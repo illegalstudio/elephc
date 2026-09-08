@@ -28,6 +28,24 @@ pub(in crate::interpreter) fn store_borrowed_static_property(
     Ok(())
 }
 
+/// Transfers a fresh value to static storage or acquires an independent owner for a storage borrow.
+/// In-place mutation results retain the existing slot owner when their cell identity is unchanged.
+pub(in crate::interpreter) fn store_static_property_value(
+    class_name: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if value.is_borrowed() {
+        return store_borrowed_static_property(class_name, property_name, value, context, values);
+    }
+    if let Some(previous) = context.set_static_property(class_name, property_name, value) {
+        eval_release_value(context, values, previous)?;
+    }
+    Ok(())
+}
+
 /// Reads one eval-declared static property after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_static_property_get_result(
     class_name: &str,
@@ -526,12 +544,7 @@ pub(super) fn eval_static_property_reference_bind_result(
         )?;
         let value = eval_reference_target_value(&target, context, values)?;
         context.bind_static_property_alias(&declaring_class, property.name(), target);
-        if let Some(replaced) =
-            context.set_static_property(&declaring_class, property.name(), value)
-        {
-            values.release(replaced)?;
-        }
-        return Ok(());
+        return store_static_property_value(&declaring_class, property.name(), value, context, values);
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         if let Some(parent) = context.class_native_parent_name(&class_name) {
@@ -737,12 +750,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 values,
             )?;
         }
-        if let Some(replaced) =
-            context.set_static_property(&declaring_class, property.name(), value)
-        {
-            values.release(replaced)?;
-        }
-        return Ok(());
+        return store_static_property_value(&declaring_class, property.name(), value, context, values);
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         if let Some(parent) = context.class_native_parent_name(&class_name) {

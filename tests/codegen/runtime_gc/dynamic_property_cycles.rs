@@ -11,6 +11,36 @@
 
 use crate::support::*;
 
+/// Static property aliases keep a borrowed method argument alive until the final alias is replaced.
+#[test]
+fn test_core_eval_static_property_aliases_own_borrowed_values() {
+    let source = r#"<?php
+$source = 'class StaticCellRoot {
+    public static $first = null;
+    public static $second = null;
+    public static function keep($value) { self::$first = $value; }
+}
+class StaticCellValue {
+    public function __construct($name) { $this->name = $name; }
+    public function __destruct() { echo "drop:", $this->name, "|"; }
+}
+$value = new StaticCellValue("kept");
+StaticCellRoot::keep($value);
+$class = "StaticCellRoot";
+$class::$second = StaticCellRoot::$first;
+unset($value);
+StaticCellRoot::$first = StaticCellRoot::$first;
+echo StaticCellRoot::$first->name, ":";
+StaticCellRoot::$first = null;
+echo $class::$second->name, "|";
+$property = "second";
+$class::${$property} = null;
+echo "done";' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "kept:kept|drop:kept|done");
+}
+
 /// Cyclic peer data remains readable until all native destructors finish, with nested GC suppressed.
 #[test]
 fn test_core_gc_destructors_keep_native_peer_data_alive() {

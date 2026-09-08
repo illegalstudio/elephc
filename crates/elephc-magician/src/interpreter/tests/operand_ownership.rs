@@ -11,6 +11,30 @@
 use super::super::*;
 use super::support::*;
 
+/// Static storage retains borrowed cells once, preserves same-cell writes, and releases replacements.
+#[test]
+fn static_property_assignments_acquire_independent_storage_owners() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let source = values.string("kept").unwrap();
+    for _ in 0..2 {
+        store_static_property_value("Owner", "value", source.borrowed(), &mut context, &mut values).unwrap();
+    }
+    assert_eq!(values.retains, vec![source]);
+    assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 2);
+    values.release(source).unwrap();
+    let stored = context.static_property("Owner", "value").unwrap();
+    assert_eq!(values.string_bytes(stored).unwrap(), b"kept");
+    assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 1);
+
+    let replacement = values.string("replacement").unwrap();
+    store_static_property_value("Owner", "value", replacement, &mut context, &mut values).unwrap();
+    assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 0);
+    assert_eq!(values.cell_owners[&(replacement.as_ptr() as usize)], 1);
+    assert_eq!(values.retains, vec![source]);
+    values.release(replacement).unwrap();
+}
+
 /// Echo consumes an expression temporary but preserves a variable's independent storage owner.
 #[test]
 fn echo_balances_temporary_and_borrowed_operands() {
