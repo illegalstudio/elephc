@@ -11,6 +11,7 @@
 mod declarations;
 mod body;
 mod method_params;
+mod property_hook_storage;
 mod traits;
 
 pub(super) use declarations::*;

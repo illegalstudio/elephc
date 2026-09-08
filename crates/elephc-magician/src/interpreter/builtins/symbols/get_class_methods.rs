@@ -107,6 +107,7 @@ fn eval_class_method_names_for_scope(
             .methods()
             .iter()
             .filter(|method| method.visibility() == EvalVisibility::Public)
+            .filter(|method| !trait_decl.properties().iter().any(|property| property.matches_hook_method(method.name())))
             .map(|method| method.name().to_string())
             .collect());
     }
@@ -131,6 +132,11 @@ fn eval_visible_runtime_method_names(
 ) -> Result<Vec<String>, EvalStatus> {
     let mut result = Vec::new();
     for name in names {
+        if values.reflection_method_flags(lookup_class_name, &name)?
+            .is_some_and(|flags| flags & EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK != 0)
+        {
+            continue;
+        }
         let Some((declaring_class, visibility)) =
             eval_runtime_method_access_metadata(lookup_class_name, &name, values)?
         else {

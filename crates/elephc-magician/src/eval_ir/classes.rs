@@ -382,6 +382,12 @@ impl EvalClass {
         &self.properties
     }
 
+    /// Replaces property declarations after trait expansion and inherited hook resolution.
+    pub(crate) fn with_properties(mut self, properties: Vec<EvalClassProperty>) -> Self {
+        self.properties = properties;
+        self
+    }
+
     /// Returns public methods declared directly by this eval class.
     pub fn methods(&self) -> &[EvalClassMethod] {
         &self.methods

@@ -35,7 +35,22 @@ pub(super) fn apply_properties(
         if prop.is_static {
             apply_static_property(state, class, checker, prop)?;
         } else {
+            let mut hooks = prop.hooks.clone();
+            if !hooks.any() {
+                hooks.uses_backing_slot = true;
+            }
+            if state.property_visibilities.get(&prop.name) != Some(&Visibility::Private) {
+                if let Some(inherited) = state.property_hooks.get(&prop.name) {
+                    hooks.uses_backing_slot |= !inherited.is_virtual();
+                    if !hooks.requires_get() {
+                        hooks.get = inherited.get;
+                        hooks.get_by_ref = inherited.get_by_ref;
+                    }
+                    hooks.set |= inherited.set;
+                }
+            }
             apply_instance_property(state, class, checker, prop)?;
+            state.property_hooks.insert(prop.name.clone(), hooks);
         }
     }
     Ok(())

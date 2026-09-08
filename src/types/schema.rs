@@ -342,6 +342,8 @@ pub struct ClassInfo {
     pub property_reference_slots: Vec<bool>,
     pub abstract_properties: HashSet<String>,
     pub abstract_property_hooks: HashMap<String, PropertyHookContract>,
+    /// Concrete and inherited hooks, including whether the visible property has backing storage.
+    pub property_hooks: HashMap<String, crate::parser::ast::PropertyHooks>,
     pub static_properties: Vec<(String, PhpType)>,
     pub static_defaults: Vec<Option<Expr>>,
     pub static_property_declaring_classes: HashMap<String, String>,
@@ -409,6 +411,16 @@ pub fn constructor_owner<'a>(
 }
 
 impl ClassInfo {
+    /// Returns whether a method-map entry is a generated property accessor rather than a PHP method.
+    pub fn is_property_hook_method(&self, method: &str) -> bool {
+        self.property_hooks.iter().any(|(property, hooks)| hooks.matches_accessor(property, method))
+    }
+
+    /// Returns whether the visible property has hooks but no backing value anywhere in its ancestry.
+    pub fn property_is_virtual(&self, property: &str) -> bool {
+        self.property_hooks.get(property).is_some_and(|hooks| hooks.is_virtual())
+    }
+
     /// Resolves the layout index of the property visible by name on this class.
     ///
     /// The result follows `property_offsets` when present so private parent

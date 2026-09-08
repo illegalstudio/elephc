@@ -349,6 +349,11 @@ fn visible_class_method_names(
         order.extend(fallback);
         order.iter()
             .filter(|method| info.methods.contains_key(*method) || info.static_methods.contains_key(*method))
+            .filter(|method| {
+                let declaring = info.method_declaring_classes.get(*method)
+                    .and_then(|class| ctx.classes.get(class)).unwrap_or(info);
+                !declaring.is_property_hook_method(method)
+            })
             .filter(|method| class_method_visible(ctx, class_name, info, method))
             .map(|method| class_method_display_name(ctx, class_name, info, method))
             .collect::<Vec<_>>()
@@ -369,6 +374,9 @@ fn visible_class_method_names(
         methods.sort_by_key(|method| method.declaration_order);
         methods.into_iter()
             .filter(|method| property_visible(ctx, class_name, &method.visibility))
+            .filter(|method| !ctx.declared_trait_properties.get(class_name).is_some_and(|properties| {
+                properties.iter().any(|property| property.hooks.matches_accessor(&property.name, &method.name))
+            }))
             .map(|method| method.name.clone())
             .collect::<Vec<_>>()
     } else {
@@ -533,6 +541,7 @@ fn visible_class_default_entries(
                     .chain(properties.iter().filter(|property| property.is_static))
             })
             .filter(|property| property_visible(ctx, class_name, &property.visibility))
+            .filter(|property| !property.hooks.is_virtual())
             .map(|property| ClassDefaultEntry {
                 name: property.name.clone(), declaring_class: class_name.to_string(),
                 default: property.default.clone(),
@@ -543,6 +552,7 @@ fn visible_class_default_entries(
     let mut seen = HashSet::new();
     for (index, (property, _)) in info.properties.iter().enumerate() {
         if info.visible_property_index(property) != Some(index)
+            || info.property_is_virtual(property)
             || !seen.insert(property.clone())
             || !instance_property_visible(ctx, class_name, info, property)
         {

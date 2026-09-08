@@ -206,6 +206,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         property_reference_slots: Vec::new(),
         abstract_properties: Default::default(),
         abstract_property_hooks: HashMap::new(),
+        property_hooks: HashMap::new(),
         static_properties: Vec::new(),
         static_defaults: Vec::new(),
         static_property_declaring_classes: HashMap::new(),

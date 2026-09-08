@@ -13,3 +13,12 @@ function inspect_request(string $label, mixed ...$details): void
 }
 
 inspect_request('core', 7, 'ready');
+
+class DisplaySettings {
+    public string $theme = 'dark';
+    public string $label { get => 'Theme: ' . $this->theme; }
+    public function reset(): void { $this->theme = 'dark'; }
+}
+
+echo 'Stored defaults: ', implode(', ', array_keys(get_class_vars(DisplaySettings::class))), "\n";
+echo 'Public methods: ', implode(', ', get_class_methods(DisplaySettings::class)), "\n";

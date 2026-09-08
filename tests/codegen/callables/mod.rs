@@ -15,6 +15,7 @@ mod func_args;
 mod language_features;
 mod constants_and_system;
 mod core_reflection;
+mod core_hook_introspection;
 mod core_spread_regressions;
 mod core_error_regressions;
 mod core_warning_fragments;

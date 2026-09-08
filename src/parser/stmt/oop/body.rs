@@ -1071,5 +1071,8 @@ fn parse_property_hooks(
             "Expected property hook declaration",
         ));
     }
+    hooks.uses_backing_slot = accessors.iter().any(|method| {
+        super::property_hook_storage::body_uses_backing_slot(&method.body, prop_name)
+    });
     Ok((hooks, accessors))
 }

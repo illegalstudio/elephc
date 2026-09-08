@@ -274,7 +274,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         [param!("object_or_class", Mixed)],
         None,
         Mixed,
-        "Returns method names visible on an object or class."
+        "Returns visible PHP method names, excluding generated property-hook accessors. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported."
     ),
     surface!(
         "get_class_vars",
@@ -284,7 +284,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         [param!("class", Mixed)],
         None,
         Mixed,
-        "Returns visible default properties for a class. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported."
+        "Returns visible default properties for a class, excluding virtual properties. Uninitialized backed properties are returned as null. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported."
     ),
     surface!(
         "hash_copy",

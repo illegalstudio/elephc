@@ -36,6 +36,7 @@ const EVAL_REFLECTION_PROPERTY_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_PROPERTY_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED: u64 = 512;
+const EVAL_REFLECTION_PROPERTY_FLAG_VIRTUAL: u64 = 1024;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET: u64 = 4096;
 const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
@@ -44,6 +45,7 @@ const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
 const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK: u64 = 32768;
 const EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
 const EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT: u64 = 16;
 const EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT: u64 = 40;
@@ -1381,8 +1383,11 @@ fn emit_eval_reflection_method_lookup_data(
                 method_name,
             );
             let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
+            let hook_flag = if declaring_info.is_property_hook_method(method_name) {
+                EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK
+            } else { 0 };
             let flags = eval_reflection_method_flags_with_source_lines(
-                eval_reflection_instance_method_flags(class_info, method_name),
+                eval_reflection_instance_method_flags(class_info, method_name) | hook_flag,
                 declaring_info,
                 method_name,
                 false,
@@ -2172,6 +2177,9 @@ fn eval_reflection_instance_property_flags(
     }
     if class_info.promoted_properties.contains(property_name) {
         flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED;
+    }
+    if class_info.property_is_virtual(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_VIRTUAL;
     }
     match class_info.property_set_visibilities.get(property_name) {
         Some(Visibility::Protected) => flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET,
@@ -3165,6 +3173,51 @@ mod tests {
 
     use super::emit_runtime_data_user;
 
+    /// All supported targets retain hook lookup rows while marking only virtual storage and real accessors.
+    #[test]
+    fn test_eval_hook_metadata_flags_on_every_supported_target() {
+        let mut info = empty_class_info(1, "__propget_virtual");
+        let signature = crate::types::FunctionSig {
+            params: Vec::new(), param_type_exprs: Vec::new(), param_attributes: Vec::new(),
+            defaults: Vec::new(), return_type: PhpType::Int, declared_return: true,
+            by_ref_return: false, ref_params: Vec::new(), declared_params: Vec::new(),
+            variadic: None, deprecation: None,
+        };
+        for (index, (name, hooked, backed)) in [
+            ("virtual", true, false), ("backed", true, true), ("plain", false, true),
+        ].into_iter().enumerate() {
+            info.properties.push((name.to_string(), PhpType::Int));
+            info.property_offsets.insert(name.to_string(), 16 + index * 8);
+            info.defaults.push(None);
+            let mut hooks = crate::parser::ast::PropertyHooks::none();
+            hooks.get = hooked;
+            hooks.uses_backing_slot = backed;
+            info.property_hooks.insert(name.to_string(), hooks);
+            let method = format!("__propget_{name}");
+            info.methods.insert(method.clone(), signature.clone());
+            info.method_declaring_classes.insert(method, "HookMetadata".to_string());
+        }
+        let classes = HashMap::from([("HookMetadata".to_string(), info)]);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = emit_runtime_data_user(
+                &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
+                &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
+                &classes, &HashMap::new(), None, false, None, target,
+            );
+            let properties = asm.split("_eval_reflection_properties:\n").nth(1).unwrap();
+            let flags = properties.lines().take(21).collect::<Vec<_>>();
+            assert_eq!(flags[4].trim(), ".quad 1026", "{name}: virtual property");
+            assert_eq!(flags[11].trim(), ".quad 2", "{name}: backed hook");
+            assert_eq!(flags[18].trim(), ".quad 2", "{name}: ordinary property");
+            let methods = asm.split("_eval_reflection_methods:\n").nth(1).unwrap();
+            let flags = methods.lines().take(21).collect::<Vec<_>>();
+            assert_eq!(flags[4].trim(), ".quad 32770", "{name}: backed getter row");
+            assert_eq!(flags[11].trim(), ".quad 2", "{name}: prefix-like user method");
+            assert_eq!(flags[18].trim(), ".quad 32770", "{name}: virtual getter row");
+        }
+    }
+
     /// Provides the Empty class info helper used by the user module.
     pub(super) fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
         let mut method_impl_classes = HashMap::new();
@@ -3212,6 +3265,7 @@ mod tests {
             property_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
+            property_hooks: HashMap::new(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
             static_property_declaring_classes: HashMap::new(),

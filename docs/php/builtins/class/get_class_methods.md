@@ -1,6 +1,6 @@
 ---
 title: "get_class_methods()"
-description: "Returns method names visible on an object or class."
+description: "Returns visible PHP method names, excluding generated property-hook accessors. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported."
 sidebar:
   order: 85
 ---
@@ -11,7 +11,7 @@ sidebar:
 function get_class_methods(mixed $object_or_class): array
 ```
 
-Returns method names visible on an object or class.
+Returns visible PHP method names, excluding generated property-hook accessors. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported.
 
 **Parameters**:
 - `$object_or_class` (`mixed`)

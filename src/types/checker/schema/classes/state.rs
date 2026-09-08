@@ -42,6 +42,7 @@ pub(super) struct ClassBuildState {
     pub(super) property_reference_slots: Vec<bool>,
     pub(super) abstract_properties: HashSet<String>,
     pub(super) abstract_property_hooks: HashMap<String, PropertyHookContract>,
+    pub(super) property_hooks: HashMap<String, crate::parser::ast::PropertyHooks>,
     pub(super) static_prop_types: Vec<(String, PhpType)>,
     pub(super) static_defaults: Vec<Option<Expr>>,
     pub(super) static_property_declaring_classes: HashMap<String, String>,
@@ -88,6 +89,7 @@ impl ClassBuildState {
             state.inherit_static_methods(parent);
             state.interfaces = parent.interfaces.clone();
             state.allow_dynamic_properties = parent.allow_dynamic_properties;
+            state.property_hooks = parent.property_hooks.clone();
         }
         state
     }
@@ -201,6 +203,7 @@ impl ClassBuildState {
             property_reference_slots: self.property_reference_slots,
             abstract_properties: self.abstract_properties,
             abstract_property_hooks: self.abstract_property_hooks,
+            property_hooks: self.property_hooks,
             static_properties: self.static_prop_types,
             static_defaults: self.static_defaults,
             static_property_declaring_classes: self.static_property_declaring_classes,

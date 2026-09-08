@@ -100,7 +100,7 @@ fn eval_dynamic_class_vars_result(
     }
     for class in context.class_chain(class_name).into_iter().rev() {
         for property in class.properties() {
-            if emitted_keys.contains(property.name())
+            if property.is_virtual() || emitted_keys.contains(property.name())
                 || validate_eval_member_access(class.name(), property.visibility(), context)
                     .is_err()
             {
@@ -129,7 +129,7 @@ fn eval_dynamic_trait_vars_result(
     let mut result = EvalArrayBuilder::assoc(values, properties.len())?;
     let mut emitted_keys = HashSet::new();
     for property in properties {
-        if emitted_keys.contains(property.name())
+        if property.is_virtual() || emitted_keys.contains(property.name())
             || validate_eval_member_access(&trait_name, property.visibility(), context).is_err()
         {
             continue;
@@ -164,6 +164,11 @@ fn eval_runtime_class_vars_result(
             continue;
         };
         if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+            continue;
+        }
+        if result.values().reflection_property_flags(class_name, &property_name)?
+            .is_some_and(|flags| flags & EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL != 0)
+        {
             continue;
         }
         result.string(&property_name, |values| {
