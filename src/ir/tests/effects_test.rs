@@ -9,6 +9,17 @@
 
 use crate::ir::{Effects, Op, RuntimeFnId};
 
+/// Both explicit collection and automatic safe points can execute arbitrary throwing destructors.
+#[test]
+fn collection_effects_include_destructor_callbacks() {
+    let collect = crate::ir::GcControlOp::Collect.effects();
+    assert_eq!(collect, Effects::all());
+    assert_eq!(Op::GcCollect.default_effects(), collect);
+    assert_eq!(Op::GcControl.default_effects(), collect);
+    assert_eq!(crate::ir::GcControlOp::Disable.effects(), Effects::WRITES_GLOBAL);
+    assert_eq!(crate::ir::GcControlOp::Enabled.effects(), Effects::READS_GLOBAL);
+}
+
 /// Warning-capable operations must not be reordered across state accessed by a user handler.
 #[test]
 fn warning_handlers_observe_and_mutate_program_state() {

@@ -348,6 +348,9 @@ When one of these checks trips, the program exits with a fatal heap-debug error 
 - **Process exit**: all memory is reclaimed by the OS
 
 Collector-triggered destructors run under individual native exception handlers.
+Both explicit collection and automatic EIR safe points have conservative callback
+effects, including `MAY_THROW`, so optimizers must preserve surrounding catches
+and cannot move collection across observable destructor-side work.
 An escaping Throwable is retained as a collector root while the remaining
 destructors, reachability recounts, and sweep finish. Multiple exceptions preserve
 existing `previous` links and are chained without repeating an object identity.

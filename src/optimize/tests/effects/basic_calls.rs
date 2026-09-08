@@ -10,6 +10,34 @@
 
 use super::*;
 
+/// Destructor callbacks keep collection observable and preserve its catch and finally clauses.
+#[test]
+fn test_effect_analysis_preserves_collection_exception_boundaries() {
+    let expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from("gc_collect_cycles"),
+            args: Vec::new(),
+        },
+        Span::dummy(),
+    );
+    let effect = expr_effect(&expr);
+    assert!(effect.may_throw && effect.has_side_effects && effect.writes_globals);
+
+    let tokens = crate::lexer::tokenize(
+        "<?php try { gc_collect_cycles(); } catch (Exception $error) { echo 'caught'; } finally { echo 'done'; }",
+    ).unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    for optimized in [
+        prune_constant_control_flow(program.clone()),
+        eliminate_dead_code(program),
+    ] {
+        assert!(optimized.iter().any(|statement| matches!(
+            &statement.kind,
+            StmtKind::Try { catches, finally_body: Some(_), .. } if !catches.is_empty()
+        )), "{optimized:?}");
+    }
+}
+
 /// Verifies that `strlen` is classified as a pure call with no side effects,
 /// no exception potential, and no observable behavior.
 #[test]

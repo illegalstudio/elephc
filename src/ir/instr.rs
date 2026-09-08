@@ -323,13 +323,9 @@ impl GcControlOp {
     pub const fn effects(self) -> Effects {
         use Effects as E;
         match self {
-            Self::Collect => Effects::from_bits_retain(
-                E::READS_GLOBAL.bits()
-                    | E::WRITES_GLOBAL.bits()
-                    | E::READS_HEAP.bits()
-                    | E::WRITES_HEAP.bits()
-                    | E::REFCOUNT_OP.bits(),
-            ),
+            // Destructors are arbitrary PHP callbacks. In particular, omitting MAY_THROW
+            // lets AST pruning discard the catch around an explicit collection call.
+            Self::Collect => E::all(),
             Self::Disable | Self::Enable => E::WRITES_GLOBAL,
             Self::Enabled
             | Self::Running
@@ -1051,14 +1047,7 @@ impl Op {
             }
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
             ReleaseUnlessAliases => E::REFCOUNT_OP | E::WRITES_HEAP | E::READS_HEAP,
-            GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
-            GcControl => Effects::from_bits_retain(
-                E::READS_GLOBAL.bits()
-                    | E::WRITES_GLOBAL.bits()
-                    | E::READS_HEAP.bits()
-                    | E::WRITES_HEAP.bits()
-                    | E::REFCOUNT_OP.bits(),
-            ),
+            GcCollect | GcControl => GcControlOp::Collect.effects(),
             CoreBuiltin => E::all(),
             ClassConstant => E::MAY_DEOPT,
         }
