@@ -194,11 +194,7 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
         return Ok(result);
     }
     if eval_php_visible_builtin_exists(name) {
-        let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, values)?;
-        let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
-            return Err(EvalStatus::UnsupportedConstruct);
-        };
-        return Ok(result);
+        return eval_bound_builtin_call(name, evaluated_args, context, values);
     }
     if let Some(closure) = context.closure(name).cloned() {
         return eval_closure_with_evaluated_args_and_bound_scope_ref_mode(

@@ -167,6 +167,61 @@ fn call_arguments_retain_source_before_later_global_replacement() {
     assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 0);
 }
 
+/// Ref-aware builtin adapters retain their first input before a later argument replaces its global.
+#[test]
+fn builtin_arguments_retain_source_before_later_global_replacement() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let source = values.string("strlen").unwrap();
+    scope.set("source", source, ScopeCellOwnership::Owned);
+    context.set_global_scope(&mut scope);
+    let declaration = parse_fragment(
+        b"function replaceCallable() { global $source; $source = null; return true; }",
+    ).unwrap();
+    execute_program_outcome_with_context(&mut context, &declaration, &mut scope, &mut values).unwrap();
+    let args = [
+        EvalCallArg::positional(EvalExpr::LoadVar("source".into())),
+        EvalCallArg::positional(EvalExpr::Call { name: "replacecallable".into(), args: vec![] }),
+    ];
+    let result = eval_builtin_is_callable_call(&args, &mut context, &mut scope, &mut values).unwrap();
+    assert!(values.truthy(result).unwrap());
+    assert!(values.retains.contains(&source));
+    assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 0);
+    values.release(result).unwrap();
+}
+
+/// Named builtin gaps own synthesized defaults and release them on success and rejected operations.
+#[test]
+fn named_builtin_defaults_are_released_after_dispatch() {
+    for pad_type in [0, 99] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let source = values.string("x").unwrap();
+        scope.set("source", source, ScopeCellOwnership::Owned);
+        let args = [
+            EvalCallArg::named("string", EvalExpr::LoadVar("source".into())),
+            EvalCallArg::named("length", EvalExpr::Const(EvalConst::Int(3))),
+            EvalCallArg::named("pad_type", EvalExpr::Const(EvalConst::Int(pad_type))),
+        ];
+        let result = eval_builtin_call("str_pad", &args, &mut context, &mut scope, &mut values);
+        if pad_type == 0 {
+            let result = result.unwrap();
+            assert_eq!(values.string_bytes(result).unwrap(), b"  x");
+            values.release(result).unwrap();
+        } else {
+            assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+        }
+        let defaults = values.releases.iter().copied()
+            .filter(|cell| values.get(*cell) == FakeValue::String(" ".into()))
+            .collect::<Vec<_>>();
+        assert_eq!(defaults.len(), 1, "the omitted pad string must have one released owner");
+        assert_eq!(values.cell_owners[&(defaults[0].as_ptr() as usize)], 0);
+        assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 1);
+    }
+}
+
 /// A malformed later spread releases itself and any previously evaluated source arguments.
 #[test]
 fn failed_argument_evaluation_releases_previous_temporaries() {

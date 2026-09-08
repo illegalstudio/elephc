@@ -101,3 +101,31 @@ echo eval($source);
     };
     assert_eq!(live(5), live(1), "source argument leases or descriptor keys leaked");
 }
+
+/// Ref-aware and named builtin adapters keep earlier values alive through later global replacement.
+#[test]
+fn test_core_eval_builtin_arguments_survive_later_source_replacement() {
+    let source = r#"<?php
+$source = 'function replaceCallable() { global $callback; $callback = null; return false; }
+$callback = str_repeat("strlen", 1);
+echo is_callable($callback, replaceCallable(), $name), ":", $name, "|";
+function replaceText() { global $text; $text = "new"; return 2; }
+$text = str_repeat("old", 2);
+echo str_repeat(string: $text, times: replaceText());' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "1:strlen|oldoldoldold");
+}
+
+/// Named date-alias fallback reuses evaluated arguments instead of executing their side effects twice.
+#[test]
+fn test_core_eval_named_date_alias_evaluates_arguments_once() {
+    let source = r#"<?php
+$source = '$calls = 0;
+function hourOnce() { global $calls; $calls = $calls + 1; return 0; }
+echo gmmktime(hour: hourOnce(), minute: 0, second: 0, month: 1, day: 1, year: 2000), ":", $calls;'
+    . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "946684800:1");
+}

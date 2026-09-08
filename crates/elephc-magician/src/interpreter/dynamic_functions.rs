@@ -35,33 +35,12 @@ pub(in crate::interpreter) fn eval_dynamic_function(
     })
 }
 
-/// Evaluates source-order call arguments while preserving named-argument metadata.
-pub(in crate::interpreter) fn eval_call_arg_values(
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    caller_scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    eval_call_arg_values_with_ownership(args, context, caller_scope, values, false)
-}
-
 /// Acquires each argument before later argument side effects can replace its source storage.
 pub(in crate::interpreter) fn eval_owned_call_arg_values(
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    eval_call_arg_values_with_ownership(args, context, caller_scope, values, true)
-}
-
-/// Shares named/spread ordering while optionally transferring argument owners to a scoped consumer.
-fn eval_call_arg_values_with_ownership(
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    caller_scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-    acquire_borrows: bool,
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     let mut evaluated_args = Vec::with_capacity(args.len());
     let mut saw_named = false;
@@ -81,11 +60,9 @@ fn eval_call_arg_values_with_ownership(
                     append_unpacked_call_arg_values(
                         spread, &mut evaluated_args, &mut saw_named, context, values,
                     )?;
-                    if acquire_borrows {
-                        for argument in &mut evaluated_args[first_unpacked..] {
-                            if argument.value.is_borrowed() {
-                                argument.value = values.retain(argument.value)?;
-                            }
+                    for argument in &mut evaluated_args[first_unpacked..] {
+                        if argument.value.is_borrowed() {
+                            argument.value = values.retain(argument.value)?;
                         }
                     }
                     Ok(())
@@ -99,7 +76,7 @@ fn eval_call_arg_values_with_ownership(
                 saw_named = true;
                 let (value, ref_target) =
                     eval_call_arg_value(arg.value(), context, caller_scope, values)?;
-                let value = if acquire_borrows && value.is_borrowed() {
+                let value = if value.is_borrowed() {
                     values.retain(value)?
                 } else { value };
                 evaluated_args.push(EvaluatedCallArg {
@@ -114,7 +91,7 @@ fn eval_call_arg_values_with_ownership(
                 return Err(EvalStatus::RuntimeFatal);
             }
             let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
-            let value = if acquire_borrows && value.is_borrowed() {
+            let value = if value.is_borrowed() {
                 values.retain(value)?
             } else { value };
             evaluated_args.push(EvaluatedCallArg {

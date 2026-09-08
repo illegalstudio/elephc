@@ -101,12 +101,22 @@ pub(in crate::interpreter) fn with_eval_call_arguments<V: RuntimeValueOps>(
         argument
     }).collect();
     let result = consume(borrowed_arguments, context, scope, values);
+    finish_eval_argument_values(result, arguments.into_iter().map(|argument| argument.value), context, values)
+}
+
+/// Retains borrowed returns before releasing argument owners, preserving the original call error.
+pub(in crate::interpreter) fn finish_eval_argument_values(
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    arguments: impl IntoIterator<Item = RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let result = result.and_then(|value| {
         if value.is_borrowed() { values.retain(value) } else { Ok(value) }
     });
     let mut released = Ok(());
     for argument in arguments {
-        let cleanup = release_expr_result(argument.value, context, values);
+        let cleanup = release_expr_result(argument, context, values);
         if released.is_ok() { released = cleanup; }
     }
     match (result, released) {
