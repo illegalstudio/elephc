@@ -42,9 +42,9 @@ pub struct FunctionSig {
 impl FunctionSig {
     /// Returns whether the CALLEE's frame owns a reference to by-value parameter `index`.
     ///
-    /// True exactly when the parameter is by-value and its CODEGEN REPR is an array or an
-    /// associative array — which is precisely the set `privatize_container_param` re-binds to an
-    /// owning shadow slot on function entry, giving PHP its by-value array semantics.
+    /// By-value arrays, hashes, and Mixed cells are rebound to owning shadow slots by
+    /// `privatize_container_param`. Mixed parameters own a detached value cell, except resources
+    /// whose shared identity receives an independent reference instead.
     ///
     /// The repr matters, not the surface type: `iterable` keeps its own runtime shape (a raw heap
     /// pointer dispatched on the heap-kind tag), so an `iterable` parameter is NOT privatized and
@@ -55,15 +55,19 @@ impl FunctionSig {
     /// caller (which must then release its owning-temporary argument instead of suppressing it)
     /// can never disagree.
     pub fn param_is_callee_owned(&self, index: usize) -> bool {
-        if self.ref_params.get(index).copied().unwrap_or(false) {
-            return false;
-        }
         self.params.get(index).is_some_and(|(_, php_type)| {
-            matches!(
-                php_type.codegen_repr(),
-                PhpType::Array(_) | PhpType::AssocArray { .. }
+            Self::parameter_needs_owned_shadow(
+                php_type, self.ref_params.get(index).copied().unwrap_or(false),
             )
         })
+    }
+
+    /// Shares the user-call ownership boundary between caller cleanup, lowering, and inlining.
+    pub(crate) fn parameter_needs_owned_shadow(php_type: &PhpType, by_ref: bool) -> bool {
+        !by_ref && matches!(
+            php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+        )
     }
 }
 

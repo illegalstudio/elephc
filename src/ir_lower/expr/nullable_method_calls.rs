@@ -223,7 +223,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
             ir_type: value_ir_type(&php_type),
         };
         if ctx.value_is_owning_temporary(lowered) {
-            // PHP callees acquire by-value array/hash parameters into owning COW shadow slots.
+            // PHP callees acquire by-value array/hash/Mixed parameters into owning shadow slots.
             // Their result therefore cannot be an unretained alias of the caller's argument.
             let callee_owns = signature
                 .is_some_and(|signature| signature.param_is_callee_owned(parameter_index));

@@ -92,7 +92,8 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // User callees return an owner independent of the caller's materialized Mixed arguments.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
@@ -321,4 +322,3 @@ pub(super) fn emit_mixed_method_class_dispatch(
 /// non-alphanumeric byte collapses to `_`, so `a_b` and `aéb` collide. A second copy here
 /// invited use where uniqueness matters; there is now one definition carrying that warning.
 pub(super) use crate::names::label_fragment;
-

@@ -787,7 +787,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         slot
     }
 
-    /// Rebinds a by-value array/hash parameter to an owning copy-on-write shadow slot.
+    /// Rebinds a by-value container or Mixed parameter to an owning copy-on-write shadow slot.
     ///
     /// Call sites pass container pointers as borrows. Acquiring the value into a fresh local makes
     /// the first callee mutation observe refcount two and split instead of modifying caller storage.
@@ -798,6 +798,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let borrowed = self.load_local(name, span);
+        let value = if php_type.codegen_repr() == PhpType::Mixed {
+            self.emit_owned_value(
+                Op::MixedClone, vec![borrowed.value], None, PhpType::Mixed,
+                Op::MixedClone.default_effects(), span,
+            )
+        } else {
+            borrowed
+        };
         let shadow = self.builder.add_local(
             Some(format!("{}#cow", name)),
             value_ir_type(php_type),
@@ -807,7 +815,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_slots.insert(name.to_string(), shadow);
         self.local_kinds
             .insert(name.to_string(), LocalKind::PhpLocal);
-        self.store_local(name, borrowed, php_type.clone(), span);
+        self.store_local(name, value, php_type.clone(), span);
     }
 
     /// Marks a local slot as initialized by caller or synthetic setup.
@@ -2487,6 +2495,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::BoolToStr
                     | Op::ResourceToStr
                     | Op::MixedBox
+                    | Op::MixedClone
                     | Op::ArrayToMixed
                     | Op::HashToMixed
                     | Op::InvokerRefArg
@@ -2586,10 +2595,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Returns whether a user-call result can alias a borrowed visible argument.
     ///
-    /// User functions currently return refcounted parameter storage without
-    /// acquiring it for the caller. Such a result is borrowed when the matching
-    /// argument is borrowed, but remains an owning temporary when an owning
-    /// argument temporary transfers through the call.
+    /// Parameters with callee-owned entry shadows return an independent owner.
+    /// Other refcounted parameters may forward a borrowed argument, or transfer
+    /// the owner of a temporary argument through the call.
     fn value_is_borrowed_user_call_result(&self, result: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(result) else {
             return false;
@@ -2611,7 +2619,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .iter()
             .enumerate()
             .any(|(parameter_index, argument)| {
-                if !return_alias.proven_aliases_parameter(parameter_index)
+                if self.functions.get(function_name)
+                    .is_some_and(|signature| signature.param_is_callee_owned(parameter_index))
+                    || !return_alias.proven_aliases_parameter(parameter_index)
                     || !self.call_result_may_alias_arg(*argument, result)
                 {
                     return false;

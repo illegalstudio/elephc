@@ -10,6 +10,44 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Every target gives a by-value Mixed parameter an owned shadow while preserving ref parameters.
+#[test]
+fn mixed_parameters_own_detached_entry_cells_on_all_targets() {
+    let source = "<?php
+        function mixed_identity(mixed $value): mixed { return $value; }
+        function mixed_reference(mixed &$value): mixed { return $value; }
+        function mixed_store(mixed $input): mixed {
+            $output = mixed_identity($input);
+            return $output;
+        }
+    ";
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let identity = module.functions.iter().find(|function| function.name == "mixed_identity").unwrap();
+        let clones = identity.instructions.iter().filter(|inst| inst.op == Op::MixedClone).collect::<Vec<_>>();
+        assert_eq!(clones.len(), 1, "{target}");
+        assert_eq!(identity.value(clones[0].result.unwrap()).unwrap().ownership, Ownership::Owned);
+        let clone = clones[0].result.unwrap();
+        assert_eq!(identity.instructions.iter().filter(|inst| {
+            inst.op == Op::Release && inst.operands == [clone]
+        }).count(), 1, "{target}: the shadow store must release its producer exactly once");
+        assert!(identity.locals.iter().any(|local| local.name.as_deref() == Some("value#cow")), "{target}");
+        let reference = module.functions.iter().find(|function| function.name == "mixed_reference").unwrap();
+        assert!(!reference.instructions.iter().any(|inst| inst.op == Op::MixedClone), "{target}");
+        assert!(!reference.locals.iter().any(|local| local.name.as_deref() == Some("value#cow")), "{target}");
+        let store = module.functions.iter().find(|function| function.name == "mixed_store").unwrap();
+        let call = store.instructions.iter().find(|inst| inst.op == Op::Call).unwrap();
+        let result = call.result.unwrap();
+        assert_eq!(store.value(result).unwrap().ownership, Ownership::Owned, "{target}");
+        assert_eq!(store.instructions.iter().filter(|inst| {
+            inst.op == Op::Release && inst.operands == [result]
+        }).count(), 1, "{target}: storing the owned call result must release its producer");
+    }
+}
+
 /// Returns the printed EIR for `main`, excluding built-in helper and property-init functions.
 fn main_function_text(text: &str) -> &str {
     let start = text.find("function main()").expect("expected lowered main function");

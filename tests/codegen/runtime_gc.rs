@@ -40,6 +40,7 @@ mod core_builtins;
 #[path = "runtime_gc/dynamic_property_cycles.rs"]
 mod dynamic_property_cycles;
 mod eval_sparse_arrays;
+mod mixed_parameters;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
 #[path = "runtime_gc/heap.rs"]

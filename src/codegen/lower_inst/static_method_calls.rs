@@ -130,7 +130,8 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &callee_sig.return_type)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // User callees return an owner independent of the caller's materialized Mixed arguments.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)?;
     if let Some(done_label) = eval_done_label {
         ctx.emitter.label(&done_label);

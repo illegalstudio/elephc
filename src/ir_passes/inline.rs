@@ -1160,16 +1160,12 @@ fn callee_stores_a_refcounted_local(callee: &Function) -> bool {
     })
 }
 
-/// Returns whether a callee takes a by-value array or associative-array parameter.
+/// Returns whether a callee takes a by-value parameter with an owning entry shadow.
 ///
 /// Such a parameter is privatized into an owning shadow slot at function entry, and that shadow
 /// cannot currently be transplanted safely into a host loop; see the gate in `is_eligible_callee`.
 fn callee_has_by_value_container_param(callee: &Function) -> bool {
     callee.params.iter().any(|param| {
-        !param.by_ref
-            && matches!(
-                param.php_type.codegen_repr(),
-                crate::types::PhpType::Array(_) | crate::types::PhpType::AssocArray { .. }
-            )
+        crate::types::FunctionSig::parameter_needs_owned_shadow(&param.php_type, param.by_ref)
     })
 }

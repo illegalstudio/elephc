@@ -1346,18 +1346,17 @@ fn lower_body_into_function(
     // and closures, so every call flavour — including `call_user_func`, dynamic `$f(...)` and
     // recursion — is covered without any per-flavour code.
     //
+    // Mixed parameters also need an owning cell: native return values must outlive an eval
+    // caller's temporary arguments, and a boxed array mutation must not replace the caller's
+    // cell payload. The resource-aware clone preserves shared resource identity.
     // By-reference parameters are excluded by definition: `array &$a` must alias, not copy.
     // `$this` is excluded because it is an object, never a container.
     for (index, (name, php_type)) in params.iter().enumerate() {
-        if by_ref_params.get(index).copied().unwrap_or(false) {
-            continue;
-        }
         if name == "this" {
             continue;
         }
-        if !matches!(
-            php_type.codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. }
+        if !FunctionSig::parameter_needs_owned_shadow(
+            php_type, by_ref_params.get(index).copied().unwrap_or(false),
         ) {
             continue;
         }

@@ -324,7 +324,8 @@ pub(in crate::codegen) fn lower_runtime_object_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_runtime_object_call_result(ctx, inst, &target.return_ty)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // The concrete PHP method owns any Mixed parameter that can flow into its return value.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
