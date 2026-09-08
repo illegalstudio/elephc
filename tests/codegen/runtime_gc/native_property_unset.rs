@@ -33,16 +33,25 @@ eval($source);
     assert_eq!(compile_and_run(source), "hidden:missing:caught:again|hidden:missing:caught:again|");
 }
 
-/// Repeated native and inherited unsets release nested values and do not accumulate metadata owners.
+/// Repeated native unsets release nested values and do not accumulate metadata owners.
 #[test]
 fn test_core_eval_native_unset_releases_payload_and_metadata_owners() {
-    for class in ["NativeUnsetOwners", "EvalUnsetOwners"] {
-        super::core_builtins::assert_core_eval_collection_cleanup_with_native(
-            "class NativeUnsetOwners { public mixed $payload; }",
-            &format!("class EvalUnsetOwners extends NativeUnsetOwners {{}} $object = new {class}();"),
-            "$object->payload = [1, [2, 3]]; unset($object->payload); unset($object->payload);",
-        );
-    }
+    assert_unset_payload_cleanup("NativeUnsetOwners");
+}
+
+/// Inherited physical-slot unsets release both payload and eval metadata owners.
+#[test]
+fn test_core_eval_inherited_unset_releases_payload_and_metadata_owners() {
+    assert_unset_payload_cleanup("EvalUnsetOwners");
+}
+
+/// Measures one allocation path separately so the native and inherited CI cases remain bounded.
+fn assert_unset_payload_cleanup(class: &str) {
+    super::core_builtins::assert_core_eval_collection_cleanup_with_native(
+        "class NativeUnsetOwners { public mixed $payload; }",
+        &format!("class EvalUnsetOwners extends NativeUnsetOwners {{}} $object = new {class}();"),
+        "$object->payload = [1, [2, 3]]; unset($object->payload); unset($object->payload);",
+    );
 }
 
 /// A native lexical private slot is unset without clearing a same-named public child property.
