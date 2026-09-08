@@ -341,7 +341,7 @@ impl Checker {
     }
 
     /// Returns a bitvec indicating which parameters of a method have declared type hints.
-    /// Looks up the method by `method_name` and `is_static` in `class_info.method_decls`.
+    /// Local declarations provide the annotations; inherited methods retain them in their signature.
     pub(crate) fn declared_method_param_flags(
         class_info: &ClassInfo,
         method_name: &str,
@@ -365,7 +365,10 @@ impl Checker {
                     .chain(method.variadic.iter().map(|_| method.variadic_type.is_some()))
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_else(|| {
+                let signatures = if is_static { &class_info.static_methods } else { &class_info.methods };
+                signatures.get(&method_key).map(|sig| sig.declared_params.clone()).unwrap_or_default()
+            })
     }
 
     /// Adjusts a function signature so that parameters without declared type hints are marked

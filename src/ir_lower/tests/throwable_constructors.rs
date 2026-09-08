@@ -17,6 +17,7 @@ fn inherited_throwable_constructors_have_layout_aware_bodies() {
 class ExtendedException extends Exception { public int $marker = 42; }
 class ExtendedError extends Error { public string $marker = "kept"; }
 $error = new ExtendedException("outer", 1, new ExtendedError("inner"));
+$error->__construct("again", 2, $error->getPrevious());
 echo $error->getMessage();
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -40,5 +41,29 @@ echo $error->getMessage();
             assert!(signature.declared_params.iter().take(3).all(|declared| *declared), "{name}: {owner}");
             assert!(initialize.effects.contains(Effects::MAY_THROW | Effects::REFCOUNT_OP), "{name}");
         }
+    }
+}
+
+/// An untyped subclass constructor cannot specialize a typed ancestor's nullable previous parameter.
+#[test]
+fn subclass_constructor_inference_preserves_ancestor_parameter_contracts() {
+    let source = r#"<?php
+class InferredPreviousException extends Exception {
+    public function __construct($message, $code, $previous) {
+        $this->message = $message;
+        $this->code = $code;
+        $this->previous = $previous;
+    }
+}
+$previous = new Error("inner");
+$child = new InferredPreviousException("child", 1, $previous);
+$parent = new Exception("parent", 2, null);
+$parent->__construct("again", 3, $child->getPrevious());
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_source_at_for_target(source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap());
+        let signature = &module.class_infos["Exception"].methods["__construct"];
+        assert_eq!(signature.params[2].1.codegen_repr(), crate::types::PhpType::Mixed, "{name}");
+        assert!(signature.declared_params[2], "{name}");
     }
 }

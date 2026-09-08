@@ -383,10 +383,16 @@ impl Checker {
                 }
             }
 
-            if !param_has_declared_type {
+            // Sharing a property does not erase another constructor's declared contract or
+            // make a different parameter position refer to this property's constructor input.
+            let maps_same_property = class_info.constructor_param_to_prop.get(param_index)
+                .and_then(|mapped| mapped.as_ref()) == Some(&prop_name);
+            if !param_has_declared_type && maps_same_property {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
-                    if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                        *param_ty = arg_ty.clone();
+                    if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
+                        if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
+                            *param_ty = arg_ty.clone();
+                        }
                     }
                 }
             }
