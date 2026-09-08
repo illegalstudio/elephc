@@ -8,10 +8,10 @@
 //! Key details:
 //! - Runtime array helpers expect callee-saved loop registers to survive callback invocation.
 //! - Descriptor invokers return boxed `Mixed`; wrappers cast or detach results before returning.
+//! - The consuming invocation boundary releases temporary arguments even when a callback throws.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::arrays::emit_array_value_type_stamp;
-use crate::codegen_support::callable_descriptor;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::{DeferredCallbackWrapper, DeferredExternCallbackTrampoline};
@@ -374,32 +374,14 @@ fn emit_box_descriptor_arg_array_as_mixed(
     );
 }
 
-/// Calls the selected descriptor invoker and releases the boxed argument container afterward.
+/// Transfers the boxed argument owner to the exception-safe descriptor invocation boundary.
 fn emit_call_descriptor_invoker_from_wrapper(emitter: &mut Emitter, descriptor_reg: &str) {
     let descriptor_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
-    let array_arg_reg = abi::int_arg_reg_name(emitter.target, 1);
-    let invoker_reg = abi::symbol_scratch_reg(emitter);
 
     if descriptor_reg != descriptor_arg_reg {
         emitter.instruction(&format!("mov {}, {}", descriptor_arg_reg, descriptor_reg)); // pass the selected callable descriptor to the uniform invoker
     }
-    callable_descriptor::emit_load_invoker_from_descriptor(
-        emitter,
-        invoker_reg,
-        descriptor_arg_reg,
-    );
-    abi::emit_push_reg(emitter, array_arg_reg); // preserve the boxed argument container for release after descriptor invocation
-    abi::emit_call_reg(emitter, invoker_reg);
-    emit_release_preserved_mixed_argument_after_result(emitter);
-}
-
-/// Releases the preserved boxed argument container while keeping the Mixed call result live.
-fn emit_release_preserved_mixed_argument_after_result(emitter: &mut Emitter) {
-    abi::emit_push_result_value(emitter, &PhpType::Mixed);
-    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
-    abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
-    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
-    abi::emit_release_temporary_stack(emitter, 16);
+    abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
 }
 
 /// Converts the descriptor invoker's boxed-Mixed result to the callback runtime return type.
@@ -472,5 +454,44 @@ fn descriptor_array_frame_offset(
     match emitter.target.arch {
         Arch::AArch64 => frame_size - 16 - visible_count * 16,
         Arch::X86_64 => frame_arg_slot_offset(visible_count),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Callback and extern adapters transfer arguments to the protected helper on every target.
+    #[test]
+    fn descriptor_callback_wrappers_use_the_owned_argument_boundary() {
+        let wrapper = DeferredCallbackWrapper {
+            label: "test_owned_callback".to_string(),
+            visible_arg_types: vec![PhpType::Int],
+            target_visible_arg_types: None,
+            capture_types: Vec::new(),
+            descriptor_prefix_types: Vec::new(),
+            descriptor_return_type: Some(PhpType::Bool),
+        };
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_descriptor_callback_wrapper(&mut emitter, &wrapper, &PhpType::Bool);
+            let asm = emitter.output();
+            assert_eq!(asm.matches("__rt_callable_invoke_owned_args").count(), 1, "{name}: {asm}");
+            assert!(!asm.lines().any(|line| {
+                let instruction = line.trim_start();
+                instruction.starts_with("blr ") || instruction.starts_with("call r")
+            }), "{name}: {asm}");
+            let trampoline = DeferredExternCallbackTrampoline {
+                label: "test_owned_extern_callback".to_string(),
+                descriptor_slot_label: "test_owned_extern_descriptor".to_string(),
+                visible_arg_types: vec![PhpType::Int],
+                return_type: PhpType::Bool,
+            };
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_extern_callback_trampoline(&mut emitter, &trampoline);
+            let asm = emitter.output();
+            assert_eq!(asm.matches("__rt_callable_invoke_owned_args").count(), 1, "{name}: {asm}");
+        }
     }
 }

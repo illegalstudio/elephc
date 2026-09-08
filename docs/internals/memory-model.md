@@ -355,6 +355,13 @@ Only after snapshot disposal, timing completion, and restoration of the collecto
 flags does the runtime rethrow to the caller. Eval uses an owned Throwable output
 across its C boundary, never a native unwind through live Rust frames.
 
+Descriptor-backed array callback wrappers transfer their temporary boxed argument
+array to `__rt_callable_invoke_owned_args`. Its local native handler releases that
+owner before returning the owned callback result or propagating a callback throw.
+The boundary also preserves the caller's exception and diagnostic state. This
+does not transfer ownership of the enclosing array helper's source snapshot or
+partial result: those remain that helper's responsibility.
+
 ### Configurable heap size
 
 The default heap is 8MB. For programs that need more (or less), use:

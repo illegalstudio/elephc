@@ -12,8 +12,10 @@ mod closure_bind;
 mod function_exists;
 mod is_callable;
 mod descriptor_release;
+mod invoke_owned_args;
 
 pub(crate) use closure_bind::emit_closure_bind;
 pub(crate) use descriptor_release::emit_callable_descriptor_release;
 pub(crate) use function_exists::emit_function_exists_lookup;
 pub(crate) use is_callable::emit_is_callable_runtime;
+pub(crate) use invoke_owned_args::emit_callable_invoke_owned_args;
