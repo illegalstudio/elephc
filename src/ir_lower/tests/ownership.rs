@@ -10,6 +10,32 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Directory-only wrappers retain the raw runtime ABI on every target without changing ordinary methods.
+#[test]
+fn directory_wrapper_parameters_keep_the_runtime_abi_on_all_targets() {
+    let source = r#"<?php
+        class DirectoryOnly {
+            public function dir_opendir($path, $options): bool { return true; }
+            public function dir_readdir(): string { return ""; }
+            public function identity($value) { return $value; }
+        }
+        stream_wrapper_register("directoryonly", "DirectoryOnly");
+        $directory = opendir("directoryonly://root");
+        echo (new DirectoryOnly())->identity("ok");
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let open = module.class_methods.iter().find(|method| method.name == "DirectoryOnly::dir_opendir").unwrap();
+        assert!(!open.params.iter().any(|param| param.php_type.codegen_repr() == crate::types::PhpType::Mixed), "{target}");
+        assert!(!open.instructions.iter().any(|inst| inst.op == Op::MixedClone), "{target}");
+        let identity = module.class_methods.iter().find(|method| method.name == "DirectoryOnly::identity").unwrap();
+        assert!(identity.instructions.iter().any(|inst| inst.op == Op::MixedClone), "{target}");
+    }
+}
+
 /// Every target gives a by-value Mixed parameter an owned shadow while preserving ref parameters.
 #[test]
 fn mixed_parameters_own_detached_entry_cells_on_all_targets() {
