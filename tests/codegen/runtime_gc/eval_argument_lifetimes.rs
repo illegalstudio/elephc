@@ -204,3 +204,56 @@ echo "|", nativeEvalCounter();
 "#;
     assert_eq!(compile_and_run(source), "40:40|11");
 }
+
+/// Reflection constructor, method, and function arrays balance extracted native argument owners.
+#[test]
+fn test_core_eval_reflection_call_array_arguments_release_after_return() {
+    let live = |iterations| {
+        let calls = r#"$object = $class->newInstanceArgs([str_repeat("v", 2)]);
+$methodResult = $method->invokeArgs($object, ["value" => str_repeat("v", 2)]);
+$functionResult = $function->invokeArgs(["value" => str_repeat("v", 2)]);
+echo $methodResult, $functionResult;
+unset($object, $methodResult, $functionResult);"#.repeat(iterations);
+        let source = format!(r#"<?php
+class NativeReflectionArguments {{
+    public function __construct(mixed $value) {{}}
+    public function first(mixed $value): mixed {{ return $value; }}
+}}
+function nativeReflectionFirst(mixed $value): mixed {{ return $value; }}
+$source = '$class = new ReflectionClass("NativeReflectionArguments");
+$method = new ReflectionMethod("NativeReflectionArguments", "first");
+$function = new ReflectionFunction("nativeReflectionFirst");
+{calls}
+unset($class, $method, $function); return 42;' . ' // ' . $argc;
+echo eval($source);
+"#);
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, format!("{}42", "vvvv".repeat(iterations)), "{}", output.stderr);
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        allocated as i128 - freed as i128
+    };
+    assert_eq!(live(5), live(1), "Reflection call-array argument or result owners leaked");
+}
+
+/// A reflected eval exception releases extracted argument cells before propagating to the caller.
+#[test]
+fn test_core_eval_reflection_call_array_arguments_release_after_throw() {
+    let live = |iterations| {
+        let calls = r#"try { $function->invokeArgs([str_repeat("v", 2)]); }
+catch (RuntimeException $error) { echo "caught"; unset($error); }"#.repeat(iterations);
+        let source = format!(r#"<?php
+$source = 'function failReflectedArguments($value) {{ throw new RuntimeException("stop"); }}
+$function = new ReflectionFunction("failReflectedArguments");
+{calls}
+unset($function); return 42;' . ' // ' . $argc;
+echo eval($source);
+"#);
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, format!("{}42", "caught".repeat(iterations)), "{}", output.stderr);
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        allocated as i128 - freed as i128
+    };
+    assert_eq!(live(5), live(1), "Reflection arguments leaked while propagating an exception");
+}
