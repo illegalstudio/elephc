@@ -487,6 +487,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_pcntl_aot_signal_handler(signal: i64) -> *mut RuntimeCell;
     /// Installs the optional eval dynamic object destructor callback.
     pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
+    /// Installs eval-owned object edge enumeration and final-release callbacks.
+    pub(super) fn __elephc_eval_install_object_owner_hooks(child: usize, release: usize);
 }
 
 /// Forwards one installed eval ob-handler callback address to the generated runtime.

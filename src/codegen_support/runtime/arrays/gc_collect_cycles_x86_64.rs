@@ -199,6 +199,15 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gc_collect_cycles_count_next");               // boxed mixed-child comparison is complete for this source block
 
     emitter.label("__rt_gc_collect_cycles_count_object");
+    emitter.instruction("push rdi");                                            // preserve source payload size for heap iteration
+    emitter.instruction("push rsi");                                            // preserve the candidate pointer and C-call stack alignment
+    emitter.instruction("lea rdi, [rdx + 16]");                                 // pass the owning raw object through the C ABI
+    emitter.instruction("xor edx, edx");                                        // select incoming-edge counting rather than marking
+    emitter.instruction("call __rt_gc_eval_object_children");                   // recount retained receiver edges to the current candidate
+    emitter.instruction("add QWORD PTR [rbp - 48], rax");                       // add the callback-owned edges to the candidate total
+    emitter.instruction("pop rsi");                                             // restore the candidate used by the fixed-property scan
+    emitter.instruction("pop rdi");                                             // restore source payload size used by count_next
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // recover the current source header after callback clobbers
     emitter.instruction("lea r9, [rdx + 16]");                                  // compute the source object user pointer from its heap header
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the runtime class_id stored at the start of the source object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_count");

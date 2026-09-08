@@ -398,14 +398,29 @@ pub(super) fn eval_closure_expr(
 }
 
 /// Materializes one PHP-visible `Closure` object for an eval callable target.
-pub(super) fn eval_closure_object_expr(
-    target: EvalClosureObjectTarget,
+pub(in crate::interpreter) fn eval_closure_object_expr(
+    mut target: EvalClosureObjectTarget,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = values.new_object("stdClass")?;
-    let identity = values.object_identity(object)?;
+    let attached = (|| {
+        if let Some(receiver) = target.receiver_mut() {
+            values.retain_object_children(object, &[*receiver])?;
+            // Metadata borrows the cell owned by the runtime edge, not its caller's scope.
+            *receiver = receiver.borrowed();
+        }
+        values.object_identity(object)
+    })();
+    let identity = match attached {
+        Ok(identity) => identity,
+        Err(status) => {
+            let _ = values.release(object);
+            return Err(status);
+        }
+    };
     context.register_closure_object_target(identity, target);
+    crate::ffi::dynamic_destructors::register_dynamic_object_context(identity, context);
     Ok(object)
 }
 

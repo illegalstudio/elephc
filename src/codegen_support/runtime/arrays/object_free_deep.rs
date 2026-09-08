@@ -67,6 +67,8 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer for the destructor call
     emitter.instruction("bl __rt_call_object_destructor");                      // run the class's __destruct hook if one is declared
     emitter.instruction("bl __rt_gc_destructor_end");                           // accumulate the completed outer destructor interval
+    emitter.instruction("ldr x0, [sp]");                                        // pass the object identity before any property payload is released
+    emitter.instruction("bl __rt_eval_object_release_children");                // detach and release retained eval receiver cells
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer after the destructor returns
 
     // -- incomplete objects own a persisted original class name plus a semantic
@@ -342,6 +344,8 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // load the object pointer as $this for the destructor call
     emitter.instruction("call __rt_call_object_destructor");                    // run the class's __destruct hook if one is declared
     emitter.instruction("call __rt_gc_destructor_end");                         // accumulate the completed outer destructor interval
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the object identity through the C ABI
+    emitter.instruction("call __rt_eval_object_release_children");              // detach and release retained eval receiver cells
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after the destructor returns
 
     // -- incomplete objects own a persisted original class name plus a semantic

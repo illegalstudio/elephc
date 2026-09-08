@@ -619,6 +619,15 @@ pub trait RuntimeValueOps {
     /// Retains one runtime cell so the eval caller receives an independent owner.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Retains hidden object-owned edges for native GC; arena-backed adapters need no extra owners.
+    fn retain_object_children(
+        &mut self,
+        _object: RuntimeCellHandle,
+        _children: &[RuntimeCellHandle],
+    ) -> Result<(), EvalStatus> {
+        Ok(())
+    }
+
     /// Emits or suppresses one PHP runtime warning through the target runtime.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus>;
 

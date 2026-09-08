@@ -40,8 +40,11 @@ fn dynamic_destructor_contexts() -> &'static Mutex<HashMap<u64, usize>> {
 #[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn __elephc_eval_dynamic_object_owns_properties(identity: u64) -> u64 {
-    u64::from(identity != 0 && dynamic_destructor_contexts().lock()
-        .is_ok_and(|contexts| contexts.contains_key(&identity)))
+    let Some(context) = dynamic_object_owner_context(identity) else { return 0; };
+    // Closure identities also use this registry for metadata cleanup, but their
+    // stdClass payload does not have eval-declared property storage.
+    let Some(context) = (unsafe { context.as_ref() }) else { return 0; };
+    u64::from(context.abi_version() == ABI_VERSION && context.dynamic_object_class(identity).is_some())
 }
 
 /// Installs the eval dynamic object destructor callback into the generated runtime.
@@ -93,6 +96,17 @@ pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcE
     Some(context as *mut ElephcEvalContext)
 }
 
+/// Drops closure metadata after receiver release, preserving foreign context leases through destructors.
+#[cfg(not(test))]
+pub(crate) fn forget_released_closure(identity: u64) {
+    let Some(context) = dynamic_object_owner_context(identity) else { return; };
+    // Context teardown unregisters its identities before freeing the context.
+    let Some(context) = (unsafe { context.as_mut() }) else { return; };
+    if context.abi_version() == ABI_VERSION && context.closure_object_target(identity).is_some() {
+        context.forget_dynamic_object(identity);
+    }
+}
+
 /// Runs an eval dynamic object destructor from the native object free path.
 ///
 /// # Safety
@@ -130,7 +144,11 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
         return 0;
     }
     if context.dynamic_object_class(identity).is_none() {
-        unregister_dynamic_object(identity);
+        // Closure metadata may own a foreign eval context needed by its receiver's
+        // destructor. Its final owner callback drops metadata after child release.
+        if context.closure_object_target(identity).is_none() {
+            unregister_dynamic_object(identity);
+        }
         return 0;
     }
 

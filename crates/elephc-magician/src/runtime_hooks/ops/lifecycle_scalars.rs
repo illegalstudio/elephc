@@ -97,6 +97,15 @@ macro_rules! impl_lifecycle_scalar_ops {
         }))
     }
 
+    /// Attaches retained receiver cells to the native object's GC graph and final-release callback.
+    fn retain_object_children(
+        &mut self,
+        object: RuntimeCellHandle,
+        children: &[RuntimeCellHandle],
+    ) -> Result<(), EvalStatus> {
+        crate::runtime_hooks::object_owners::retain_object_children(self, object, children)
+    }
+
     /// Emits one PHP warning through the generated runtime diagnostic helper.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
         // Magician submits complete diagnostics, unlike native fragment producers.

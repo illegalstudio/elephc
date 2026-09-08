@@ -191,6 +191,12 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // mixed-child counting is complete
 
     emitter.label("__rt_gc_collect_cycles_count_object");
+    emitter.instruction("mov x0, x12");                                         // pass the owning object to the optional eval-edge walker
+    emitter.instruction("mov x1, xzr");                                         // ARM64 counts every edge directly in the child header
+    emitter.instruction("mov x2, xzr");                                         // select incoming-edge counting rather than marking
+    emitter.instruction("bl __rt_gc_eval_object_children");                     // include retained closure receivers in heap graph accounting
+    emitter.instruction("ldr x12, [sp]");                                       // recover the current heap header after callback clobbers
+    emitter.instruction("add x12, x12, #16");                                   // restore the source object payload pointer
     emitter.instruction("ldr x14, [x12]");                                      // load the runtime class_id from the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_gc_desc_count");
     emitter.instruction("ldr x15, [x15]");                                      // load the number of emitted class descriptors

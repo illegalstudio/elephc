@@ -43,6 +43,7 @@ mod eval_sparse_arrays;
 mod mixed_parameters;
 mod native_string_arguments;
 mod native_property_unset;
+mod eval_closure_receivers;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
 #[path = "runtime_gc/heap.rs"]

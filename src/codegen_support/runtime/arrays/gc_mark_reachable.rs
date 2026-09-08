@@ -178,6 +178,10 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
 
     // -- object traversal: consult the emitted per-class property descriptor table --
     emitter.label("__rt_gc_mark_reachable_object");
+    emitter.instruction("mov x1, xzr");                                         // marking does not select a single candidate node
+    emitter.instruction("mov x2, #1");                                          // select recursive reachability traversal
+    emitter.instruction("bl __rt_gc_eval_object_children");                     // visit retained receiver cells after marking their parent object
+    emitter.instruction("ldr x0, [sp]");                                        // restore the owning object before the fixed-property walk
     emitter.instruction("ldr x10, [x0]");                                       // load the runtime class_id from the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_count");
     emitter.instruction("ldr x11, [x11]");                                      // load the number of emitted class descriptors
@@ -390,6 +394,10 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
 
     // -- object traversal: consult the emitted per-class property descriptor table --
     emitter.label("__rt_gc_mark_reachable_object");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the already marked owning object using the C ABI
+    emitter.instruction("xor esi, esi");                                        // marking does not select a single candidate node
+    emitter.instruction("mov edx, 1");                                          // select recursive reachability traversal
+    emitter.instruction("call __rt_gc_eval_object_children");                   // visit retained receiver cells before the fixed-property walk
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the current object pointer before computing its property count
     emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // load the runtime class_id stored at the start of the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_class_gc_desc_count");
