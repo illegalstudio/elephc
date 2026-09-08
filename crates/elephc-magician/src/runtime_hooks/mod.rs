@@ -28,6 +28,7 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 use externs::{
     __elephc_eval_install_dynamic_object_destructor_hook, __elephc_eval_value_array_new,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
+    __elephc_eval_value_release,
 };
 
 /// Runtime hook adapter that produces and consumes boxed elephc Mixed cells.
@@ -66,15 +67,25 @@ impl ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_object_from_raw(object) })
     }
 
-    /// Packs source-order argument cells into the boxed eval array ABI.
+    /// Packs borrowed arguments, releasing temporary keys and unfinished arrays on failure.
     fn arg_array(args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
         let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
         let mut arg_array = Self::handle(arg_array)?;
-        for (index, value) in args.into_iter().enumerate() {
-            let index = Self::handle(unsafe { __elephc_eval_value_int(index as i64) })?;
-            arg_array = Self::handle(unsafe {
-                __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
-            })?;
+        let populated = (|| {
+            for (index, value) in args.into_iter().enumerate() {
+                let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+                let key = Self::handle(unsafe { __elephc_eval_value_int(index) })?;
+                let inserted = Self::handle(unsafe {
+                    __elephc_eval_value_array_set(arg_array.as_ptr(), key.as_ptr(), value.as_ptr())
+                });
+                unsafe { __elephc_eval_value_release(key.as_ptr()); }
+                arg_array = inserted?;
+            }
+            Ok(())
+        })();
+        if let Err(status) = populated {
+            unsafe { __elephc_eval_value_release(arg_array.as_ptr()); }
+            return Err(status);
         }
         Ok(arg_array)
     }

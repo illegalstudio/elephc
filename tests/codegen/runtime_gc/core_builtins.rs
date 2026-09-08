@@ -72,6 +72,35 @@ fn test_core_eval_concat_releases_tostring_result_cells() {
     );
 }
 
+/// Successful dynamic string hooks release their returned cells without relying on exception cleanup.
+#[test]
+fn test_core_eval_concat_successful_hooks_release_results() {
+    assert_core_eval_collection_cleanup(
+        "class ConcatSuccess { public function __toString(): string { return \"value\"; } }
+         $object = new ConcatSuccess();",
+        "$joined = $object . $object; unset($joined);",
+    );
+}
+
+/// Repeated native calls with borrowed arguments release the bridge's boxed argument indexes.
+#[test]
+fn test_core_eval_native_argument_packing_releases_indexes() {
+    assert_core_eval_collection_cleanup_with_native(
+        "class NativeArgumentSink { public function accept(int $value): void {} }",
+        "$object = new NativeArgumentSink(); $value = 7;",
+        "$object->accept($value);",
+    );
+}
+
+/// Native exception construction releases argument defaults independently of string-hook execution.
+#[test]
+fn test_core_eval_native_exception_construction_releases_arguments() {
+    assert_core_eval_collection_cleanup(
+        "",
+        "try { throw new Exception(\"stop\"); } catch (Exception $caught) { unset($caught); }",
+    );
+}
+
 /// Native and eval string hooks preserve conversion order, operands, and exceptions.
 #[test]
 fn test_core_eval_concat_native_and_dynamic_string_hooks() {
@@ -199,9 +228,15 @@ echo eval($source);
 
 /// Compares deep cleanup after repeated eval results, without allocating loop-control temporaries.
 fn assert_core_eval_collection_cleanup(setup: &str, body: &str) {
+    assert_core_eval_collection_cleanup_with_native("", setup, body);
+}
+
+/// Measures repeated eval cleanup with native declarations kept outside the opaque source.
+fn assert_core_eval_collection_cleanup_with_native(native: &str, setup: &str, body: &str) {
     let outstanding = |iterations| {
         let repeated = body.repeat(iterations);
         let source = format!(r#"<?php
+{native}
 $source = '{setup} {repeated} return 42;' . ' // ' . $argc;
 echo eval($source);
 "#);
