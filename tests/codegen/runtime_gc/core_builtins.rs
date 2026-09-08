@@ -253,6 +253,50 @@ fn test_core_eval_native_unchanged_mixed_references_release_activation_leases() 
     );
 }
 
+/// Native by-value returns detach from nullable Mixed reference cells before bridge writeback.
+#[test]
+fn test_core_eval_native_mixed_reference_returns_survive_writeback() {
+    let source = r#"<?php
+class NativeReturnedReference {
+    public function replace(?string &$value, ?string $next): ?string {
+        $value = $next;
+        return $value;
+    }
+    public static function read(?string &$value): ?string { return $value; }
+}
+$source = '$box = new NativeReturnedReference(); $value = "old";
+$result = $box->replace($value, "new");
+echo $result, ":", $value, "|";
+unset($result);
+echo $value, "|";
+$result = NativeReturnedReference::read($value);
+$value = "changed";
+echo $result, ":", $value, "|";
+$result = $box->replace($value, null);
+echo is_null($result), ":", is_null($value);' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "new:new|new|new:changed|1:1");
+}
+
+/// Repeated native Mixed reference returns balance both the returned owner and caller storage.
+#[test]
+fn test_core_eval_native_mixed_reference_returns_release_independent_owners() {
+    assert_core_eval_collection_cleanup_with_native(
+        "class NativeReturnedReferenceGC {
+            public function replace(?string &$value, ?string $next): ?string {
+                $value = $next; return $value;
+            }
+            public static function read(?string &$value): ?string { return $value; }
+         }",
+        "$box = new NativeReturnedReferenceGC();",
+        "$value = \"old\";
+         $result = $box->replace($value, \"new\"); unset($result);
+         $result = NativeReturnedReferenceGC::read($value); unset($result);
+         $result = $box->replace($value, null); unset($result, $value);",
+    );
+}
+
 /// Native reference coercions leave caller variables usable after the activation releases its lease.
 #[test]
 fn test_core_eval_native_reference_coercion_retains_caller_value() {

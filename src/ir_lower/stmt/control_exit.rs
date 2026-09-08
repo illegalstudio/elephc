@@ -146,6 +146,17 @@ pub(super) fn acquire_borrowed_return_value(
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }
+    if !ctx.by_ref_return && ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell) {
+        // A by-value return cannot transfer the caller's mutable reference owner.
+        // Detach Mixed cells so native reference writeback cannot invalidate the result.
+        if php_type.codegen_repr() == PhpType::Mixed {
+            return ctx.emit_owned_value(
+                Op::MixedClone, vec![value.value], None, php_type,
+                Op::MixedClone.default_effects(), Some(span),
+            );
+        }
+        return crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    }
     if !matches!(
         ctx.builder.value_defining_op(value.value),
         Some(

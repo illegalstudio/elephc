@@ -122,6 +122,10 @@ fn mixed_parameters_own_detached_entry_cells_on_all_targets() {
             $output = mixed_identity($input);
             return $output;
         }
+        function mixed_reference_store(mixed $input): mixed {
+            $output = mixed_reference($input);
+            return $output;
+        }
     ";
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
@@ -138,15 +142,24 @@ fn mixed_parameters_own_detached_entry_cells_on_all_targets() {
         }).count(), 1, "{target}: the shadow store must release its producer exactly once");
         assert!(identity.locals.iter().any(|local| local.name.as_deref() == Some("value#cow")), "{target}");
         let reference = module.functions.iter().find(|function| function.name == "mixed_reference").unwrap();
-        assert!(!reference.instructions.iter().any(|inst| inst.op == Op::MixedClone), "{target}");
+        let returned_clones = reference.instructions.iter().filter(|inst| inst.op == Op::MixedClone).collect::<Vec<_>>();
+        assert_eq!(returned_clones.len(), 1, "{target}: by-value return must detach from the caller's reference");
+        let clone = returned_clones[0];
+        let ValueDef::Instruction { inst, .. } = reference.value(clone.operands[0]).unwrap().def else {
+            panic!("{target}: expected a load from reference storage");
+        };
+        assert_eq!(reference.instruction(inst).unwrap().op, Op::LoadRefCell, "{target}");
+        assert_eq!(reference.value(clone.result.unwrap()).unwrap().ownership, Ownership::Owned, "{target}");
         assert!(!reference.locals.iter().any(|local| local.name.as_deref() == Some("value#cow")), "{target}");
-        let store = module.functions.iter().find(|function| function.name == "mixed_store").unwrap();
-        let call = store.instructions.iter().find(|inst| inst.op == Op::Call).unwrap();
-        let result = call.result.unwrap();
-        assert_eq!(store.value(result).unwrap().ownership, Ownership::Owned, "{target}");
-        assert_eq!(store.instructions.iter().filter(|inst| {
-            inst.op == Op::Release && inst.operands == [result]
-        }).count(), 1, "{target}: storing the owned call result must release its producer");
+        for name in ["mixed_store", "mixed_reference_store"] {
+            let store = module.functions.iter().find(|function| function.name == name).unwrap();
+            let call = store.instructions.iter().find(|inst| inst.op == Op::Call).unwrap();
+            let result = call.result.unwrap();
+            assert_eq!(store.value(result).unwrap().ownership, Ownership::Owned, "{target}: {name}");
+            assert_eq!(store.instructions.iter().filter(|inst| {
+                inst.op == Op::Release && inst.operands == [result]
+            }).count(), 1, "{target}: {name} must release the stored call result's producer");
+        }
     }
 }
 

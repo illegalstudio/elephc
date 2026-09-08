@@ -2595,7 +2595,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Returns whether a user-call result can alias a borrowed visible argument.
     ///
-    /// Parameters with callee-owned entry shadows return an independent owner.
+    /// Callee-owned entry shadows and by-value reads from reference parameters return independent owners.
     /// Other refcounted parameters may forward a borrowed argument, or transfer
     /// the owner of a temporary argument through the call.
     fn value_is_borrowed_user_call_result(&self, result: ValueId) -> bool {
@@ -2620,7 +2620,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .enumerate()
             .any(|(parameter_index, argument)| {
                 if self.functions.get(function_name)
-                    .is_some_and(|signature| signature.param_is_callee_owned(parameter_index))
+                    .is_some_and(|signature| signature.returned_parameter_has_independent_owner(parameter_index))
                     || !return_alias.proven_aliases_parameter(parameter_index)
                     || !self.call_result_may_alias_arg(*argument, result)
                 {

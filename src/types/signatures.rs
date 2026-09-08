@@ -62,6 +62,17 @@ impl FunctionSig {
         })
     }
 
+    /// Returns whether forwarding this parameter by value produces an independent result owner.
+    /// Reference parameters keep caller storage, but value returns acquire or clone its payload.
+    pub(crate) fn returned_parameter_has_independent_owner(&self, index: usize) -> bool {
+        self.param_is_callee_owned(index)
+            || (!self.by_ref_return
+                && self.ref_params.get(index).copied().unwrap_or(false)
+                && self.params.get(index).is_some_and(|(_, php_type)| {
+                    crate::ir::Ownership::php_type_needs_lifetime_tracking(php_type)
+                }))
+    }
+
     /// Shares the user-call ownership boundary between caller cleanup, lowering, and inlining.
     pub(crate) fn parameter_needs_owned_shadow(php_type: &PhpType, by_ref: bool) -> bool {
         !by_ref && matches!(

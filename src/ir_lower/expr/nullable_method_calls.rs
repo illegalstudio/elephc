@@ -224,9 +224,10 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
         };
         if ctx.value_is_owning_temporary(lowered) {
             // PHP callees acquire by-value array/hash/Mixed parameters into owning shadow slots.
+            // By-value returns from reference parameters also acquire or clone a separate owner.
             // Their result therefore cannot be an unretained alias of the caller's argument.
             let callee_owns = signature
-                .is_some_and(|signature| signature.param_is_callee_owned(parameter_index));
+                .is_some_and(|signature| signature.returned_parameter_has_independent_owner(parameter_index));
             let independently_boxed = signature.is_some_and(|signature| {
                 call_arg_gets_independent_mixed_box(signature, parameter_index, &php_type)
             });
