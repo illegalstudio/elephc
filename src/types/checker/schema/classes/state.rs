@@ -136,6 +136,7 @@ impl ClassBuildState {
             is_readonly_class: class.is_readonly_class,
             allow_dynamic_properties: self.allow_dynamic_properties
                 || class_has_allow_dynamic_properties(class),
+            eval_property_storage: false,
             constants: class
                 .constants
                 .iter()

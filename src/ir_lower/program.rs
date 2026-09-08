@@ -130,6 +130,7 @@ pub(crate) fn lower(
     );
     include_lowered_runtime_features(&mut module);
     super::effect_refinement::refine_module(&mut module);
+    reserve_eval_subclass_property_storage(&mut module);
     validate_module(&module)?;
     Ok(module)
 }

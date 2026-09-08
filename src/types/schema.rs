@@ -263,6 +263,9 @@ pub struct ClassInfo {
     /// Codegen routes undeclared property storage through a per-object
     /// side-table when this flag is set.
     pub allow_dynamic_properties: bool,
+    /// EIR reserves a GC-visible property hash for subclasses declared by opaque eval.
+    /// This is a storage capability, not PHP's permission to create dynamic properties.
+    pub eval_property_storage: bool,
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
@@ -411,6 +414,11 @@ pub fn constructor_owner<'a>(
 }
 
 impl ClassInfo {
+    /// Returns whether the physical object layout includes a trailing property hash pointer.
+    pub fn has_property_hash_storage(&self) -> bool {
+        self.allow_dynamic_properties || self.eval_property_storage
+    }
+
     /// Returns whether a method-map entry is a generated property accessor rather than a PHP method.
     pub fn is_property_hook_method(&self, method: &str) -> bool {
         self.property_hooks.iter().any(|(property, hooks)| hooks.matches_accessor(property, method))

@@ -2314,7 +2314,7 @@ fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize 
 
 /// Returns whether this class layout stores a dynamic-property hash tail.
 fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) -> bool {
-    class_name == "stdClass" || class_info.allow_dynamic_properties
+    class_name == "stdClass" || class_info.has_property_hash_storage()
 }
 
 /// The number of fixed-slot stream-wrapper methods recorded per class in
@@ -3235,6 +3235,7 @@ mod tests {
             is_final: false,
             is_readonly_class: false,
             allow_dynamic_properties: false,
+            eval_property_storage: false,
             constants: HashMap::new(),
     constant_deprecations: HashMap::new(),
     constant_types: HashMap::new(),

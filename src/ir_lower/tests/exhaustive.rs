@@ -175,6 +175,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         is_final: false,
         is_readonly_class: false,
         allow_dynamic_properties: true,
+        eval_property_storage: false,
         constants: HashMap::new(),
         constant_deprecations: HashMap::new(),
         constant_types: HashMap::new(),

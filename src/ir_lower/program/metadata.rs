@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Reserves extra field storage without changing PHP attributes or checker visibility rules.
+pub(super) fn reserve_eval_subclass_property_storage(module: &mut Module) {
+    if !module.required_runtime_features.eval_bridge {
+        return;
+    }
+    for (name, info) in &mut module.class_infos {
+        // Builtin objects may have custom payloads; their layouts remain authoritative.
+        if elephc_builtin_contract::lookup_class(name).is_none() && !info.is_final {
+            info.eval_property_storage = true;
+        }
+    }
+}
+
 /// Converts a PHP source path into the canonical display string stored in EIR metadata.
 pub(super) fn canonical_source_path(source_path: &Path) -> String {
     source_path

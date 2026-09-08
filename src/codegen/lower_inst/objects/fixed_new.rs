@@ -107,7 +107,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         (
             class_info.class_id,
             class_info.properties.len(),
-            class_info.allow_dynamic_properties,
+            class_info.has_property_hash_storage(),
             marker_offsets,
             owned_ref_offsets,
             property_defaults,

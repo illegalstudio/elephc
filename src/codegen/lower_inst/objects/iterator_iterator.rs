@@ -30,7 +30,7 @@ pub(super) fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &
         .class_infos
         .get("IteratorIterator")
         .ok_or_else(|| CodegenIrError::unsupported("unknown class IteratorIterator"))?;
-    if class_info.allow_dynamic_properties {
+    if class_info.has_property_hash_storage() {
         return Err(CodegenIrError::unsupported(
             "object allocation requiring dynamic properties for IteratorIterator",
         ));
@@ -270,7 +270,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("str x9, [x0]");                            // store the class id at object header
             abi::emit_symbol_address(ctx.emitter, "x9", "_iterator_iterator_downcast_msg");
             ctx.emitter.instruction("str x9, [x0, #8]");                        // store static exception message pointer
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // materialize the exception message length
                 "mov x9, #{}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
             ));                                                                 // load static exception message length
@@ -288,7 +288,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // materialize the target heap-kind marker
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
             );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
@@ -299,7 +299,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter
                 .instruction("lea r10, [rip + _iterator_iterator_downcast_msg]"); // materialize static exception message pointer
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static exception message pointer
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // store the exception message length
                 "mov QWORD PTR [rax + 16], {}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
             ));                                                                 // store static exception message length

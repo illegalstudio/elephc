@@ -41,7 +41,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
         (
             class_info.class_id,
             class_info.properties.len(),
-            class_info.allow_dynamic_properties,
+            class_info.has_property_hash_storage(),
             retained_offsets,
             owned_reference_property_offsets,
         )
@@ -218,7 +218,7 @@ pub(super) fn lower_callback_filter_iterator_new(
             ctx.module.class_infos.get(class_name).ok_or_else(|| {
                 CodegenIrError::unsupported(format!("unknown class {}", class_name))
             })?;
-        if class_info.allow_dynamic_properties {
+        if class_info.has_property_hash_storage() {
             return Err(CodegenIrError::unsupported(format!(
                 "object allocation requiring dynamic properties for {}",
                 class_name

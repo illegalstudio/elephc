@@ -35,6 +35,15 @@ fn dynamic_destructor_contexts() -> &'static Mutex<HashMap<u64, usize>> {
     DYNAMIC_DESTRUCTOR_CONTEXTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Reports whether a raw object identity belongs to a live eval-declared class.
+/// Native property helpers use this only after ordinary declared-property dispatch misses.
+#[cfg(not(test))]
+#[no_mangle]
+pub extern "C" fn __elephc_eval_dynamic_object_owns_properties(identity: u64) -> u64 {
+    u64::from(identity != 0 && dynamic_destructor_contexts().lock()
+        .is_ok_and(|contexts| contexts.contains_key(&identity)))
+}
+
 /// Installs the eval dynamic object destructor callback into the generated runtime.
 #[cfg(not(test))]
 pub(crate) fn install_dynamic_object_destructor_hook() {

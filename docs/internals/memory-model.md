@@ -117,6 +117,20 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Union` | 8 bytes | Boxed runtime-tagged payload (same storage as Mixed) |
 | `TaggedScalar` | 16 bytes | 8-byte payload + 8-byte runtime tag (tagged null representation) |
 
+### Eval subclass property storage
+
+In eval-enabled modules, non-final user classes reserve a GC-visible hash pointer
+after their fixed property slots. Eval-declared subclasses use that hash for
+additional fields while retaining the native parent's existing field offsets.
+The runtime layout metadata includes the tail in allocation, cloning, deep release,
+and cycle traversal on every supported target.
+
+This storage capability is separate from `#[AllowDynamicProperties]`. Ordinary
+native instances do not gain dynamic-property permission: fallback access to the
+extra hash requires a registered eval object. Declared native properties retain
+their usual visibility checks. Hash entries own retained boxed cells, and writes
+publish COW replacements through the owning hash slot.
+
 ### Null representations
 
 elephc has two representations for PHP `null` in scalar slots, selected per compilation by

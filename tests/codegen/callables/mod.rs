@@ -20,6 +20,7 @@ mod core_spread_regressions;
 mod core_error_regressions;
 mod core_warning_fragments;
 mod core_reflection_regressions;
+mod core_native_subclasses;
 mod core_inventory_regressions;
 mod core_backtrace_regressions;
 mod core_runtime_introspection;
