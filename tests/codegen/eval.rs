@@ -26474,7 +26474,7 @@ echo "after";
     assert_eq!(out, "before:drop:A:after");
 }
 
-/// Verifies eval-declared object destructors run when cycle collection releases them.
+/// Explicit collection runs eval-declared destructors after their cyclic objects lose external roots.
 #[test]
 fn test_eval_dynamic_object_runs_destructor_after_cycle_collection() {
     let out = compile_and_run(
@@ -26486,6 +26486,7 @@ eval('class EvalCycleDropBox {
 $box = new EvalCycleDropBox("A");
 $box->self = $box;
 unset($box);
+gc_collect_cycles();
 echo "after";');
 "#,
     );
