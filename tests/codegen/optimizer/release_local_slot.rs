@@ -108,8 +108,10 @@ echo $alias;
 /// Verifies deferred releases are pruned when the loop-carried slot stays scalar.
 #[test]
 fn test_release_local_slot_is_pruned_for_scalar_loop_slot_in_both_modes() {
+    // Keep the unrelated counter scalar even without optimization. A checked `i++`
+    // now legitimately retires its temporary Mixed owner before the next store.
     let source = r#"<?php
-for ($i = 0; $i < $argc; $i++) {
+for ($i = 0; $i < $argc; $i = (int)($i + 1)) {
     $value = 7;
     echo $value;
 }
@@ -126,10 +128,11 @@ for ($i = 0; $i < $argc; $i++) {
 /// Verifies a slot promoted before the loop uses ref-cell stores without raw-slot releases.
 #[test]
 fn test_release_local_slot_is_excluded_for_already_ref_bound_slot() {
+    // Isolate the promoted value from the unoptimized counter's boxed arithmetic.
     let source = r#"<?php
 $value = 0;
 $alias =& $value;
-for ($i = 0; $i < $argc; $i++) {
+for ($i = 0; $i < $argc; $i = (int)($i + 1)) {
     $value = 0;
     $value++;
 }
