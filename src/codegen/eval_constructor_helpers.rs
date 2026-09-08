@@ -692,7 +692,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     );
 }
 
-/// Stores the nullable third Throwable constructor argument on ARM64.
+/// Stores the nullable previous argument using the receiver's compact or ordinary ARM64 layout.
 fn emit_aarch64_builtin_throwable_previous_arg(
     module: &Module,
     emitter: &mut Emitter,
@@ -709,14 +709,19 @@ fn emit_aarch64_builtin_throwable_previous_arg(
     emitter.instruction(&format!("b.eq {}", success_label));                    // keep the default raw null previous pointer
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the previous argument is an object
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed non-object previous arguments
-    emitter.instruction("mov x0, x1");                                          // move the previous object payload into the retain ABI
+    emitter.instruction("ldr x9, [sp, #16]");                                   // inspect the actual receiver allocated by AOT or the by-name eval bridge
+    emitter.instruction("ldr x10, [x9, #-8]");                                  // recover the heap kind independently of the PHP class id
+    emitter.instruction("and x10, x10, #0xff");                                 // discard collector and ownership flags
+    emitter.instruction("cmp x10, #6");                                         // only compact Throwable payloads own a raw previous pointer
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // ordinary objects retain the nullable property's Mixed argument cell
+    emitter.instruction("csel x0, x1, x0, eq");                                 // compact objects instead retain the unboxed previous object
     abi::emit_call_label(emitter, "__rt_incref");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object after retaining previous
-    emitter.instruction("str x0, [x9, #40]");                                   // store the retained previous object pointer
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the receiver after retaining its previous owner
+    emitter.instruction("str x0, [x9, #40]");                                   // store the previous owner in the representation its reader and cleanup expect
     emitter.instruction(&format!("b {}", success_label));                       // builtin Throwable construction completed
 }
 
-/// Stores the nullable third Throwable constructor argument on x86_64.
+/// Stores the nullable previous argument using the receiver's compact or ordinary x86_64 layout.
 fn emit_x86_64_builtin_throwable_previous_arg(
     module: &Module,
     emitter: &mut Emitter,
@@ -733,10 +738,15 @@ fn emit_x86_64_builtin_throwable_previous_arg(
     emitter.instruction(&format!("je {}", success_label));                      // keep the default raw null previous pointer
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the previous argument is an object
     emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed non-object previous arguments
-    emitter.instruction("mov rax, rdi");                                        // move the previous object payload into the retain ABI
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // inspect the receiver allocated by AOT or the by-name eval bridge
+    emitter.instruction("mov r10, QWORD PTR [r11 - 8]");                        // recover the actual heap layout independently of the PHP class id
+    emitter.instruction("and r10, 0xff");                                       // discard the heap marker and collector flags
+    emitter.instruction("cmp r10, 6");                                          // compact Throwable payloads own raw previous pointers
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // ordinary objects retain the nullable property's Mixed argument cell
+    emitter.instruction("cmove rax, rdi");                                      // compact objects instead retain the unboxed previous object
     abi::emit_call_label(emitter, "__rt_incref");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object after retaining previous
-    emitter.instruction("mov QWORD PTR [r11 + 40], rax");                       // store the retained previous object pointer
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the receiver after retaining its previous owner
+    emitter.instruction("mov QWORD PTR [r11 + 40], rax");                       // store the previous owner in its reader and cleanup representation
     emitter.instruction(&format!("jmp {}", success_label));                     // builtin Throwable construction completed
 }
 
@@ -1764,6 +1774,29 @@ fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
 
 #[cfg(test)]
 mod catalog_tests {
+    /// Eval construction selects the previous owner from the concrete layout on every target.
+    #[test]
+    fn throwable_previous_initialization_preserves_ordinary_boxed_storage() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let module = super::Module::new(target);
+            let mut emitter = super::Emitter::new(target);
+            let selection = match target.arch {
+                super::Arch::AArch64 => {
+                    super::emit_aarch64_builtin_throwable_previous_arg(&module, &mut emitter, "fail", "done");
+                    "csel x0, x1, x0, eq"
+                }
+                super::Arch::X86_64 => {
+                    super::emit_x86_64_builtin_throwable_previous_arg(&module, &mut emitter, "fail", "done");
+                    "cmove rax, rdi"
+                }
+            };
+            let asm = emitter.output();
+            assert!(asm.find(selection).unwrap() < asm.find("__rt_incref").unwrap(), "{name}");
+            assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}");
+        }
+    }
+
     /// Both native ABIs release default message and previous owners before overwriting the slots.
     #[test]
     fn throwable_default_initialization_releases_displaced_owners_on_all_targets() {

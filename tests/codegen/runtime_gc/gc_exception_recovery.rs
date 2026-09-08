@@ -10,6 +10,33 @@
 
 use crate::support::*;
 
+/// A native caller retains eval's boxed previous link after releasing the outer exception.
+#[test]
+fn test_core_eval_throwable_previous_survives_outer_release() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function checkEvalPreviousOwner(string $source): void {
+    try { eval($source); }
+    catch (Exception $outer) {
+        $previous = $outer->getPrevious();
+        unset($outer);
+        if ($previous !== null) {
+            echo $previous->getMessage(), ":", $previous->getCode(), "|";
+        } else {
+            echo "lost-previous|";
+        }
+        unset($previous);
+    }
+}
+$source = 'throw new Exception("outer", 7, new RuntimeException("inner", 13)); // ' . $argc;
+checkEvalPreviousOwner($source);
+checkEvalPreviousOwner($source);
+unset($source);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "inner:13|inner:13|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 const DECLARATIONS: &str = r#"
 class GcThrowCycle {
     public mixed $self = null;
