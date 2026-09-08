@@ -210,7 +210,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("mov x15, #0");                                         // initialize the property index to zero
     emitter.label("__rt_gc_collect_cycles_count_object_loop");
     emitter.instruction("cmp x15, x13");                                        // have we visited every property slot?
-    emitter.instruction("b.ge __rt_gc_collect_cycles_count_next");              // finish the object scan once all properties were visited
+    emitter.instruction("b.ge __rt_gc_collect_cycles_count_object_dynamic");    // inspect the dynamic-property hash after fixed slots
     emitter.instruction("mov x0, #16");                                         // each property slot occupies 16 bytes
     emitter.instruction("mul x0, x15, x0");                                     // compute the byte offset for this property slot
     emitter.instruction("add x0, x0, #8");                                      // skip the leading class_id field
@@ -243,6 +243,20 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_count_object_next");
     emitter.instruction("add x15, x15, #1");                                    // advance to the next property slot
     emitter.instruction("b __rt_gc_collect_cycles_count_object_loop");          // continue scanning object child pointers
+
+    // -- dynamic-property storage is an owned graph edge, including stdClass --
+    emitter.label("__rt_gc_collect_cycles_count_object_dynamic");
+    emitter.instruction("ldr x12, [sp, #0]");                                   // reload the source heap header after fixed-slot traversal
+    emitter.instruction("add x12, x12, #16");                                   // recover the object payload pointer
+    emitter.instruction("ldr x14, [x12]");                                      // read the already-validated runtime class id
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x15, [x15, x14, lsl #3]");                         // determine whether this object owns a dynamic-property hash
+    emitter.instruction("cbz x15, __rt_gc_collect_cycles_count_next");          // fixed-only objects have no extra graph edge
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_object_payload_sizes");
+    emitter.instruction("ldr x15, [x15, x14, lsl #3]");                         // locate the tail using the declared layout size
+    emitter.instruction("sub x15, x15, #8");                                    // the hash occupies the final payload word
+    emitter.instruction("ldr x0, [x12, x15]");                                  // load the dynamic-property hash child
+    emitter.instruction("bl __rt_gc_note_child_ref");                           // count the object's ownership of its dynamic properties
 
     emitter.label("__rt_gc_collect_cycles_count_next");
     emitter.instruction("ldr x9, [sp, #0]");                                    // restore the current heap header scan pointer after nested helper calls

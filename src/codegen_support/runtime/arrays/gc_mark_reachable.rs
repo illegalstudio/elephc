@@ -200,7 +200,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the current property index
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the property count
     emitter.instruction("cmp x9, x10");                                         // have we scanned every property?
-    emitter.instruction("b.ge __rt_gc_mark_reachable_return");                  // finish once every property slot has been visited
+    emitter.instruction("b.ge __rt_gc_mark_reachable_object_dynamic");          // visit the dynamic-property hash after fixed slots
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the object pointer
     emitter.instruction("mov x11, #16");                                        // each property slot occupies 16 bytes
     emitter.instruction("mul x11, x9, x11");                                    // compute the byte offset for this property slot
@@ -230,6 +230,19 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // advance to the next property slot
     emitter.instruction("str x9, [sp, #24]");                                   // save the updated property index
     emitter.instruction("b __rt_gc_mark_reachable_object_loop");                // continue traversing object properties
+
+    // -- a reachable object keeps its dynamic-property hash and descendants alive --
+    emitter.label("__rt_gc_mark_reachable_object_dynamic");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object after recursive fixed-slot visits
+    emitter.instruction("ldr x10, [x0]");                                       // read the already-validated runtime class id
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // test whether this layout owns a dynamic-property tail
+    emitter.instruction("cbz x11, __rt_gc_mark_reachable_return");              // fixed-only objects have no extra child
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_payload_sizes");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // use the class layout rather than recycled allocation capacity
+    emitter.instruction("sub x11, x11, #8");                                    // locate the final payload word containing the hash
+    emitter.instruction("ldr x0, [x0, x11]");                                   // load the owned dynamic-property hash
+    emitter.instruction("bl __rt_gc_mark_reachable");                           // retain reachability through dynamic properties
 
     emitter.label("__rt_gc_mark_reachable_return");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
@@ -404,7 +417,7 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_mark_reachable_object_loop");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the current property index after any recursive child traversal
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // have we visited every object property slot?
-    emitter.instruction("jae __rt_gc_mark_reachable_return");                   // yes — finish once the object property scan is exhausted
+    emitter.instruction("jae __rt_gc_mark_reachable_object_dynamic");           // visit the dynamic-property hash after fixed slots
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the current object pointer before computing the selected property slot address
     emitter.instruction("mov r8, rcx");                                         // preserve the logical property index while scaling it into a byte offset
     emitter.instruction("imul r8, 16");                                         // scale the property index by 16 bytes per object property slot
@@ -432,6 +445,18 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, 1");                                          // advance to the next object property slot in this heap node
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // persist the updated object property index for the next traversal iteration
     emitter.instruction("jmp __rt_gc_mark_reachable_object_loop");              // continue traversing object property child pointers
+
+    // -- a reachable object keeps its dynamic-property hash and descendants alive --
+    emitter.label("__rt_gc_mark_reachable_object_dynamic");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the object after recursive fixed-slot visits
+    emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // read the already-validated runtime class id
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_class_object_dynamic_prop_flags");
+    emitter.instruction("cmp QWORD PTR [r8 + rcx * 8], 0");                     // test whether this layout owns a dynamic-property tail
+    emitter.instruction("je __rt_gc_mark_reachable_return");                    // fixed-only objects have no extra child
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_class_object_payload_sizes");
+    emitter.instruction("mov r8, QWORD PTR [r8 + rcx * 8]");                    // use the declared layout rather than recycled allocation capacity
+    emitter.instruction("mov rax, QWORD PTR [rdx + r8 - 8]");                   // load the owned hash from the final payload word
+    emitter.instruction("call __rt_gc_mark_reachable");                         // retain reachability through dynamic properties
 
     emitter.label("__rt_gc_mark_reachable_return");
     emitter.instruction("leave");                                               // tear down the recursive traversal frame before returning to the caller

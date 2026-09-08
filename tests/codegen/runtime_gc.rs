@@ -37,6 +37,8 @@ mod stack_args;
 mod cow_and_cycles;
 #[path = "runtime_gc/core_builtins.rs"]
 mod core_builtins;
+#[path = "runtime_gc/dynamic_property_cycles.rs"]
+mod dynamic_property_cycles;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
 #[path = "runtime_gc/heap.rs"]
