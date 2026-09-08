@@ -21,12 +21,19 @@ pub(super) fn emit_aarch64_compare(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the left string pointer and length
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for string casting
     emitter.instruction("bl __rt_mixed_cast_string");                           // cast the right boxed operand to a PHP string pair
+    emitter.instruction("str x1, [sp, #24]");                                   // preserve the right cast allocation until concatenation has consumed it
     emitter.instruction("mov x3, x1");                                          // move the right string pointer into concat's right pointer register
     emitter.instruction("mov x4, x2");                                          // move the right string length into concat's right length register
     emitter.instruction("ldp x1, x2, [sp, #8]");                                // reload the left string pair for concat
     emitter.instruction("bl __rt_concat");                                      // concatenate the two PHP string pairs
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string for boxing the concat result
     emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the concatenated string
+    emitter.instruction("str x0, [sp, #32]");                                   // preserve the independent result while releasing cast temporaries
+    emitter.instruction("ldr x0, [sp, #8]");                                    // recover the left string cast result
+    emitter.instruction("bl __rt_heap_free");                                   // release owned string copies while ignoring scalar scratch results
+    emitter.instruction("ldr x0, [sp, #24]");                                   // recover the right string cast result
+    emitter.instruction("bl __rt_heap_free");                                   // release its owned copy or ignore borrowed scratch
+    emitter.instruction("ldr x0, [sp, #32]");                                   // transfer only the concatenated Mixed result to the caller
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the concat wrapper frame
     emitter.instruction("ret");                                                 // return the boxed concat result to Rust

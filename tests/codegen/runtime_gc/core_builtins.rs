@@ -49,6 +49,27 @@ fn test_core_eval_property_defaults_release_temporary_cells() {
     );
 }
 
+/// Concatenation releases the owned string copies created for both boxed operands.
+#[test]
+fn test_core_eval_concat_releases_string_cast_copies() {
+    assert_core_eval_collection_cleanup(
+        "$left = \"left\"; $right = \"right\";",
+        "$joined = $left . $right; unset($joined);",
+    );
+}
+
+/// Concatenation keeps scalar cast scratch separate from owned string copies.
+#[test]
+fn test_core_eval_concat_preserves_borrowed_scalar_cast_results() {
+    let source = r#"<?php
+$source = '$text = "x"; $number = 23; $flag = true; $nothing = null;
+echo $text . $number, ":", $number . $text, ":", $flag . $text,
+    ":", $text . $nothing, ":", $text;' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "x23:23x:1x:x:x");
+}
+
 /// Compound writes and increments release read results, arithmetic cells, and receiver/name leases.
 #[test]
 fn test_core_eval_property_compound_updates_release_temporary_cells() {
