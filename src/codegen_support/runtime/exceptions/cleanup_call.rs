@@ -8,6 +8,7 @@
 //! - The C arguments are a unary native entry, its payload, and an owned pending-Throwable slot.
 //! - Both internal and C unary argument registers receive the payload on x86_64.
 //! - The caller's handler and active exception are restored before ordinary cleanup resumes.
+//! - The integer result reports a newly caught throw, independently of the pending owner slot.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::{
@@ -20,6 +21,7 @@ const ENTRY: usize = 8;
 const PAYLOAD: usize = 16;
 const OUTPUT: usize = 24;
 const PREVIOUS: usize = 32;
+const CAUGHT: usize = 40;
 
 /// Emits the non-escaping unary cleanup boundary; the caller owns the pending exception slot.
 pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
@@ -37,6 +39,7 @@ pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
     abi::store_at_offset(emitter, result, PREVIOUS);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    abi::emit_store_zero_to_local_slot(emitter, CAUGHT);
     for (symbol, offset) in [
         ("_exc_handler_top", HANDLER),
         ("_exc_call_frame_top", HANDLER - 8),
@@ -60,6 +63,8 @@ pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
 
     // -- publish the newest exception before linking any older pending cleanup throw --
     emitter.label("__rt_cleanup_invoke_caught");
+    abi::emit_load_int_immediate(emitter, result, 1);
+    abi::store_at_offset(emitter, result, CAUGHT);
     abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::load_at_offset(emitter, scratch, OUTPUT);
@@ -75,6 +80,7 @@ pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
         abi::load_at_offset(emitter, result, offset);
         abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
     }
+    abi::load_at_offset(emitter, result, CAUGHT);
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);
 }
@@ -115,6 +121,11 @@ mod tests {
             assert!(enter < invoke && invoke < caught && caught < chain, "{name}");
             assert!(!asm.contains("__rt_throw_current"), "{name}");
             assert!(asm.matches("_exc_handler_top").count() >= 3, "{name}");
+            let caught_flag = match target.arch {
+                Arch::AArch64 => "ldur x0, [x29, #-40]",
+                Arch::X86_64 => "mov rax, QWORD PTR [rbp - 40]",
+            };
+            assert!(asm.contains(caught_flag), "{name}: return a separate new-throw flag");
         }
     }
 }

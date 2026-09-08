@@ -10,6 +10,26 @@
 
 use crate::support::*;
 
+/// Cleanup while a constructor throw is pending must still write back every array-element reference.
+#[test]
+fn test_core_eval_pending_constructor_throw_preserves_all_reference_writebacks() {
+    let source = r#"<?php
+class PendingWritebackConstructor {
+    public function __construct(int &$left, int &$right) {
+        $left += 1;
+        $right += 2;
+        throw new RuntimeException("pending");
+    }
+}
+$source = '$values = ["left" => "20", "right" => "30"];
+try { new PendingWritebackConstructor($values["left"], $values["right"]); }
+catch (RuntimeException $error) { echo $error->getMessage(), ":"; }
+echo gettype($values["left"]), ":", $values["left"], "|", gettype($values["right"]), ":", $values["right"];' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "pending:integer:21|integer:32");
+}
+
 /// Recycled temporary arrays do not inherit PHP reference targets from previous allocations.
 #[test]
 fn test_core_eval_freed_array_reference_metadata_does_not_alias_new_values() {

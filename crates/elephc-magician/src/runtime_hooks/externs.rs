@@ -487,7 +487,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_install_ob_handler_hook(callback: usize);
     pub(super) fn __elephc_eval_value_final_object_identity(value: *mut RuntimeCell) -> u64;
     /// Consumes a boxed owner, preserving or chaining the owned Throwable already held by the slot.
-    pub(super) fn __elephc_eval_value_release_v2(value: *mut RuntimeCell, throwable: *mut *mut RuntimeCell);
+    /// Returns nonzero only if this release caught a new exception.
+    pub(super) fn __elephc_eval_value_release_v3(value: *mut RuntimeCell, throwable: *mut *mut RuntimeCell) -> i32;
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Retains the original boxed handler value installed by compiled AOT code.
     pub(super) fn __elephc_eval_pcntl_aot_signal_handler(signal: i64) -> *mut RuntimeCell;

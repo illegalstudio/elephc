@@ -324,6 +324,9 @@ instead of jumping across Rust frames.
 Interpreter value releases and native-call argument cleanup use a versioned
 release boundary with an owned Throwable accumulator. Releasing a group finishes
 every element and preserves earlier destructor exceptions in the resulting chain.
+The release status reports only a newly caught exception, separately from that
+accumulator. An earlier pending throw must not turn successful temporary cleanup
+into a failure that interrupts native by-reference writeback.
 The eval object-edge callback returns that owned exception box to native code;
 it never propagates by jumping out of the Rust registry iteration.
 Scope replacement, unset, and free similarly return exceptions through versioned
