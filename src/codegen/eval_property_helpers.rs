@@ -26,6 +26,7 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 mod dynamic_properties;
+mod private_shadow;
 use dynamic_properties::{
     emit_dynamic_property_get_fallback, emit_dynamic_property_set_fallback,
     emit_property_hash_slot_helper,
@@ -587,14 +588,21 @@ fn emit_aarch64_property_name_compare(
     let miss_label = slot_access_miss_label(module, slot, mode);
     emitter.instruction(&format!("cbz x0, {}", miss_label));                    // continue property dispatch when names differ
     let scope_ok_label = slot_scope_ok_label(module, slot, mode);
+    let private_shadow_label = format!("{scope_ok_label}_eval_shadow");
     let scope_fail_label = if slot.is_hidden_shadow {
         miss_label.as_str()
+    } else if slot.visibility == Visibility::Private {
+        private_shadow_label.as_str()
     } else {
         fail_label
     };
     emit_aarch64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, scope_fail_label);
     emitter.label(&scope_ok_label);
     emitter.instruction(&format!("b {}", target_label));                        // dispatch after scoped visibility is satisfied
+    if slot.visibility == Visibility::Private && !slot.is_hidden_shadow {
+        emitter.label(&private_shadow_label);
+        private_shadow::emit_separate_property_probe(module, emitter, &miss_label, fail_label);
+    }
     emitter.label(&miss_label);
 }
 
@@ -622,14 +630,21 @@ fn emit_x86_64_property_name_compare(
     let miss_label = slot_access_miss_label(module, slot, mode);
     emitter.instruction(&format!("je {}", miss_label));                         // continue property dispatch when names differ
     let scope_ok_label = slot_scope_ok_label(module, slot, mode);
+    let private_shadow_label = format!("{scope_ok_label}_eval_shadow");
     let scope_fail_label = if slot.is_hidden_shadow {
         miss_label.as_str()
+    } else if slot.visibility == Visibility::Private {
+        private_shadow_label.as_str()
     } else {
         fail_label
     };
     emit_x86_64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, scope_fail_label);
     emitter.label(&scope_ok_label);
     emitter.instruction(&format!("jmp {}", target_label));                      // dispatch after scoped visibility is satisfied
+    if slot.visibility == Visibility::Private && !slot.is_hidden_shadow {
+        emitter.label(&private_shadow_label);
+        private_shadow::emit_separate_property_probe(module, emitter, &miss_label, fail_label);
+    }
     emitter.label(&miss_label);
 }
 

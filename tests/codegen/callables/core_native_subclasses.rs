@@ -9,6 +9,37 @@
 
 use crate::support::*;
 
+/// Same-named eval fields never overwrite private native parent fields or expose private access.
+#[test]
+fn test_core_eval_native_private_parent_property_has_distinct_child_storage() {
+    let source = r#"<?php
+class NativePrivateParent {
+    private int $value = 3;
+    public function nativeValue(): int { return $this->value; }
+}
+$source = 'class EvalPublicPrivateShadow extends NativePrivateParent { public int $value = 9; }
+class EvalProtectedPrivateShadow extends NativePrivateParent {
+    protected int $value = 11;
+    public function childValue(): int { return $this->value; }
+}
+$public = new EvalPublicPrivateShadow();
+echo $public->value, ":", $public->nativeValue(), "|";
+$public->value = 15;
+$copy = clone $public;
+$copy->value = 17;
+echo $public->value, ":", $copy->value, ":", $copy->nativeValue(), "|";
+$vars = get_mangled_object_vars($public);
+echo $vars["value"], ":", $vars["\0NativePrivateParent\0value"], "|";
+$protected = new EvalProtectedPrivateShadow();
+echo $protected->childValue(), ":", $protected->nativeValue(), "|";
+try { echo $protected->value; } catch (Error $error) { echo "protected|"; }
+$parent = new NativePrivateParent();
+try { echo $parent->value; } catch (Error $error) { echo "private"; }' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "9:3|15:17:3|15:3|11:3|protected|private");
+}
+
 /// Eval overrides initialize and share protected native storage without exposing protected reads.
 #[test]
 fn test_core_eval_native_protected_property_overrides_use_declaring_scope() {

@@ -14,6 +14,8 @@ pub mod callables;
 pub mod context;
 pub mod declared_symbols;
 pub(crate) mod dynamic_destructors;
+#[cfg(not(test))]
+mod dynamic_properties;
 pub(crate) mod ob_handlers;
 pub mod execute;
 #[cfg(not(test))]
