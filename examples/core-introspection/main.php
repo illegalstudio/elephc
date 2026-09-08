@@ -16,6 +16,7 @@ inspect_request('core', 7, 'ready');
 
 class DisplaySettings {
     public string $theme = 'dark';
+    public mixed $palette = ['accent' => ['blue', 'white']];
     public string $label { get => 'Theme: ' . $this->theme; }
     public function reset(): void { $this->theme = 'dark'; }
 }
@@ -27,3 +28,4 @@ echo 'Public methods: ', implode(', ', get_class_methods(DisplaySettings::class)
 $source = 'return new DisplaySettings();' . ' // ' . $argc;
 $settings = eval($source);
 echo 'Runtime object methods: ', implode(', ', get_class_methods($settings)), "\n";
+echo 'Default accent: ', $settings->palette['accent'][0], "\n";

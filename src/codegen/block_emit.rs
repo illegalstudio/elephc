@@ -1162,6 +1162,9 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
         }
+        LiteralDefaultValue::BoxedAssocArray { value_type, entries } => {
+            super::literal_defaults::emit_boxed_assoc_array_literal_to_result(ctx, value_type, entries)?;
+        }
         LiteralDefaultValue::BoxedArray {
             elem_type,
             elements,
