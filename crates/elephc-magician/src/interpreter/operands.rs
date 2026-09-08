@@ -84,6 +84,38 @@ pub(in crate::interpreter) fn release_expr_result(
     if value.is_borrowed() { Ok(()) } else { eval_release_value(context, values, value) }
 }
 
+/// Keeps source-created method arguments alive through dispatch and releases them after writeback.
+/// Borrowed variable arguments remain owned by their scope; borrowed returns acquire an owner
+/// before argument cleanup so an identity method can safely return a temporary parameter.
+pub(in crate::interpreter) fn with_eval_method_arguments<V: RuntimeValueOps>(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut V,
+    consume: impl FnOnce(
+        Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
+    ) -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let arguments = eval_method_call_arg_values(args, context, scope, values)?;
+    let result = consume(arguments.clone(), context, scope, values);
+    let result = result.and_then(|value| {
+        if value.is_borrowed() { values.retain(value) } else { Ok(value) }
+    });
+    let mut released = Ok(());
+    for argument in arguments {
+        let cleanup = release_expr_result(argument.value, context, values);
+        if released.is_ok() { released = cleanup; }
+    }
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = eval_release_value(context, values, value);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
 /// Evaluates a condition and consumes its temporary owner after reading PHP truthiness.
 pub(in crate::interpreter) fn eval_condition(
     expr: &EvalExpr,

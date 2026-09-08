@@ -11,6 +11,75 @@
 use super::super::*;
 use super::support::*;
 
+/// Receiver leases must not make the fake runtime run a destructor before the last owner exits.
+#[test]
+fn retained_object_lease_is_not_a_final_release() {
+    let mut values = FakeOps::default();
+    let object = values.new_object("stdClass").unwrap();
+    let lease = values.retain(object).unwrap();
+    assert_eq!(values.final_object_identity_for_release(lease).unwrap(), None);
+    values.release(lease).unwrap();
+    assert_eq!(values.final_object_identity_for_release(object).unwrap(),
+        Some(values.object_identity(object).unwrap()));
+}
+
+/// Caller cleanup acquires an independent borrowed return before releasing its temporary input.
+#[test]
+fn method_arguments_keep_borrowed_returns_alive() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let args = [EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(7)))];
+    let result = with_eval_method_arguments(
+        &args, &mut context, &mut scope, &mut values,
+        |arguments, _, _, _| Ok(arguments[0].value.borrowed()),
+    ).unwrap();
+    assert_eq!(values.retains, vec![result]);
+    assert_eq!(values.releases, vec![result]);
+    assert!(!result.is_borrowed());
+}
+
+/// Dispatch failures still release source-created arguments while preserving borrowed variables.
+#[test]
+fn failed_method_dispatch_releases_temporary_arguments() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let borrowed = values.int(1).unwrap();
+    scope.set("existing", borrowed, ScopeCellOwnership::Owned);
+    let args = [
+        EvalCallArg::positional(EvalExpr::LoadVar("existing".into())),
+        EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(7))),
+    ];
+    let result = with_eval_method_arguments(
+        &args, &mut context, &mut scope, &mut values,
+        |_, _, _, _| Err(EvalStatus::RuntimeFatal),
+    );
+    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert_eq!(values.releases.len(), 1);
+    assert_ne!(values.releases[0], borrowed);
+}
+
+/// A malformed later spread releases itself and any previously evaluated source arguments.
+#[test]
+fn failed_argument_evaluation_releases_previous_temporaries() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let args = [
+        EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(7))),
+        EvalCallArg::spread(EvalExpr::Const(EvalConst::Int(9))),
+    ];
+    let result = with_eval_method_arguments(
+        &args, &mut context, &mut scope, &mut values,
+        |_, _, _, _| panic!("invalid spread must fail before dispatch"),
+    );
+    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert_eq!(values.releases.len(), 2);
+    assert_eq!(values.get(values.releases[0]), FakeValue::Int(9));
+    assert_eq!(values.get(values.releases[1]), FakeValue::Int(7));
+}
+
 /// Native activation cleanup releases defaults while leaving borrowed caller operands intact.
 #[test]
 fn native_bound_argument_cleanup_preserves_borrowed_inputs() {

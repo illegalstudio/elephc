@@ -13,6 +13,9 @@ impl FakeOps {
     /// Records fake releases without freeing handles needed for assertions.
     pub(super) fn runtime_release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         self.releases.push(value);
+        if let Some(owners) = self.cell_owners.get_mut(&(value.as_ptr() as usize)) {
+            *owners = owners.saturating_sub(1);
+        }
         Ok(())
     }
     /// Records a retained lease while preserving fake cell identity.
@@ -21,6 +24,7 @@ impl FakeOps {
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.retains.push(value);
+        *self.cell_owners.entry(value.as_ptr() as usize).or_default() += 1;
         Ok(value.owned())
     }
     /// Records fake PHP warnings without writing to stderr.

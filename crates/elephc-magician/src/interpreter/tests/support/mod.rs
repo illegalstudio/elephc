@@ -95,6 +95,8 @@ pub(super) struct FakeOps {
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
     pub(super) retains: Vec<RuntimeCellHandle>,
+    /// Explicit cell owners only; fake containers do not model native heap payload refcounts.
+    pub(super) cell_owners: HashMap<usize, usize>,
     pub(super) warnings: Vec<String>,
     pub(super) fail_array_set_call: Option<usize>,
     pub(super) array_set_calls: usize,
@@ -130,6 +132,7 @@ impl FakeOps {
         self.next_id += 1;
         let id = self.next_id;
         self.values.insert(id, value);
+        self.cell_owners.insert(id, 1);
         RuntimeCellHandle::from_raw(id as *mut RuntimeCell)
     }
 

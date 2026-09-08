@@ -56,48 +56,56 @@ pub(in crate::interpreter) fn eval_call_arg_values(
     let mut evaluated_args = Vec::with_capacity(args.len());
     let mut saw_named = false;
 
-    for arg in args {
-        if arg.is_spread() {
+    let evaluated = (|| {
+        for arg in args {
+            if arg.is_spread() {
+                if saw_named {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                let spread = eval_expr(arg.value(), context, caller_scope, values)?;
+                let unpacked = (|| {
+                    if !values.is_array_like(spread)? {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                    append_unpacked_call_arg_values(
+                        spread, &mut evaluated_args, &mut saw_named, context, values,
+                    )
+                })();
+                let released = release_expr_result(spread, context, values);
+                unpacked.and(released)?;
+                continue;
+            }
+
+            if let Some(name) = arg.name() {
+                saw_named = true;
+                let (value, ref_target) =
+                    eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+                evaluated_args.push(EvaluatedCallArg {
+                    name: Some(name.to_string()),
+                    value,
+                    ref_target,
+                });
+                continue;
+            }
+
             if saw_named {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let spread = eval_expr(arg.value(), context, caller_scope, values)?;
-            if !values.is_array_like(spread)? {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            append_unpacked_call_arg_values(
-                spread,
-                &mut evaluated_args,
-                &mut saw_named,
-                context,
-                values,
-            )?;
-            continue;
-        }
-
-        if let Some(name) = arg.name() {
-            saw_named = true;
-            let (value, ref_target) =
-                eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+            let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
             evaluated_args.push(EvaluatedCallArg {
-                name: Some(name.to_string()),
+                name: None,
                 value,
                 ref_target,
             });
-            continue;
         }
-
-        if saw_named {
-            return Err(EvalStatus::RuntimeFatal);
+        Ok(())
+    })();
+    if let Err(status) = evaluated {
+        for argument in evaluated_args {
+            let _ = release_expr_result(argument.value, context, values);
         }
-        let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
-        evaluated_args.push(EvaluatedCallArg {
-            name: None,
-            value,
-            ref_target,
-        });
+        return Err(status);
     }
-
     Ok(evaluated_args)
 }
 

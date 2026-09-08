@@ -92,6 +92,47 @@ fn test_core_eval_native_argument_packing_releases_indexes() {
     );
 }
 
+/// Native method syntax releases fresh positional, named, and dynamic-call operands.
+#[test]
+fn test_core_eval_native_method_calls_release_source_temporaries() {
+    assert_core_eval_collection_cleanup_with_native(
+        "class NativeTemporarySink {
+            public function accept(int $value): void {}
+            public static function acceptStatic(string $value): void {}
+         }",
+        "$object = new NativeTemporarySink(); $method = \"accept\";
+         $class = \"NativeTemporarySink\"; $staticMethod = \"acceptStatic\";",
+        "$object->accept(7);
+         $object->accept(value: 8);
+         $object->{$method}(9);
+         $object?->accept(10);
+         $object?->{$method}(11);
+         $object->accept(...[12]);
+         $object->accept(...[\"value\" => 13]);
+         NativeTemporarySink::acceptStatic(\"temporary\");
+         $class::{$staticMethod}(\"dynamic\");",
+    );
+}
+
+/// Source argument cleanup preserves returns aliasing native and eval method parameters.
+#[test]
+fn test_core_eval_method_argument_cleanup_preserves_return_values() {
+    let source = r#"<?php
+class NativeIdentityMethod {
+    public static function identity(string $value): string { return $value; }
+}
+$source = 'class DynamicIdentityMethod {
+    public function identity($value) { return $value; }
+}
+$object = new DynamicIdentityMethod();
+$first = NativeIdentityMethod::identity("native");
+$second = $object->identity("dynamic");
+echo $first, ":", $second;' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "native:dynamic");
+}
+
 /// Native static calls free nested default arrays and their materialization operands.
 #[test]
 fn test_core_eval_native_default_arguments_release_nested_arrays() {
