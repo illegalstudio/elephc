@@ -112,6 +112,39 @@ fn method_arguments_keep_borrowed_returns_alive() {
     assert!(!result.is_borrowed());
 }
 
+/// Call-array extraction releases its cells on errors and promotes borrowed callback returns.
+#[test]
+fn call_array_arguments_balance_extracted_owners_on_return_and_error() {
+    for fail_dispatch in [false, true] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let array = values.assoc_new(1).unwrap();
+        let key = values.string("value").unwrap();
+        let source = values.string("original").unwrap();
+        let array = values.array_set(array, key, source).unwrap();
+        values.release(key).unwrap();
+        values.release(source).unwrap();
+        let mut extracted = None;
+        let result = with_eval_array_call_arguments(
+            array, &mut context, &mut values,
+            |arguments, _, _| {
+                assert_eq!(arguments[0].name.as_deref(), Some("value"));
+                assert!(arguments[0].value.is_borrowed());
+                extracted = Some(arguments[0].value);
+                if fail_dispatch { Err(EvalStatus::RuntimeFatal) } else { Ok(arguments[0].value) }
+            },
+        );
+        assert_eq!(result.is_err(), fail_dispatch);
+        let extracted = extracted.unwrap();
+        assert_eq!(values.cell_owners[&(extracted.as_ptr() as usize)], usize::from(!fail_dispatch));
+        if let Ok(result) = result {
+            assert_eq!(values.string_bytes(result).unwrap(), b"original");
+            values.release(result).unwrap();
+        }
+        values.release(array).unwrap();
+    }
+}
+
 /// Dispatch failures still release source-created arguments while preserving borrowed variables.
 #[test]
 fn failed_method_dispatch_releases_temporary_arguments() {

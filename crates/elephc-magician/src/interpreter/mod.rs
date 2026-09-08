@@ -209,8 +209,10 @@ pub fn execute_context_function_call_array_outcome(
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let evaluated_args = eval_array_call_arg_values(arg_array, context, values)?;
-    match eval_callable_with_call_array_args(name, evaluated_args, context, values) {
+    let result = with_eval_array_call_arguments(arg_array, context, values, |arguments, context, values| {
+        eval_callable_with_call_array_args(name, arguments, context, values)
+    });
+    match result {
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()

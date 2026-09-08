@@ -131,6 +131,26 @@ pub(in crate::interpreter) fn finish_eval_argument_values(
 
 pub(in crate::interpreter) use with_eval_call_arguments as with_eval_method_arguments;
 
+/// Owns extracted call-array values until dispatch and reference writeback have completed.
+pub(in crate::interpreter) fn with_eval_array_call_arguments<V: RuntimeValueOps>(
+    array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut V,
+    consume: impl FnOnce(
+        Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut V,
+    ) -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let arguments = eval_array_call_arg_values(array, context, values)?;
+    let borrowed_arguments = arguments.iter().cloned().map(|mut argument| {
+        argument.value = argument.value.borrowed();
+        argument
+    }).collect();
+    let result = consume(borrowed_arguments, context, values);
+    finish_eval_argument_values(
+        result, arguments.into_iter().map(|argument| argument.value), context, values,
+    )
+}
+
 /// Evaluates a condition and consumes its temporary owner after reading PHP truthiness.
 pub(in crate::interpreter) fn eval_condition(
     expr: &EvalExpr,

@@ -288,13 +288,19 @@ pub(in crate::interpreter) fn eval_array_call_arg_values(
     let len = values.array_len(arg_array)?;
     let mut evaluated_args = Vec::with_capacity(len);
     let mut saw_named = false;
-    append_unpacked_call_arg_values(
+    let unpacked = append_unpacked_call_arg_values(
         arg_array,
         &mut evaluated_args,
         &mut saw_named,
         context,
         values,
-    )?;
+    );
+    if let Err(status) = unpacked {
+        for argument in evaluated_args {
+            let _ = release_expr_result(argument.value, context, values);
+        }
+        return Err(status);
+    }
     Ok(evaluated_args)
 }
 
