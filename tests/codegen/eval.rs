@@ -26477,7 +26477,7 @@ echo "after";
 /// Explicit collection runs eval-declared destructors after their cyclic objects lose external roots.
 #[test]
 fn test_eval_dynamic_object_runs_destructor_after_cycle_collection() {
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalCycleDropBox {
     public function __construct($name) { $this->name = $name; }
@@ -26486,11 +26486,13 @@ eval('class EvalCycleDropBox {
 $box = new EvalCycleDropBox("A");
 $box->self = $box;
 unset($box);
-gc_collect_cycles();
+$collected = gc_collect_cycles();
+echo $collected > 0 ? "collected:" : "uncollected:";
 echo "after";');
 "#,
     );
-    assert_eq!(out, "drop:A:after");
+    assert!(out.success, "stdout={:?} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop:A:collected:after", "{}", out.stderr);
 }
 
 /// Verifies eval-declared subclasses inherit generated/AOT destructors.
