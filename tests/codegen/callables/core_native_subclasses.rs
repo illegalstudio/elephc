@@ -9,6 +9,34 @@
 
 use crate::support::*;
 
+/// Eval overrides initialize and share protected native storage without exposing protected reads.
+#[test]
+fn test_core_eval_native_protected_property_overrides_use_declaring_scope() {
+    let source = r#"<?php
+class NativeProtectedParent {
+    protected int $guard = 3;
+    public function nativeGuard(): int { return $this->guard; }
+}
+$source = 'class EvalProtectedChild extends NativeProtectedParent {
+    protected int $guard = 9;
+    public function change(): void { $this->guard = 11; }
+    public function inspect(): int { return $this->guard; }
+}
+class EvalPublicChild extends NativeProtectedParent { public int $guard = 15; }
+$child = new EvalProtectedChild();
+echo $child->inspect(), ":", $child->nativeGuard(), "|";
+$child->change();
+echo $child->inspect(), ":", $child->nativeGuard(), "|";
+try { echo $child->guard; } catch (Error $error) { echo "protected|"; }
+$public = new EvalPublicChild();
+echo $public->guard, ":", $public->nativeGuard(), "|";
+$public->guard = 17;
+echo $public->nativeGuard();' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "9:9|11:11|protected|15:15|17");
+}
+
 /// Extra eval fields coexist with native overrides, protected fields, and independent cloned arrays.
 #[test]
 fn test_core_eval_native_subclass_property_storage_and_clone() {

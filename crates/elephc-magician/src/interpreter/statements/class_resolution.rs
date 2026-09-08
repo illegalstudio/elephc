@@ -403,6 +403,24 @@ pub(super) fn eval_dynamic_class_native_property_metadata(
     eval_reflection_aot_property_access_metadata(&parent, property_name, values)
 }
 
+/// Accesses an already authorized eval property using its non-private native slot's declaring scope.
+/// Eval visibility checks stay at the caller; private parent slots never become child overrides.
+pub(super) fn eval_with_native_property_storage_scope<T, V: RuntimeValueOps>(
+    class_name: &str,
+    storage_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut V,
+    operation: impl FnOnce(&mut V) -> Result<T, EvalStatus>,
+) -> Result<T, EvalStatus> {
+    let native = eval_dynamic_class_native_property_metadata(class_name, storage_name, context, values)?;
+    if let Some((declaring_class, visibility, _, false)) = native {
+        if visibility != EvalVisibility::Private {
+            return eval_with_native_bridge_scope(&declaring_class, context, || operation(values));
+        }
+    }
+    operation(values)
+}
+
 /// Returns generated/AOT class-constant metadata inherited by an eval-declared class.
 pub(super) fn eval_dynamic_class_native_constant_metadata(
     called_class_name: &str,
@@ -503,7 +521,10 @@ pub(super) fn eval_dynamic_class_allocate_object(
             };
             let storage_name = eval_instance_property_storage_name(class.name(), property);
             if let Some(value) = value {
-                let written = values.property_set(object, &storage_name, value);
+                let written = eval_with_native_property_storage_scope(
+                    class.name(), &storage_name, context, values,
+                    |values| values.property_set(object, &storage_name, value),
+                );
                 let released = release_expr_result(value, context, values);
                 written.and(released)?;
                 context.mark_dynamic_property_initialized(identity, &storage_name);

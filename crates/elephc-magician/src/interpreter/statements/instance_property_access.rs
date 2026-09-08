@@ -145,7 +145,10 @@ pub(in crate::interpreter) fn eval_property_get_result(
     {
         return eval_reference_target_value(&target, context, values);
     }
-    values.property_get(object, &storage_property_name)
+    eval_with_native_property_storage_scope(
+        &object_class_name, &storage_property_name, context, values,
+        |values| values.property_get(object, &storage_property_name),
+    )
 }
 
 /// Writes one object property while enforcing eval-declared member visibility.
@@ -333,9 +336,15 @@ pub(in crate::interpreter) fn eval_property_set_result(
             values,
         )?;
         context.mark_dynamic_property_initialized(identity, &storage_property_name);
-        return values.property_set(object, &storage_property_name, value);
+        return eval_with_native_property_storage_scope(
+            &object_class_name, &storage_property_name, context, values,
+            |values| values.property_set(object, &storage_property_name, value),
+        );
     }
-    values.property_set(object, &storage_property_name, value)?;
+    eval_with_native_property_storage_scope(
+        &object_class_name, &storage_property_name, context, values,
+        |values| values.property_set(object, &storage_property_name, value),
+    )?;
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
 }
@@ -375,7 +384,10 @@ pub(super) fn eval_property_reference_bind_result(
     )?;
     let value = eval_reference_target_value(&target, context, values)?;
     context.bind_dynamic_property_alias(identity, &storage_property_name, target);
-    values.property_set(object, &storage_property_name, value)?;
+    eval_with_native_property_storage_scope(
+        &object_class_name, &storage_property_name, context, values,
+        |values| values.property_set(object, &storage_property_name, value),
+    )?;
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
 }
@@ -625,7 +637,12 @@ pub(in crate::interpreter) fn eval_property_unset_result(
             context.remove_dynamic_property_alias(identity, &storage_property_name);
             context.mark_dynamic_property_uninitialized(identity, &storage_property_name);
             let null = values.null()?;
-            return values.property_set(object, &storage_property_name, null);
+            let written = eval_with_native_property_storage_scope(
+                &object_class_name, &storage_property_name, context, values,
+                |values| values.property_set(object, &storage_property_name, null),
+            );
+            let released = release_expr_result(null, context, values);
+            return written.and(released);
         }
         if eval_magic_property_unset(object, &object_class_name, property_name, context, values)? {
             return Ok(());
