@@ -55,7 +55,7 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
         params: vec![
             (
                 "message".to_string(),
-                None,
+                Some(TypeExpr::Str),
                 Some(Expr::new(
                     ExprKind::StringLiteral(String::new()),
                     crate::span::Span::dummy(),
@@ -64,7 +64,7 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
             ),
             (
                 "code".to_string(),
-                None,
+                Some(TypeExpr::Int),
                 Some(Expr::new(
                     ExprKind::IntLiteral(0),
                     crate::span::Span::dummy(),

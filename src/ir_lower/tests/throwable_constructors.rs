@@ -8,7 +8,7 @@
 //! - Ordinary subclasses add storage while Error and Exception retain their shared method owners.
 
 use super::*;
-use crate::ir::{Effects, Immediate, RuntimeCallTarget};
+use crate::ir::{Effects, Immediate, IrHeapKind, IrType, RuntimeCallTarget};
 
 /// Both constructor roots remain emitted and use normalized boxed previous operands on all targets.
 #[test]
@@ -29,6 +29,15 @@ echo $error->getMessage();
                 inst.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::ThrowableInitialize))
             }).expect("constructor must initialize the receiver's concrete layout");
             assert_eq!(initialize.operands.len(), 4, "{name}");
+            let expected = [IrType::Heap(IrHeapKind::Object), IrType::Str, IrType::I64,
+                IrType::Heap(IrHeapKind::Mixed)];
+            for (operand, expected) in initialize.operands.iter().zip(expected) {
+                assert_eq!(constructor.value(*operand).unwrap().ir_type, expected, "{name}: {owner}");
+            }
+            let signature = &module.class_infos[owner].methods["__construct"];
+            assert_eq!(signature.params[0].1, crate::types::PhpType::Str, "{name}: {owner}");
+            assert_eq!(signature.params[1].1, crate::types::PhpType::Int, "{name}: {owner}");
+            assert!(signature.declared_params.iter().take(3).all(|declared| *declared), "{name}: {owner}");
             assert!(initialize.effects.contains(Effects::MAY_THROW | Effects::REFCOUNT_OP), "{name}");
         }
     }
