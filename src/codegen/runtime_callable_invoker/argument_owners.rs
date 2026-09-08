@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Arrays and Mixed arguments get independent callee shadows; invocation leases remain caller-owned.
+//! - By-value strings have detached buffers owned here, including defaults and scalar coercions.
 //! - Frame slots start empty and are cleared before release, including partial preparation failures.
 //! - Hidden captures and by-reference marker slots are not by-value invocation owners.
 
@@ -47,9 +48,9 @@ impl InvokerArgumentOwners {
         }
     }
 
-    /// Records the owner already pushed for a by-value parameter with a callee-owned shadow.
+    /// Records a pushed by-value string buffer or a container with a callee-owned shadow.
     pub(super) fn record_pushed(&self, index: usize, ty: &PhpType, emitter: &mut Emitter) {
-        if !FunctionSig::parameter_needs_owned_shadow(ty, false) {
+        if ty.codegen_repr() != PhpType::Str && !FunctionSig::parameter_needs_owned_shadow(ty, false) {
             return;
         }
         assert!(index < self.count, "invoker argument owner exceeds its frame layout");
@@ -101,7 +102,7 @@ mod tests {
     fn invoker_argument_owners_cover_normal_and_exception_exits() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
-            let owners = InvokerArgumentOwners::new(super::super::INVOKER_BOUNDARY_FRAME_SIZE, 3);
+            let owners = InvokerArgumentOwners::new(super::super::INVOKER_BOUNDARY_FRAME_SIZE, 4);
             assert!(owners.offset(0) > super::super::INVOKER_BOUNDARY_BASE_OFFSET);
             assert!(owners.offset(3) <= owners.frame_size() - 16);
             assert_eq!(owners.frame_size() % 16, 0);
@@ -109,9 +110,10 @@ mod tests {
             owners.record_pushed(0, &PhpType::Mixed, &mut emitter);
             owners.record_pushed(1, &PhpType::Array(Box::new(PhpType::Int)), &mut emitter);
             owners.record_pushed(2, &PhpType::Int, &mut emitter);
+            owners.record_pushed(3, &PhpType::Str, &mut emitter);
             owners.finish_return(&mut emitter);
             owners.release_all(&mut emitter);
-            assert_eq!(emitter.output().matches("__rt_decref_any").count(), 7, "{name}");
+            assert_eq!(emitter.output().matches("__rt_decref_any").count(), 9, "{name}");
         }
     }
 }

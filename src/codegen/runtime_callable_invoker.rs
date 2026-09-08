@@ -16,6 +16,7 @@
 //!   offsets beyond the signed 9-bit `ldur`/`stur` immediate range.
 
 mod argument_owners;
+mod owned_value_args;
 
 use argument_owners::InvokerArgumentOwners;
 use crate::codegen::callable_descriptor;
@@ -1290,7 +1291,7 @@ fn push_loaded_array_element_arg(
     data: &mut DataSection,
 ) -> PhpType {
     let (pushed_ty, boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, source_elem_ty, target_ty);
+        owned_value_args::coerce(emitter, ctx, data, source_elem_ty, target_ty);
     if !boxed_to_mixed {
         abi::emit_incref_if_refcounted(emitter, &pushed_ty);
     }
@@ -1629,7 +1630,7 @@ fn push_materialized_mixed_hash_value_arg(
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     }
     let (pushed_ty, _boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
+        owned_value_args::coerce(emitter, ctx, data, &PhpType::Mixed, target_ty);
     // A borrowed hash cell and an unboxed container need their own invoker lease.
     // Newly boxed Mixed results already carry that owner.
     if FunctionSig::parameter_needs_owned_shadow(&pushed_ty, false)
@@ -1754,7 +1755,7 @@ fn push_default_value_arg(
         PhpType::Mixed
     } else {
         // Heap defaults are newly allocated, not borrowed from the argument container.
-        coerce_current_value_to_target(emitter, ctx, data, &source_ty, target_ty).0
+        owned_value_args::coerce(emitter, ctx, data, &source_ty, target_ty).0
     };
     abi::emit_push_result_value(emitter, &pushed_ty);
     pushed_ty

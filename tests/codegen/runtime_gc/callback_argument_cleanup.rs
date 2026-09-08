@@ -105,3 +105,50 @@ mappedCallbackStrings(detachedCallbackString(...));
     assert_eq!(out.stdout, "0:48", "stderr: {}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Descriptor argument strings survive later scalar conversions and release defaults after each call.
+#[test]
+fn test_core_descriptor_string_argument_coercions_and_defaults_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function joinStringArguments(string $left = "left", string $right = "right"): string {
+    return $left . ":" . $right;
+}
+function exerciseStringArguments(callable $callback): void {
+    $numbers = [123, 456];
+    $strings = ["", str_repeat("x", 24)];
+    $defaults = [];
+    $named = ["right" => "R", "left" => "L"];
+    echo call_user_func_array($callback, $numbers), "|";
+    echo strlen(call_user_func_array($callback, $strings)), "|";
+    echo call_user_func_array($callback, $defaults), "|";
+    echo call_user_func_array($callback, $named);
+}
+exerciseStringArguments(joinStringArguments(...));
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "123:456|25|left:right|L:R", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing descriptor callback releases its converted string lease without consuming the caller's array.
+#[test]
+fn test_core_descriptor_string_arguments_are_released_on_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function throwStringArgument(string $value): bool {
+    throw new RuntimeException("stop");
+}
+function exerciseThrowingStringArguments(callable $callback): void {
+    $arguments = [str_repeat("x", 24)];
+    $caught = 0;
+    for ($i = 0; $i < 12; $i++) {
+        try { call_user_func_array($callback, $arguments); }
+        catch (RuntimeException $error) { $caught++; unset($error); }
+    }
+    echo $caught, ":", strlen($arguments[0]);
+}
+exerciseThrowingStringArguments(throwStringArgument(...));
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "12:24", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
