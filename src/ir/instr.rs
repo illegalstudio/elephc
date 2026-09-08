@@ -684,12 +684,14 @@ pub enum Op {
     PropGetForWrite,
     PropInitialized,
     /// Stores through a property name, or a physical PropertyRef inside its allocation initializer.
+    /// Physical initialization adds ALLOC_HEAP to the default effects for owned reference cells.
     PropSet,
     /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
     /// refcounted payload the slot owned and stamps the uninitialized-typed-property
     /// marker, so the property stops being reported by `isset()` and by the
     /// descriptor walkers. Operand: object; immediate: property name data id.
     /// An initializer may instead supply PropertyRef to mark a freshly zeroed physical slot.
+    /// That form adds ALLOC_HEAP to the default effects for owned reference cells.
     PropUnset,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return

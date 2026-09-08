@@ -274,11 +274,18 @@ fn validate_instruction_result(
 /// Validates that non-refinable opcodes carry their canonical effect set.
 /// `load_local` additionally admits exactly `PURE`, which is attached only after
 /// the immutable-local pass proves that the named scalar slot cannot change.
+/// Physical property initialization additionally allocates owned reference cells.
 fn validate_instruction_effects(
     inst_id: InstId,
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
-    let expected = inst.op.default_effects();
+    let expected = if matches!(inst.op, Op::PropSet | Op::PropUnset)
+        && matches!(inst.immediate, Some(Immediate::PropertyRef { .. }))
+    {
+        inst.op.default_effects() | Effects::ALLOC_HEAP
+    } else {
+        inst.op.default_effects()
+    };
     let immutable_local_refinement = inst.op == Op::LoadLocal && inst.effects.is_pure();
     if !inst.op.allows_effect_refinement()
         && !immutable_local_refinement
@@ -291,6 +298,41 @@ fn validate_instruction_effects(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod property_effect_tests {
+    use super::*;
+    use crate::ir::Ownership;
+
+    /// Physical initializer writes require allocation effects without weakening ordinary writes.
+    #[test]
+    fn physical_property_initializers_have_exact_allocation_effects() {
+        for op in [Op::PropSet, Op::PropUnset] {
+            for physical in [false, true] {
+                let immediate = physical.then_some(Immediate::PropertyRef { class: 1, property: 0 });
+                let expected = op.default_effects()
+                    | if physical { Effects::ALLOC_HEAP } else { Effects::PURE };
+                let mut instruction = Instruction::new(
+                    op, Vec::new(), immediate, None, IrType::Void, PhpType::Void,
+                    Ownership::NonHeap, expected, None,
+                );
+                let id = InstId::from_raw(0);
+                assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+                instruction.effects = if physical {
+                    op.default_effects()
+                } else {
+                    op.default_effects() | Effects::ALLOC_HEAP
+                };
+                assert!(matches!(
+                    validate_instruction_effects(id, &instruction),
+                    Err(ValidationError::EffectMismatch { .. })
+                ));
+                instruction.effects = expected | Effects::OUTPUT;
+                assert!(validate_instruction_effects(id, &instruction).is_err());
+            }
+        }
+    }
 }
 
 /// Validates immediate shape for opcodes whose immediate is structurally required.
