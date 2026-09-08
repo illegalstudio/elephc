@@ -152,3 +152,16 @@ pub(in crate::interpreter) fn with_eval_void_operands<V: RuntimeValueOps>(
     }
     result
 }
+
+/// Gives a statement consumer one owned lease for a materialized value and releases it on every exit.
+pub(in crate::interpreter) fn with_eval_value_lease<V: RuntimeValueOps>(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut V,
+    consume: impl FnOnce(RuntimeCellHandle, &mut ElephcEvalContext, &mut V) -> Result<(), EvalStatus>,
+) -> Result<(), EvalStatus> {
+    let value = if value.is_borrowed() { values.retain(value)? } else { value };
+    let result = consume(value, context, values);
+    let released = eval_release_value(context, values, value);
+    result.and(released)
+}

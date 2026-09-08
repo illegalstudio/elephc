@@ -99,6 +99,46 @@ fn owned_assignments_balance_identical_reference_cells() {
     }
 }
 
+/// Materialized leases retain borrowed values and consume fresh ones, including failed writes.
+#[test]
+fn materialized_value_cleanup_covers_success_and_failure() {
+    for borrowed in [false, true] {
+        for fail in [false, true] {
+            let mut values = FakeOps::default();
+            let mut context = ElephcEvalContext::new();
+            let cell = values.int(5).unwrap();
+            let input = if borrowed { cell.borrowed() } else { cell };
+            let result = with_eval_value_lease(input, &mut context, &mut values, |value, _, values| {
+                assert_eq!(value, cell);
+                assert!(!value.is_borrowed());
+                assert!(values.releases.is_empty());
+                if fail { Err(EvalStatus::RuntimeFatal) } else { Ok(()) }
+            });
+            assert_eq!(result.is_err(), fail);
+            assert_eq!(values.retains.len(), usize::from(borrowed));
+            assert_eq!(values.releases, vec![cell]);
+        }
+    }
+}
+
+/// A failed compound-assignment RHS releases the prior property read and the receiver lease.
+#[test]
+fn failed_compound_property_rhs_releases_prior_operands() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let cell = values.int(5).unwrap();
+    let object = values.alloc(FakeValue::Object(vec![("n".into(), cell)]));
+    scope.set("box", object, ScopeCellOwnership::Owned);
+    let program = parse_fragment(b"$box->n += missing_compound_operand();").unwrap();
+    assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
+    assert_eq!(values.retains, vec![object]);
+    let operands = values.releases.iter().copied()
+        .filter(|released| *released == cell || *released == object).collect::<Vec<_>>();
+    assert_eq!(operands, vec![cell, object]);
+    assert_eq!(scope.visible_cell("box"), Some(object));
+}
+
 /// Class-constant defaults acquire a builder-owned lease instead of consuming the persistent cell.
 #[test]
 fn class_vars_default_cleanup_preserves_class_constants() {

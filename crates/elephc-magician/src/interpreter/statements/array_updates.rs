@@ -16,11 +16,41 @@ pub(super) fn eval_inc_dec_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let one = values.int(1)?;
-    if increment {
+    let result = if increment {
         values.add(current, one)
     } else {
         values.sub(current, one)
+    };
+    let released = values.release(one);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = values.release(value);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
     }
+}
+
+/// Keeps the old property value alive through the RHS and balances every compound-assignment operand.
+pub(super) fn eval_property_compound_assign_result(
+    object: RuntimeCellHandle,
+    property: &str,
+    op: EvalBinOp,
+    right: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let current = eval_property_get_result(object, property, context, values)?;
+    with_eval_value_lease(current, context, values, |current, context, values| {
+        with_eval_void_operands(&[right], context, scope, values, |args, context, _, values| {
+            let value = eval_binary_result(op, current, args[0], context, values)?;
+            with_eval_value_lease(value, context, values, |value, context, values| {
+                eval_property_set_result(object, property, value, context, values)
+            })
+        })
+    })
 }
 
 /// Reads, updates, and writes one object property after the receiver/name are evaluated.
@@ -32,8 +62,12 @@ pub(super) fn eval_property_inc_dec_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let current = eval_property_get_result(object, property, context, values)?;
-    let value = eval_inc_dec_value(current, increment, values)?;
-    eval_property_set_result(object, property, value, context, values)
+    with_eval_value_lease(current, context, values, |current, context, values| {
+        let value = eval_inc_dec_value(current, increment, values)?;
+        with_eval_value_lease(value, context, values, |value, context, values| {
+            eval_property_set_result(object, property, value, context, values)
+        })
+    })
 }
 
 /// Reads, updates, and writes one static property after the receiver/name are resolved.

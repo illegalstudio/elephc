@@ -49,6 +49,33 @@ fn test_core_eval_property_defaults_release_temporary_cells() {
     );
 }
 
+/// Compound writes and increments release read results, arithmetic cells, and receiver/name leases.
+#[test]
+fn test_core_eval_property_compound_updates_release_temporary_cells() {
+    assert_core_eval_collection_cleanup(
+        "$box = new stdClass(); $box->n = 0; $box->text = \"\"; $name = \"n\"; $delta = 3;",
+        "$box->n += $delta; $box->{$name} += 2;
+         $box->n++; --$box->{$name}; $box->text .= \"x\";",
+    );
+}
+
+/// Compound property statements evaluate receiver, dynamic name, and RHS once in source order.
+#[test]
+fn test_core_eval_property_compound_updates_preserve_evaluation_order() {
+    let source = r#"<?php
+$source = 'function receiver($box) { echo "R"; return $box; }
+function member() { echo "N"; return "n"; }
+function delta() { echo "V"; return 3; }
+$box = new stdClass(); $box->n = 2;
+receiver($box)->{member()} += delta();
+echo ":", $box->n, "|";
+receiver($box)->{member()}++;
+echo ":", $box->n; return 42;' . ' // ' . $argc;
+echo ":", eval($source);
+"#;
+    assert_eq!(compile_and_run(source), ":RNV:5|RN:642");
+}
+
 /// A variable aliased to a property keeps its own owner after writing and destroying the object.
 #[test]
 fn test_core_eval_property_reference_survives_receiver_release() {
