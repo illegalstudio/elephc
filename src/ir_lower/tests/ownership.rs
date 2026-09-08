@@ -129,8 +129,8 @@ fn executable_frames_publish_non_escaping_local_cleanup_on_all_targets() {
             crate::codegen::platform::Target::parse(name).unwrap(),
         );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        let callback = "_fn_abort_owned_frame__cdylib_exception_cleanup";
-        assert!(asm.matches(callback).count() >= 2, "{name}: publish and define the executable frame callback");
+        let callback = format!("{}__cdylib_exception_cleanup", crate::names::function_symbol("abort_owned_frame"));
+        assert!(asm.matches(&callback).count() >= 2, "{name}: publish and define the executable frame callback");
         let body = asm.split(&format!("{callback}:")).nth(1).unwrap();
         let body = body.split("\n.globl ").next().unwrap();
         assert!(body.contains("__rt_cleanup_preserve_exception"), "{name}: destructor throws cannot skip later locals");

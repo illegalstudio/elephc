@@ -58,7 +58,8 @@ fn native_debug_ranges_stay_in_their_function_sections_on_all_targets() {
             }
         }
         assert!(open.is_none(), "{name}: all source ranges must close");
-        assert!(asm.contains("@fn name=debug_items symbol=_fn_debug_items__genbody"), "{name}: generator body has debug information");
+        let generator = format!("{}__genbody", crate::names::function_symbol("debug_items"));
+        assert!(asm.contains(&format!("@fn name=debug_items symbol={generator}")), "{name}: generator body has debug information");
         assert!(ranges >= 5, "{name}: user functions, methods, generators, and main have ranges");
     }
 }

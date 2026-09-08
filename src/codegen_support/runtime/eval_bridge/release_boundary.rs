@@ -62,7 +62,12 @@ mod tests {
             assert!(asm.contains(&target.extern_symbol("__elephc_eval_value_release_v3")), "{name}");
             assert!(asm.find("__rt_cleanup_invoke").unwrap() < asm.find("__rt_throwable_box_owned").unwrap(), "{name}");
             assert!(asm.find("__rt_throwable_take_boxed").unwrap() < asm.find("__rt_cleanup_invoke").unwrap(), "{name}");
-            assert_eq!(asm.matches("__rt_decref_mixed").count(), 1, "{name}");
+            // Materializing one address mentions the symbol twice on AArch64 (page and offset).
+            // Count calls instead, proving release cannot bypass the containing native boundary.
+            let call = if target.arch == super::super::Arch::AArch64 { "bl" } else { "call" };
+            assert!(asm.contains("__rt_decref_mixed"), "{name}");
+            assert_eq!(asm.lines().filter(|line| line.trim() == format!("{call} __rt_cleanup_invoke")).count(), 1, "{name}");
+            assert!(!asm.lines().any(|line| line.trim() == format!("{call} __rt_decref_mixed")), "{name}");
             assert!(!asm.contains("__rt_throw_current"), "{name}");
             let caught_flag = match target.arch {
                 super::super::Arch::AArch64 => "ldur x0, [x29, #-32]",

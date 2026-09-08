@@ -88,14 +88,20 @@ echo $a;
         !text.contains("array_to_mixed") && !text.contains("array_to_hash"),
         "the fixed point canonicalized a binding the region re-binds: {text}"
     );
-    assert!(
-        text.contains("php=array<int> own=owned = load_local slot[1]"),
-        "the abandoned slot lost its concrete array<int> storage type: {text}"
-    );
-    assert!(
-        !text.contains("php=string own=maybe_owned = load_local slot[1]"),
-        "the re-bound string was stored through the OLD slot instead of a fresh one: {text}"
-    );
+    let main = module.functions.iter().find(|function| function.flags.is_main).unwrap();
+    let retired = main.instructions.iter().find(|inst| inst.op == crate::ir::Op::ReleaseLocalSlot)
+        .expect("rebinding must retire the old array owner atomically");
+    let Some(crate::ir::Immediate::LocalSlot(slot)) = retired.immediate else {
+        panic!("the retirement must identify the abandoned local slot");
+    };
+    let local = main.locals.iter().find(|local| local.id == slot).unwrap();
+    assert_eq!(local.php_type, crate::types::PhpType::Array(Box::new(crate::types::PhpType::Int)),
+        "the abandoned slot lost its concrete array<int> storage type: {text}");
+    assert!(!main.instructions.iter().any(|inst| {
+        inst.op == crate::ir::Op::StoreLocal
+            && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))
+            && main.value(inst.operands[0]).unwrap().php_type == crate::types::PhpType::Str
+    }), "the re-bound string was stored through the old slot instead of a fresh one: {text}");
 }
 
 /// A local the checker marked as branch-divergently assigned gets a boxed `mixed` slot before its
