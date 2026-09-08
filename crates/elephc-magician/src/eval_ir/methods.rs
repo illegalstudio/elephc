@@ -16,6 +16,7 @@ pub struct EvalClassMethod {
     trait_origin: Option<String>,
     trait_origin_method: Option<String>,
     source_location: Option<EvalSourceLocation>,
+    strict_types: bool,
     attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
     is_static: bool,
@@ -38,6 +39,7 @@ impl PartialEq for EvalClassMethod {
         self.name == other.name
             && self.trait_origin == other.trait_origin
             && self.trait_origin_method == other.trait_origin_method
+            && self.strict_types == other.strict_types
             && self.attributes == other.attributes
             && self.visibility == other.visibility
             && self.is_static == other.is_static
@@ -101,6 +103,7 @@ impl EvalClassMethod {
             trait_origin: None,
             trait_origin_method: None,
             source_location: None,
+            strict_types: false,
             attributes: Vec::new(),
             visibility,
             is_static,
@@ -121,6 +124,12 @@ impl EvalClassMethod {
     /// Returns a copy of this method with source-location metadata attached.
     pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);
+        self
+    }
+
+    /// Retains the strict-types mode of the compilation unit that owns this method body.
+    pub const fn with_strict_types(mut self, strict_types: bool) -> Self {
+        self.strict_types = strict_types;
         self
     }
 
@@ -161,6 +170,11 @@ impl EvalClassMethod {
     /// Returns eval-fragment source-location metadata, when retained.
     pub const fn source_location(&self) -> Option<EvalSourceLocation> {
         self.source_location
+    }
+
+    /// Returns the lexical strict-types mode used while this method body executes.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
     }
 
     /// Returns a copy of this method with declaration attributes attached.
@@ -287,6 +301,18 @@ impl EvalClassMethod {
     /// Returns source-order flags for whether each parameter was declared variadic.
     pub fn parameter_is_variadic(&self) -> &[bool] {
         &self.parameter_is_variadic
+    }
+
+    /// Returns PHP's last-required positional count for this method signature.
+    pub fn required_num_args(&self) -> usize {
+        let fixed_count = self
+            .parameter_is_variadic
+            .iter()
+            .position(|is_variadic| *is_variadic)
+            .unwrap_or(self.params.len());
+        (0..fixed_count)
+            .rfind(|index| !self.parameter_defaults.get(*index).is_some_and(Option::is_some))
+            .map_or(0, |index| index + 1)
     }
 
     /// Returns retained return type metadata, if the method declared one.

@@ -70,7 +70,7 @@ pub(super) fn emit_reflection_attrs_property(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, attrs_low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     super::super::super::builtins::attributes::emit_reflection_attribute_array(
@@ -135,7 +135,7 @@ pub(super) fn emit_reflection_owner_string_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_string_array(ctx, names)?;
@@ -170,7 +170,7 @@ pub(super) fn emit_reflection_class_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_class_array(ctx, names)?;
@@ -205,7 +205,7 @@ pub(super) fn emit_reflection_constant_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_constant_array(ctx, members)?;
@@ -213,7 +213,7 @@ pub(super) fn emit_reflection_constant_array_property_by_name(
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
@@ -239,7 +239,7 @@ pub(super) fn emit_reflection_default_property_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_default_property_array(ctx, members);
@@ -247,7 +247,7 @@ pub(super) fn emit_reflection_default_property_array_property_by_name(
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
@@ -273,7 +273,7 @@ pub(super) fn emit_reflection_static_property_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_static_property_array(ctx, members);
@@ -284,4 +284,3 @@ pub(super) fn emit_reflection_static_property_array_property_by_name(
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
 }
-

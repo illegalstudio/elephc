@@ -48,7 +48,7 @@ sidebar:
 | [`getdate()`](./date/getdate.md) | `(?int $timestamp = null): array` | `array` | ✓ | ✓ |
 | [`gettimeofday()`](./date/gettimeofday.md) | `(bool $as_float = false): mixed` | `mixed` | ✓ | ✓ |
 | [`gmdate()`](./date/gmdate.md) | `(string $format, ?int $timestamp = null): string` | `string` | ✓ | ✓ |
-| [`gmmktime()`](./date/gmmktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
+| [`gmmktime()`](./date/gmmktime.md) | `(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): mixed` | `mixed` | ✓ | ✓ |
 | [`gmstrftime()`](./date/gmstrftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`gregoriantojd()`](./date/gregoriantojd.md) | `(int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
 | [`hrtime()`](./date/hrtime.md) | `(bool $as_number = false): mixed` | `mixed` | ✓ | ✓ |
@@ -64,7 +64,7 @@ sidebar:
 | [`juliantojd()`](./date/juliantojd.md) | `(int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
 | [`localtime()`](./date/localtime.md) | `(int $timestamp = -1, bool $associative = false): array` | `array` | ✓ | ✓ |
 | [`microtime()`](./date/microtime.md) | `(bool $as_float = false): mixed` | `mixed` | ✓ | ✓ |
-| [`mktime()`](./date/mktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
+| [`mktime()`](./date/mktime.md) | `(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): mixed` | `mixed` | ✓ | ✓ |
 | [`strftime()`](./date/strftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`strptime()`](./date/strptime.md) | `(string $timestamp, string $format): mixed` | `mixed` | ✓ | ✓ |
 | [`strtotime()`](./date/strtotime.md) | `(string $datetime, ?int $baseTimestamp = null): mixed` | `mixed` | ✓ | ✓ |

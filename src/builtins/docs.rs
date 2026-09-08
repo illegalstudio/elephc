@@ -31,6 +31,8 @@ fn type_spec_str(ty: &TypeSpec) -> String {
         TypeSpec::Float => "float".to_string(),
         TypeSpec::Str => "string".to_string(),
         TypeSpec::Bool => "bool".to_string(),
+        TypeSpec::False => "false".to_string(),
+        TypeSpec::Union(members) => members.iter().map(type_spec_str).collect::<Vec<_>>().join("|"),
         TypeSpec::Mixed => "mixed".to_string(),
         TypeSpec::Void => "void".to_string(),
         // Not a PHP type: the `Area::Pointers` builtins are elephc extensions and this is the
@@ -182,7 +184,8 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     let argument_lowering = match semantics.argument_lowering {
         BuiltinArgumentLowering::Standard => "standard",
         BuiltinArgumentLowering::Count => "count",
-        BuiltinArgumentLowering::Date => "date",
+            BuiltinArgumentLowering::Date => "date",
+            BuiltinArgumentLowering::Mktime { .. } => "mktime",
         BuiltinArgumentLowering::JsonDecode => "json_decode",
         BuiltinArgumentLowering::Getenv => "getenv",
         BuiltinArgumentLowering::PcntlPreserveOmitted => "pcntl_preserve_omitted",

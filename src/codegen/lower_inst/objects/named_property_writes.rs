@@ -74,7 +74,15 @@ pub(super) fn lower_allow_dynamic_prop_set(
     value: ValueId,
     property: &str,
     hash_offset: usize,
+    span: Option<crate::span::Span>,
 ) -> Result<()> {
+    emit_dynamic_property_creation_deprecation_if_missing(
+        ctx,
+        object,
+        property,
+        hash_offset,
+        span,
+    )?;
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     let boxed_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -153,6 +161,9 @@ pub(super) fn lower_nullable_prop_set(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
+    if is_builtin_stdclass(class_name) {
+        return lower_nullable_stdclass_prop_set(ctx, object, value, property);
+    }
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;

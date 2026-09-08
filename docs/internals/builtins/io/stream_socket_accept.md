@@ -2,7 +2,7 @@
 title: "stream_socket_accept() — internals"
 description: "Compiler internals for stream_socket_accept(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 384
+  order: 385
 ---
 
 ## `stream_socket_accept()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_accept.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_accept.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

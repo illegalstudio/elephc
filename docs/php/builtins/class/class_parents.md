@@ -2,7 +2,7 @@
 title: "class_parents()"
 description: "Returns the parent classes of the given class."
 sidebar:
-  order: 79
+  order: 80
 ---
 
 ## class_parents()

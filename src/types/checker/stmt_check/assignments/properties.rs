@@ -109,6 +109,39 @@ pub(super) fn check_property_array_push(
     }
 }
 
+/// Type-checks an append through a runtime property name (`$obj->{$name}[] = $value`).
+pub(super) fn check_dynamic_property_array_push(
+    checker: &mut Checker,
+    object: &Expr,
+    property: &Expr,
+    value: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let object_type = checker.infer_type_with_assignment_effects(object, env)?;
+    if !matches!(
+        object_type,
+        PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed
+    ) {
+        return Err(CompileError::new(
+            span,
+            "Property array append requires an object",
+        ));
+    }
+    let property_type = checker.infer_type_with_assignment_effects(property, env)?;
+    if !matches!(
+        property_type,
+        PhpType::Str | PhpType::Int | PhpType::Mixed
+    ) {
+        return Err(CompileError::new(
+            property.span,
+            "Dynamic property name must be string or integer",
+        ));
+    }
+    checker.infer_type_with_assignment_effects(value, env)?;
+    Ok(())
+}
+
 /// Type-checks an indexed property array assignment (`$obj->prop[$index] = value`).
 ///
 /// Infers object, index, and value types. Validates array key types and property mutability.
@@ -291,6 +324,22 @@ fn check_object_property_write(
                     || method == php_symbol_key(&property_hook_set_method(property))
             });
         if has_get_hook && !has_set_hook && !in_own_accessor {
+            if class_name == "DatePeriod" {
+                // php-src exposes DatePeriod's state through virtual, non-readonly
+                // Reflection properties, but its object handlers reject writes at runtime
+                // with the same catchable error used for readonly properties.
+                checker.throw_access_sites.insert(
+                    span,
+                    crate::types::ThrowAccessInfo {
+                        span,
+                        kind: crate::types::ThrowAccessKind::ReadonlyProperty {
+                            class_name: class_name.to_string(),
+                            property: property.to_string(),
+                        },
+                    },
+                );
+                return Ok(());
+            }
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -398,9 +447,8 @@ pub(super) fn refined_untyped_property_assignment_type(
             if *val_ty == PhpType::Void {
                 None
             } else if definitely_initialized {
-                // Assignments inside the object's own constructor initialize the slot
-                // before any observable read, so the historical precise rebind stays
-                // (matching `propagate_constructor_arg_type` for promoted params).
+                // No earlier `$this->property` read can observe the implicit null, so every
+                // constructed instance reaches this write before exposing the slot.
                 Some(val_ty.clone())
             } else if untyped_property_value_needs_nullable_storage(val_ty) {
                 let stored = if matches!(val_ty, PhpType::False) {
@@ -418,11 +466,26 @@ pub(super) fn refined_untyped_property_assignment_type(
         {
             if checker.type_accepts(current, val_ty) {
                 None
+            } else if matches!(
+                val_ty,
+                PhpType::Buffer(_) | PhpType::Pointer(_) | PhpType::Packed(_)
+            ) {
+                // Systems storage assigned after construction supersedes the constructor's
+                // scalar placeholder; keeping the nullable scalar union would erase its layout.
+                Some(val_ty.clone())
             } else {
                 Some(PhpType::Mixed)
             }
         }
         PhpType::Int if current != val_ty => Some(val_ty.clone()),
+        PhpType::Str | PhpType::Float | PhpType::Bool | PhpType::False
+            if current != val_ty =>
+        {
+            // An untyped property with a non-null scalar default may later hold an
+            // unrelated PHP value. Keep both the initializer and the reassignment
+            // representable in the fixed object slot by widening the slot to Mixed.
+            Some(PhpType::Mixed)
+        }
         _ => {
             if is_empty_array_placeholder(current)
                 && matches!(val_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
@@ -450,11 +513,12 @@ fn refine_object_property_type(
     property: &str,
     val_ty: &PhpType,
 ) {
-    // A write inside the written class's own constructor (or a subclass constructor)
-    // definitely initializes the slot before any observable read.
     let definitely_initialized = checker.current_method.as_deref() == Some("__construct")
         && checker.current_class.as_deref().is_some_and(|current| {
-            current == class_name || checker.is_subclass_of(current, class_name)
+            (current == class_name || checker.is_subclass_of(current, class_name))
+                && !checker
+                    .constructor_properties_read
+                    .contains(&(current.to_string(), property.to_string()))
         });
     let refined_ty = {
         let Some(class_info) = checker.classes.get(class_name) else {
@@ -553,6 +617,9 @@ fn resolve_object_array_property(
         .get(class_name)
         .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", class_name)))?;
     if class_info.visible_property(property).is_none() {
+        if class_info.allow_dynamic_properties {
+            return Ok((PhpType::Mixed, false));
+        }
         return Err(CompileError::new(
             span,
             &format!("Undefined property: {}::{}", class_name, property),
@@ -605,6 +672,9 @@ fn updated_array_property_push_type(
         }
         PhpType::Int | PhpType::Void if !property_has_declared_type => {
             Ok(PhpType::Array(Box::new(val_ty.clone())))
+        }
+        PhpType::Mixed if !property_has_declared_type => {
+            Ok(PhpType::Array(Box::new(PhpType::Mixed)))
         }
         PhpType::Buffer(_) => Err(CompileError::new(
             span,
@@ -700,6 +770,16 @@ fn updated_array_property_assign_type(
                 value: Box::new(merged_value),
             })
         }
+        PhpType::Mixed if !property_has_declared_type => {
+            if matches!(normalized_idx_ty, PhpType::Int) {
+                Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+            } else {
+                Ok(PhpType::AssocArray {
+                    key: Box::new(normalized_idx_ty.clone()),
+                    value: Box::new(PhpType::Mixed),
+                })
+            }
+        }
         other => Err(CompileError::new(
             span,
             &format!(
@@ -774,6 +854,12 @@ fn update_object_property_type(
             .iter_mut()
             .find(|(name, _)| name == property)
         {
+            if !property_has_declared_type && prop.1 == PhpType::Mixed {
+                // Mixed here records an earlier incompatible value (for example a
+                // scalar default followed by `[]`). Narrowing back to Array would
+                // make the initializer impossible to store in the fixed slot.
+                return;
+            }
             if !property_has_declared_type
                 || declared_generic_array_can_use_assoc_storage(&prop.1, &updated_prop_ty)
             {

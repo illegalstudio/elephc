@@ -2,7 +2,7 @@
 title: "lstat() — internals"
 description: "Compiler internals for lstat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 288
+  order: 289
 ---
 
 ## `lstat()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/lstat.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/lstat.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

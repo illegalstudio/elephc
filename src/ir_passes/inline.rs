@@ -331,7 +331,7 @@ fn trace_returned_slot_inner(
             Some(Immediate::LocalSlot(slot)) => Some(*slot),
             _ => None,
         },
-        Op::ArrayToMixed | Op::HashToMixed => {
+        Op::ArrayToMixed | Op::HashToMixed | Op::HashToArrayReturn | Op::DateSerializeHashReturn => {
             trace_returned_slot_inner(callee, *inst.operands.first()?, visited)
         }
         Op::Move | Op::Borrow => {

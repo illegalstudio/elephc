@@ -83,7 +83,7 @@ fn apply_scalar_param_cast(
         CastType::String => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
         // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
-        CastType::Int | CastType::Float | CastType::Array => value,
+        CastType::Int | CastType::Float | CastType::Array | CastType::Void => value,
     }
 }
 
@@ -115,7 +115,9 @@ pub(super) fn coerce_operands_to_params(
                 value,
                 ir_type: IrType::I64,
             };
-            operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
+            let coerced = coerce_to_float_at_span(ctx, lowered, None).value;
+            ctx.transfer_call_arg_temp_cleanup(value, coerced);
+            operands[index] = coerced;
         } else if param_ty == PhpType::Str
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
         {
@@ -123,7 +125,9 @@ pub(super) fn coerce_operands_to_params(
                 value,
                 ir_type: ctx.builder.value_type(value),
             };
-            operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
+            let coerced = coerce_to_string_at_span(ctx, lowered, None).value;
+            ctx.transfer_call_arg_temp_cleanup(value, coerced);
+            operands[index] = coerced;
         } else if sig.declared_params.get(index).copied().unwrap_or(false) {
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order
@@ -135,7 +139,9 @@ pub(super) fn coerce_operands_to_params(
                     value,
                     ir_type: ctx.builder.value_type(value),
                 };
-                operands[index] = apply_scalar_param_cast(ctx, cast, lowered, None).value;
+                let coerced = apply_scalar_param_cast(ctx, cast, lowered, None).value;
+                ctx.transfer_call_arg_temp_cleanup(value, coerced);
+                operands[index] = coerced;
             }
         }
     }
@@ -240,7 +246,7 @@ pub(super) fn lower_args_with_signature(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
-    lower_args_with_signature_options(ctx, sig, args, false)
+    lower_args_with_signature_options(ctx, sig, args, false, None)
 }
 
 /// Lowers arguments while preserving omission of trailing default-only parameter slots.
@@ -249,15 +255,38 @@ pub(super) fn lower_args_with_signature_trimming_trailing_defaults(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
-    lower_args_with_signature_options(ctx, sig, args, true)
+    lower_args_with_signature_options(ctx, sig, args, true, None)
 }
 
-/// Applies shared argument planning with optional elision of trailing defaults.
+/// Lowers arguments with an internal-overload diagnostic for excess spread entries.
+pub(super) fn lower_args_with_signature_and_spread_overflow(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    spread_overflow_error: Option<&str>,
+) -> Vec<crate::ir::ValueId> {
+    lower_args_with_signature_and_spread_bounds(
+        ctx, sig, args, spread_overflow_error.map(SpreadOverflowError::Overload),
+    )
+}
+
+/// Uses the shared planner with the caller's PHP overflow exception contract.
+pub(super) fn lower_args_with_signature_and_spread_bounds(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    spread_overflow_error: Option<SpreadOverflowError<'_>>,
+) -> Vec<crate::ir::ValueId> {
+    lower_args_with_signature_options(ctx, sig, args, false, spread_overflow_error)
+}
+
+/// Combines trailing-default omission with the selected spread-overflow diagnostic.
 fn lower_args_with_signature_options(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
     trim_trailing_defaults: bool,
+    spread_overflow_error: Option<SpreadOverflowError<'_>>,
 ) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);
@@ -272,7 +301,9 @@ fn lower_args_with_signature_options(
         };
         return coerce_operands_to_params(ctx, sig, operands);
     }
-    if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args) {
+    if let Some(operands) =
+        lower_positional_spread_args_with_signature(ctx, sig, args, spread_overflow_error)
+    {
         return coerce_operands_to_params(ctx, sig, operands);
     }
     let static_spread_args = if has_static_call_spread_args(args) {

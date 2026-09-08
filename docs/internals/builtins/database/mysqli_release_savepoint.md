@@ -2,7 +2,7 @@
 title: "mysqli_release_savepoint() — internals"
 description: "Compiler internals for mysqli_release_savepoint(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 150
+  order: 151
 ---
 
 ## `mysqli_release_savepoint()` — internals

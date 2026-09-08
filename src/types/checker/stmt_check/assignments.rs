@@ -216,6 +216,18 @@ impl Checker {
                 stmt.span,
                 env,
             ),
+            StmtKind::DynamicPropertyArrayPush {
+                object,
+                property,
+                value,
+            } => properties::check_dynamic_property_array_push(
+                self,
+                object,
+                property,
+                value,
+                stmt.span,
+                env,
+            ),
             StmtKind::PropertyArrayAssign {
                 object,
                 property,
@@ -253,7 +265,9 @@ impl Checker {
                 Self::purge_property_narrowings(env);
                 self.record_property_assignment_narrowing(stmt, env);
             }
-            StmtKind::PropertyArrayPush { .. } | StmtKind::PropertyArrayAssign { .. } => {
+            StmtKind::PropertyArrayPush { .. }
+            | StmtKind::DynamicPropertyArrayPush { .. }
+            | StmtKind::PropertyArrayAssign { .. } => {
                 Self::purge_property_narrowings(env)
             }
             StmtKind::StaticPropertyArrayPush { .. }

@@ -17,7 +17,11 @@ pub(super) fn lower_instance_callable_call_user_func(
     callback_args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let result_type = static_callable_return_type(ctx, &callback);
+    let result_type = if instance_callable_is_date_serialize(ctx, &callback) {
+        PhpType::Mixed
+    } else {
+        static_callable_return_type(ctx, &callback)
+    };
     let signature = instance_callable_signature(&callback).cloned();
     let mut operands = vec![lower_expr(ctx, callback_expr).value];
     operands.extend(lower_args_with_signature(ctx, signature.as_ref(), callback_args));
@@ -29,6 +33,40 @@ pub(super) fn lower_instance_callable_call_user_func(
         Op::ExprCall.default_effects(),
         Some(expr.span),
     ))
+}
+
+/// Returns whether a statically tracked instance callback targets a DateTime-family serializer.
+///
+/// The direct callable-array backend must receive a Mixed result for this one surface so it can
+/// preserve a user override's actual indexed/hash layout through the shared runtime finalizer.
+pub(super) fn instance_callable_is_date_serialize(
+    ctx: &LoweringContext<'_, '_>,
+    callback: &StaticCallableBinding,
+) -> bool {
+    let StaticCallableBinding::InstanceMethod { object, method, .. } = callback else {
+        return false;
+    };
+    if php_symbol_key(method) != "__serialize" {
+        return false;
+    }
+    let Some(class_name) = instance_callable_object_class(ctx, object) else {
+        return false;
+    };
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(candidate) = current {
+        if matches!(
+            candidate,
+            "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+        ) {
+            return true;
+        }
+        current = ctx
+            .classes
+            .get(candidate)
+            .and_then(|class_info| class_info.parent.as_deref())
+            .map(|parent| parent.trim_start_matches('\\'));
+    }
+    false
 }
 
 /// Lowers dynamic `call_user_func()` callbacks through descriptor invocation.
@@ -317,9 +355,11 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let arg_container = lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span)?;
-    let result_type = sig
-        .map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
-        .unwrap_or(PhpType::Mixed);
+    // Runtime callable descriptors always return their uniform boxed Mixed cell. Retaining a
+    // signature's concrete `array` result here would make the backend statically rebox an
+    // associative DateTime `__serialize()` payload as indexed storage before consumers can inspect
+    // its runtime kind; downstream typed boundaries perform the ordinary Mixed conversion instead.
+    let result_type = PhpType::Mixed;
     Some(emit_callable_descriptor_invoke(
         ctx,
         callback,

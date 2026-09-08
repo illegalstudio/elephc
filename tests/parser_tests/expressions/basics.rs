@@ -230,6 +230,54 @@ fn test_cast_keywords_are_case_insensitive() {
     }
 }
 
+/// Verifies PHP 8.5's `(void)` explicit-discard cast parses around a call expression.
+#[test]
+fn test_void_cast_parses() {
+    let program = parse_source("<?php (void) strlen('discarded');");
+    assert!(matches!(
+        &program[0].kind,
+        StmtKind::ExprStmt(Expr {
+            kind: ExprKind::Cast {
+                target: CastType::Void,
+                ..
+            },
+            ..
+        })
+    ));
+}
+
+/// Verifies `(void)` consumes the complete expression statement as its discarded operand.
+#[test]
+fn test_void_cast_discards_complete_statement_expression() {
+    let program = parse_source("<?php (void) strlen('discarded') + 1;");
+    match &program[0].kind {
+        StmtKind::ExprStmt(Expr {
+            kind:
+                ExprKind::Cast {
+                    target: CastType::Void,
+                    expr,
+                },
+            ..
+        }) => assert!(matches!(expr.kind, ExprKind::BinaryOp { .. })),
+        other => panic!("expected statement-level void cast, got {other:?}"),
+    }
+}
+
+/// Verifies php-src rejects `(void)` when it is nested in a value expression.
+#[test]
+fn test_void_cast_is_rejected_outside_statement_root() {
+    for source in [
+        "<?php $value = (void) 1;",
+        "<?php echo (void) 1;",
+        "<?php consume((void) 1);",
+        "<?php ((void) strlen('discarded'));",
+        "<?php @(void) strlen('discarded');",
+        "<?php for (; (void) strlen('discarded');) {}",
+    ] {
+        assert!(parse_fails(source), "source unexpectedly parsed: {source}");
+    }
+}
+
 /// Verifies that `<?php echo (1 + 2);` parses as a parenthesized expression, NOT as a cast.
 /// Parentheses around an arithmetic expression must not be interpreted as cast syntax.
 #[test]

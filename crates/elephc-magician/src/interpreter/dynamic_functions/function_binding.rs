@@ -253,7 +253,15 @@ fn apply_native_function_arg_types(
         let Some(param_type) = function.param_type(param_index) else {
             continue;
         };
-        bound_arg.value = eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
+        bound_arg.value = eval_method_parameter_value(
+            param_type,
+            bound_arg.value,
+            function.name(),
+            param_index + 1,
+            function.param_names().get(param_index).map(String::as_str),
+            context,
+            values,
+        )?;
     }
     Ok(())
 }

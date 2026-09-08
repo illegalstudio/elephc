@@ -273,7 +273,10 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
     let Some(spec) = eval_declared_builtin_spec(name) else {
         return Ok(None);
     };
-    if let Some(runtime_builtin) = spec.runtime_builtin {
+    if let Some(runtime_builtin) = spec
+        .runtime_builtin
+        .filter(|id| *id != elephc_builtin_contract::RuntimeBuiltinId::DateDefaultTimezoneSet)
+    {
         if runtime_builtin.supports_arity(args.len()) {
             let mut evaluated_args = Vec::with_capacity(args.len());
             for arg in args {
@@ -302,7 +305,10 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call(
     let Some(spec) = eval_declared_builtin_spec(name) else {
         return Ok(None);
     };
-    if let Some(runtime_builtin) = spec.runtime_builtin {
+    if let Some(runtime_builtin) = spec
+        .runtime_builtin
+        .filter(|id| *id != elephc_builtin_contract::RuntimeBuiltinId::DateDefaultTimezoneSet)
+    {
         if runtime_builtin.supports_arity(evaluated_args.len()) {
             if let Some(result) = values.runtime_builtin_call(runtime_builtin, evaluated_args)? {
                 return Ok(Some(result));

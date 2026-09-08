@@ -228,6 +228,8 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("Stringable", "stringable", Interface, Core, CheckerInjected),
     class!("Throwable", "throwable", Interface, Core, CheckerInjected),
     class!("Traversable", "traversable", Interface, Core, CheckerInjected),
+    class!("CompileError", "compileerror", Class, Core, CheckerInjected),
+    class!("ParseError", "parseerror", Class, Core, CheckerInjected),
     class!("TypeError", "typeerror", Class, Core, CheckerInjected),
     class!("UnderflowException", "underflowexception", Class, Spl, CheckerInjected),
     class!("UnexpectedValueException", "unexpectedvalueexception", Class, Spl, CheckerInjected),

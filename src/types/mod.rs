@@ -20,14 +20,22 @@ mod array_storage;
 pub(crate) mod call_args;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
+/// Concrete date-family method dispatch through DateTimeInterface.
+pub(crate) mod date_method_dispatch;
 /// C FFI type mapping utilities.
 mod ffi;
+/// Reflection signatures for procedural date aliases lowered before builtin lookup.
+mod date_reflection_signatures;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
 mod model;
+/// Physical runtime representations for declared instance-property types.
+pub(crate) mod property_storage;
+/// Shared classification for static syntax that binds the current instance receiver.
+pub(crate) mod static_syntax;
 /// Return-to-argument storage alias summaries used by ownership lowering.
 mod return_alias;
 /// Type checker result types and the `check` entry point.
@@ -53,8 +61,20 @@ pub(crate) use array_keys::{
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
+pub(crate) use property_storage::property_runtime_storage_type;
+pub(crate) use static_syntax::{
+    class_is_same_or_descends_from, static_syntax_instance_receiver_class,
+    static_syntax_uses_late_bound_instance_receiver,
+};
 pub(crate) use return_alias::{
-    collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
+    collect_return_alias_summaries, extend_return_alias_summaries_with_classes,
+    ReturnAliasSummaries, ReturnArgAlias,
+};
+pub(crate) use date_reflection_signatures::{
+    php_src_date_method_canonical_name, php_src_date_method_names,
+    php_src_date_method_parameter_type, php_src_date_method_visible,
+    php_src_date_method_return_type, php_src_date_property_names,
+    reflection_builtin_function_sig,
 };
 pub(crate) use result::LoopStorageTypes;
 pub use checker::CheckOptions;

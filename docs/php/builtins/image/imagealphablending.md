@@ -2,7 +2,7 @@
 title: "imagealphablending()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 457
+  order: 458
 ---
 
 ## imagealphablending()

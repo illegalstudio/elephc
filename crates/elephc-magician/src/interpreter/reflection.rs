@@ -110,6 +110,19 @@ const EVAL_REFLECTION_PARAMETER_FLAG_CALLABLE_TYPE: u64 = 512;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_ALLOWS_NULL: u64 = 1;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN: u64 = 2;
 
+/// Decodes bridge property flags for debug output, excluding static and virtual properties.
+pub(in crate::interpreter) fn native_property_debug_visibility(flags: u64) -> Option<EvalVisibility> {
+    if flags & (EVAL_REFLECTION_MEMBER_FLAG_STATIC | EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL) != 0 {
+        None
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+        Some(EvalVisibility::Private)
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
+        Some(EvalVisibility::Protected)
+    } else {
+        Some(EvalVisibility::Public)
+    }
+}
+
 /// Exception category and message for failed ReflectionClass instantiation.
 pub(in crate::interpreter) enum EvalReflectionInstantiationError {
     ThrowableError(String),

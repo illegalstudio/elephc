@@ -22,7 +22,8 @@ use super::builtin_class_gate::{
 };
 use super::builtin_types::{
     inject_builtin_date_period, inject_builtin_datetime, inject_builtin_reflection,
-    program_may_reference_datetime, program_may_reference_reflection,
+    program_may_reference_date_period, program_may_reference_datetime,
+    program_may_reference_reflection,
     inject_builtin_throwables,
     patch_builtin_exception_signatures,
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
@@ -174,7 +175,14 @@ pub(super) fn check_types_impl(
     // computed here and reused at their own injection sites below.
     let register_spl = crate::types::checker::builtin_spl_classes::program_may_reference_spl(program);
     let register_reflection = program_may_reference_reflection(program);
+    let register_datetime = program_may_reference_datetime(program);
+    let register_date_period = program_may_reference_date_period(program);
     let mut wanted_throwables = throwables_to_register(program, register_spl, register_reflection);
+    if register_datetime {
+        // Synthetic DateTime/DatePeriod overload adapters raise this class from checker-owned
+        // method bodies, so the source-only throwable scan cannot discover the dependency.
+        wanted_throwables.insert("ArgumentCountError".to_string());
+    }
     // Fiber and FiberError ride in the same set because `inject_builtin_throwables` owns their
     // declarations. Nothing raises a FiberError without a Fiber, so one answer covers both.
     if program_may_reference_fiber(program) {
@@ -198,7 +206,6 @@ pub(super) fn check_types_impl(
     // a trivial program. `program_may_reference_datetime` carries the measurement.
     // Gated at the call site rather than inside, because this injection has no redeclaration
     // check to keep running — it inserts only names the program has not already declared.
-    let register_datetime = program_may_reference_datetime(program);
     if register_datetime {
         inject_builtin_datetime(&mut interface_map, &mut class_map, uses_tz_introspection);
     }
@@ -207,8 +214,8 @@ pub(super) fn check_types_impl(
     }
     // DatePeriod implements Iterator (registered just above) and references DateTime/DateInterval,
     // so it can only be registered when they are.
-    if register_datetime {
-        inject_builtin_date_period(&mut class_map);
+    if register_date_period {
+        inject_builtin_date_period(&mut class_map, uses_tz_introspection);
     }
     // Pay-for-use like the families around it, but per-class rather than all-or-nothing: naming
     // one of these registers it and its ancestors, and nothing else. Eight of the thirteen have
@@ -235,8 +242,12 @@ pub(super) fn check_types_impl(
     // and for why under-detecting here is a readable compile error rather than a miscompile.
     // The redeclaration check inside runs regardless of the decision. (`register_spl` is computed
     // above, because the throwable gate needs it too.)
-    if let Err(error) = inject_builtin_spl_classes(&mut interface_map, &mut class_map, register_spl)
-    {
+    if let Err(error) = inject_builtin_spl_classes(
+        &mut interface_map,
+        &mut class_map,
+        register_spl,
+        register_date_period,
+    ) {
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_stdclass(&mut class_map) {

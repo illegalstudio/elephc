@@ -2,7 +2,7 @@
 title: "unixtojd() — internals"
 description: "Compiler internals for unixtojd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 252
+  order: 253
 ---
 
 ## `unixtojd()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:697](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L697) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:902](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L902) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

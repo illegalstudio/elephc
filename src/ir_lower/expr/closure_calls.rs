@@ -17,7 +17,11 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     let mut result_type = None;
     let mut instance_signature = None;
     if let Some(target) = ctx.static_callable_local(var) {
-        result_type = Some(static_callable_return_type(ctx, &target));
+        result_type = Some(if instance_callable_is_date_serialize(ctx, &target) {
+            PhpType::Mixed
+        } else {
+            static_callable_return_type(ctx, &target)
+        });
         instance_signature = instance_callable_signature(&target).cloned();
         if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
             return value;
@@ -286,4 +290,3 @@ pub(super) fn terminate_dynamic_method_call_on_null(
     );
     ctx.builder.terminate(Terminator::Unreachable);
 }
-

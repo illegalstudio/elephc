@@ -76,7 +76,20 @@ unsafe fn execute_eval_inner(
     };
     let program = match parse_cache::parse_fragment_cached(code) {
         Ok(program) => program,
-        Err(err) => return err.status().code(),
+        Err(err) => {
+            #[cfg(not(test))]
+            {
+                let mut fallback_context = ElephcEvalContext::new();
+                let context = ctx.as_mut().unwrap_or(&mut fallback_context);
+                let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+                if let Err(status) = interpreter::emit_eval_compile_warnings(
+                    err.compile_warnings(), context, &mut values, false,
+                ) {
+                    return status.code();
+                }
+            }
+            return err.status().code();
+        }
     };
     clear_result(out);
     execute_parsed_eval(ctx, scope, program.as_ref(), out)

@@ -2,7 +2,7 @@
 title: "jdtofrench() — internals"
 description: "Compiler internals for jdtofrench(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 229
+  order: 230
 ---
 
 ## `jdtofrench()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:685](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L685) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:890](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L890) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

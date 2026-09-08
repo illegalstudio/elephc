@@ -2,7 +2,7 @@
 title: "__elephc_hash_ctx_final() — internals"
 description: "Compiler internals for __elephc_hash_ctx_final(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 958
+  order: 966
 ---
 
 ## `__elephc_hash_ctx_final()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/__elephc_hash_ctx_final.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/__elephc_hash_ctx_final.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

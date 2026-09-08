@@ -2,7 +2,7 @@
 title: "imagecolorset()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 475
+  order: 476
 ---
 
 ## imagecolorset()

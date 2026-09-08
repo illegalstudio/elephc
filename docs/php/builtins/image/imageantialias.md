@@ -2,7 +2,7 @@
 title: "imageantialias()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 458
+  order: 459
 ---
 
 ## imageantialias()

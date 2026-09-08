@@ -25,7 +25,13 @@ pub(super) fn eval_nested_eval(
     };
     let code = eval_expr(code, context, scope, values)?;
     let code = values.string_bytes(code)?;
-    let program = parse_fragment_cached(&code).map_err(EvalParseError::status)?;
+    let program = match parse_fragment_cached(&code) {
+        Ok(program) => program,
+        Err(error) => {
+            emit_eval_compile_warnings(error.compile_warnings(), context, values, false)?;
+            return super::throwables::eval_throw_parse_failure(error.status(), context, values);
+        }
+    };
     execute_program_with_context(context, program.as_ref(), scope, values)
 }
 
@@ -115,7 +121,7 @@ fn eval_execute_include_bytes(
         {
             EvalControl::None => {}
             EvalControl::ReturnVoid => return values.null(),
-            EvalControl::Return(value) => return Ok(value),
+            EvalControl::Return(value) => return Ok(value.value),
             EvalControl::Throw(value) => {
                 context.set_pending_throw(value);
                 return Err(EvalStatus::UncaughtThrowable);
@@ -141,7 +147,7 @@ fn eval_execute_include_code(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let program = parse_fragment_cached(code).map_err(EvalParseError::status)?;
+    let parsed = parse_fragment_cached(code);
     let previous = context.call_site();
     let file = path.to_string_lossy().into_owned();
     let dir = path
@@ -150,7 +156,12 @@ fn eval_execute_include_code(
         .unwrap_or_default();
     context.set_call_site(file.clone(), dir, 1);
     context.set_file_magic_override(Some(file));
-    let result = execute_statements(program.statements(), context, scope, values);
+    let result = match parsed {
+        Ok(program) => emit_eval_compile_warnings(program.compile_warnings(), context, values, true)
+            .and_then(|()| execute_statements_with_return_ownership(program.statements(), context, scope, values, false)),
+        Err(error) => emit_eval_compile_warnings(error.compile_warnings(), context, values, true)
+            .and_then(|()| super::throwables::eval_throw_parse_failure(error.status(), context, values)),
+    };
     context.set_call_site(previous.0, previous.1, previous.2);
     context.set_file_magic_override(previous.3);
     result

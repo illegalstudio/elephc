@@ -9,11 +9,21 @@
 
 use super::*;
 
+/// Selects the PHP exception for an internal spread argument overflow.
+#[derive(Clone, Copy)]
+pub(super) enum SpreadOverflowError<'a> {
+    /// A legacy internal overload reports a TypeError with its specific message.
+    Overload(&'a str),
+    /// A fixed-arity builtin reports an ArgumentCountError.
+    Builtin(&'a str),
+}
+
 /// Lowers one trailing indexed spread in a fixed-arity positional call.
 pub(super) fn lower_positional_spread_args_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     args: &[Expr],
+    spread_overflow_error: Option<SpreadOverflowError<'_>>,
 ) -> Option<Vec<crate::ir::ValueId>> {
     if sig.variadic.is_some() {
         return None;
@@ -38,15 +48,28 @@ pub(super) fn lower_positional_spread_args_with_signature(
     }
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
-    let spread = lower_expr(ctx, inner);
-    let temp_name = ctx.declare_hidden_temp(spread_type.clone());
-    store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
-    let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
+    let (spread_expr, cleanup_temp) = if matches!(&inner.kind, ExprKind::Variable(_)) {
+        (inner.as_ref().clone(), None)
+    } else {
+        let spread = lower_expr(ctx, inner);
+        let temp_name = ctx.declare_hidden_temp(spread_type.clone());
+        store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
+        (
+            Expr::new(ExprKind::Variable(temp_name.clone()), inner.span),
+            Some(temp_name),
+        )
+    };
     let spread_value = lower_expr(ctx, &spread_expr);
-    emit_positional_spread_min_len_guard(
+    emit_positional_spread_min_len_guard_with_context(
         ctx,
         spread_value.value,
         required_len,
+        match spread_overflow_error {
+            Some(SpreadOverflowError::Builtin(name)) => Some(name),
+            _ => None,
+        },
+        spread_idx,
+        cleanup_temp.as_deref(),
         args[spread_idx].span,
     );
 
@@ -84,7 +107,91 @@ pub(super) fn lower_positional_spread_args_with_signature(
         operands.push(lower_expr(ctx, &expr).value);
     }
 
+    if let Some(cleanup_temp) = cleanup_temp {
+        if let Some(anchor) = operands.first().copied() {
+            ctx.register_call_arg_temp_cleanup(anchor, cleanup_temp.clone());
+        } else {
+            ctx.clear_hidden_temp(&cleanup_temp, Some(args[spread_idx].span));
+        }
+        if let Some(message) = spread_overflow_error {
+            emit_positional_spread_max_len_error_guard(
+                ctx,
+                spread_value.value,
+                regular_param_count - spread_idx,
+                spread_idx,
+                message,
+                Some(&cleanup_temp),
+                args[spread_idx].span,
+            );
+        }
+    } else if let Some(message) = spread_overflow_error {
+        emit_positional_spread_max_len_error_guard(
+            ctx,
+            spread_value.value,
+            regular_param_count - spread_idx,
+            spread_idx,
+            message,
+            None,
+            args[spread_idx].span,
+        );
+    }
     Some(operands)
+}
+
+/// Throws the caller's PHP arity/overload exception when a runtime spread has excess entries.
+pub(super) fn emit_positional_spread_max_len_error_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    spread: crate::ir::ValueId,
+    max_len: usize,
+    supplied_prefix: usize,
+    error: SpreadOverflowError<'_>,
+    cleanup_temp: Option<&str>,
+    span: Span,
+) {
+    let len = ctx.emit_value(
+        Op::ArrayLen,
+        vec![spread],
+        None,
+        PhpType::Int,
+        Op::ArrayLen.default_effects(),
+        Some(span),
+    );
+    let max = emit_i64_at_span(ctx, max_len as i64, span);
+    let within_bound = ctx.emit_value(
+        Op::ICmp,
+        vec![len.value, max.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Sle)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(span),
+    );
+    let valid = ctx
+        .builder
+        .create_named_block("call.spread.max.valid", Vec::new());
+    let invalid = ctx
+        .builder
+        .create_named_block("call.spread.max.invalid", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: within_bound.value,
+        then_target: valid,
+        then_args: Vec::new(),
+        else_target: invalid,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(invalid);
+    if let Some(cleanup_temp) = cleanup_temp {
+        ctx.clear_hidden_temp(cleanup_temp, Some(span));
+    }
+    match error {
+        SpreadOverflowError::Overload(message) => {
+            emit_exception_and_terminate(ctx, "TypeError", message, span);
+        }
+        SpreadOverflowError::Builtin(name) => {
+            emit_builtin_spread_arity_error(ctx, name, len, supplied_prefix, false, span);
+        }
+    }
+    ctx.builder.position_at_end(valid);
 }
 
 /// Returns the element count for a statically-known indexed spread source.
@@ -126,6 +233,11 @@ pub(super) fn indexed_spread_source_type(
     let ty = match &expr.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
+        ExprKind::FunctionCall { name, .. } => ctx
+            .functions
+            .get(name.as_str())
+            .map(eir_user_function_return_type)
+            .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
         _ => infer_expr_type_syntactic(expr),
     }
     .codegen_repr();
@@ -148,12 +260,15 @@ pub(super) fn required_positional_spread_len(
         .unwrap_or(0)
 }
 
-/// Emits a fatal guard when a positional spread is shorter than required parameters.
-pub(super) fn emit_positional_spread_min_len_guard(
+/// Checks required entries while retaining builtin identity and caller-owned temp cleanup.
+fn emit_positional_spread_min_len_guard_with_context(
     ctx: &mut LoweringContext<'_, '_>,
     spread: crate::ir::ValueId,
     min_len: usize,
-    span: crate::span::Span,
+    builtin: Option<&str>,
+    supplied_prefix: usize,
+    cleanup_temp: Option<&str>,
+    span: Span,
 ) {
     if min_len == 0 {
         return;
@@ -186,8 +301,58 @@ pub(super) fn emit_positional_spread_min_len_guard(
     });
 
     ctx.builder.position_at_end(fatal);
-    let message = ctx.intern_string("Fatal error: too few arguments for spread call\n");
-    ctx.builder.terminate(Terminator::Fatal { message });
+    if let Some(cleanup_temp) = cleanup_temp {
+        ctx.clear_hidden_temp(cleanup_temp, Some(span));
+    }
+    if let Some(name) = builtin {
+        emit_builtin_spread_arity_error(ctx, name, len, supplied_prefix, true, span);
+    } else {
+        emit_exception_and_terminate(ctx, "ArgumentCountError", "Too few arguments for spread call", span);
+    }
 
     ctx.builder.position_at_end(ok);
+}
+
+/// Emits PHP's exact internal arity wording with the actual runtime argument count.
+fn emit_builtin_spread_arity_error(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    spread_len: LoweredValue,
+    supplied_prefix: usize,
+    too_few: bool,
+    span: Span,
+) {
+    use crate::synthetic_class::{e_binop, e_int, e_str, e_var};
+    let contract = elephc_builtin_contract::lookup(name)
+        .expect("a registry-backed builtin has a shared contract");
+    let minimum = contract.min_args.unwrap_or_else(|| {
+        contract.params.iter().take_while(|param| param.default.is_none()).count()
+    });
+    let maximum = contract.max_args.unwrap_or(contract.params.len());
+    let (qualifier, expected) = if minimum == maximum {
+        ("exactly", minimum)
+    } else if too_few {
+        ("at least", minimum)
+    } else {
+        ("at most", maximum)
+    };
+    let plural = if expected == 1 { "" } else { "s" };
+    let count_temp = ctx.declare_hidden_temp(PhpType::Int);
+    store_value_into_temp(ctx, &count_temp, PhpType::Int, spread_len, span);
+    let count = if supplied_prefix == 0 {
+        e_var(&count_temp)
+    } else {
+        e_binop(e_var(&count_temp), BinOp::Add, e_int(supplied_prefix as i64))
+    };
+    let message = e_binop(
+        e_binop(
+            e_str(&format!("{}() expects {qualifier} {expected} argument{plural}, ", contract.name)),
+            BinOp::Concat,
+            count,
+        ),
+        BinOp::Concat,
+        e_str(" given"),
+    );
+    emit_exception_from_expr(ctx, "ArgumentCountError", message, span);
+    ctx.builder.terminate(Terminator::Unreachable);
 }

@@ -216,6 +216,12 @@ fn debug_assert_checker_methods_have_ast_sources(
             continue;
         }
         for method in &class_info.method_decls {
+            if method.span == crate::span::Span::dummy() {
+                // DateTime subclass hydration helpers and comparable checker-injected methods
+                // carry a complete synthetic AST body in `method_decls`, but deliberately have
+                // no source declaration to match. They are lowered from that generated body below.
+                continue;
+            }
             assert!(
                 methods.contains(&(method.span, method.is_static)),
                 "checker method declaration {}::{} has no matching AST method",

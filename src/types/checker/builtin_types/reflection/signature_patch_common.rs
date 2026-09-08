@@ -142,11 +142,13 @@ pub(super) fn patch_shared_reflection_owner(class_name: &str, class_info: &mut C
 }
 
 /// Patches the common getAttributes result collection.
+///
+/// The unfiltered path stores raw ReflectionAttribute pointers, while the filtered clone path
+/// builds boxed Mixed slots. Expose the common safe element representation so callers unbox both.
 pub(super) fn patch_reflection_attribute_result(class_info: &mut ClassInfo) {
-            if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getAttributes")) {
-                sig.return_type =
-                    PhpType::Array(Box::new(PhpType::Object("ReflectionAttribute".to_string())));
-            }
+    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getAttributes")) {
+        sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
+    }
 }
 
 /// Applies final cross-class overrides that depend on all owners being initialized.

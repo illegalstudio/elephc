@@ -21,7 +21,7 @@ pub(super) fn emit_property_load(
     if slot.is_reference {
         return emit_reference_property_load(ctx, slot, base_reg);
     }
-    match slot.php_type.codegen_repr() {
+    match slot.storage_type.codegen_repr() {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             if base_reg == ptr_reg {
@@ -61,7 +61,7 @@ pub(super) fn emit_property_load(
         _ => {
             return Err(CodegenIrError::unsupported(format!(
                 "property load for PHP type {:?}",
-                slot.php_type
+                slot.storage_type
             )))
         }
     }
@@ -76,7 +76,7 @@ pub(super) fn emit_reference_property_load(
 ) -> Result<()> {
     let pointer_reg = reference_pointer_reg(ctx, base_reg);
     abi::emit_load_from_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
-    match slot.php_type.codegen_repr() {
+    match slot.storage_type.codegen_repr() {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, ptr_reg, pointer_reg, 0);

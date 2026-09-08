@@ -463,6 +463,7 @@ pub(crate) fn insert_enum_metadata(
             is_final: true,
             is_readonly_class: true,
             allow_dynamic_properties: false,
+            dynamic_properties_deprecated: false,
             constants,
             constant_deprecations: user_constants
                 .iter()
@@ -489,8 +490,10 @@ pub(crate) fn insert_enum_metadata(
             properties,
             property_offsets,
             property_declaring_classes,
+            property_slot_declaring_classes: Vec::new(),
             defaults,
             property_visibilities,
+            property_slot_visibilities: Vec::new(),
             property_set_visibilities: HashMap::new(),
             declared_properties,
             property_declared_slots,

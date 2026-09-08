@@ -29,6 +29,17 @@ pub enum RuntimeCallSignature {
         /// Maximum accepted operand count, or `None` for a variadic operation.
         max_operands: Option<usize>,
     },
+    /// A DateTime `__serialize()` ABI result plus its concrete or dynamically proven receiver.
+    ///
+    /// The validator enforces `array<mixed> + object|mixed|union -> mixed`; this custom shape
+    /// exists because the receiver has several permitted storage representations while the raw
+    /// result and boxed ownership boundary remain fixed.
+    DateSerializeFinalize,
+    /// A consuming declared-`array` return boundary for an owned boxed Mixed value.
+    ///
+    /// Storage alone cannot distinguish an arbitrary heap cell from this operation's required
+    /// PHP `mixed -> array<mixed>` contract, so the validator checks both representations.
+    MixedToArrayReturn,
 }
 
 /// PHP key-sort operation that requested a guarded nested-array promotion.
@@ -68,6 +79,19 @@ pub enum RuntimeCallTarget {
     /// Creates an independently mutable boxed Mixed cell from one stored
     /// Mixed cell while retaining its tag-4/tag-5 payload ownership.
     MixedCellClone,
+    /// Finalizes an owned generic `array` returned by an ambiguously typed DateTime
+    /// `__serialize()` call, using the concrete receiver only to decide date-property merging.
+    DateSerializeFinalize,
+    /// Consumes an owned Mixed result at any declared PHP `array` return boundary.
+    ///
+    /// The target retains a valid array/hash payload before releasing the boxed source and emits
+    /// the function-specific PHP return TypeError for every invalid runtime tag.
+    MixedToArrayReturn,
+    /// Consumes an owned Mixed result at a DateTime `__serialize(): array` return boundary.
+    ///
+    /// It retains a valid array/hash payload before releasing the superseded Mixed owner and
+    /// releases that owner before raising the return-contract TypeError for every other tag.
+    DateSerializeMixedToArrayReturn,
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
     /// A typed PCNTL process-control operation with target-aware availability.
@@ -102,6 +126,13 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
+            RuntimeCallTarget::DateSerializeFinalize => {
+                Some(RuntimeCallSignature::DateSerializeFinalize)
+            }
+            RuntimeCallTarget::MixedToArrayReturn
+            | RuntimeCallTarget::DateSerializeMixedToArrayReturn => {
+                Some(RuntimeCallSignature::MixedToArrayReturn)
+            }
             RuntimeCallTarget::UnaryString(_) => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
@@ -133,6 +164,11 @@ impl RuntimeCallTarget {
                 "array.mixed_cell_promote_attached_to_hash"
             }
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
+            RuntimeCallTarget::DateSerializeFinalize => "datetime.serialize_finalize",
+            RuntimeCallTarget::MixedToArrayReturn => "return.mixed_to_array",
+            RuntimeCallTarget::DateSerializeMixedToArrayReturn => {
+                "datetime.serialize_mixed_to_array_return"
+            }
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::Pcntl(target) => target.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),

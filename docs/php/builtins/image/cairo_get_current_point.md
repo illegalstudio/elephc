@@ -2,7 +2,7 @@
 title: "cairo_get_current_point()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 405
+  order: 406
 ---
 
 ## cairo_get_current_point()

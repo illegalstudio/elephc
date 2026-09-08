@@ -2,7 +2,7 @@
 title: "mysqli_stmt_num_rows() — internals"
 description: "Compiler internals for mysqli_stmt_num_rows(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 171
+  order: 172
 ---
 
 ## `mysqli_stmt_num_rows()` — internals

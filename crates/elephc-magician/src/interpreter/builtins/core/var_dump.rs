@@ -63,7 +63,10 @@ pub(in crate::interpreter) fn eval_var_dump_result(
         )?;
     }
     let output = values.string_bytes_value(&output)?;
-    values.echo(output)?;
+    let result = values.echo(output);
+    let cleanup = values.release(output);
+    result?;
+    cleanup?;
     values.null()
 }
 
@@ -97,7 +100,7 @@ fn eval_var_dump_append_value(
             objects_seen,
             output,
         ),
-        EVAL_TAG_OBJECT => eval_var_dump_append_object(
+        EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => eval_var_dump_append_object(
             value,
             context,
             values,
@@ -269,31 +272,35 @@ fn eval_var_dump_append_object(
     objects_seen.push(object_key);
     let class_name = eval_debug_object_class_name(value, identity, context, values)?;
     let properties = eval_debug_object_properties(value, identity, &class_name, context, values)?;
-    eval_var_dump_append_prefix(depth, is_reference, output);
-    output.extend_from_slice(b"object(");
-    output.extend_from_slice(class_name.as_bytes());
-    output.extend_from_slice(b")#");
-    output.extend_from_slice(object_key.to_string().as_bytes());
-    output.extend_from_slice(b" (");
-    output.extend_from_slice(properties.len().to_string().as_bytes());
-    output.extend_from_slice(b") {\n");
-    for property in &properties {
-        eval_var_dump_append_object_key(property, depth + 1, output);
-        eval_var_dump_append_value(
-            property.value,
-            context,
-            values,
-            depth + 1,
-            property.is_reference,
-            arrays_seen,
-            objects_seen,
-            output,
-        )?;
-    }
-    eval_var_dump_append_indent(depth, output);
-    output.extend_from_slice(b"}\n");
+    let result = (|| {
+        eval_var_dump_append_prefix(depth, is_reference, output);
+        output.extend_from_slice(b"object(");
+        output.extend_from_slice(class_name.as_bytes());
+        output.extend_from_slice(b")#");
+        output.extend_from_slice(object_key.to_string().as_bytes());
+        output.extend_from_slice(b" (");
+        output.extend_from_slice(properties.len().to_string().as_bytes());
+        output.extend_from_slice(b") {\n");
+        for property in &properties {
+            eval_var_dump_append_object_key(property, depth + 1, output);
+            eval_var_dump_append_value(
+                property.value,
+                context,
+                values,
+                depth + 1,
+                property.is_reference,
+                arrays_seen,
+                objects_seen,
+                output,
+            )?;
+        }
+        eval_var_dump_append_indent(depth, output);
+        output.extend_from_slice(b"}\n");
+        Ok(())
+    })();
     objects_seen.pop();
-    Ok(())
+    let cleanup = release_debug_properties(properties, context, values);
+    result.and_then(|()| cleanup)
 }
 
 /// Appends one array key line for an indexed or associative `var_dump()` entry.
@@ -324,6 +331,12 @@ fn eval_var_dump_append_object_key(
     output: &mut Vec<u8>,
 ) {
     eval_var_dump_append_indent(depth, output);
+    if property.numeric_name {
+        output.extend_from_slice(b"[");
+        output.extend_from_slice(property.name.as_bytes());
+        output.extend_from_slice(b"]=>\n");
+        return;
+    }
     output.extend_from_slice(b"[\"");
     output.extend_from_slice(property.name.as_bytes());
     output.extend_from_slice(b"\"");

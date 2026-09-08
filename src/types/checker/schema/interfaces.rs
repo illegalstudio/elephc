@@ -13,7 +13,10 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassProperty, Visibility};
-use crate::types::{InterfaceInfo, PhpType, PropertyHookContract};
+use crate::types::{
+    collect_attribute_args, collect_attribute_names, InterfaceInfo, PhpType,
+    PropertyHookContract,
+};
 
 use super::super::Checker;
 use super::super::InterfaceDeclInfo;
@@ -410,6 +413,8 @@ pub(crate) fn build_interface_info_recursive(
 
     let mut iface_constants: HashMap<String, crate::parser::ast::Expr> = HashMap::new();
     let mut constant_types = HashMap::new();
+    let mut constant_attribute_names = HashMap::new();
+    let mut constant_attribute_args = HashMap::new();
     let mut constant_declaring_interfaces = HashMap::new();
     let mut final_constants = HashSet::new();
     for parent_name in &interface.extends {
@@ -420,6 +425,22 @@ pub(crate) fn build_interface_info_recursive(
                     if let Some(type_expr) = parent_info.constant_types.get(k) {
                         constant_types.insert(k.clone(), type_expr.clone());
                     }
+                    constant_attribute_names.insert(
+                        k.clone(),
+                        parent_info
+                            .constant_attribute_names
+                            .get(k)
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                    constant_attribute_args.insert(
+                        k.clone(),
+                        parent_info
+                            .constant_attribute_args
+                            .get(k)
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
                     constant_declaring_interfaces.insert(
                         k.clone(),
                         parent_info
@@ -454,6 +475,10 @@ pub(crate) fn build_interface_info_recursive(
         } else {
             constant_types.remove(&c.name);
         }
+        constant_attribute_names
+            .insert(c.name.clone(), collect_attribute_names(&c.attributes));
+        constant_attribute_args
+            .insert(c.name.clone(), collect_attribute_args(&c.attributes));
         constant_declaring_interfaces.insert(c.name.clone(), interface.name.clone());
         if c.is_final {
             final_constants.insert(c.name.clone());
@@ -481,6 +506,8 @@ pub(crate) fn build_interface_info_recursive(
             static_method_order,
             constants: iface_constants,
             constant_types,
+            constant_attribute_names,
+            constant_attribute_args,
             constant_declaring_interfaces,
             final_constants,
         },

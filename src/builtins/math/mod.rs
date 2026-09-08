@@ -53,6 +53,7 @@ pub mod exp;
 pub mod fdiv;
 pub mod floor;
 pub mod fmod;
+pub mod getrandmax;
 pub mod hexdec;
 pub mod hypot;
 pub mod intdiv;

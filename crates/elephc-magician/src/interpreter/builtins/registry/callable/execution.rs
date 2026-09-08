@@ -70,6 +70,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
             called_class,
             native_class,
             bridge_scope,
+            ..
         } => {
             eval_reject_fiber_object_switch_during_pcntl_dispatch(
                 *object,
@@ -302,6 +303,7 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
             called_class,
             native_class,
             bridge_scope,
+            ..
         } => {
             eval_reject_fiber_object_switch_during_pcntl_dispatch(
                 *object,
@@ -438,6 +440,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
             called_class,
             native_class,
             bridge_scope,
+            ..
         } => {
             eval_reject_fiber_object_switch_during_pcntl_dispatch(
                 *object,

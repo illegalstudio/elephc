@@ -155,6 +155,8 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_arr_dyn_value_object");                 // objects encode through the object descriptor walker
     emitter.instruction("cmp x12, #7");                                         // does this array store boxed mixed payloads?
     emitter.instruction("b.eq __rt_json_arr_dyn_value_mixed");                  // boxed mixed payloads encode through the mixed helper
+    emitter.instruction("cmp x12, #10");                                        // does this array store Closure descriptors?
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_closure");                // Closures encode as empty JSON objects
     emitter.instruction("b __rt_json_arr_dyn_value_null");                      // null and unsupported payloads encode as JSON null
 
     emitter.label("__rt_json_arr_dyn_value_int");
@@ -224,6 +226,14 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the boxed mixed pointer from the 8-byte array slot
     emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed payload recursively
     emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded mixed payload into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_closure");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
+    emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
+    emitter.instruction("add x4, x4, #3");                                      // skip the indexed-array header
+    emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the Closure descriptor payload
+    emitter.instruction("bl __rt_json_encode_closure");                         // encode the Closure as an empty JSON object
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded Closure slice into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_null");
     emitter.instruction("bl __rt_json_encode_null");                            // encode null/unsupported payloads as JSON null
@@ -397,6 +407,8 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_arr_dyn_value_object");                   // encode objects through the object descriptor walker
     emitter.instruction("cmp r10, 7");                                          // does this indexed array store boxed mixed payloads?
     emitter.instruction("je __rt_json_arr_dyn_value_mixed");                    // encode boxed mixed payloads through the mixed JSON helper
+    emitter.instruction("cmp r10, 10");                                         // does this indexed array store Closure descriptors?
+    emitter.instruction("je __rt_json_arr_dyn_value_closure");                  // Closures encode as empty JSON objects
     emitter.instruction("jmp __rt_json_arr_dyn_value_null");                    // unsupported payloads currently degrade to JSON null
 
     emitter.label("__rt_json_arr_dyn_value_int");
@@ -467,6 +479,14 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the boxed mixed pointer from the indexed-array storage slot
     emitter.instruction("call __rt_json_encode_mixed");                         // encode the boxed mixed payload recursively into a JSON slice
     emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded nested JSON element into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_closure");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index
+    emitter.instruction("add r10, 3");                                          // skip the indexed-array header
+    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the Closure descriptor payload
+    emitter.instruction("call __rt_json_encode_closure");                       // encode the Closure as an empty JSON object
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded Closure slice into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_null");
     emitter.instruction("call __rt_json_encode_null");                          // encode null or unsupported payload families as the JSON null literal

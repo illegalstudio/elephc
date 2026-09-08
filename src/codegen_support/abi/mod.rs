@@ -38,7 +38,6 @@ pub use frame::{
     emit_store_zero_to_local_slot, load_at_offset, load_at_offset_scratch, load_from_caller_stack,
     store_at_offset, store_at_offset_scratch,
 };
-#[cfg(test)]
 pub use frame::{emit_preserve_return_value, emit_restore_return_value};
 pub(crate) use registers::{
     float_arg_reg_name, float_result_reg, float_spill_scratch_reg, frame_pointer_reg,

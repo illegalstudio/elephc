@@ -9,6 +9,26 @@
 
 use super::support::*;
 
+/// Silence wraps its unary operand without swallowing the following addition.
+#[test]
+fn parse_fragment_accepts_error_suppression() {
+    let program = parse_fragment(b"return @$a + $b;").expect("silence should parse");
+    assert_eq!(program.statements(), &[EvalStmt::Return(Some(EvalExpr::Binary {
+        op: EvalBinOp::Add,
+        left: Box::new(EvalExpr::Unary {
+            op: EvalUnaryOp::Suppress,
+            expr: Box::new(EvalExpr::LoadVar("a".into())),
+        }),
+        right: Box::new(EvalExpr::LoadVar("b".into())),
+    }))]);
+}
+
+/// A silence operator still requires an operand.
+#[test]
+fn parse_fragment_rejects_empty_error_suppression() {
+    assert!(parse_fragment(b"return @;").is_err());
+}
+
 /// Verifies comparison operators parse with lower precedence than arithmetic.
 #[test]
 fn parse_fragment_accepts_comparison_source() {

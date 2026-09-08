@@ -27,6 +27,15 @@ use super::{
     STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
     UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
     UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
+    UNCAUGHT_DATEPERIOD_STACK_PREFIX, UNCAUGHT_DATETIME_FORMAT_PARENT_PREFIX,
+    UNCAUGHT_DATETIME_FORMAT_STACK_PREFIX, UNCAUGHT_DATETIME_FORMAT_STACK_SUFFIX,
+    UNCAUGHT_TIMEZONE_OFFSET_STACK_PREFIX, UNCAUGHT_TIMEZONE_OFFSET_STACK_SUFFIX,
+    UNCAUGHT_TRACE_CLASS_SEPARATOR, UNCAUGHT_TRACE_LINE_PREFIX, UNCAUGHT_TRACE_LOCATION_SEPARATOR,
+    UNCAUGHT_TRACE_NEWLINE, UNCAUGHT_TRACE_NEXT_PREFIX, UNCAUGHT_TRACE_NEXT_STACK_PREFIX,
+    UNCAUGHT_TRACE_PREFIX,
+    UNCAUGHT_UNSERIALIZE_CALL_AFTER_LINE, UNCAUGHT_UNSERIALIZE_CALL_PREFIX,
+    UNCAUGHT_UNSERIALIZE_CALL_SUFFIX, UNCAUGHT_UNSERIALIZE_OWNER_SUFFIX,
+    UNCAUGHT_UNSERIALIZE_STACK_PREFIX, UNCAUGHT_UNSERIALIZE_THROWN_SUFFIX,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -34,6 +43,12 @@ use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
 use crate::codegen_support::platform::Target;
+
+/// PHP's non-serializable Closure exception message shared with the serializer runtime.
+pub(crate) const SERIALIZE_CLOSURE_ERROR: &str = "Serialization of 'Closure' is not allowed";
+/// PHP's return-contract message for a `__serialize()` result that is not an array.
+pub(crate) const SERIALIZE_MAGIC_RETURN_TYPE_ERROR: &str =
+    "__serialize(): Return value must be of type array";
 use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
 };
@@ -52,7 +67,16 @@ use crate::types::checker::builtins::{
 /// runtime's `.comm`, the runtime's load, and the Rust bridge's `extern "C"`
 /// all name the same symbol (`_elephc_web_capture` on macOS, `elephc_web_capture`
 /// on Linux). The cache key already includes the target, so this stays cache-safe.
-pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> String {
+/// `float_precision` is PHP's compile-time `precision` INI value for ordinary
+/// float-to-string conversion and is part of the runtime cache identity.
+/// `php_profile` is the selected PHP minor version and keeps version-sensitive
+/// constants in the runtime data aligned with the user-code constant surface.
+pub(crate) fn emit_runtime_data_fixed(
+    heap_size: usize,
+    target: Target,
+    float_precision: u8,
+    php_profile: u8,
+) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
@@ -105,7 +129,29 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ));
     }
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    out.push_str(&format!(
+        ".globl _serialize_closure_error\n_serialize_closure_error:\n    .ascii {SERIALIZE_CLOSURE_ERROR:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _serialize_magic_return_type_error\n_serialize_magic_return_type_error:\n    .ascii {SERIALIZE_MAGIC_RETURN_TYPE_ERROR:?}\n"
+    ));
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
+    out.push_str(".globl _closure_debug_key_name\n_closure_debug_key_name:\n    .ascii \"[\\\"name\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_file\n_closure_debug_key_file:\n    .ascii \"[\\\"file\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_line\n_closure_debug_key_line:\n    .ascii \"[\\\"line\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_parameter\n_closure_debug_key_parameter:\n    .ascii \"[\\\"parameter\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_static\n_closure_debug_key_static:\n    .ascii \"[\\\"static\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_this\n_closure_debug_key_this:\n    .ascii \"[\\\"this\\\"]\"\n");
+    out.push_str(".globl _closure_debug_key_function\n_closure_debug_key_function:\n    .ascii \"[\\\"function\\\"]\"\n");
+    out.push_str(".globl _closure_debug_required\n_closure_debug_required:\n    .ascii \"<required>\"\n");
+    out.push_str(".globl _closure_debug_optional\n_closure_debug_optional:\n    .ascii \"<optional>\"\n");
+    out.push_str(".globl _closure_print_r_key_name\n_closure_print_r_key_name:\n    .ascii \"[name] => \"\n");
+    out.push_str(".globl _closure_print_r_key_file\n_closure_print_r_key_file:\n    .ascii \"[file] => \"\n");
+    out.push_str(".globl _closure_print_r_key_line\n_closure_print_r_key_line:\n    .ascii \"[line] => \"\n");
+    out.push_str(".globl _closure_print_r_key_static\n_closure_print_r_key_static:\n    .ascii \"[static] => \"\n");
+    out.push_str(".globl _closure_print_r_key_this\n_closure_print_r_key_this:\n    .ascii \"[this] => \"\n");
+    out.push_str(".globl _closure_print_r_key_parameter\n_closure_print_r_key_parameter:\n    .ascii \"[parameter] => \"\n");
+    out.push_str(".globl _closure_print_r_key_function\n_closure_print_r_key_function:\n    .ascii \"[function] => \"\n");
     out.push_str(&format!(
         ".globl _diag_sprintf_array_to_string\n_diag_sprintf_array_to_string:\n    .ascii {SPRINTF_ARRAY_TO_STRING_WARNING:?}\n"
     ));
@@ -230,7 +276,27 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
     out.push_str(&comm_directive("_unser_count", 8, target));
     out.push_str(&comm_directive("_unser_values", 524288, target));
-    out.push_str(&comm_directive("_strtotime_clock", 8, target));
+    out.push_str(&comm_directive("_unser_warning_callback", 8, target));
+    out.push_str(&comm_directive("_unser_dateinterval_dynamic_callback", 8, target));
+    out.push_str(&comm_directive("_unser_warning_emitted", 8, target));
+    out.push_str(&comm_directive("_unser_force_failure", 8, target));
+    out.push_str(&comm_directive("_unser_failure_offset", 8, target));
+    // Native ext/date __unserialize hooks publish enough call-site state for
+    // the uncaught-exception helper to reproduce php-src's internal-hook trace.
+    out.push_str(&comm_directive("_unser_trace_active", 8, target));
+    out.push_str(&comm_directive("_unser_trace_exception_ptr", 8, target));
+    out.push_str(&comm_directive("_unser_trace_input_ptr", 8, target));
+    out.push_str(&comm_directive("_unser_trace_input_len", 8, target));
+    out.push_str(&comm_directive("_unser_trace_owner_ptr", 8, target));
+    out.push_str(&comm_directive("_unser_trace_owner_len", 8, target));
+    out.push_str(&comm_directive("_unser_trace_call_line", 8, target));
+    out.push_str(&comm_directive("_date_special_trace_kind", 8, target));
+    out.push_str(&comm_directive("_date_special_trace_line", 8, target));
+    out.push_str(&comm_directive("_date_constructor_trace_line", 8, target));
+    out.push_str(&comm_directive("_date_special_trace_exception_ptr", 8, target));
+    out.push_str(&comm_directive("_dateperiod_foreach_trace_active", 8, target));
+    out.push_str(&comm_directive("_dateperiod_foreach_trace_exception_ptr", 8, target));
+    out.push_str(&comm_directive("_dateperiod_foreach_trace_line", 8, target));
     // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
     // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
     // "UTC" literal returned in that default case.
@@ -366,6 +432,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // request on demand instead of every request or none.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_request_fn"), 8, target));
     out.push_str(&comm_directive("_rt_diag_suppression", 8, target));
+    // PHP 8.4 removed E_STRICT from E_ALL; older profiles retain its bit.
+    let default_error_reporting = if php_profile >= 4 { 30719 } else { 32767 };
+    out.push_str(".globl _rt_error_reporting\n");
+    out.push_str("_rt_error_reporting:\n");
+    out.push_str(&format!("    .quad {default_error_reporting}\n"));
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
     // write(1, …) syscall; non-zero (set only by the --web bridge) routes it to
@@ -640,6 +711,32 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _uncaught_exc_msg\n_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
+    for (label, message) in [
+        ("_uncaught_trace_prefix", UNCAUGHT_TRACE_PREFIX),
+        ("_uncaught_trace_next_prefix", UNCAUGHT_TRACE_NEXT_PREFIX),
+        (
+            "_uncaught_trace_next_stack_prefix",
+            UNCAUGHT_TRACE_NEXT_STACK_PREFIX,
+        ),
+        ("_uncaught_trace_class_separator", UNCAUGHT_TRACE_CLASS_SEPARATOR),
+        ("_uncaught_trace_location_separator", UNCAUGHT_TRACE_LOCATION_SEPARATOR),
+        ("_uncaught_trace_line_prefix", UNCAUGHT_TRACE_LINE_PREFIX),
+        ("_uncaught_trace_newline", UNCAUGHT_TRACE_NEWLINE),
+        ("_uncaught_dateperiod_stack_prefix", UNCAUGHT_DATEPERIOD_STACK_PREFIX),
+        ("_uncaught_timezone_offset_stack_prefix", UNCAUGHT_TIMEZONE_OFFSET_STACK_PREFIX),
+        ("_uncaught_timezone_offset_stack_suffix", UNCAUGHT_TIMEZONE_OFFSET_STACK_SUFFIX),
+        ("_uncaught_datetime_format_stack_prefix", UNCAUGHT_DATETIME_FORMAT_STACK_PREFIX),
+        ("_uncaught_datetime_format_parent_prefix", UNCAUGHT_DATETIME_FORMAT_PARENT_PREFIX),
+        ("_uncaught_datetime_format_stack_suffix", UNCAUGHT_DATETIME_FORMAT_STACK_SUFFIX),
+        ("_uncaught_unserialize_stack_prefix", UNCAUGHT_UNSERIALIZE_STACK_PREFIX),
+        ("_uncaught_unserialize_owner_suffix", UNCAUGHT_UNSERIALIZE_OWNER_SUFFIX),
+        ("_uncaught_unserialize_call_prefix", UNCAUGHT_UNSERIALIZE_CALL_PREFIX),
+        ("_uncaught_unserialize_call_after_line", UNCAUGHT_UNSERIALIZE_CALL_AFTER_LINE),
+        ("_uncaught_unserialize_call_suffix", UNCAUGHT_UNSERIALIZE_CALL_SUFFIX),
+        ("_uncaught_unserialize_thrown_suffix", UNCAUGHT_UNSERIALIZE_THROWN_SUFFIX),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     // PHP prefixes the report with a newline UNCONDITIONALLY — measured against 8.5 on a script
     // that writes nothing at all before throwing, where the output still begins with "\n".
     out.push_str(".globl _uncaught_exc_prefix\n_uncaught_exc_prefix:\n    .ascii \"\\nFatal error: Uncaught \"\n");
@@ -1352,7 +1449,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     out.push_str(".globl _resource_type_stream\n_resource_type_stream:\n    .ascii \"stream\"\n");
     out.push_str(".globl _resource_type_unknown\n_resource_type_unknown:\n    .ascii \"Unknown\"\n");
-    out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
+    out.push_str(&format!(
+        ".globl _fmt_g\n_fmt_g:\n    .asciz \"%.{}G\"\n",
+        float_precision
+    ));
     out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
     out.push_str(".globl _fmt_star_f\n_fmt_star_f:\n    .asciz \"%.*f\"\n");
     // PHP's own default `ucwords()` separator set, `" \t\r\n\f\v"`. It is a byte SET rather
@@ -1457,7 +1557,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _locale_env_name\n_locale_env_name:\n    .asciz \"\"\n");
     out.push_str(&system::emit_json_data());
     out.push_str(&system::emit_date_data());
-    out.push_str(&system::emit_strtotime_data());
     out.push_str(&system::emit_pcntl_data());
     out.push_str(&emit_php_uname_data());
 
@@ -1535,6 +1634,18 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform};
 
+    /// Verifies the configured PHP precision is embedded in the cacheable `%G` format.
+    #[test]
+    fn test_float_precision_is_baked_into_runtime_data() {
+        let asm = emit_runtime_data_fixed(
+            8_388_608,
+            Target::new(Platform::MacOS, Arch::AArch64),
+            13,
+            5,
+        );
+        assert!(asm.contains(".asciz \"%.13G\""));
+    }
+
     /// Every common symbol the runtime data section declares must carry an alignment operand
     /// the target's own assembler reads as 8 bytes.
     ///
@@ -1553,7 +1664,7 @@ mod tests {
             (Platform::Linux, Arch::X86_64, "8"),
         ] {
             let target = Target::new(platform, arch);
-            let asm = emit_runtime_data_fixed(8_388_608, target);
+            let asm = emit_runtime_data_fixed(8_388_608, target, 14, 5);
 
             let mut seen = 0usize;
             for line in asm.lines().filter(|line| line.starts_with(".comm ")) {
@@ -1581,6 +1692,8 @@ mod tests {
         let asm = emit_runtime_data_fixed(
             8_388_608,
             Target::new(Platform::Linux, Arch::AArch64),
+            14,
+            5,
         );
 
         assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
@@ -1613,7 +1726,7 @@ mod tests {
             (Platform::Linux, Arch::X86_64, ""),
         ] {
             let target = Target::new(platform, arch);
-            let asm = emit_runtime_data_fixed(8_388_608, target);
+            let asm = emit_runtime_data_fixed(8_388_608, target, 14, 5);
             for slot in &bridge_slots {
                 let wanted = format!(".comm {prefix}{slot}, 8, ");
                 assert!(
@@ -1635,6 +1748,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Verifies PHP 8.4+ runtime defaults exclude the removed E_STRICT bit.
+    #[test]
+    fn test_error_reporting_default_tracks_php_profile() {
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let php83 = emit_runtime_data_fixed(8_388_608, target, 14, 3);
+        let php85 = emit_runtime_data_fixed(8_388_608, target, 14, 5);
+        assert!(php83.contains("_rt_error_reporting:\n    .quad 32767\n"));
+        assert!(php85.contains("_rt_error_reporting:\n    .quad 30719\n"));
     }
 
     /// Every `elephc_*` runtime slot a bridge crate resolves through the C ABI, read from

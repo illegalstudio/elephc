@@ -103,6 +103,94 @@ pub(crate) fn lower_object_prop_value(
     store_if_result(ctx, inst)
 }
 
+/// Merges DateTime-family subclass properties into a magic `__serialize()` result hash.
+///
+/// The shared runtime helper owns the visibility-mangled descriptor walk; this lowerer
+/// only materializes its `(hash, object)` ABI without exposing a PHP-visible builtin.
+pub(crate) fn lower_date_magic_append_properties(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "date_magic_append_properties", 2)?;
+    emit_date_magic_property_arguments(ctx, inst, false)?;
+    abi::emit_call_label(ctx.emitter, "__rt_date_magic_append_props");
+    store_if_result(ctx, inst)
+}
+
+/// Merges custom properties after an explicit `parent::__serialize()` call to ext/date.
+pub(crate) fn lower_date_magic_append_properties_forced(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "date_magic_append_properties_forced", 2)?;
+    emit_date_magic_property_arguments(ctx, inst, true)?;
+    abi::emit_call_label(ctx.emitter, "__rt_date_magic_append_props");
+    store_if_result(ctx, inst)
+}
+
+/// Dispatches internal DateTime-subclass AST hydrators and returns their filtered data hash.
+///
+/// The helper receives `(object, data)` rather than exposing a PHP method call, so user methods
+/// cannot override or observe the compiler-only dispatch identity.
+pub(crate) fn lower_date_magic_restore_properties(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "date_magic_restore_properties", 2)?;
+    let object = expect_operand(inst, 0)?;
+    let data = expect_operand(inst, 1)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(data, result_reg)?;
+    prepare_owned_date_restore_hash(ctx, data)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    emit_object_pointer_from_operand(ctx, object)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_pop_reg(ctx.emitter, "x1"),
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // object pointer → first SysV restore argument
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_date_magic_restore_props");
+    store_if_result(ctx, inst)
+}
+
+/// Filters serialized references before native DateTime-family hydration consumes object data.
+pub(crate) fn lower_date_magic_filter_references(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "date_magic_filter_references", 2)?;
+    let object = expect_operand(inst, 0)?;
+    let data = expect_operand(inst, 1)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(data, result_reg)?;
+    prepare_owned_date_restore_hash(ctx, data)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    emit_object_pointer_from_operand(ctx, object)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_pop_reg(ctx.emitter, "x1"),
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // object pointer → first SysV filter argument
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_date_magic_filter_refs");
+    store_if_result(ctx, inst)
+}
+
+/// Gives the date hydrator its own writable hash; the caller retains its input.
+/// The returned hash is owned, including when there are no custom properties to remove.
+fn prepare_owned_date_restore_hash(ctx: &mut FunctionContext<'_>, data: ValueId) -> Result<()> {
+    let data_ty = ctx.value_php_type(data)?.codegen_repr();
+    abi::emit_incref_if_refcounted(ctx.emitter, &data_ty);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the owned hash to the copy-on-write boundary
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+    Ok(())
+}
+
 /// Materializes the object pointer in the first argument register and the property
 /// index in the second, evaluating the index FIRST so the object pointer is not
 /// clobbered by the index load.
@@ -125,6 +213,36 @@ fn emit_object_and_index_arguments(
             ctx.emitter.instruction("mov rdi, rax");                            // object pointer → SysV first argument register
             ctx.emitter
                 .instruction(&format!("mov rsi, {}", index_reg));               // property index → SysV second argument register
+        }
+    }
+    Ok(())
+}
+
+/// Places the internal magic-property helper's `(hash, object)` arguments in ABI order.
+///
+/// The helper's arguments are spilled hash-first because materializing a mixed object receiver
+/// may clobber result registers.
+fn emit_date_magic_property_arguments(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    forced: bool,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let object = expect_operand(inst, 1)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(hash, result_reg)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    emit_object_pointer_from_operand(ctx, object)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // object → second helper argument
+            abi::emit_pop_reg(ctx.emitter, "x0");                              // magic hash → first helper argument
+            abi::emit_load_int_immediate(ctx.emitter, "x2", i64::from(forced));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // object → second SysV helper argument
+            abi::emit_pop_reg(ctx.emitter, "rdi");                             // magic hash → first SysV helper argument
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", i64::from(forced));
         }
     }
     Ok(())

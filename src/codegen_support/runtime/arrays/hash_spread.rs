@@ -13,6 +13,9 @@
 //!   persisted, refcounted payloads are retained, and scalars are copied as-is.
 //! - `__rt_hash_project_spread` preserves integer keys and normalizes numeric
 //!   string property names to the integer keys produced by PHP array casts.
+//! - `__rt_hash_project_add` is the add-only merge used by DateTime magic
+//!   serialization; it preserves object-property keys exactly, including
+//!   numeric-looking string keys.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -25,8 +28,10 @@ use crate::codegen_support::platform::Arch;
 /// entry), and string keys are preserved. Each value is retained/persisted so
 /// the destination owns an independent reference. Duplicate keys overwrite the
 /// existing destination entry (later spread operand wins).
-/// The companion projection entry preserves existing integer keys and normalizes
+/// The array-cast projection entry preserves existing integer keys and normalizes
 /// numeric string keys before inserting the same independently retained values.
+/// The add-only projection used by magic serialization instead preserves every
+/// source key exactly and skips entries already present in the destination.
 ///
 /// # Inputs (ARM64)
 /// - `x0`: destination hash pointer
@@ -49,6 +54,9 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_spread_entry");                            // share the ownership-preserving hash copy implementation
     emitter.label_global("__rt_hash_project_spread");
     emitter.instruction("mov x2, #1");                                          // select object-projection key normalization semantics
+    emitter.instruction("b __rt_hash_spread_entry");                            // share the ownership-preserving hash copy implementation
+    emitter.label_global("__rt_hash_project_add");
+    emitter.instruction("mov x2, #2");                                          // add-only serialization projection preserves exact object-property keys
     emitter.label_shared("__rt_hash_spread_entry");
 
     // -- set up stack frame --
@@ -62,7 +70,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     //   [sp, #48] = borrowed source value low word
     //   [sp, #56] = borrowed source value high word
     //   [sp, #64] = borrowed source value runtime tag
-    //   [sp, #72] = key mode (0 = array spread, 1 = object projection)
+    //   [sp, #72] = key mode (0 = array spread, 1 = array-cast projection, 2 = add-only serialization projection)
     //   [sp, #80] = saved x29
     //   [sp, #88] = saved x30
     emitter.instruction("sub sp, sp, #96");                                     // reserve spill slots for the spread walk state
@@ -124,7 +132,17 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #56]");                                   // save the borrowed source value high word
     emitter.instruction("str x5, [sp, #64]");                                   // save the borrowed source value runtime tag
 
+    emitter.instruction("ldr x9, [sp, #72]");                                   // inspect the selected merge mode
+    emitter.instruction("cmp x9, #2");                                          // add-only object projection?
+    emitter.instruction("b.ne __rt_hash_spread_retain");                        // ordinary spread/project always retains then overwrites
+    emitter.instruction("ldr x0, [sp, #0]");                                    // destination hash for an add-if-absent probe
+    emitter.instruction("ldr x1, [sp, #32]");                                   // source key pointer or integer payload
+    emitter.instruction("ldr x2, [sp, #40]");                                   // source key length or integer sentinel
+    emitter.instruction("bl __rt_hash_get");                                    // existing native/common property wins
+    emitter.instruction("cbnz x0, __rt_hash_spread_loop");                      // do not retain or overwrite an existing entry
+
     // -- retain the source value so the destination owns an independent copy --
+    emitter.label("__rt_hash_spread_retain");
     emitter.instruction("ldr x5, [sp, #64]");                                   // reload the source value runtime tag
     emitter.instruction("cmp x5, #1");                                          // is the source value a string payload?
     emitter.instruction("b.eq __rt_hash_spread_value_str");                     // strings need a persisted copy for the destination owner
@@ -160,15 +178,16 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("mov x4, xzr");                                         // refcounted hash values store only the low payload word
     emitter.instruction("ldr x5, [sp, #64]");                                   // reload the refcounted value runtime tag
 
-    // -- select the destination key: reindex integer keys, preserve string keys --
+    // -- select the destination key: reindex spread integers; preserve projection keys --
     emitter.label("__rt_hash_spread_insert");
     emitter.instruction("ldr x2, [sp, #40]");                                   // reload the source key length / integer sentinel
     emitter.instruction("cmn x2, #1");                                          // is this an inline integer source key?
     emitter.instruction("b.eq __rt_hash_spread_int_key");                       // integer source keys are reindexed to the running counter
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload the borrowed source string key pointer
     emitter.instruction("ldr x9, [sp, #72]");                                   // reload the key transformation mode
-    emitter.instruction("cbz x9, __rt_hash_spread_set");                        // array spread preserves string keys verbatim
-    emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric property names to PHP integer array keys
+    emitter.instruction("cmp x9, #1");                                          // only array-cast projection normalizes numeric string keys
+    emitter.instruction("b.ne __rt_hash_spread_set");                           // array spread and magic serialization preserve strings verbatim
+    emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric array-cast property names to integer keys
     emitter.instruction("ldr x3, [sp, #48]");                                   // restore the retained value low word after key normalization
     emitter.instruction("ldr x4, [sp, #56]");                                   // restore the retained value high word after key normalization
     emitter.instruction("ldr x5, [sp, #64]");                                   // restore the retained value tag after key normalization
@@ -222,6 +241,9 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_spread_x86_entry");                      // share the ownership-preserving hash copy implementation
     emitter.label_global("__rt_hash_project_spread");
     emitter.instruction("mov rdx, 1");                                          // select object-projection key normalization semantics
+    emitter.instruction("jmp __rt_hash_spread_x86_entry");                      // share the ownership-preserving hash copy implementation
+    emitter.label_global("__rt_hash_project_add");
+    emitter.instruction("mov rdx, 2");                                          // add-only serialization projection preserves exact object-property keys
     emitter.label("__rt_hash_spread_x86_entry");
 
     // -- set up stack frame --
@@ -235,7 +257,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 56]  = borrowed source value low word
     //   [rbp - 64]  = borrowed source value high word
     //   [rbp - 72]  = borrowed source value runtime tag
-    //   [rbp - 80]  = key mode (0 = array spread, 1 = object projection)
+    //   [rbp - 80]  = key mode (0 = array spread, 1 = array-cast projection, 2 = add-only serialization projection)
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving spread spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the spread walk state
     emitter.instruction("sub rsp, 96");                                         // reserve aligned spill space while keeping nested calls ABI-aligned
@@ -295,7 +317,17 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the borrowed source value high word
     emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // save the borrowed source value runtime tag
 
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 2");                         // add-only object projection?
+    emitter.instruction("jne __rt_hash_spread_x86_retain");                     // ordinary spread/project always retains then overwrites
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // destination hash for an add-if-absent probe
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // source key pointer or integer payload
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // source key length or integer sentinel
+    emitter.instruction("call __rt_hash_get");                                  // existing native/common property wins
+    emitter.instruction("test rax, rax");                                       // did the destination already own this key?
+    emitter.instruction("jnz __rt_hash_spread_x86_loop");                       // do not retain or overwrite an existing entry
+
     // -- retain the source value so the destination owns an independent copy --
+    emitter.label("__rt_hash_spread_x86_retain");
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the source value runtime tag
     emitter.instruction("cmp r9, 1");                                           // is the source value a string payload?
     emitter.instruction("je __rt_hash_spread_x86_value_str");                   // strings need a persisted copy for the destination owner
@@ -331,16 +363,16 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r8d, r8d");                                        // refcounted hash values store only the low payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the refcounted value runtime tag
 
-    // -- select the destination key: reindex integer keys, preserve string keys --
+    // -- select the destination key: reindex spread integers; preserve projection keys --
     emitter.label("__rt_hash_spread_x86_insert");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload the source key length / integer sentinel
     emitter.instruction("cmp rdx, -1");                                         // is this an inline integer source key?
     emitter.instruction("je __rt_hash_spread_x86_int_key");                     // integer source keys are reindexed to the running counter
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reload the borrowed source string key pointer
-    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // check whether object-projection key normalization is enabled
-    emitter.instruction("je __rt_hash_spread_x86_set");                         // array spread preserves string keys verbatim
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 1");                         // only array-cast projection normalizes numeric string keys
+    emitter.instruction("jne __rt_hash_spread_x86_set");                        // array spread and magic serialization preserve string keys verbatim
     emitter.instruction("mov rax, rsi");                                        // move the string key pointer into the normalizer input register
-    emitter.instruction("call __rt_hash_normalize_key");                        // normalize numeric property names to PHP integer array keys
+    emitter.instruction("call __rt_hash_normalize_key");                        // normalize numeric array-cast property names to integer keys
     emitter.instruction("mov rsi, rax");                                        // move the normalized key payload into the hash-set ABI register
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // restore the retained value low word after key normalization
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // restore the retained value high word after key normalization
@@ -380,4 +412,61 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 96");                                         // release the spread walk spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return to generated code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Emits the shared hash-copy helper for one supported target.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_hash_spread(&mut emitter);
+        emitter.output()
+    }
+
+    /// Pins the AArch64 mode split: magic serialization mode 2 must retain a numeric-looking
+    /// string key, while only the object-to-array cast mode 1 reaches the normalizer.
+    #[test]
+    fn project_add_preserves_numeric_string_keys_on_aarch64() {
+        let assembly = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        let insert = assembly
+            .split("__rt_hash_spread_insert:\n")
+            .nth(1)
+            .and_then(|body| body.split("__rt_hash_spread_int_key:\n").next())
+            .expect("AArch64 hash spread insert arm must be emitted");
+        assert!(
+            insert.contains(
+                "    ldr x1, [sp, #32]\n    ldr x9, [sp, #72]\n    cmp x9, #1\n    b.ne __rt_hash_spread_set\n    bl __rt_hash_normalize_key\n"
+            ),
+            "mode 2 must bypass numeric-key normalization:\n{insert}"
+        );
+        assert!(
+            assembly.contains("__rt_hash_project_add:\n    mov x2, #2\n"),
+            "the add-only entry point must retain its dedicated mode:\n{assembly}"
+        );
+    }
+
+    /// Pins the x86_64 counterpart so magic serialization cannot regress by normalizing a
+    /// numeric-looking dynamic property name on only one supported runtime ABI.
+    #[test]
+    fn project_add_preserves_numeric_string_keys_on_x86_64() {
+        let assembly = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let insert = assembly
+            .split("__rt_hash_spread_x86_insert:\n")
+            .nth(1)
+            .and_then(|body| body.split("__rt_hash_spread_x86_int_key:\n").next())
+            .expect("x86_64 hash spread insert arm must be emitted");
+        assert!(
+            insert.contains(
+                "    mov rsi, QWORD PTR [rbp - 40]\n    cmp QWORD PTR [rbp - 80], 1\n    jne __rt_hash_spread_x86_set\n    mov rax, rsi\n    call __rt_hash_normalize_key\n"
+            ),
+            "mode 2 must bypass numeric-key normalization:\n{insert}"
+        );
+        assert!(
+            assembly.contains("__rt_hash_project_add:\n    mov rdx, 2\n"),
+            "the add-only entry point must retain its dedicated mode:\n{assembly}"
+        );
+    }
 }

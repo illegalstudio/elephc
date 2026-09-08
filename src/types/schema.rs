@@ -241,6 +241,10 @@ pub struct InterfaceInfo {
     pub constants: HashMap<String, crate::parser::ast::Expr>,
     /// PHP 8.3 declared types for visible interface constants.
     pub constant_types: HashMap<String, TypeExpr>,
+    /// Attribute names attached to visible interface constants.
+    pub constant_attribute_names: HashMap<String, Vec<String>>,
+    /// Literal interface-constant attribute args aligned with `constant_attribute_names`.
+    pub constant_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     /// Declaring interface for each visible constant, keyed by case-sensitive constant name.
     pub constant_declaring_interfaces: HashMap<String, String>,
     /// Interface constants declared with PHP 8.1+ `final`, including inherited parents.
@@ -263,6 +267,10 @@ pub struct ClassInfo {
     /// Codegen routes undeclared property storage through a per-object
     /// side-table when this flag is set.
     pub allow_dynamic_properties: bool,
+    /// `true` when creating a missing dynamic property must emit PHP 8.2+'s
+    /// `E_DEPRECATED` notice. Internal ext/date classes use the side table but,
+    /// unlike `stdClass` and `#[AllowDynamicProperties]`, retain this diagnostic.
+    pub dynamic_properties_deprecated: bool,
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
@@ -309,8 +317,15 @@ pub struct ClassInfo {
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
+    /// Declaring class for every physical instance-property slot, in `properties` order.
+    ///
+    /// The name-keyed map above deliberately names the currently visible property. Private parent
+    /// shadows need their original declaration provenance for serialization and restoration.
+    pub property_slot_declaring_classes: Vec<String>,
     pub defaults: Vec<Option<Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
+    /// Visibility for every physical instance-property slot, in `properties` order.
+    pub property_slot_visibilities: Vec<Visibility>,
     /// PHP 8.4 asymmetric write (`set`) visibility, only for properties whose write visibility
     /// differs from their read visibility (e.g. `public private(set)`). Properties absent here
     /// use their `property_visibilities` entry for writes too.

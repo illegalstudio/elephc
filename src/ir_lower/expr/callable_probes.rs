@@ -123,6 +123,15 @@ pub(super) fn lower_static_call_user_func(
                     return lower_static_callable_call(ctx, callback, &callback_args, expr);
                 }
             }
+            // A known builtin does not become an unknown callable merely because its
+            // argument array is computed at runtime. Shared spread lowering evaluates
+            // the container once and performs signature-based extraction and bounds checks.
+            if let Some(callback @ StaticCallableBinding::Builtin(_)) =
+                static_call_user_func_callback(ctx, callback_arg)
+            {
+                let spread = Expr::new(ExprKind::Spread(Box::new(arg_array.clone())), arg_array.span);
+                return lower_static_callable_call(ctx, callback, &[spread], expr);
+            }
             lower_eval_call_user_func_array_fallback(ctx, callback_arg, arg_array, expr)
         }
         _ => None,

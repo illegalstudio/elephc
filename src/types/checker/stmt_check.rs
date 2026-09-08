@@ -102,6 +102,7 @@ impl Checker {
             | StmtKind::StaticPropertyArrayPush { .. }
             | StmtKind::StaticPropertyArrayAssign { .. }
             | StmtKind::PropertyArrayPush { .. }
+            | StmtKind::DynamicPropertyArrayPush { .. }
             | StmtKind::PropertyArrayAssign { .. } => self.check_assignment_like_stmt(stmt, env),
             StmtKind::Foreach { .. }
             | StmtKind::Switch { .. }

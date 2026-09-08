@@ -2,7 +2,7 @@
 title: "cairo_set_source_rgb()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 439
+  order: 440
 ---
 
 ## cairo_set_source_rgb()

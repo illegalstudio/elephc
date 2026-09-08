@@ -100,7 +100,42 @@ pub(crate) struct CallableDescriptorSpec<'a> {
     pub(crate) hidden_params: &'a [(String, PhpType, bool)],
     pub(crate) invocation: CallableDescriptorInvocation,
     pub(crate) invoker_label: Option<&'a str>,
+    pub(crate) debug: Option<CallableDebugMetadata<'a>>,
 }
+
+/// Version-one PHP Closure debug metadata stored after stable invocation fields.
+pub(crate) struct CallableDebugMetadata<'a> {
+    pub(crate) flags: u64,
+    pub(crate) primary_name: &'a str,
+    pub(crate) source_path: Option<&'a str>,
+    pub(crate) source_line: u32,
+    /// Runtime capture slots exposed by php-src as Closure debug bindings.
+    pub(crate) bindings: &'a [(String, PhpType, bool)],
+    /// Symbol-backed closure `static $local` slots exposed beside `use` bindings.
+    pub(crate) static_bindings: &'a [CallableDebugStaticBinding],
+}
+
+/// One Closure static-local debug binding and its persistent storage symbol.
+pub(crate) struct CallableDebugStaticBinding {
+    /// PHP source name without the `$` prefix.
+    pub(crate) name: String,
+    /// Runtime representation stored by the persistent static slot.
+    pub(crate) php_type: PhpType,
+    /// Assembly symbol of the 16-byte persistent static value slot.
+    pub(crate) value_symbol: String,
+}
+
+/// Debug-record flag identifying a true PHP Closure expression.
+pub(crate) const CALLABLE_DEBUG_FLAG_CLOSURE: u64 = 1;
+
+/// Debug-record flag identifying a first-class callable backed by a PHP method or function.
+pub(crate) const CALLABLE_DEBUG_FLAG_FAKE_CLOSURE: u64 = 1 << 1;
+
+/// Version of the optional debug record attached to an invocation record.
+///
+/// Version two appends symbol-backed `static $local` metadata after the stable
+/// capture table offsets consumed by the first Closure debug projection.
+const CALLABLE_DEBUG_RECORD_VERSION: u64 = 2;
 
 impl CallableDescriptorInvocation {
     /// Creates invocation metadata for a descriptor shape with no receiver or method payload.
@@ -177,6 +212,34 @@ pub(crate) fn static_descriptor_with_optional_invoker_meta(
     invocation: CallableDescriptorInvocation,
     invoker_label: Option<&str>,
 ) -> String {
+    static_descriptor_with_optional_invoker_debug_meta(
+        data,
+        entry_label,
+        php_name,
+        kind,
+        sig,
+        captures,
+        hidden_params,
+        invocation,
+        invoker_label,
+        None,
+    )
+}
+
+/// Emits a descriptor with side records, an optional invoker, and optional Closure debug data.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn static_descriptor_with_optional_invoker_debug_meta(
+    data: &mut DataSection,
+    entry_label: &str,
+    php_name: Option<&str>,
+    kind: u64,
+    sig: Option<&FunctionSig>,
+    captures: &[(String, PhpType, bool)],
+    hidden_params: &[(String, PhpType, bool)],
+    invocation: CallableDescriptorInvocation,
+    invoker_label: Option<&str>,
+    debug: Option<CallableDebugMetadata<'_>>,
+) -> String {
     let spec = CallableDescriptorSpec {
         entry_label,
         php_name,
@@ -186,6 +249,34 @@ pub(crate) fn static_descriptor_with_optional_invoker_meta(
         hidden_params,
         invocation,
         invoker_label,
+        debug,
+    };
+    static_descriptor_from_spec(data, &spec)
+}
+
+/// Emits a Closure descriptor with optional debug metadata while preserving all header offsets.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn static_closure_descriptor_with_debug_meta(
+    data: &mut DataSection,
+    entry_label: &str,
+    php_name: &str,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    hidden_params: &[(String, PhpType, bool)],
+    invocation: CallableDescriptorInvocation,
+    invoker_label: Option<&str>,
+    debug: CallableDebugMetadata<'_>,
+) -> String {
+    let spec = CallableDescriptorSpec {
+        entry_label,
+        php_name: Some(php_name),
+        kind: CALLABLE_DESC_KIND_CLOSURE,
+        sig: Some(sig),
+        captures,
+        hidden_params,
+        invocation,
+        invoker_label,
+        debug: Some(debug),
     };
     static_descriptor_from_spec(data, &spec)
 }
@@ -219,7 +310,11 @@ fn static_descriptor_from_spec(
             spec.hidden_params,
         ))
     };
-    let invocation_word = DataWord::Symbol(invocation_record(data, &spec.invocation));
+    let invocation_word = DataWord::Symbol(invocation_record(
+        data,
+        &spec.invocation,
+        spec.debug.as_ref(),
+    ));
     let invoker_word = spec
         .invoker_label
         .map(|label| DataWord::Symbol(label.to_string()))
@@ -356,6 +451,11 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
     let defaults = optional_symbol(default_table(data, &sig.defaults));
     let ref_flags = optional_symbol(flag_table(data, &sig.ref_params));
     let declared_flags = optional_symbol(flag_table(data, &sig.declared_params));
+    let debug_param_names = optional_symbol(param_debug_name_table(
+        data,
+        &sig.params,
+        &sig.ref_params,
+    ));
 
     data.add_words(vec![
         DataWord::U64(visible_param_count as u64),
@@ -370,6 +470,7 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
         defaults,
         ref_flags,
         declared_flags,
+        debug_param_names,
     ])
 }
 
@@ -393,10 +494,14 @@ fn environment_record(
 fn invocation_record(
     data: &mut DataSection,
     invocation: &CallableDescriptorInvocation,
+    debug: Option<&CallableDebugMetadata<'_>>,
 ) -> String {
     let (receiver_word, receiver_len) = optional_string_word(data, invocation.receiver_name.as_deref());
     let (method_word, method_len) = optional_string_word(data, invocation.method_name.as_deref());
     let (aux_word, aux_len) = optional_string_word(data, invocation.aux_name.as_deref());
+    let debug_word = debug
+        .map(|metadata| DataWord::Symbol(callable_debug_record(data, metadata)))
+        .unwrap_or(DataWord::U64(0));
     data.add_words(vec![
         DataWord::U64(invocation.shape as u64),
         receiver_word,
@@ -405,6 +510,28 @@ fn invocation_record(
         DataWord::U64(method_len),
         aux_word,
         DataWord::U64(aux_len),
+        debug_word,
+    ])
+}
+
+/// Serializes a versioned debug record without changing stable invocation offsets.
+fn callable_debug_record(data: &mut DataSection, metadata: &CallableDebugMetadata<'_>) -> String {
+    let (name_word, name_len) = optional_string_word(data, Some(metadata.primary_name));
+    let (file_word, file_len) = optional_string_word(data, metadata.source_path);
+    let binding_word = optional_symbol(binding_table(data, metadata.bindings));
+    let static_binding_word = optional_symbol(static_binding_table(data, metadata.static_bindings));
+    data.add_words(vec![
+        DataWord::U64(CALLABLE_DEBUG_RECORD_VERSION),
+        DataWord::U64(metadata.flags),
+        name_word,
+        DataWord::U64(name_len),
+        file_word,
+        DataWord::U64(file_len),
+        DataWord::U64(metadata.source_line as u64),
+        binding_word,
+        DataWord::U64(metadata.bindings.len() as u64),
+        static_binding_word,
+        DataWord::U64(metadata.static_bindings.len() as u64),
     ])
 }
 
@@ -416,6 +543,29 @@ fn param_name_table(data: &mut DataSection, params: &[(String, PhpType)]) -> Opt
     let mut words = Vec::with_capacity(params.len() * 2);
     for (name, _) in params {
         let (name_word, name_len) = optional_string_word(data, Some(name));
+        words.push(name_word);
+        words.push(DataWord::U64(name_len));
+    }
+    Some(data.add_words(words))
+}
+
+/// Builds the php-src debug keys for visible Closure parameters.
+fn param_debug_name_table(
+    data: &mut DataSection,
+    params: &[(String, PhpType)],
+    ref_params: &[bool],
+) -> Option<String> {
+    if params.is_empty() {
+        return None;
+    }
+    let mut words = Vec::with_capacity(params.len() * 2);
+    for (index, (name, _)) in params.iter().enumerate() {
+        let rendered = if ref_params.get(index).copied().unwrap_or(false) {
+            format!("&${name}")
+        } else {
+            format!("${name}")
+        };
+        let (name_word, name_len) = optional_string_word(data, Some(&rendered));
         words.push(name_word);
         words.push(DataWord::U64(name_len));
     }
@@ -480,6 +630,25 @@ fn binding_table(
         words.push(DataWord::U64(name_len));
         words.push(DataWord::U64(type_tag(&ty.codegen_repr())));
         words.push(DataWord::U64(u64::from(*by_ref)));
+    }
+    Some(data.add_words(words))
+}
+
+/// Builds symbol-backed debug metadata for Closure `static $local` storage.
+fn static_binding_table(
+    data: &mut DataSection,
+    bindings: &[CallableDebugStaticBinding],
+) -> Option<String> {
+    if bindings.is_empty() {
+        return None;
+    }
+    let mut words = Vec::with_capacity(bindings.len() * 4);
+    for binding in bindings {
+        let (name_word, name_len) = optional_string_word(data, Some(&binding.name));
+        words.push(name_word);
+        words.push(DataWord::U64(name_len));
+        words.push(DataWord::U64(type_tag(&binding.php_type.codegen_repr())));
+        words.push(DataWord::Symbol(binding.value_symbol.clone()));
     }
     Some(data.add_words(words))
 }

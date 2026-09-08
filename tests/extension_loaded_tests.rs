@@ -471,3 +471,82 @@ fn with_iconv_reports_extension_loaded() {
     let bin = compile_with_flags(&dir, src, "app", &["--with-iconv"]);
     assert_eq!(run_binary(&bin), "yes");
 }
+
+/// Verifies `get_extension_funcs("date")` preserves php-src's declaration order,
+/// accepts case-insensitive names, and returns `false` for an unknown extension.
+#[test]
+fn get_extension_funcs_reports_exact_date_inventory() {
+    let dir = make_test_dir("ext_date_functions");
+    let src = r#"<?php
+function extension_functions(string $name): array|false {
+    return \GeT_ExTeNsIoN_FuNcS($name);
+}
+$functions = get_extension_funcs("date");
+echo implode(",", $functions), "|";
+echo get_extension_funcs("DATE") === $functions ? "L" : "l";
+$dynamic = "Date";
+echo extension_functions($dynamic) === $functions ? "D" : "d";
+echo get_extension_funcs("elephc_missing_extension") === false ? "F" : "f";
+$reflection = new ReflectionFunction("get_extension_funcs");
+echo "|", $reflection->getParameters()[0]->getName(), ":", $reflection->getParameters()[0]->getType(), ":", $reflection->getReturnType();
+"#;
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(
+        run_binary(&bin),
+        "strtotime,date,idate,gmdate,mktime,gmmktime,checkdate,strftime,gmstrftime,time,localtime,getdate,\
+date_create,date_create_immutable,date_create_from_format,date_create_immutable_from_format,date_parse,\
+date_parse_from_format,date_get_last_errors,date_format,date_modify,date_add,date_sub,date_timezone_get,\
+date_timezone_set,date_offset_get,date_diff,date_time_set,date_date_set,date_isodate_set,\
+date_timestamp_set,date_timestamp_get,timezone_open,timezone_name_get,timezone_name_from_abbr,\
+timezone_offset_get,timezone_transitions_get,timezone_location_get,timezone_identifiers_list,\
+timezone_abbreviations_list,timezone_version_get,date_interval_create_from_date_string,\
+date_interval_format,date_default_timezone_set,date_default_timezone_get,date_sunrise,date_sunset,\
+date_sun_info|LDF|extension:string:array|false"
+    );
+}
+
+/// Verifies `get_extension_funcs()` uses php-src weak string binding and catchable errors.
+#[test]
+fn get_extension_funcs_coerces_scalars_and_throws_runtime_type_errors() {
+    let dir = make_test_dir("ext_date_function_coercions");
+    let src = r#"<?php
+class DateExtensionName {
+    public function __toString(): string { return "DATE"; }
+}
+foreach ([0, 1.5, true, false] as $extension) {
+    echo get_extension_funcs($extension) === false ? "F" : "x";
+}
+echo @get_extension_funcs(null) === false ? "N" : "x";
+echo get_extension_funcs(new DateExtensionName())[0] === "strtotime" ? "S" : "x";
+try {
+    get_extension_funcs([]);
+} catch (TypeError $error) {
+    echo "|", $error->getMessage();
+}
+try {
+    get_extension_funcs(new stdClass());
+} catch (TypeError $error) {
+    echo "|", $error->getMessage();
+}
+"#;
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(
+        run_binary(&bin),
+        "FFFFNS|get_extension_funcs(): Argument #1 ($extension) must be of type string, array given\
+|get_extension_funcs(): Argument #1 ($extension) must be of type string, stdClass given"
+    );
+
+    let strict_src = r#"<?php
+declare(strict_types=1);
+try {
+    get_extension_funcs(0);
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#;
+    let strict_bin = compile_with_flags(&dir, strict_src, "strict", &[]);
+    assert_eq!(
+        run_binary(&strict_bin),
+        "get_extension_funcs(): Argument #1 ($extension) must be of type string, int given"
+    );
+}

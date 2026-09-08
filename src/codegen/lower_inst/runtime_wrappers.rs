@@ -15,7 +15,35 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
-    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
+    emit_runtime_callable_invoker_with_ownership(ctx, sig, captures, false)
+}
+
+/// Selects object-return adoption only when all concrete EIR returns own their value.
+pub(super) fn emit_method_callable_invoker_inline(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    class_name: &str,
+    method_key: &str,
+) -> String {
+    let target = format!("{class_name}::{method_key}");
+    let owned = !sig.by_ref_return && matches!(sig.return_type, PhpType::Object(_))
+        && ctx.module.class_methods.iter().find(|function| function.name.eq_ignore_ascii_case(&target))
+            .is_some_and(|function| {
+                super::object_return_ownership::object_return_ownership(function)
+                    == super::object_return_ownership::ObjectReturnOwnership::Owned
+            });
+    emit_runtime_callable_invoker_with_ownership(ctx, sig, captures, owned)
+}
+
+/// Emits or reuses an invoker with the same signature, captures, and return ownership.
+pub(super) fn emit_runtime_callable_invoker_with_ownership(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    owned_object_return: bool,
+) -> String {
+    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures, owned_object_return) {
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
@@ -24,6 +52,8 @@ pub(super) fn emit_runtime_callable_invoker_inline(
         label: &label,
         sig,
         captures,
+        date_serialize_finalize: false,
+        owned_object_return,
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
     // enclosing function back before continuing it, or its tail lands in there.
@@ -33,7 +63,37 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, &label);
+        .cache_runtime_callable_invoker(sig, captures, owned_object_return, &label);
+    label
+}
+
+/// Emits an uncached descriptor invoker for a first-class internal DateTime serializer.
+///
+/// Its receiver capture is semantically part of the return conversion, so it must not share the
+/// ordinary `(signature, captures)` cache entry whose post-call boxer assumes indexed arrays.
+pub(in crate::codegen) fn emit_runtime_date_serialize_invoker_inline(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+) -> String {
+    let label = ctx.next_global_label("date_serialize_callable_invoker");
+    let done_label = ctx.next_label("date_serialize_callable_invoker_done");
+    let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        label: &label,
+        sig,
+        captures,
+        date_serialize_finalize: true,
+        owned_object_return: false,
+    };
+    let enclosing = ctx.emitter.current_text_section();
+    abi::emit_jump(ctx.emitter, &done_label);
+    super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
+        ctx.emitter,
+        ctx.data,
+        &invoker,
+    );
+    ctx.emitter.reopen_text_section(enclosing);
+    ctx.emitter.label(&done_label);
     label
 }
 
@@ -268,6 +328,48 @@ impl crate::builtins::semantics::BuiltinLoweringContext
             effects,
             span,
         )
+    }
+
+    /// Rejects scope-sensitive object projection from runtime-selected wrappers.
+    fn emit_get_object_vars(
+        &mut self,
+        _object: ValueId,
+        _span: crate::span::Span,
+    ) -> std::result::Result<
+        crate::builtins::semantics::LoweredBuiltinValue,
+        crate::builtins::semantics::BuiltinLoweringError,
+    > {
+        Err(crate::builtins::semantics::BuiltinLoweringError::new(
+            "get_object_vars() is unavailable in runtime-selected callable wrappers",
+        ))
+    }
+
+    /// Rejects array-pointer inspection from runtime-selected wrappers.
+    fn emit_array_end(
+        &mut self,
+        _array: ValueId,
+        _span: crate::span::Span,
+    ) -> std::result::Result<
+        crate::builtins::semantics::LoweredBuiltinValue,
+        crate::builtins::semantics::BuiltinLoweringError,
+    > {
+        Err(crate::builtins::semantics::BuiltinLoweringError::new(
+            "end() is unavailable in runtime-selected callable wrappers",
+        ))
+    }
+
+    /// Rejects closed-world constant-table selection from runtime-selected wrappers.
+    fn emit_constant_fetch(
+        &mut self,
+        _name: ValueId,
+        _span: crate::span::Span,
+    ) -> std::result::Result<
+        crate::builtins::semantics::LoweredBuiltinValue,
+        crate::builtins::semantics::BuiltinLoweringError,
+    > {
+        Err(crate::builtins::semantics::BuiltinLoweringError::new(
+            "constant() is unavailable in runtime-selected callable wrappers",
+        ))
     }
 }
 

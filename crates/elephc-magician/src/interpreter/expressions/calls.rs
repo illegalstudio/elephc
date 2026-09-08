@@ -31,14 +31,65 @@ pub(in crate::interpreter) fn positional_call_arg_exprs(
     Ok(args.iter().map(|arg| arg.value().clone()).collect())
 }
 
-/// Evaluates method-call arguments, preserving named metadata for eval method binding.
-pub(in crate::interpreter) fn eval_method_call_arg_values(
+/// Keeps source argument owners alive through binding and invocation, then releases each once.
+pub(in crate::interpreter) fn eval_with_method_call_args<V: RuntimeValueOps>(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut V,
+    call: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_with_method_call_args_result(args, context, scope, values,
+        |args, context, scope, values| call(args, context, scope, values).map(EvalExprResult::unclassified))
+        .map(|result| result.value)
+}
+
+/// Transfers source argument aliases into the typed expression result's ownership.
+pub(super) fn eval_with_method_call_args_result<V: RuntimeValueOps>(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut V,
+    call: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<EvalExprResult, EvalStatus>,
+) -> Result<EvalExprResult, EvalStatus> {
+    let mut owners = Vec::new();
+    let mut result = (|| {
+        let evaluated = eval_call_arg_values_with_temporaries(
+            args, context, scope, values, Some(&mut owners),
+        )?;
+        call(evaluated, context, scope, values)
+    })();
+    let returned = result.as_ref().ok().map(|result| result.value);
+    for owner in owners {
+        // Returning the original cell transfers this source owner to the result.
+        if returned == Some(owner) {
+            if let Ok(result) = &mut result { result.owned = true; }
+            continue;
+        }
+        let cleanup = eval_release_value(context, values, owner);
+        if result.is_ok() {
+            if let Err(status) = cleanup { result = Err(status); }
+        }
+    }
+    result
+}
+
+/// Evaluates one instance-method expression with both argument and selected-result ownership.
+pub(super) fn eval_method_expression_result(
+    object: RuntimeCellHandle,
+    method: &str,
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    eval_call_arg_values(args, context, scope, values)
+) -> Result<EvalExprResult, EvalStatus> {
+    eval_with_method_call_args_result(args, context, scope, values, |args, context, _, values| {
+        let mut owned = false;
+        let value = eval_method_call_result_with_ownership(object, method, args, context, values, &mut owned)?;
+        Ok(EvalExprResult { value, owned })
+    })
 }
 
 /// Evaluates supported function-like calls from a runtime eval fragment.
@@ -223,8 +274,11 @@ pub(in crate::interpreter) fn eval_dynamic_call(
         }
     }
     let callback = eval_callable(callback, context, values)?;
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+    let result = (|| {
+        let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+        eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+    })();
+    finish_evaluated_callable(callback, result, context, values)
 }
 
 /// Returns true for language constructs that need unevaluated argument expressions.

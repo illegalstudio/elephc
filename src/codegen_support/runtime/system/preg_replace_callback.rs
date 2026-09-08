@@ -11,6 +11,9 @@
 //!   backs up already-emitted output because callback prologues reset `_concat_off`.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
 
 /// __rt_preg_replace_callback: replace regex matches with a callback result.
 /// Input:  x1=pattern ptr, x2=pattern len, x3=callback ptr, x4=callback env ptr,
@@ -45,15 +48,16 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     let output_backup_len_off = output_backup_ptr_off + 8;
     let callback_result_ptr_off = output_backup_len_off + 8;
     let callback_result_len_off = callback_result_ptr_off + 8;
-    let stack_size = (callback_result_len_off + 96 + 15) & !15;
+    let handler_off = callback_result_len_off + 8;
+    let stack_size = (handler_off + TRY_HANDLER_SLOT_SIZE + 16 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_replace_callback ---");
     emitter.label_global("__rt_preg_replace_callback");
+    emitter.instruction(&format!("sub sp, sp, #{}", stack_size));               // allocate preg_replace_callback stack frame
 
     // -- set up stack frame --
-    emitter.instruction(&format!("sub sp, sp, #{}", stack_size));               // allocate preg_replace_callback stack frame
     emitter.instruction(&format!("add x9, sp, #{}", save_off));                 // compute save-slot address beyond ARM64 pair-store immediate range
     emitter.instruction("stp x29, x30, [x9]");                                  // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", save_off));                // establish the runtime helper frame pointer
@@ -86,6 +90,9 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
     emitter.instruction("cbz x0, __rt_preg_replace_callback_malloc_fail");      // allocation failure frees the handle and returns the original subject
     emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
+    emitter.instruction(&format!("str xzr, [sp, #{}]", matches_array_off));     // initialize optional matches-array owner slot
+    emitter.instruction(&format!("str xzr, [sp, #{}]", output_backup_ptr_off)); // initialize optional output-backup owner slot
+    emitter.instruction(&format!("str xzr, [sp, #{}]", callback_result_ptr_off)); // initialize optional callback-result owner slot
 
     // -- materialize subject as a C string for repeated regexec calls --
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // reload subject pointer for C-string conversion
@@ -102,6 +109,19 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // initialize final output write pointer
     emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_cstr_off));       // load subject C-string start
     emitter.instruction(&format!("str x9, [sp, #{}]", current_pos_off));        // initialize current regex search cursor
+
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler_off));           // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler_off + 8));       // preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler_off + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("add x10, sp, #{}", handler_off));             // materialize the PCRE callback handler record
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("add x0, sp, #{}", handler_off + TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch callback exceptions while PCRE and heap owners are live
+    emitter.instruction("cbnz x0, __rt_preg_replace_callback_throw");           // release retained native owners before rethrow
+
 
     // -- replacement loop --
     emitter.label("__rt_preg_replace_callback_loop");
@@ -188,9 +208,12 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_direct");
     emitter.instruction(&format!("ldr x10, [sp, #{}]", callback_ptr_off));      // reload callback entry point
     emitter.instruction("blr x10");                                             // call callback and receive replacement string in x1/x2
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", callback_env_off));       // descriptor environments return stable heap-owned strings
+    emitter.instruction("cbnz x9, __rt_preg_replace_callback_result_stable");   // adopt descriptor-wrapper results without copying again
     emitter.instruction("bl __rt_str_persist");                                 // copy callback result away from volatile concat-buffer scratch space
-    emitter.instruction(&format!("str x1, [sp, #{}]", callback_result_ptr_off)); // save persisted callback result pointer across prefix copying
-    emitter.instruction(&format!("str x2, [sp, #{}]", callback_result_len_off)); // save persisted callback result length across prefix copying
+    emitter.label("__rt_preg_replace_callback_result_stable");
+    emitter.instruction(&format!("str x1, [sp, #{}]", callback_result_ptr_off));// save persisted callback result pointer across prefix copying
+    emitter.instruction(&format!("str x2, [sp, #{}]", callback_result_len_off));// save persisted callback result length across prefix copying
 
     // -- restore output already emitted before the callback clobbered concat_buf --
     emitter.instruction(&format!("ldr x1, [sp, #{}]", output_backup_ptr_off));  // reload backed-up output prefix pointer
@@ -206,6 +229,11 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_replace_callback_restore_output");         // keep restoring previously emitted output bytes
     emitter.label("__rt_preg_replace_callback_restore_done");
     emitter.instruction("add x11, x11, x2");                                    // resume appending at the end of the restored output
+    emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // preserve output position across prefix-owner cleanup
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", output_backup_ptr_off));  // reload the heap-owned output backup
+    emitter.instruction("bl __rt_heap_free_safe");                              // release the backup after every prefix byte was restored
+    emitter.instruction(&format!("str xzr, [sp, #{}]", output_backup_ptr_off)); // clear the released backup owner slot
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // restore output position after cleanup
 
     // -- copy unmatched prefix after callback scratch has been persisted --
     emitter.instruction(&format!("ldr x9, [sp, #{}]", prefix_len_off));         // reload unmatched prefix byte count
@@ -222,8 +250,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
 
     // -- append callback string result --
     emitter.label("__rt_preg_replace_callback_copy_repl_start");
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", callback_result_ptr_off)); // reload persisted callback result pointer
-    emitter.instruction(&format!("ldr x2, [sp, #{}]", callback_result_len_off)); // reload persisted callback result length
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", callback_result_ptr_off));// reload persisted callback result pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", callback_result_len_off));// reload persisted callback result length
     emitter.instruction("mov x12, #0");                                         // initialize callback-result copy index
     emitter.label("__rt_preg_replace_callback_copy_repl");
     emitter.instruction("cmp x12, x2");                                         // compare copied bytes against callback result length
@@ -237,6 +265,9 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     // -- advance past this match --
     emitter.label("__rt_preg_replace_callback_advance");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save output write pointer after callback copy
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", callback_result_ptr_off)); // reload the persisted callback string owner
+    emitter.instruction("bl __rt_heap_free_safe");                              // release the replacement after copying it into final output
+    emitter.instruction(&format!("str xzr, [sp, #{}]", callback_result_ptr_off)); // clear the released callback-result owner slot
     publish_concat_offset(emitter, output_write_off);
     emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match pair before advancing cursor
     emitter.instruction("ldr x9, [x14, #8]");                                   // load full-match signed-64-bit end
@@ -264,6 +295,10 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     // -- free regex and return final output slice --
     emitter.label("__rt_preg_replace_callback_done");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save final output pointer
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler_off));           // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler_off + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after success
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
@@ -291,6 +326,26 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [x9]");                                  // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // release preg_replace_callback stack frame
     emitter.instruction("ret");                                                 // return to generated code
+
+    emitter.label("__rt_preg_replace_callback_throw");
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler_off));           // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler_off + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // reload the matches array abandoned by the throwing callback
+    emitter.instruction("bl __rt_array_free_deep");                             // destroy the uniquely owned matches array before rethrow
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", output_backup_ptr_off));  // reload any acquired output-backup owner
+    emitter.instruction("bl __rt_heap_free_safe");                              // release the output backup when present
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", callback_result_ptr_off));// reload any stabilized callback-result owner
+    emitter.instruction("bl __rt_heap_free_safe");                              // release the callback result when present
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload the compiled PCRE2 handle
+    emitter.bl_c("elephc_pcre2_v1_free");                                      // release compiled regex resources before rethrow
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload the libc offset-pair buffer
+    emitter.bl_c("free");                                                       // release the offset-pair allocation before rethrow
+    emitter.instruction(&format!("add x9, sp, #{}", save_off));                 // compute the saved frame-linkage address
+    emitter.instruction("ldp x29, x30, [x9]");                                  // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // discard the protected PCRE callback frame
+    emitter.instruction("b __rt_throw_current");                                // resume exception propagation at the caller handler
 }
 
 /// Publishes the current output write pointer as the `_concat_off` global offset.
@@ -338,18 +393,18 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     let output_backup_len_off = output_backup_ptr_off + 8;
     let callback_result_ptr_off = output_backup_len_off + 8;
     let callback_result_len_off = callback_result_ptr_off + 8;
-    let stack_size = (callback_result_len_off + 16 + 15) & !15;
+    let handler_off = callback_result_len_off + 8;
+    let stack_size = (handler_off + TRY_HANDLER_SLOT_SIZE + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_replace_callback ---");
     emitter.label_global("__rt_preg_replace_callback");
-
-    // -- set up stack frame --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving regex callback scratch storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for regex callback spill slots
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for the handle, offset pairs, and callback state
 
     // -- save all inputs --
+
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdi", pattern_ptr_off)); // preserve pattern pointer across regex helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", pattern_len_off)); // preserve pattern length across regex helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", callback_ptr_off)); // preserve callback entry point across regex helper calls
@@ -381,6 +436,9 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
     emitter.instruction("jz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); // allocation failure frees the opaque handle and returns the subject
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", matches_array_off)); // initialize optional matches-array owner slot
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", output_backup_ptr_off)); // initialize optional output-backup owner slot
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", callback_result_ptr_off)); // initialize optional callback-result owner slot
 
     // -- materialize subject as a C string for repeated regexec calls --
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload subject pointer for C-string conversion
@@ -397,6 +455,20 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_write_off)); // initialize final output write pointer
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_cstr_off)); // load subject C-string start
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)); // initialize current regex search cursor
+
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", handler_off)); // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", handler_off + 8)); // preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", handler_off + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("lea r10, [rsp + {}]", handler_off));           // materialize the PCRE callback handler record
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("lea rdi, [rsp + {}]", handler_off + TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch callback exceptions while PCRE and heap owners are live
+    emitter.instruction("test eax, eax");                                      // did control return through longjmp?
+    emitter.instruction("jnz __rt_preg_replace_callback_throw_linux_x86_64");  // release retained native owners before rethrow
+
 
     // -- replacement loop --
     emitter.label("__rt_preg_replace_callback_loop_linux_x86_64");
@@ -439,7 +511,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 16");                                         // string array slots store pointer and length pairs
     emitter.instruction("call __rt_array_new");                                 // allocate indexed string matches array
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save matches array pointer across pushes
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start with $matches[0]
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off));// start with $matches[0]
     emitter.label("__rt_preg_replace_callback_group_loop_linux_x86_64");
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
@@ -487,7 +559,10 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_direct_linux_x86_64");
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", callback_ptr_off)); // reload callback entry point
     emitter.instruction("call r10");                                            // call callback and receive replacement string in rax/rdx
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", callback_env_off)); // descriptor environments return stable heap-owned strings
+    emitter.instruction("jne __rt_preg_replace_callback_result_stable_linux_x86_64"); // adopt descriptor-owned callback strings directly
     emitter.instruction("call __rt_str_persist");                               // copy callback result away from volatile concat-buffer scratch space
+    emitter.label("__rt_preg_replace_callback_result_stable_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", callback_result_ptr_off)); // save persisted callback result pointer across prefix copying
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", callback_result_len_off)); // save persisted callback result length across prefix copying
 
@@ -505,6 +580,11 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_replace_callback_restore_output_linux_x86_64"); // keep restoring previously emitted output bytes
     emitter.label("__rt_preg_replace_callback_restore_done_linux_x86_64");
     emitter.instruction("add r11, rdx");                                        // resume appending at the end of the restored output
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // preserve output position across prefix-owner cleanup
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_backup_ptr_off)); // reload the heap-owned output backup
+    emitter.instruction("call __rt_heap_free_safe");                            // release the backup after every prefix byte was restored
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", output_backup_ptr_off)); // clear the released backup owner slot
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // restore output position after cleanup
 
     // -- copy unmatched prefix after callback scratch has been persisted --
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", prefix_len_off)); // reload unmatched prefix byte count
@@ -536,6 +616,9 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     // -- advance past this match --
     emitter.label("__rt_preg_replace_callback_advance_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save output write pointer after callback copy
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", callback_result_ptr_off)); // reload the persisted callback string owner
+    emitter.instruction("call __rt_heap_free_safe");                            // release the replacement after copying it into final output
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", callback_result_ptr_off)); // clear the released callback-result owner slot
     publish_concat_offset_x86_64(emitter, output_write_off);
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match pair before advancing cursor
     emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // load full-match signed-64-bit end
@@ -564,6 +647,10 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     // -- free regex and return final output slice --
     emitter.label("__rt_preg_replace_callback_done_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save final output pointer
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", handler_off)); // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", handler_off + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after success
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
@@ -590,6 +677,25 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release preg_replace_callback stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to generated code
+
+    emitter.label("__rt_preg_replace_callback_throw_linux_x86_64");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", handler_off));// reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", handler_off + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", matches_array_off)); // reload the matches array abandoned by the throwing callback
+    emitter.instruction("call __rt_array_free_deep");                           // destroy the uniquely owned matches array before rethrow
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_backup_ptr_off)); // reload any acquired output-backup owner
+    emitter.instruction("call __rt_heap_free_safe");                            // release the output backup when present
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", callback_result_ptr_off)); // reload any stabilized callback-result owner
+    emitter.instruction("call __rt_heap_free_safe");                            // release the callback result when present
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload the compiled PCRE2 handle
+    emitter.bl_c("elephc_pcre2_v1_free");                                      // release compiled regex resources before rethrow
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload the libc offset-pair buffer
+    emitter.bl_c("free");                                                       // release the offset-pair allocation before rethrow
+    emitter.instruction(&format!("add rsp, {}", stack_size));                   // discard the protected PCRE callback frame
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("jmp __rt_throw_current");                              // resume exception propagation at the caller handler
 }
 
 /// x86_64 variant of `publish_concat_offset`. Publishes the current output write

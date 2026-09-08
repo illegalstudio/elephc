@@ -15,10 +15,15 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;
     }
+    let canonical = name.as_str();
+    if let Some(value) =
+        lower_internal_new_instance_without_constructor(ctx, canonical, args, expr)
+    {
+        return value;
+    }
     if let Some(value) = constants::lower_static_constant_call(ctx, name, args, expr) {
         return value;
     }
-    let canonical = name.as_str();
     if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
         return value;
     }
@@ -37,11 +42,10 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_dynamic_call_user_func_array(ctx, canonical, args, expr) {
         return value;
     }
-    // A mutating builtin whose by-reference array argument is a property, static property, or
-    // container element is rewritten to `$tmp = <place>; f($tmp, ...); <place> = $tmp;` before
-    // any builtin fast path runs, so the rewritten call reaches the local-variable
-    // by-reference lowering that actually stores the copy-on-write result back.
     if let Some(value) = ref_place_args::lower_builtin_ref_place_call(ctx, name, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_static_date_period_var_export(ctx, canonical, args, expr) {
         return value;
     }
     if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
@@ -74,6 +78,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     if let Some(value) = lower_eval_class_probe(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_mktime_argument_count_error(ctx, canonical, args, expr) {
         return value;
     }
     let extension_builtin = source_prefers_extension_builtin(canonical);
@@ -117,6 +124,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return call;
     }
     if is_user_function {
+        if let Some(signature) = sig.as_ref() {
+            super::object_argument_guards::guard_object_arguments(
+                ctx, canonical, signature, &operands, expr.span,
+            );
+        }
         let data = ctx.intern_function_name(canonical);
         let call = ctx.emit_value(
             Op::Call,
@@ -163,6 +175,127 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
 }
 
+/// Lowers PHP's catchable mktime/gmmktime arity errors before typed runtime dispatch.
+fn lower_mktime_argument_count_error(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let canonical = php_symbol_key(name.trim_start_matches('\\'));
+    if !matches!(canonical.as_str(), "mktime" | "gmmktime")
+        || (1..=6).contains(&args.len())
+    {
+        return None;
+    }
+    let _ = lower_args(ctx, args);
+    let message = if args.is_empty() {
+        format!("{canonical}() expects at least 1 argument, 0 given")
+    } else {
+        format!(
+            "{canonical}() expects at most 6 arguments, {} given",
+            args.len()
+        )
+    };
+    let placeholder = lower_null(ctx, expr);
+    emit_exception(ctx, "ArgumentCountError", &message, expr.span);
+    Some(placeholder)
+}
+
+/// Renders a statically known DatePeriod through its concrete php-src property projection.
+///
+/// The generic PHP prelude accepts `mixed`, which erases the subclass before its ordinary
+/// properties can be enumerated. Closed-world EIR retains that concrete class at the rewritten
+/// `var_export(..., true)` call site, so pass the projected hash directly to the shared renderer.
+fn lower_static_date_period_var_export(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let helper_key = php_symbol_key(name.trim_start_matches('\\'));
+    let render_mode = helper_key == "__elephc_var_export_str" && args.len() == 2;
+    let echo_mode = helper_key == "__elephc_var_export_echo" && args.len() == 1;
+    if (!render_mode && !echo_mode)
+        || args
+            .iter()
+            .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+    {
+        return None;
+    }
+    let (class_name, _) = isset_object_expr_class(ctx, &args[0])?;
+    if !class_extends_class(ctx, &class_name, "DatePeriod") {
+        return None;
+    }
+
+    let object = lower_expr(ctx, &args[0]);
+    let state = lower_object_property_hash(ctx, object.value, args[0].span, false)
+        .unwrap_or_else(|error| panic!("checked DatePeriod var_export projection failed: {error}"));
+    let boxed_object = ensure_boxed_mixed(ctx, object, args[0].span);
+    let indent = if render_mode {
+        lower_expr(ctx, &args[1])
+    } else {
+        emit_i64_at_span(ctx, 0, expr.span)
+    };
+    let operands = vec![boxed_object.value, state.value, indent.value];
+    let helper = "__elephc_var_export_date_object";
+    let data = ctx.intern_function_name(helper);
+    let call = ctx.emit_value(
+        Op::Call,
+        operands.clone(),
+        Some(Immediate::Data(data)),
+        PhpType::Str,
+        effects_lookup::user_call_effects(helper),
+        Some(expr.span),
+    );
+    release_owned_call_arg_temporaries(
+        ctx,
+        &operands,
+        Some(call.value),
+        &ReturnArgAlias::None,
+        expr.span,
+    );
+    if render_mode {
+        return Some(call);
+    }
+    ctx.emit_void(
+        Op::EchoValue,
+        vec![call.value],
+        None,
+        Op::EchoValue.default_effects(),
+        Some(expr.span),
+    );
+    if ctx.value_is_owning_temporary(call) {
+        crate::ir_lower::ownership::release_if_owned(ctx, call, Some(expr.span));
+    }
+    Some(lower_null(ctx, expr))
+}
+
+/// Lowers the DateTime factory's internal constructorless class-string allocation directly to EIR.
+fn lower_internal_new_instance_without_constructor(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\'))
+        != "__elephc_new_instance_without_constructor"
+        || args.len() != 1
+        || matches!(args[0].kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))
+    {
+        return None;
+    }
+    let class_name = lower_expr(ctx, &args[0]);
+    Some(ctx.emit_value(
+        Op::DynamicObjectNewWithoutConstructorMixed,
+        vec![class_name.value],
+        None,
+        PhpType::Mixed,
+        Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
+        Some(expr.span),
+    ))
+}
+
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 pub(super) fn emit_builtin_call_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -194,7 +327,16 @@ pub(super) fn emit_builtin_call_value(
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
             };
-            let return_alias = match def.spec.semantics.result_ownership {
+            if matches!(
+                def.spec.semantics.result_ownership,
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh
+            ) && crate::ir::Ownership::php_type_needs_lifetime_tracking(
+                &ctx.builder.value_php_type(call.value),
+            ) {
+                ctx.builder
+                    .set_value_ownership(call.value, crate::ir::Ownership::Owned);
+            }
+            let mut return_alias = match def.spec.semantics.result_ownership {
                 crate::builtins::semantics::BuiltinResultOwnership::NonHeap
                 | crate::builtins::semantics::BuiltinResultOwnership::Fresh
                 | crate::builtins::semantics::BuiltinResultOwnership::Independent => {
@@ -207,6 +349,24 @@ pub(super) fn emit_builtin_call_value(
                 | crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments => {
                     ReturnArgAlias::Unknown
                 }
+            };
+            // A borrowed string may be a slice into an owned argument temporary.
+            // Persist the slice before dropping its backing allocation; an interior
+            // pointer cannot transfer the allocation's release obligation safely.
+            let needs_string_owner = ctx.builder.value_php_type(call.value).codegen_repr()
+                == PhpType::Str
+                && operands.iter().enumerate().any(|(index, value)| {
+                    return_alias.may_alias_parameter(index)
+                        && ctx.value_is_owning_temporary(LoweredValue {
+                            value: *value,
+                            ir_type: ctx.builder.value_type(*value),
+                        })
+                });
+            let call = if needs_string_owner {
+                return_alias = ReturnArgAlias::None;
+                crate::ir_lower::ownership::acquire_if_refcounted(ctx, call, Some(span))
+            } else {
+                call
             };
             release_owned_call_arg_temporaries(
                 ctx,
@@ -251,11 +411,25 @@ pub(super) fn emit_builtin_call_value(
         effects,
         Some(span),
     );
+    // The opaque eval ABI now returns a distinct owner, including when its PHP
+    // return expression borrowed an existing scope cell.
+    if op == Op::LanguageConstructCall
+        && php_symbol_key(name.trim_start_matches('\\')) == "eval"
+    {
+        ctx.builder.set_value_ownership(call.value, crate::ir::Ownership::Owned);
+    }
+    // Eval parses its source into independently owned program data; its result
+    // never aliases the temporary source-string allocation.
+    let return_alias = if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
+        ReturnArgAlias::None
+    } else {
+        ReturnArgAlias::Unknown
+    };
     release_owned_call_arg_temporaries(
         ctx,
         &operands,
         Some(call.value),
-        &ReturnArgAlias::Unknown,
+        &return_alias,
         span,
     );
     let eval_needs_barrier = match eval_literal {

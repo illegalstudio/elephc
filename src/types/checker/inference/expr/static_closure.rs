@@ -28,6 +28,7 @@ pub(super) fn body_must_not_use_this(body: &[Stmt], span: Span) -> Result<(), Co
 /// which exempts bare `isset($this)` arguments (PHP allows the probe inside
 /// static closures), this walker counts every `$this` mention so EIR lowering
 /// captures `$this` for non-static closures that probe it via `isset`.
+#[allow(dead_code)]
 pub(crate) fn closure_body_uses_this(body: &[Stmt]) -> bool {
     body_uses_this(body)
 }
@@ -62,6 +63,11 @@ fn stmt_uses_this(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_uses_this(object) || expr_uses_this(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_uses_this(object) || expr_uses_this(property) || expr_uses_this(value),
         StmtKind::PropertyArrayAssign {
             object,
             index,
@@ -243,6 +249,15 @@ fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_must_not_use_this(object, span)?;
+            expr_must_not_use_this(value, span)
+        }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_must_not_use_this(object, span)?;
+            expr_must_not_use_this(property, span)?;
             expr_must_not_use_this(value, span)
         }
         StmtKind::PropertyArrayAssign {

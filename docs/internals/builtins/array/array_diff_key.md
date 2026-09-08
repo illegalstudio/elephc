@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_diff_key.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_diff_key.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -24,7 +24,7 @@ sidebar:
 
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
-- **Result type source**: `checked`
+- **Result type source**: `shared`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`

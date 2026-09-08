@@ -564,6 +564,15 @@ fn stmt_refs_mysqli(stmt: &Stmt) -> bool {
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_mysqli(object) || expr_refs_mysqli(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_refs_mysqli(object)
+                || expr_refs_mysqli(property)
+                || expr_refs_mysqli(value)
+        }
         StmtKind::PropertyArrayAssign {
             object,
             index,

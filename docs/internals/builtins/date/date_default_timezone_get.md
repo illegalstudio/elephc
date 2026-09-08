@@ -2,7 +2,7 @@
 title: "date_default_timezone_get() — internals"
 description: "Compiler internals for date_default_timezone_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 195
+  order: 196
 ---
 
 ## `date_default_timezone_get()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/date_default_timezone_get.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/date_default_timezone_get.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,8 +49,8 @@ function date_default_timezone_get(): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_get.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_get.rs) (`eval_builtin!`)
-- **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `runtime-state-or-resource`.
+- **Execution**: generated-runtime ABI (`RuntimeBuiltinId(22)`) with a Magician fallback adapter.
+- **Adapter reason**: `additional-signature-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

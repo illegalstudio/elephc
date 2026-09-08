@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Returns whether an inline `ReflectionClass` receiver has no observable construction effects.
+///
+/// Known literal class reflectors may be skipped when a member-list call is rebuilt directly
+/// from compile-time metadata. `ReflectionObject` must still be materialized because its
+/// DateInterval property surface depends on live instance state.
+fn reflection_class_inline_owner_can_be_elided(object_expr: &Expr) -> bool {
+    matches!(
+        &object_expr.kind,
+        ExprKind::NewObject { class_name, .. }
+            if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionclass"
+    )
+}
+
 /// Lowers an object method call.
 pub(super) fn lower_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -41,6 +54,13 @@ pub(super) fn lower_method_call(
         None
     };
     let object_expr = object;
+    if op == Op::MethodCall && reflection_class_inline_owner_can_be_elided(object_expr) {
+        if let Some(value) =
+            lower_reflection_class_member_list_call(ctx, Some(object_expr), method, args, expr)
+        {
+            return value;
+        }
+    }
     let object = lower_expr(ctx, object_expr);
     if let Some(message) = throw_access_message {
         release_owning_receiver_temporary(ctx, object, expr.span);
@@ -50,6 +70,50 @@ pub(super) fn lower_method_call(
         let null_value = lower_null(ctx, expr);
         terminate_method_call_on_null(ctx, method);
         return null_value;
+    }
+    if op == Op::MethodCall
+        && args.is_empty()
+        && ctx.owner_name() == "DatePeriod::createFromISO8601String"
+        && php_symbol_key(method) == "__elephc_factory_result"
+        && matches!(object.ir_type, IrType::Heap(IrHeapKind::Mixed))
+    {
+        let consumed = if ctx.value_is_owning_temporary(object) {
+            object
+        } else {
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, object, Some(expr.span))
+        };
+        let data = ctx.intern_string(
+            "DatePeriod\0DatePeriod::createFromISO8601String(): factory result must be DatePeriod, ",
+        );
+        return ctx.emit_value(
+            Op::ReturnBoundaryMixedToObject,
+            vec![consumed.value],
+            Some(Immediate::Data(data)),
+            PhpType::Object("DatePeriod".to_string()),
+            Op::ReturnBoundaryMixedToObject.default_effects(),
+            Some(expr.span),
+        );
+    }
+    if op == Op::MethodCall
+        && args.is_empty()
+        && matches!(ctx.owner_name(), "DateTime::diff" | "DateTimeImmutable::diff")
+    {
+        let (target, result_type) = match php_symbol_key(method).as_str() {
+            "gettimestamp" => ("DateTime::getTimestamp", PhpType::Int),
+            "getmicrosecond" => ("DateTime::getMicrosecond", PhpType::Int),
+            _ => ("", PhpType::Never),
+        };
+        if !target.is_empty() {
+            let target_data = ctx.intern_string(target);
+            return ctx.emit_value(
+                Op::MethodCallExact,
+                vec![object.value],
+                Some(Immediate::Data(target_data)),
+                result_type,
+                Op::MethodCallExact.default_effects(),
+                Some(expr.span),
+            );
+        }
     }
     if op == Op::MethodCall {
         if let Some(value) =
@@ -85,7 +149,13 @@ pub(super) fn lower_method_call(
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+        return lower_reflection_class_new_instance_without_constructor(
+            ctx,
+            Some(object_expr),
+            object,
+            args,
+            expr,
+        );
     }
     if op == Op::MethodCall {
         if let Some(value) = lower_reflection_class_static_property_value_call(
@@ -120,6 +190,25 @@ pub(super) fn lower_method_call(
             return result;
         }
     }
+    if let Some(call) = super::date_interface_calls::lower_date_interface_call(
+        ctx, object, method, args, op, expr,
+    ) {
+        return call;
+    }
+    let receiver_type = ctx.builder.value_php_type(object.value);
+    if op == Op::MethodCall
+        && php_symbol_key(method) == "format"
+        && ctx.owner_name().ends_with("::__construct")
+        && matches!(object_expr.kind, ExprKind::This)
+        && matches!(
+            &receiver_type,
+            PhpType::Object(class_name)
+                if !class_name.trim_start_matches('\\').eq_ignore_ascii_case("DateTimeInterface")
+        )
+        && is_datetime_family_value(ctx, object.value)
+    {
+        guard_constructor_datetime_format(ctx, object.value, expr.span);
+    }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
         magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
@@ -130,20 +219,124 @@ pub(super) fn lower_method_call(
         (method, args)
     };
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
+    let finalize_date_serialize = method_call_uses_date_serialize_finalizer(
+        ctx,
+        object.value,
+        dispatch_method,
+        &result_type,
+    );
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let mut arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    coerce_datetime_method_arguments(ctx, object.value, dispatch_method, &mut arg_values, expr.span);
+    validate_datetime_method_arguments(
+        ctx,
+        object.value,
+        dispatch_method,
+        &arg_values,
+        expr.span,
+    );
     operands.extend(arg_values.iter().copied());
+    if op == Op::MethodCall && is_internal_date_magic_filter_marker(ctx, dispatch_method) {
+        let data = arg_values
+            .first()
+            .copied()
+            .expect("internal date reference filter has its required data argument");
+        let call = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![object.value, data],
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::DateMagicFilterReferences,
+                ),
+            )),
+            result_type.clone(),
+            crate::ir::RuntimeFnId::DateMagicFilterReferences.effects(),
+            Some(expr.span),
+        );
+        release_owned_call_arg_temporaries_with_signature(
+            ctx,
+            &arg_values,
+            Some(call.value),
+            &ReturnArgAlias::None,
+            sig.as_ref(),
+            expr.span,
+        );
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return call;
+    }
+    if op == Op::MethodCall && is_internal_date_magic_restore_marker(ctx, dispatch_method) {
+        let data = arg_values
+            .first()
+            .copied()
+            .expect("internal date restore marker has its required data argument");
+        let call = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![object.value, data],
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::DateMagicRestoreProperties,
+                ),
+            )),
+            result_type.clone(),
+            crate::ir::RuntimeFnId::DateMagicRestoreProperties.effects(),
+            Some(expr.span),
+        );
+        release_owned_call_arg_temporaries_with_signature(
+            ctx,
+            &arg_values,
+            Some(call.value),
+            &ReturnArgAlias::None,
+            sig.as_ref(),
+            expr.span,
+        );
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return call;
+    }
     let data = ctx.intern_string(dispatch_method);
-    let call = ctx.emit_value(
+    let mut call = ctx.emit_value(
         op,
         operands,
         Some(Immediate::Data(data)),
-        result_type,
+        result_type.clone(),
         op.default_effects(),
         Some(expr.span),
     );
+    if op == Op::MethodCall
+        && date_magic_uses_builtin_handler(ctx, object.value, dispatch_method)
+    {
+        match php_symbol_key(dispatch_method).as_str() {
+            "__serialize" => {
+                call = if finalize_date_serialize {
+                    ctx.emit_value(
+                        Op::RuntimeCall,
+                        vec![call.value, object.value],
+                        Some(Immediate::RuntimeCall(
+                            crate::ir::RuntimeCallTarget::DateSerializeFinalize,
+                        )),
+                        PhpType::Mixed,
+                        effects_lookup::runtime_effects(),
+                        Some(expr.span),
+                    )
+                } else {
+                    ctx.emit_value(
+                        Op::RuntimeCall,
+                        vec![call.value, object.value],
+                        Some(Immediate::RuntimeCall(
+                            crate::ir::RuntimeCallTarget::Function(
+                                crate::ir::RuntimeFnId::DateMagicAppendProperties,
+                            ),
+                        )),
+                        result_type,
+                        crate::ir::RuntimeFnId::DateMagicAppendProperties.effects(),
+                        Some(expr.span),
+                    )
+                };
+            }
+            _ => {}
+        }
+    }
     let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
     release_owned_call_arg_temporaries_with_signature(
         ctx,
@@ -155,6 +348,194 @@ pub(super) fn lower_method_call(
     );
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
+}
+
+/// Returns whether a private generated marker must lower to the non-PHP date restore runtime.
+fn is_internal_date_magic_restore_marker(ctx: &LoweringContext<'_, '_>, method: &str) -> bool {
+    if php_symbol_key(method) != "__elephc_restore_date_properties" {
+        return false;
+    }
+    let Some((owner, method_name)) = ctx.owner_name().rsplit_once("::") else {
+        return false;
+    };
+    matches!(
+        (owner.trim_start_matches('\\'), method_name),
+        ("DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DatePeriod", "__unserialize")
+            | ("DateInterval", "__unserialize" | "__elephc_restore_custom_properties")
+    )
+}
+
+/// Returns whether a private generated marker must filter references before native date hydration.
+fn is_internal_date_magic_filter_marker(ctx: &LoweringContext<'_, '_>, method: &str) -> bool {
+    if php_symbol_key(method) != "__elephc_filter_date_references" {
+        return false;
+    }
+    let Some((owner, method_name)) = ctx.owner_name().rsplit_once("::") else {
+        return false;
+    };
+    matches!(
+        (owner.trim_start_matches('\\'), method_name),
+        (
+            "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod",
+            "__unserialize"
+        )
+    )
+}
+
+/// Returns whether a method call needs the runtime-gated date magic serialization merge.
+///
+/// Runtime class metadata, rather than the receiver's static type, decides whether the helper
+/// appends DateTime-family subclass properties. This keeps `DateTimeInterface`, `Mixed`, and
+/// union receivers correct without changing user-defined `__serialize()` results.
+pub(super) fn date_magic_uses_builtin_handler(
+    _ctx: &LoweringContext<'_, '_>,
+    _receiver: ValueId,
+    method: &str,
+) -> bool {
+    let method_key = php_symbol_key(method);
+    method_key == "__serialize"
+}
+
+/// Throws php-src's uninitialized DateObjectError at a constructor's `$this->format()` callsite.
+fn guard_constructor_datetime_format(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: ValueId,
+    span: Span,
+) {
+    let property = ctx.intern_string("__elephc_initialized");
+    let initialized = ctx.emit_value(
+        Op::PropGet,
+        vec![object],
+        Some(Immediate::Data(property)),
+        PhpType::Bool,
+        Op::PropGet.default_effects(),
+        Some(span),
+    );
+    let valid = ctx
+        .builder
+        .create_named_block("date.constructor.format.valid", Vec::new());
+    let invalid = ctx
+        .builder
+        .create_named_block("date.constructor.format.invalid", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: valid,
+        then_args: Vec::new(),
+        else_target: invalid,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(invalid);
+    let class_name = ctx.current_class.as_deref().unwrap_or("DateTime");
+    let builtin_name = if class_extends_class(ctx, class_name, "DateTimeImmutable") {
+        "DateTimeImmutable"
+    } else {
+        "DateTime"
+    };
+    let inheritance = if class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case(builtin_name)
+    {
+        String::new()
+    } else {
+        format!(" (inheriting {builtin_name})")
+    };
+    let message = format!(
+        "Object of type {class_name}{inheritance} has not been correctly initialized by calling parent::__construct() in its constructor"
+    );
+    emit_exception_and_terminate(ctx, "DateObjectError", &message, span);
+    ctx.builder.position_at_end(valid);
+}
+
+/// Applies weak scalar coercion required by selected ext/date method signatures.
+pub(super) fn coerce_datetime_method_arguments(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: ValueId,
+    method: &str,
+    arguments: &mut [ValueId],
+    span: Span,
+) {
+    match php_symbol_key(method).as_str() {
+        "settimestamp" if is_datetime_family_value(ctx, receiver) => {
+            let Some(value) = arguments.first_mut() else {
+                return;
+            };
+            let lowered = LoweredValue {
+                value: *value,
+                ir_type: ctx.builder.value_type(*value),
+            };
+            *value = coerce_to_int_at_span(ctx, lowered, Some(span)).value;
+        }
+        "gettransitions" if is_datetime_zone_family_value(ctx, receiver) => {
+            for value in arguments.iter_mut().take(2) {
+                let lowered = LoweredValue {
+                    value: *value,
+                    ir_type: ctx.builder.value_type(*value),
+                };
+                *value = coerce_to_int_at_span(ctx, lowered, Some(span)).value;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Guards ext/date object arguments before direct method ABI materialization can read bad bits.
+fn validate_datetime_method_arguments(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: ValueId,
+    method: &str,
+    arguments: &[ValueId],
+    span: Span,
+) {
+    if php_symbol_key(method) != "getoffset" || !is_datetime_zone_family_value(ctx, receiver) {
+        return;
+    }
+    let Some(datetime) = arguments.first().copied() else {
+        return;
+    };
+    emit_runtime_named_object_argument_guard(
+        ctx,
+        datetime,
+        "DateTimeInterface",
+        "DateTimeZone::getOffset(): Argument #1 ($datetime) must be of type DateTimeInterface, ",
+        span,
+    );
+}
+
+/// Accepts one runtime object family or throws a php-src-style TypeError with the actual type.
+fn emit_runtime_named_object_argument_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: ValueId,
+    expected_class: &str,
+    message_prefix: &str,
+    span: Span,
+) {
+    let class_data = ctx.intern_class_name(expected_class);
+    let matches = ctx.emit_value(
+        Op::InstanceOf,
+        vec![value],
+        Some(Immediate::Data(class_data)),
+        PhpType::Bool,
+        Op::InstanceOf.default_effects(),
+        Some(span),
+    );
+    let valid = ctx
+        .builder
+        .create_named_block("date.method.arg.valid", Vec::new());
+    let invalid = ctx
+        .builder
+        .create_named_block("date.method.arg.invalid", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: matches.value,
+        then_target: valid,
+        then_args: Vec::new(),
+        else_target: invalid,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(invalid);
+    emit_runtime_argument_type_error_and_terminate(ctx, value, message_prefix, span);
+    ctx.builder.position_at_end(valid);
 }
 
 /// Lowers the `Closure` rebinding methods on a closure (`Callable`) receiver:
@@ -279,7 +660,17 @@ pub(super) fn lower_nullable_regular_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
+    let raw_result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
+    let result_type = if method_call_uses_date_serialize_finalizer(
+        ctx,
+        object.value,
+        method,
+        &raw_result_type,
+    ) {
+        PhpType::Mixed
+    } else {
+        raw_result_type
+    };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let fatal_block = ctx
         .builder

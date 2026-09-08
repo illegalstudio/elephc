@@ -130,6 +130,15 @@ fn stmt_contains_yield(stmt: &Stmt) -> bool {
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_contains_yield(object) || expr_contains_yield(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_contains_yield(object)
+                || expr_contains_yield(property)
+                || expr_contains_yield(value)
+        }
         StmtKind::PropertyArrayAssign { object, index, value, .. } => {
             expr_contains_yield(object) || expr_contains_yield(index) || expr_contains_yield(value)
         }

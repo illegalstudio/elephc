@@ -2,7 +2,7 @@
 title: "mysqli_fetch_assoc()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 116
+  order: 117
 ---
 
 ## mysqli_fetch_assoc()

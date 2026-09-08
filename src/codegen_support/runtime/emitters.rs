@@ -144,8 +144,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // Callable introspection runtime functions
     callables::emit_is_callable_runtime(emitter);
     callables::emit_function_exists_lookup(emitter);
-    callables::emit_callable_descriptor_release(emitter);
+    callables::emit_callable_descriptor_release(emitter, features.eval_bridge);
     callables::emit_closure_bind(emitter);
+    callables::emit_closure_debug(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);
@@ -158,14 +159,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_getenv(emitter);
     system::emit_getenv_all(emitter);
     system::emit_shell_exec(emitter);
-    system::emit_date(emitter);
+    if features.timelib {
+        system::emit_date(emitter);
+    }
     system::emit_date_default_timezone(emitter);
     system::emit_checkdate(emitter);
     system::emit_getdate(emitter);
     system::emit_localtime(emitter);
     system::emit_hrtime(emitter);
     system::emit_mktime(emitter);
-    system::emit_strtotime(emitter);
+    system::emit_strtotime(emitter, features.timelib);
     system::emit_pcntl_rusage_array(emitter);
     system::emit_pcntl_siginfo_array(emitter);
     system::emit_pcntl_signal_dispatch(emitter);
@@ -176,6 +179,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_encode_float(emitter);
     system::emit_json_ftoa(emitter);
     system::emit_json_encode_object(emitter);
+    system::emit_json_encode_closure(emitter);
     system::emit_json_pretty_helpers(emitter);
     system::emit_json_throw_error(emitter);
     system::emit_json_depth_enter(emitter);

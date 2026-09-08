@@ -2,7 +2,7 @@
 title: "date_sunrise() — internals"
 description: "Compiler internals for date_sunrise(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 209
+  order: 210
 ---
 
 ## `date_sunrise()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:753](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L753) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:958](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L958) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

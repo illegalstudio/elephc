@@ -75,6 +75,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.push_called_class_scope(called_class_name.to_string());
     context.push_method_magic_scope(class_name, method);
     let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -104,7 +105,9 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
-    let result = execute_statements(method.body(), context, &mut method_scope, values);
+    let result = with_lexical_strict_types(context, method.strict_types(), |context| {
+        execute_statements_with_return_ownership(method.body(), context, &mut method_scope, values, false)
+    });
     let persist_result = persist_static_locals(
         context,
         &qualified_method_name,
@@ -122,9 +125,11 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &qualified_method_name,
             method.return_type(),
             Some(class_name),
             Some(called_class_name),
+            method.strict_types(),
             control,
             context,
             values,
@@ -198,6 +203,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.push_called_class_scope(called_class_name.to_string());
     context.push_method_magic_scope(class_name, method);
     let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -226,7 +232,9 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
-    let result = execute_statements(method.body(), context, &mut method_scope, values);
+    let result = with_lexical_strict_types(context, method.strict_types(), |context| {
+        execute_statements_with_return_ownership(method.body(), context, &mut method_scope, values, false)
+    });
     let persist_result = persist_static_locals(
         context,
         &qualified_method_name,
@@ -244,9 +252,11 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &qualified_method_name,
             method.return_type(),
             Some(class_name),
             Some(called_class_name),
+            method.strict_types(),
             control,
             context,
             values,

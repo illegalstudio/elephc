@@ -25,7 +25,7 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
 pub(super) struct Lexer<'a> {
     source: &'a str,
     pos: usize,
-    line: i64,
+    pub(super) line: i64,
 }
 
 impl<'a> Lexer<'a> {
@@ -40,9 +40,15 @@ impl<'a> Lexer<'a> {
 
     /// Tokenizes the complete source and appends an EOF sentinel.
     fn tokenize(mut self) -> Result<Vec<Token>, EvalParseError> {
-        let mut tokens = Vec::new();
+        let mut tokens: Vec<Token> = Vec::new();
         loop {
-            let batch = self.next_tokens()?;
+            let batch = self.next_tokens().map_err(|error| {
+                let warnings = tokens.iter().filter_map(|token| match token.kind() {
+                    TokenKind::CompileWarning(warning) => Some(warning.clone()),
+                    _ => None,
+                }).collect();
+                error.with_compile_warnings(warnings)
+            })?;
             let done = batch
                 .last()
                 .is_some_and(|token| *token.kind() == TokenKind::Eof);
@@ -214,6 +220,10 @@ impl<'a> Lexer<'a> {
             '~' => {
                 self.bump_char();
                 Ok(TokenKind::Tilde)
+            }
+            '@' => {
+                self.bump_char();
+                Ok(TokenKind::At)
             }
             '<' => {
                 self.bump_char();

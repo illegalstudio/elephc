@@ -212,6 +212,13 @@ fn lower_append_target(base: Expr, value: Expr, span: Span) -> Option<Stmt> {
                 value,
             }
         }
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            StmtKind::DynamicPropertyArrayPush {
+                object,
+                property,
+                value,
+            }
+        }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             StmtKind::StaticPropertyArrayPush {
                 receiver,

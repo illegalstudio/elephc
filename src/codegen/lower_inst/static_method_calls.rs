@@ -64,7 +64,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
         ))
     })?;
     let Some(callee_sig) = impl_info.static_methods.get(&method_key) else {
-        if is_lexical_instance_static_receiver(receiver_label)
+        if is_lexical_instance_static_receiver(ctx, receiver_label, receiver.as_str())
             && receiver_info.methods.contains_key(&method_key)
         {
             return lower_lexical_instance_static_method_call(
@@ -146,7 +146,7 @@ pub(super) fn lower_eval_static_method_call(ctx: &mut FunctionContext<'_>, inst:
     builtins::lower_eval_static_method_call(ctx, inst, receiver.as_str(), method_name)
 }
 
-/// Lowers `self::method()` or `parent::method()` when it targets an instance method.
+/// Lowers compatible static-call syntax when it targets an instance method through `$this`.
 pub(super) fn lower_lexical_instance_static_method_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -314,9 +314,25 @@ pub(super) fn is_late_bound_static_receiver(receiver: &str) -> bool {
     receiver.trim_start_matches('\\') == "static"
 }
 
-/// Returns true when PHP static-call syntax should bind an instance method lexically.
-pub(super) fn is_lexical_instance_static_receiver(receiver: &str) -> bool {
-    matches!(receiver.trim_start_matches('\\'), "self" | "parent")
+/// Returns whether one static-syntax receiver is compatible with the current `$this` object.
+pub(super) fn is_lexical_instance_static_receiver(
+    ctx: &FunctionContext<'_>,
+    receiver_label: &str,
+    receiver: &str,
+) -> bool {
+    if matches!(receiver_label.trim_start_matches('\\'), "static")
+        || ctx.local_slot_by_name("this").is_none()
+    {
+        return false;
+    }
+    let Ok(current_class) = current_method_class(ctx) else {
+        return false;
+    };
+    crate::types::class_is_same_or_descends_from(
+        &ctx.module.class_infos,
+        current_class,
+        receiver,
+    )
 }
 
 /// Returns the class name encoded in the current EIR class-method function name.

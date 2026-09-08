@@ -40,6 +40,9 @@ pub(super) fn lower(
         RuntimeFnId::Defined => Some({
             crate::codegen::lower_inst::builtins::lower_defined(ctx, inst)
         }),
+        RuntimeFnId::ErrorReporting => Some({
+            crate::codegen::lower_inst::builtins::system::lower_error_reporting(ctx, inst)
+        }),
         RuntimeFnId::Exec => Some({
             crate::codegen::lower_inst::builtins::system::lower_exec(ctx, inst)
         }),
@@ -114,6 +117,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::Putenv => Some({
             crate::codegen::lower_inst::builtins::system::lower_putenv(ctx, inst)
+        }),
+        RuntimeFnId::Setlocale => Some({
+            crate::codegen::lower_inst::builtins::system::lower_setlocale(ctx, inst)
         }),
         RuntimeFnId::Serialize => Some({
             crate::codegen::lower_inst::builtins::serialize::lower_serialize(ctx, inst)

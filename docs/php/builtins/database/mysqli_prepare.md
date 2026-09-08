@@ -2,7 +2,7 @@
 title: "mysqli_prepare()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 145
+  order: 146
 ---
 
 ## mysqli_prepare()

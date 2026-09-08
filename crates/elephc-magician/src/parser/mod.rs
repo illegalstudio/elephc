@@ -31,8 +31,18 @@ pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseError> {
         return Err(EvalParseError::PhpOpenTag);
     }
     let source = std::str::from_utf8(code).map_err(|_| EvalParseError::InvalidUtf8)?;
-    let tokens = tokenize(source)?;
-    Parser::new(tokens, code.len()).parse_program()
+    let mut tokens = tokenize(source)?;
+    let mut warnings = Vec::new();
+    tokens.retain(|token| {
+        if let crate::lexer::TokenKind::CompileWarning(warning) = token.kind() {
+            warnings.push(warning.clone());
+            false
+        } else { true }
+    });
+    match Parser::new(tokens, code.len()).parse_program() {
+        Ok(program) => Ok(program.with_compile_warnings(warnings)),
+        Err(error) => Err(error.with_compile_warnings(warnings)),
+    }
 }
 
 /// Returns true when a fragment contains a PHP opening tag sequence.

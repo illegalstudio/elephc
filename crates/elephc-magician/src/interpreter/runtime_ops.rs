@@ -89,6 +89,34 @@ pub trait RuntimeValueOps {
     /// Creates a runtime indexed-array cell with room for at least `capacity` elements.
     fn array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Packs borrowed arguments into an owned array, releasing temporary index cells on every exit.
+    fn argument_array(&mut self, args: &[RuntimeCellHandle]) -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut array = self.array_new(args.len())?;
+        for (position, value) in args.iter().copied().enumerate() {
+            let index = match self.int(position as i64) {
+                Ok(index) => index,
+                Err(status) => {
+                    let _ = self.release(array);
+                    return Err(status);
+                }
+            };
+            let insertion = self.array_set(array, index, value);
+            let cleanup = self.release(index);
+            match insertion {
+                Ok(updated) => array = updated,
+                Err(status) => {
+                    let _ = self.release(array);
+                    return Err(status);
+                }
+            }
+            if let Err(status) = cleanup {
+                let _ = self.release(array);
+                return Err(status);
+            }
+        }
+        Ok(array)
+    }
+
     /// Creates a runtime indexed-array cell specialized for direct string payload slots.
     fn string_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -518,6 +546,24 @@ pub trait RuntimeValueOps {
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         Ok(None)
     }
+
+    /// Emits formatted E_COMPILE_WARNING bytes without invoking a user error handler.
+    fn compile_warning(&mut self, message: &str) -> Result<(), EvalStatus>;
+
+    /// Emits an E_NOTICE diagnostic while preserving the original PHP message bytes.
+    fn notice(&mut self, message: &[u8]) -> Result<(), EvalStatus>;
+
+    /// Starts a PHP silence scope and returns the unfiltered previous error mask.
+    fn begin_error_suppression(&mut self) -> Result<i64, EvalStatus>;
+
+    /// Restores a silence scope unless user code explicitly enabled nonfatal errors.
+    fn end_error_suppression(&mut self, previous: i64) -> Result<(), EvalStatus>;
+
+    /// Emits or suppresses one PHP runtime deprecation through the target runtime.
+    fn deprecated(&mut self, message: &str) -> Result<(), EvalStatus>;
+
+    /// Returns the active PHP error mask and optionally replaces it.
+    fn error_reporting(&mut self, level: Option<i64>) -> Result<i64, EvalStatus>;
 
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;

@@ -29,7 +29,8 @@ pub(in crate::interpreter) fn execute_enum_decl_stmt(
         return Err(EvalStatus::RuntimeFatal);
     }
     validate_eval_enum_direct_method_declarations(enum_decl)?;
-    let enum_decl = expand_eval_enum_traits(enum_decl, context)?;
+    let enum_decl = expand_eval_enum_traits(enum_decl, context)?
+        .with_direct_method_strict_types(context.strict_types());
     let enum_decl = &enum_decl;
     validate_eval_enum_decl(enum_decl, context, values)?;
     if context.define_enum(enum_decl.clone()) {

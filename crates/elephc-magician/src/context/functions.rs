@@ -69,6 +69,11 @@ impl ElephcEvalContext {
         self.closure_objects.insert(identity, target);
     }
 
+    /// Removes one closure-object identity when its native storage is destroyed.
+    pub fn unregister_closure_object_target(&mut self, identity: u64) {
+        self.closure_objects.remove(&identity);
+    }
+
     /// Returns the callable target bound to a PHP `Closure` object.
     pub fn closure_object_target(&self, identity: u64) -> Option<&EvalClosureObjectTarget> {
         self.closure_objects.get(&identity)
@@ -89,12 +94,13 @@ impl ElephcEvalContext {
     pub fn define_native_function(
         &mut self,
         name: impl Into<String>,
-        function: NativeFunction,
+        mut function: NativeFunction,
     ) -> Result<(), NativeFunction> {
         let name = name.into();
         if self.functions.contains_key(&name) || self.native_functions.contains_key(&name) {
             return Err(function);
         }
+        function.set_name(name.clone());
         self.native_functions.insert(name, function);
         Ok(())
     }

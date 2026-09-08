@@ -44,7 +44,13 @@ pub(super) fn register_eval_native_function(
     context_offset: usize,
     registration: &EvalNativeFunctionRegistration,
 ) -> Result<()> {
-    let invoker_label = emit_eval_native_function_invoker_inline(ctx, &registration.signature);
+    let owned_object_return = ctx.function_by_name(&registration.name).is_some_and(|function| {
+        crate::codegen::lower_inst::object_return_ownership::object_return_ownership(function)
+            == crate::codegen::lower_inst::object_return_ownership::ObjectReturnOwnership::Owned
+    });
+    let invoker_label = emit_eval_native_function_invoker_inline(
+        ctx, &registration.signature, owned_object_return,
+    );
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &function_symbol(&registration.name),
@@ -166,6 +172,7 @@ pub(super) fn register_eval_native_function(
 pub(super) fn emit_eval_native_function_invoker_inline(
     ctx: &mut FunctionContext<'_>,
     sig: &FunctionSig,
+    owned_object_return: bool,
 ) -> String {
     let label = ctx.next_global_label("eval_callable_invoker");
     let done_label = ctx.next_label("eval_callable_invoker_done");
@@ -174,6 +181,8 @@ pub(super) fn emit_eval_native_function_invoker_inline(
         label: &label,
         sig,
         captures: &captures,
+        date_serialize_finalize: false,
+        owned_object_return,
     };
     abi::emit_jump(ctx.emitter, &done_label);
     crate::codegen::runtime_callable_invoker::emit_runtime_callable_invoker_with_exception_boundary(

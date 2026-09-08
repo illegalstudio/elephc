@@ -2,7 +2,7 @@
 title: "timezone_name_get() — internals"
 description: "Compiler internals for timezone_name_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 247
+  order: 248
 ---
 
 ## `timezone_name_get()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:838](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L838) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:1114](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L1114) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

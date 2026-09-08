@@ -296,6 +296,9 @@ impl Checker {
                         Self::types_compatible(expected_member, actual_member)
                     })
                 }),
+            (_, PhpType::Union(actual_members)) => actual_members
+                .iter()
+                .any(|actual_member| Self::types_compatible(expected, actual_member)),
             (PhpType::Union(members), _) => members
                 .iter()
                 .any(|member| Self::types_compatible(member, actual)),
@@ -575,8 +578,11 @@ impl Checker {
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                     }
-                    if coercive_param_binding
-                        && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                    let nullable_scalar_binding = expected_ty.codegen_repr() == PhpType::TaggedScalar
+                        && !sig.ref_params.get(param_idx).copied().unwrap_or(false);
+                    if (coercive_param_binding
+                        && sig.declared_params.get(param_idx).copied().unwrap_or(false))
+                        || nullable_scalar_binding
                     {
                         self.require_bound_param_arg_type(
                             expected_ty,

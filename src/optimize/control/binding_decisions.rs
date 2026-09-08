@@ -76,6 +76,15 @@ fn stmt_carries_decision(stmt: &Stmt) -> bool {
         StmtKind::PropertyArrayPush { object, property: _, value } => {
             expr_carries_decision(object) || expr_carries_decision(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_carries_decision(object)
+                || expr_carries_decision(property)
+                || expr_carries_decision(value)
+        }
         StmtKind::PropertyArrayAssign { object, property: _, index, value } => {
             expr_carries_decision(object)
                 || expr_carries_decision(index)

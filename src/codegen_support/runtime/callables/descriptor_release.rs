@@ -20,9 +20,9 @@ use crate::codegen_support::platform::Arch;
 /// Dynamic descriptors are refcounted with the uniform heap header. On the final release,
 /// by-value string captures are freed, heap-backed captures are decref'd through
 /// `__rt_decref_any`, nested callable captures recurse, and the descriptor block is freed.
-pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
+pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter, eval_bridge: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_callable_descriptor_release_linux_x86_64(emitter);
+        emit_callable_descriptor_release_linux_x86_64(emitter, eval_bridge);
         return;
     }
 
@@ -54,6 +54,22 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish a frame pointer for the helper
     emitter.instruction("str x0, [sp, #0]");                                    // save descriptor pointer for capture release and final free
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize capture index to zero
+
+    if eval_bridge {
+        emitter.instruction("ldr x9, [x0]");                                    // load the descriptor kind before generic capture cleanup
+        emitter.instruction("cmp x9, #3");                                      // kind 3 is the eval callback adapter
+        emitter.instruction("b.ne __rt_callable_descriptor_release_load_env");  // ordinary descriptors use typed capture cleanup
+        emitter.instruction("ldr x0, [x0, #64]");                               // pass the retained eval context capture
+        emitter.instruction("ldr x9, [sp, #0]");                                // reload the descriptor identity
+        emitter.instruction("ldr x1, [x9, #80]");                               // pass the owned eval callback cell
+        emitter.instruction("mov x2, x9");                                      // unregister this descriptor payload identity
+        let symbol = emitter
+            .target
+            .extern_symbol("__elephc_eval_release_callable_descriptor");
+        crate::codegen_support::abi::emit_call_label(emitter, &symbol);
+        emitter.instruction("b __rt_callable_descriptor_release_free");         // Magician already released both opaque captures
+        emitter.label("__rt_callable_descriptor_release_load_env");
+    }
 
     // -- load environment metadata --
     emitter.instruction("ldr x9, [x0, #40]");                                   // x9 = descriptor environment record pointer
@@ -128,7 +144,7 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
 }
 
 /// Emits the x86_64 Linux variant of `__rt_callable_descriptor_release`.
-fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
+fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.blank();
     emitter.comment("--- runtime: callable descriptor release ---");
     emitter.label_global("__rt_callable_descriptor_release");
@@ -159,6 +175,21 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve descriptor pointer, count, table, and index slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save descriptor pointer for capture release and final free
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize capture index to zero
+
+    if eval_bridge {
+        emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the descriptor kind before generic capture cleanup
+        emitter.instruction("cmp r10, 3");                                      // kind 3 is the eval callback adapter
+        emitter.instruction("jne __rt_callable_descriptor_release_load_env");   // ordinary descriptors use typed capture cleanup
+        emitter.instruction("mov rdi, QWORD PTR [rax + 64]");                   // pass the retained eval context capture
+        emitter.instruction("mov rsi, QWORD PTR [rax + 80]");                   // pass the owned eval callback cell
+        emitter.instruction("mov rdx, rax");                                    // unregister this descriptor payload identity
+        let symbol = emitter
+            .target
+            .extern_symbol("__elephc_eval_release_callable_descriptor");
+        crate::codegen_support::abi::emit_call_label(emitter, &symbol);
+        emitter.instruction("jmp __rt_callable_descriptor_release_free");       // Magician already released both opaque captures
+        emitter.label("__rt_callable_descriptor_release_load_env");
+    }
 
     emitter.instruction("mov r10, QWORD PTR [rax + 40]");                       // r10 = descriptor environment record pointer
     emitter.instruction("test r10, r10");                                       // does the descriptor carry capture metadata?

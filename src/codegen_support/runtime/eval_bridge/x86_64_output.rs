@@ -190,11 +190,20 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_string_bytes");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across string casting
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // reserve slots for the caller's output pointers
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for output pointers and the boxed source
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the caller's out_ptr storage address
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the caller's out_len storage address
-    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_string input
-    emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed eval value to a PHP string pair
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the boxed source for non-string scalar conversion
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into the internal unbox argument
+    emitter.instruction("call __rt_mixed_unbox");                               // expose tag in rax and borrowed string words in rdi/rdx
+    emitter.instruction("cmp rax, 1");                                          // an existing string needs no detached allocation
+    emitter.instruction("jne __elephc_eval_value_string_bytes_cast");           // only non-string scalars need scratch formatting
+    emitter.instruction("mov rax, rdi");                                        // return the borrowed string pointer alongside its length in rdx
+    emitter.instruction("jmp __elephc_eval_value_string_bytes_store");          // preserve the caller-owned string payload
+    emitter.label("__elephc_eval_value_string_bytes_cast");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the boxed source for scalar conversion
+    emitter.instruction("call __rt_mixed_cast_string");                         // non-string scalar arms return borrowed scratch or empty bytes
+    emitter.label("__elephc_eval_value_string_bytes_store");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the optional out_ptr storage address
     emitter.instruction("test r10, r10");                                       // did the caller request the string pointer?
     emitter.instruction("jz __elephc_eval_value_string_bytes_len");             // skip pointer storage when the caller passed null
@@ -206,7 +215,7 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], rdx");                            // store the string byte length for Rust
     emitter.label("__elephc_eval_value_string_bytes_done");
     emitter.instruction("mov rax, 1");                                          // report successful string conversion to Rust
-    emitter.instruction("add rsp, 16");                                         // release the string-bytes wrapper slots
+    emitter.instruction("add rsp, 32");                                         // release the string-bytes wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the success flag to Rust
 
@@ -262,7 +271,66 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return zero to Rust
 
     label_c_global(emitter, "__elephc_eval_warning");
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_error_reporting", 0); // load the PHP diagnostic mask shared with static code
+    emitter.instruction("test r10, 2");                                         // is E_WARNING enabled for eval diagnostics?
+    emitter.instruction("jz __elephc_eval_warning_done_x86");                   // suppress eval warning output when its mask bit is disabled
     emitter.instruction("jmp __rt_diag_warning");                               // emit or suppress one eval runtime warning
+    emitter.label("__elephc_eval_warning_done_x86");
+    emitter.instruction("ret");                                                 // return without output when E_WARNING is disabled
+
+    label_c_global(emitter, "__elephc_eval_compile_warning");
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_error_reporting", 0);
+    emitter.instruction("test r10, 128");                                       // test E_COMPILE_WARNING independently from E_WARNING
+    emitter.instruction("jz __elephc_eval_compile_warning_done_x86");           // skip masked compile diagnostics
+    emitter.instruction("jmp __rt_diag_write");                                 // respect silence without invoking a user handler
+    emitter.label("__elephc_eval_compile_warning_done_x86");
+    emitter.instruction("ret");                                                 // return silently for a disabled compile-warning mask
+
+    label_c_global(emitter, "__elephc_eval_notice");
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_error_reporting", 0);
+    emitter.instruction("test r10, 8");                                         // check the E_NOTICE bit independently of warnings
+    emitter.instruction("jz __elephc_eval_notice_done_x86");                    // suppress notices excluded by error_reporting
+    emitter.instruction("jmp __rt_diag_write");                                 // retain shared @ suppression for the original byte slice
+    emitter.label("__elephc_eval_notice_done_x86");
+    emitter.instruction("ret");                                                 // return without output for a masked notice
+
+    label_c_global(emitter, "__elephc_eval_suppression");
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "rax", "_rt_error_reporting", 0);
+    emitter.instruction("mov r10, 4437");                                       // retain only PHP fatal error levels during silence
+    emitter.instruction("test rsi, rsi");                                       // check whether this call finishes the silence scope
+    emitter.instruction("jnz __elephc_eval_suppression_end_x86");               // select restoration rather than BEGIN_SILENCE
+    emitter.instruction("mov r11, rax");                                        // preserve the original mask as the C ABI return value
+    emitter.instruction("and r11, r10");                                        // compute the temporary fatal-only mask
+    crate::codegen::abi::emit_store_reg_to_symbol(emitter, "r11", "_rt_error_reporting", 0);
+    emitter.instruction("ret");                                                 // return the unfiltered original mask to the interpreter
+    emitter.label("__elephc_eval_suppression_end_x86");
+    emitter.instruction("not r10");                                             // select nonfatal error bits
+    emitter.instruction("test rax, r10");                                       // detect an explicit nonfatal error_reporting change
+    emitter.instruction("jnz __elephc_eval_suppression_done_x86");              // preserve explicit nonfatal mask changes
+    crate::codegen::abi::emit_store_reg_to_symbol(emitter, "rdi", "_rt_error_reporting", 0);
+    emitter.label("__elephc_eval_suppression_done_x86");
+    emitter.instruction("ret");                                                 // finish restoring the prior mask
+
+    label_c_global(emitter, "__elephc_eval_deprecated");
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_error_reporting", 0); // load the PHP diagnostic mask shared with static code
+    emitter.instruction("test r10, 8192");                                      // is E_DEPRECATED enabled for eval diagnostics?
+    emitter.instruction("jz __elephc_eval_deprecated_done_x86");                // suppress eval deprecation output when its mask bit is disabled
+    emitter.instruction("jmp __rt_diag_write");                                 // emit or suppress one eval runtime deprecation
+    emitter.label("__elephc_eval_deprecated_done_x86");
+    emitter.instruction("ret");                                                 // return without output when E_DEPRECATED is disabled
+
+    label_c_global(emitter, "__elephc_eval_error_reporting");
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "rax", "_rt_error_reporting", 0); // preserve the previous PHP diagnostic mask
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0); // load the active nested @ depth
+    emitter.instruction("mov r11, 4437");                                       // PHP's fatal-only mask exposed during @
+    emitter.instruction("and r11, rax");                                        // retain only fatal levels from the current user mask
+    emitter.instruction("test r10, r10");                                       // is eval running inside a suppressed expression?
+    emitter.instruction("cmovnz rax, r11");                                     // return the fatal-only mask while suppressed
+    emitter.instruction("test rsi, rsi");                                       // did PHP supply a concrete integer level?
+    emitter.instruction("jz __elephc_eval_error_reporting_done_x86");           // a missing/null level is a query only
+    crate::codegen::abi::emit_store_reg_to_symbol(emitter, "rdi", "_rt_error_reporting", 0); // publish the replacement PHP diagnostic mask
+    emitter.label("__elephc_eval_error_reporting_done_x86");
+    emitter.instruction("ret");                                                 // return the previous mask to Rust
 
     label_c_global(emitter, "__elephc_eval_fatal");
     emitter.instruction("mov rdx, rsi");                                        // move fatal length into the stderr write-length register

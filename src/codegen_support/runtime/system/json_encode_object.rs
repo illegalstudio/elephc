@@ -11,6 +11,9 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
 
 /// __rt_json_encode_object: encode a PHP object instance as JSON.
 ///
@@ -54,7 +57,9 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     //   [sp, #104] = JsonSerializable saved _json_indent_depth
     //   [sp, #112] = saved x29
     //   [sp, #120] = saved x30
-    emitter.instruction("sub sp, sp, #128");                                    // allocate the object encoder scratch frame
+    let frame_bytes = 128 + TRY_HANDLER_SLOT_SIZE;
+    let handler = 128;
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_bytes));              // allocate encoder scratch plus exception-handler storage
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish a stable frame pointer for the encoder
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer for downstream loads
@@ -112,12 +117,25 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // capture the outer JSON depth limit before user code can change it
     emitter.instruction("str x10, [sp, #72]");                                  // save _json_depth_limit across jsonSerialize()
     emitter.instruction("str xzr, [sp, #40]");                                  // default the saved prefix heap pointer to null for empty prefixes
+    emitter.instruction("str xzr, [sp, #48]");                                  // initialize the optional boxed method-result owner slot
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the caller prefix length after saving unrelated JSON state
     emitter.instruction("cbz x10, __rt_json_obj_jsonserialize_invoke");         // skip the prefix copy when there is no caller-visible prefix to preserve
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_concat_buf");
     emitter.instruction("mov x2, x10");                                         // copy the prefix length into the str_persist length register
     emitter.instruction("bl __rt_str_persist");                                 // duplicate the caller prefix into a heap-owned buffer
     emitter.instruction("str x1, [sp, #40]");                                   // remember the heap-owned prefix pointer for the post-call restore
     emitter.label("__rt_json_obj_jsonserialize_invoke");
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler));               // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler + 8));           // preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("add x10, sp, #{}", handler));                 // materialize the JsonSerializable handler record
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("add x0, sp, #{}", handler + TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch user and recursive-encoder exceptions while owners are live
+    emitter.instruction("cbnz x0, __rt_json_obj_jsonserialize_throw");          // release owners and restore JSON state before rethrow
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the receiver object pointer for the method call
     emitter.instruction("ldr x14, [sp, #32]");                                  // reload the saved jsonSerialize method target
     emitter.instruction("blr x14");                                             // invoke jsonSerialize on the receiver and capture the boxed mixed result
@@ -158,12 +176,45 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #48]");                                   // restore the boxed mixed return value before encoding it
     emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed return value as JSON
     // Save the (x1, x2) result across the depth-exit helper call.
-    emitter.instruction("stp x1, x2, [sp, #32]");                               // checkpoint the encoded result slice across __rt_json_depth_exit
+    emitter.instruction("stp x1, x2, [sp, #56]");                               // checkpoint the encoded result away from owner slots used during cleanup
+    emitter.instruction("ldr x0, [sp, #48]");                                   // reload the owned boxed jsonSerialize result
+    emitter.instruction("bl __rt_decref_any");                                  // release the method result after recursive encoding consumed it
+    emitter.instruction("str xzr, [sp, #48]");                                  // clear the released result owner slot
+    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the heap-owned caller-prefix backup
+    emitter.instruction("bl __rt_heap_free_safe");                              // release the prefix after its bytes were restored
+    emitter.instruction("str xzr, [sp, #40]");                                  // clear the released prefix owner slot
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler));               // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after success
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
     emitter.instruction("bl __rt_json_depth_exit");                             // decrement _json_active_depth so a sibling encoder can re-enter cleanly
-    emitter.instruction("ldp x1, x2, [sp, #32]");                               // restore the encoded result slice after the helper call
+    emitter.instruction("ldp x1, x2, [sp, #56]");                               // restore the encoded result slice after the helper call
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address after JsonSerializable encoding
-    emitter.instruction("add sp, sp, #128");                                    // deallocate the object encoder scratch frame
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // deallocate encoder scratch and exception-handler storage
     emitter.instruction("ret");                                                 // return the JSON encoded result produced by mixed encoding
+
+    emitter.label("__rt_json_obj_jsonserialize_throw");
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler));               // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction("ldr x0, [sp, #48]");                                   // reload any boxed jsonSerialize result acquired before failure
+    emitter.instruction("bl __rt_decref_any");                                  // release the method result when recursive encoding threw
+    emitter.instruction("ldr x0, [sp, #40]");                                   // reload any heap-owned caller-prefix backup
+    emitter.instruction("bl __rt_heap_free_safe");                              // release the prefix backup when user code threw
+    emitter.instruction("ldr x10, [sp, #80]");                                  // reload the caller JSON error state
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_json_last_error", 0);
+    emitter.instruction("ldr x10, [sp, #88]");                                  // reload the caller JSON flags
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_json_active_flags", 0);
+    emitter.instruction("ldr x10, [sp, #96]");                                  // reload the caller JSON recursion depth
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_json_active_depth", 0);
+    emitter.instruction("ldr x10, [sp, #104]");                                 // reload the caller JSON indentation depth
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_json_indent_depth", 0);
+    emitter.instruction("ldr x10, [sp, #72]");                                  // reload the caller JSON depth limit
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_json_depth_limit", 0);
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // discard the protected object-encoder frame
+    emitter.instruction("b __rt_throw_current");                                // resume exception propagation at the caller handler
 
     // -- empty object fallback (missing class id) --
     emitter.label("__rt_json_obj_open_only");
@@ -274,6 +325,8 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     // Dispatch on the property type tag. Each branch leaves the encoded
     // result in x1=ptr, x2=len so the shared copy code can append it.
     emitter.instruction("ldr x17, [sp, #56]");                                  // reload the saved property type tag
+    emitter.instruction("cmp x17, #11");                                        // does the descriptor describe an inline nullable scalar?
+    emitter.instruction("csel x17, x15, x17, eq");                              // dispatch tagged scalars by their stored int-or-null tag
     emitter.instruction("cmp x17, #0");                                         // tag 0 = integer
     emitter.instruction("b.eq __rt_json_obj_val_int");                          // branch on the current JSON object encoder condition
     emitter.instruction("cmp x17, #1");                                         // tag 1 = string
@@ -290,6 +343,8 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_obj_val_object");                       // branch on the current JSON object encoder condition
     emitter.instruction("cmp x17, #7");                                         // tag 7 = boxed mixed
     emitter.instruction("b.eq __rt_json_obj_val_mixed");                        // branch on the current JSON object encoder condition
+    emitter.instruction("cmp x17, #10");                                        // tag 10 = Closure descriptor
+    emitter.instruction("b.eq __rt_json_obj_val_closure");                      // Closures encode as empty JSON objects
     emitter.instruction("b __rt_json_obj_val_null");                            // every other tag (null, resource, ...) falls back to JSON null
 
     emitter.label("__rt_json_obj_val_int");
@@ -333,6 +388,11 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #64]");                                   // load the boxed mixed pointer payload
     emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed payload recursively
     emitter.instruction("b __rt_json_obj_val_copy");                            // jump to the shared result copy
+
+    emitter.label("__rt_json_obj_val_closure");
+    emitter.instruction("ldr x0, [sp, #64]");                                   // load the Closure descriptor payload
+    emitter.instruction("bl __rt_json_encode_closure");                         // encode the Closure as php-src's empty JSON object
+    emitter.instruction("b __rt_json_obj_val_copy");                            // copy the encoded Closure slice into the parent JSON object
 
     emitter.label("__rt_json_obj_val_null");
     emitter.instruction("bl __rt_json_encode_null");                            // encode unsupported tags as the JSON null literal
@@ -385,8 +445,68 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("sub x10, x11, x10");                                   // compute the absolute concat-buffer offset after the closing brace
     emitter.instruction("str x10, [x9]");                                       // publish the concat-buffer offset for the next encoder
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #128");                                    // deallocate the object encoder scratch frame
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // deallocate encoder scratch and exception-handler storage
     emitter.instruction("ret");                                                 // return the encoded object slice in the standard string registers
+}
+
+/// Emits `__rt_json_encode_closure`, which renders PHP Closures as empty JSON objects.
+///
+/// Closure debug information is intentionally excluded from JSON, matching php-src's
+/// public-property JSON projection. The descriptor still consumes one JSON container depth.
+pub(crate) fn emit_json_encode_closure(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: json_encode_closure ---");
+    emitter.label_global("__rt_json_encode_closure");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #32");                             // allocate the closure JSON frame
+            emitter.instruction("stp x29, x30, [sp, #16]");                     // save frame pointer and return address
+            emitter.instruction("mov x29, sp");                                 // establish the closure JSON frame
+            emitter.instruction("bl __rt_json_depth_enter");                    // Closures are JSON object containers for depth accounting
+            abi::emit_symbol_address(emitter, "x9", "_concat_off");
+            emitter.instruction("ldr x10, [x9]");                               // load the caller-visible concat offset
+            abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+            emitter.instruction("add x1, x11, x10");                            // resolve the empty-object write start
+            emitter.instruction("str x1, [sp, #0]");                            // preserve the returned JSON slice start
+            emitter.instruction("mov w12, #123");                               // ASCII `{`
+            emitter.instruction("strb w12, [x1]");                              // emit the opening object brace
+            emitter.instruction("add x1, x1, #1");                              // advance after the opening brace
+            emitter.instruction("mov w12, #125");                               // ASCII `}`
+            emitter.instruction("strb w12, [x1]");                              // emit the closing object brace
+            emitter.instruction("add x1, x1, #1");                              // advance after the closing brace
+            emitter.instruction("sub x10, x1, x11");                            // compute the updated concat offset
+            abi::emit_symbol_address(emitter, "x9", "_concat_off");
+            emitter.instruction("str x10, [x9]");                               // publish the completed empty-object JSON slice
+            emitter.instruction("bl __rt_json_depth_exit");                     // leave the Closure JSON container depth
+            emitter.instruction("ldr x1, [sp, #0]");                            // restore the JSON slice pointer
+            emitter.instruction("mov x2, #2");                                  // `{}` is two bytes long
+            emitter.instruction("ldp x29, x30, [sp, #16]");                     // restore frame pointer and return address
+            emitter.instruction("add sp, sp, #32");                             // release the closure JSON frame
+            emitter.instruction("ret");                                         // return the encoded Closure slice
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // save caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish the closure JSON frame
+            emitter.instruction("sub rsp, 32");                                 // allocate the closure JSON frame
+            emitter.instruction("call __rt_json_depth_enter");                  // Closures are JSON object containers for depth accounting
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);   // load the caller-visible concat offset
+            abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+            emitter.instruction("lea rax, [r11 + r10]");                        // resolve the empty-object write start
+            emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // preserve the returned JSON slice start
+            emitter.instruction("mov BYTE PTR [rax], 123");                     // emit the opening `{`
+            emitter.instruction("mov BYTE PTR [rax + 1], 125");                 // emit the closing `}`
+            emitter.instruction("add rax, 2");                                  // advance after the completed empty object
+            emitter.instruction("sub rax, r11");                                // compute the updated concat offset
+            abi::emit_symbol_address(emitter, "r10", "_concat_off");
+            emitter.instruction("mov QWORD PTR [r10], rax");                    // publish the completed empty-object JSON slice
+            emitter.instruction("call __rt_json_depth_exit");                   // leave the Closure JSON container depth
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // restore the JSON slice pointer
+            emitter.instruction("mov rdx, 2");                                  // `{}` is two bytes long
+            emitter.instruction("add rsp, 32");                                 // release the closure JSON frame
+            emitter.instruction("pop rbp");                                     // restore caller frame pointer
+            emitter.instruction("ret");                                         // return the encoded Closure slice
+        }
+    }
 }
 
 /// x86_64 SysV ABI implementation of `__rt_json_encode_object`.
@@ -437,7 +557,9 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 96] = scratch (prop name_len)
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the object encoder
-    emitter.instruction("sub rsp, 96");                                         // reserve the encoder scratch frame
+    let frame_bytes = 96 + TRY_HANDLER_SLOT_SIZE;
+    let handler = frame_bytes;
+    emitter.instruction(&format!("sub rsp, {}", frame_bytes));                  // reserve encoder scratch plus exception-handler storage
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the object pointer
 
     // Enter the recursion-depth check.
@@ -485,6 +607,8 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_depth_limit", 0);       // capture the outer JSON depth limit before user code can change it
     emitter.instruction("mov QWORD PTR [rbp - 96], r10");                       // save _json_depth_limit across jsonSerialize()
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // default the saved prefix heap pointer to null for empty prefixes
+    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // initialize the optional boxed method-result owner slot
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the caller prefix length after saving unrelated JSON state
     emitter.instruction("test r10, r10");                                       // is there any caller-visible prefix to preserve?
     emitter.instruction("jz __rt_json_obj_jsonserialize_invoke_x");             // skip the prefix copy when the prefix is empty
     abi::emit_symbol_address(emitter, "rax", "_concat_buf");                    // materialize the concat-buffer base for the str_persist input
@@ -492,6 +616,18 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // duplicate the caller prefix into a heap-owned buffer
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // remember the heap-owned prefix pointer for the post-call restore
     emitter.label("__rt_json_obj_jsonserialize_invoke_x");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler));    // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler - 8));// preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("lea r10, [rbp - {}]", handler));              // materialize the JsonSerializable handler record
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("lea rdi, [rbp - {}]", handler - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch user and recursive-encoder exceptions while owners are live
+    emitter.instruction("test eax, eax");                                       // did control return through longjmp?
+    emitter.instruction("jnz __rt_json_obj_jsonserialize_throw_x");             // release owners and restore JSON state before rethrow
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the receiver object pointer as the SysV $this argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // reload the saved jsonSerialize method target
     emitter.instruction("call rdx");                                            // invoke jsonSerialize on the receiver and capture the boxed mixed result
@@ -530,12 +666,45 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     // Save the (rax, rdx) result across __rt_json_depth_exit.
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // checkpoint the encoded result pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // checkpoint the encoded result length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the owned boxed jsonSerialize result
+    emitter.instruction("call __rt_decref_any");                                // release the method result after recursive encoding consumed it
+    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // clear the released result owner slot
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the heap-owned caller-prefix backup
+    emitter.instruction("call __rt_heap_free_safe");                            // release the prefix after its bytes were restored
+    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // clear the released prefix owner slot
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler));    // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after success
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
     emitter.instruction("call __rt_json_depth_exit");                           // decrement _json_active_depth so a sibling encoder can re-enter cleanly
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the encoded result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // restore the encoded result length
     emitter.instruction("mov rsp, rbp");                                        // unwind the encoder scratch frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the encoded result produced by mixed encoding
+
+    emitter.label("__rt_json_obj_jsonserialize_throw_x");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler));    // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload any boxed jsonSerialize result acquired before failure
+    emitter.instruction("call __rt_decref_any");                                // release the method result when recursive encoding threw
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload any heap-owned caller-prefix backup
+    emitter.instruction("call __rt_heap_free_safe");                            // release the prefix backup when user code threw
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the caller JSON error state
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_last_error", 0);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the caller JSON flags
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_active_flags", 0);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // reload the caller JSON recursion depth
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_active_depth", 0);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reload the caller JSON indentation depth
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_indent_depth", 0);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 96]");                       // reload the caller JSON depth limit
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_depth_limit", 0);
+    emitter.instruction("mov rsp, rbp");                                        // discard the protected encoder frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_throw_current");                              // resume exception propagation at the caller handler
 
     emitter.label("__rt_json_obj_open_only_x");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer for the open-brace fallback
@@ -635,6 +804,8 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
 
     // Dispatch on the property type tag.
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the saved property type tag
+    emitter.instruction("cmp r9, 11");                                          // does the descriptor describe an inline nullable scalar?
+    emitter.instruction("cmove r9, rsi");                                       // dispatch tagged scalars by their stored int-or-null tag
     emitter.instruction("cmp r9, 0");                                           // tag 0 = integer
     emitter.instruction("je __rt_json_obj_val_int_x");                          // branch on the current JSON object encoder condition
     emitter.instruction("cmp r9, 1");                                           // tag 1 = string
@@ -651,6 +822,8 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_obj_val_object_x");                       // branch on the current JSON object encoder condition
     emitter.instruction("cmp r9, 7");                                           // tag 7 = boxed mixed
     emitter.instruction("je __rt_json_obj_val_mixed_x");                        // branch on the current JSON object encoder condition
+    emitter.instruction("cmp r9, 10");                                          // tag 10 = Closure descriptor
+    emitter.instruction("je __rt_json_obj_val_closure_x");                      // Closures encode as empty JSON objects
     emitter.instruction("jmp __rt_json_obj_val_null_x");                        // every other tag falls back to JSON null
 
     emitter.label("__rt_json_obj_val_int_x");
@@ -693,6 +866,11 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_obj_val_mixed_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // load the boxed mixed pointer payload
     emitter.instruction("call __rt_json_encode_mixed");                         // encode the boxed mixed payload recursively
+    emitter.instruction("jmp __rt_json_obj_val_copy_x");                        // continue in the JSON object encoder control path
+
+    emitter.label("__rt_json_obj_val_closure_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // load the Closure descriptor payload
+    emitter.instruction("call __rt_json_encode_closure");                       // encode the Closure as php-src's empty JSON object
     emitter.instruction("jmp __rt_json_obj_val_copy_x");                        // continue in the JSON object encoder control path
 
     emitter.label("__rt_json_obj_val_null_x");

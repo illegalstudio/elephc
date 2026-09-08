@@ -86,13 +86,16 @@ fn eval_array_reduce_result_from_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
-    let len = values.array_len(array)?;
-    let mut carry = initial;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        carry =
-            eval_evaluated_callable_with_values(&callback, vec![carry, value], context, values)?;
-    }
-    Ok(carry)
+    let result = (|| {
+        let len = values.array_len(array)?;
+        let mut carry = initial;
+        for position in 0..len {
+            let key = values.array_iter_key(array, position)?;
+            let value = values.array_get(array, key)?;
+            carry =
+                eval_evaluated_callable_with_values(&callback, vec![carry, value], context, values)?;
+        }
+        Ok(carry)
+    })();
+    finish_evaluated_callable(callback, result, context, values)
 }

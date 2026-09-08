@@ -2,7 +2,7 @@
 title: "curl_share_close() — internals"
 description: "Compiler internals for curl_share_close(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 688
+  order: 695
 ---
 
 ## `curl_share_close()` — internals

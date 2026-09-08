@@ -45,6 +45,14 @@ pub fn is_enabled() -> bool {
     SOURCE_MODE.with(|mode| mode.get().strict_php_is_effective(is_requested()))
 }
 
+/// Returns the physical source mode currently being resolved or type-checked.
+///
+/// Compiler-generated declarations use this to retain access to their private
+/// implementation helpers without granting the same access to user PHP source.
+pub fn source_mode() -> crate::source::SourceMode {
+    SOURCE_MODE.with(|mode| mode.get())
+}
+
 /// RAII guard restoring the previous physical-source mode on drop.
 struct SourceModeGuard {
     previous: crate::source::SourceMode,

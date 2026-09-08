@@ -2,7 +2,7 @@
 title: "pcntl_wexitstatus()"
 description: "Returns the exit code encoded in a child wait status."
 sidebar:
-  order: 646
+  order: 652
 ---
 
 ## pcntl_wexitstatus()

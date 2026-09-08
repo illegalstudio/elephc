@@ -6,13 +6,10 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - No `check` hook is needed: `gmmktime` is a pure-data builtin whose return type
-//!   (`Int`) is fully determined by its declaration.
+//! - Optional civil fields use a single post-argument UTC clock snapshot.
 
 
 builtin! {
     contract: "gmmktime",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Gmmktime,
-    ),
+    semantics: super::mktime::mktime_semantics(true),
 }

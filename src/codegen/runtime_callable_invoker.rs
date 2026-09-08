@@ -32,6 +32,7 @@ use crate::codegen_support::try_handlers::{
 };
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
+mod nullable_args;
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
@@ -44,11 +45,8 @@ const INVOKER_SAVED_REGS_OFFSET: usize = 32;
 const INVOKER_CALLEE_SAVE_BYTES: usize = 8 * 8;
 /// Exclusive end of the callee-saved save area (`INVOKER_SAVED_REGS_OFFSET` … end-8).
 const INVOKER_SAVED_REGS_END: usize = INVOKER_SAVED_REGS_OFFSET + INVOKER_CALLEE_SAVE_BYTES;
-/// Frame size covering the footer plus every local slot through the save area.
-/// `frame_size - 16` must cover the last save offset; rounded up to 16 for ABI `sp` alignment.
-const INVOKER_FRAME_SIZE: usize = ((INVOKER_SAVED_REGS_END - 8) + 16 + 15) & !15;
-const INVOKER_BOUNDARY_FRAME_SIZE: usize = INVOKER_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE + 16;
-const INVOKER_BOUNDARY_BASE_OFFSET: usize = INVOKER_BOUNDARY_FRAME_SIZE - 16;
+/// First typed owner slot used to clean visible arguments after target dispatch.
+const INVOKER_ARG_CLEANUP_OFFSET: usize = INVOKER_SAVED_REGS_END + 8;
 
 /// Callee-saved registers the invoker body uses as scratch. Must stay in sync with the
 /// hard-coded scratch choices in the indexed/assoc/mixed argument loaders and
@@ -83,20 +81,30 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) label: &'a str,
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
+    /// Whether this invoker calls a proven internal DateTime `__serialize()` method.
+    pub(super) date_serialize_finalize: bool,
+    /// The concrete EIR callee transfers an object reference on every return path.
+    pub(super) owned_object_return: bool,
 }
 
 /// Minimal state needed by the descriptor invoker emitter.
 struct InvokerEmitContext {
     label_prefix: String,
     label_counter: usize,
+    cleanup_base_offset: usize,
+    return_offset: usize,
+    cleanup_types: Vec<PhpType>,
 }
 
 impl InvokerEmitContext {
     /// Creates a fresh label context for one generated invoker body.
-    fn new(invoker_label: &str) -> Self {
+    fn new(invoker_label: &str, cleanup_base_offset: usize, return_offset: usize) -> Self {
         Self {
             label_prefix: local_label_prefix(invoker_label),
             label_counter: 0,
+            cleanup_base_offset,
+            return_offset,
+            cleanup_types: Vec::new(),
         }
     }
 
@@ -140,21 +148,28 @@ pub(crate) fn emit_runtime_callable_invoker_with_exception_boundary(
     emit_runtime_callable_invoker_impl(emitter, data, invoker, true);
 }
 
-/// Emits a descriptor invoker wrapper, optionally bounded by an exception handler.
+/// Emits a descriptor invoker wrapper bounded by an exception handler.
+///
+/// Eval/Rust callers receive a null result after cleanup and inspect the pending throwable status;
+/// ordinary generated callers resume native unwinding after the same cleanup has completed.
 fn emit_runtime_callable_invoker_impl(
     emitter: &mut Emitter,
     data: &mut DataSection,
     invoker: &RuntimeCallableInvoker<'_>,
-    catch_native_throws: bool,
+    return_null_on_throw: bool,
 ) {
-    let mut ctx = InvokerEmitContext::new(invoker.label);
+    let cleanup_slot_count = invoker.sig.params.len();
+    let return_offset = INVOKER_ARG_CLEANUP_OFFSET + cleanup_slot_count * 16;
+    let base_frame_size = (return_offset + 16 + 15) & !15;
+    let frame_size = base_frame_size + TRY_HANDLER_SLOT_SIZE + 16;
+    let boundary_base_offset = frame_size - 16;
+    let mut ctx = InvokerEmitContext::new(
+        invoker.label,
+        INVOKER_ARG_CLEANUP_OFFSET,
+        return_offset,
+    );
     let call_reg = abi::nested_call_reg(emitter);
     let escape_label = format!("{}_eval_escape", invoker.label);
-    let frame_size = if catch_native_throws {
-        INVOKER_BOUNDARY_FRAME_SIZE
-    } else {
-        INVOKER_FRAME_SIZE
-    };
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -165,31 +180,29 @@ fn emit_runtime_callable_invoker_impl(
     // register allocator keeps values live across the indirect invoke in these registers
     // (issue #487).
     emit_invoker_callee_saved_saves(emitter);
+    for index in 0..cleanup_slot_count {
+        abi::emit_store_zero_to_local_slot(
+            emitter,
+            INVOKER_ARG_CLEANUP_OFFSET + index * 16,
+        );
+    }
     abi::store_at_offset(
         emitter,
         abi::int_arg_reg_name(emitter.target, 0),
         INVOKER_DESCRIPTOR_OFFSET,
     );
-    if catch_native_throws {
-        abi::store_at_offset(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 1),
-            INVOKER_ARG_ARRAY_OFFSET,
-        );
-        emit_invoker_exception_boundary_push(
-            emitter,
-            INVOKER_BOUNDARY_BASE_OFFSET,
-            &escape_label,
-        );
-        abi::load_at_offset(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 1),
-            INVOKER_ARG_ARRAY_OFFSET,
-        );
-        emit_saved_descriptor_entry_to_call_reg(emitter, call_reg);
-    } else {
-        emit_descriptor_entry_to_call_reg(emitter, call_reg);
-    }
+    abi::store_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 1),
+        INVOKER_ARG_ARRAY_OFFSET,
+    );
+    emit_invoker_exception_boundary_push(emitter, boundary_base_offset, &escape_label);
+    abi::load_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 1),
+        INVOKER_ARG_ARRAY_OFFSET,
+    );
+    emit_saved_descriptor_entry_to_call_reg(emitter, call_reg);
 
     let ret_ty = emit_loaded_array_callback_call(
         LoadedArraySource::ArgumentRegister(1),
@@ -201,23 +214,96 @@ fn emit_runtime_callable_invoker_impl(
         &mut ctx,
         data,
     );
-    emit_boxed_invoker_return(emitter, &ret_ty);
-    if catch_native_throws {
-        emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+    if invoker.date_serialize_finalize {
+        emit_date_serialize_invoker_return(emitter, invoker.captures, &ret_ty);
+    } else if invoker.owned_object_return {
+        emit_box_current_owned_value_as_mixed(emitter, &ret_ty.codegen_repr());
+    } else {
+        emit_boxed_invoker_return(emitter, &ret_ty);
     }
+    emit_invoker_exception_boundary_pop(emitter, boundary_base_offset);
     // Restore before tearing down the frame (and on the escape path below): the boxed
     // Mixed result travels in return registers, which these loads never touch.
     emit_invoker_callee_saved_restores(emitter);
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
-    if catch_native_throws {
-        emitter.label(&escape_label);
-        emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+    emitter.label(&escape_label);
+    emit_invoker_exception_boundary_pop(emitter, boundary_base_offset);
+    release_visible_argument_owners(
+        emitter,
+        &ctx.cleanup_types,
+        ctx.cleanup_types.len(),
+        ctx.cleanup_base_offset,
+    );
+    if return_null_on_throw {
         emit_null_invoker_result(emitter);
         emit_invoker_callee_saved_restores(emitter);
         abi::emit_frame_restore(emitter, frame_size);
         abi::emit_return(emitter);
+    } else {
+        abi::load_at_offset(
+            emitter,
+            abi::int_result_reg(emitter),
+            INVOKER_ARG_ARRAY_OFFSET,
+        );
+        abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
+        emit_invoker_callee_saved_restores(emitter);
+        abi::emit_frame_restore(emitter, frame_size);
+        abi::emit_jump(emitter, "__rt_throw_current");
     }
+}
+
+/// Finalizes a first-class internal DateTime `__serialize()` result through the shared owner boundary.
+///
+/// The instance receiver is capture slot zero. The raw call result remains in the native return
+/// register until both values are arranged for `__rt_date_serialize_finalize_mixed`, whose
+/// exception boundary owns every release and returns the one boxed Mixed owner expected by all
+/// descriptor invokers.
+fn emit_date_serialize_invoker_return(
+    emitter: &mut Emitter,
+    captures: &[(String, PhpType, bool)],
+    ret_ty: &PhpType,
+) {
+    let Some((capture_name, receiver_ty, by_ref)) = captures.first() else {
+        emit_boxed_invoker_return(emitter, ret_ty);
+        return;
+    };
+    if capture_name != "receiver"
+        || *by_ref
+        || !matches!(receiver_ty.codegen_repr(), PhpType::Object(_))
+        || !matches!(ret_ty.codegen_repr(), PhpType::Array(value) if value.codegen_repr() == PhpType::Mixed)
+    {
+        emit_boxed_invoker_return(emitter, ret_ty);
+        return;
+    }
+    let descriptor_reg = abi::symbol_scratch_reg(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(emitter, "x0");                                  // preserve the raw DateTime array/hash owner while loading capture zero
+            abi::load_at_offset(emitter, descriptor_reg, INVOKER_DESCRIPTOR_OFFSET);
+            callable_descriptor::emit_load_runtime_capture_to_result(
+                emitter,
+                descriptor_reg,
+                0,
+                receiver_ty,
+            );
+            emitter.instruction("mov x1, x0");                                  // move the captured DateTime receiver into the helper's second argument register
+            abi::emit_pop_reg(emitter, "x0");                                   // recover the raw DateTime array/hash owner as helper argument zero
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(emitter, "rax");                                 // preserve the raw DateTime array/hash owner while loading capture zero
+            abi::load_at_offset(emitter, descriptor_reg, INVOKER_DESCRIPTOR_OFFSET);
+            callable_descriptor::emit_load_runtime_capture_to_result(
+                emitter,
+                descriptor_reg,
+                0,
+                receiver_ty,
+            );
+            emitter.instruction("mov rsi, rax");                                // move the captured DateTime receiver into the helper's second argument register
+            abi::emit_pop_reg(emitter, "rdi");                                  // recover the raw DateTime array/hash owner as helper argument zero
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_date_serialize_finalize_mixed");
 }
 
 /// Boxes the callable target's return value into the invoker's uniform Mixed result.
@@ -254,19 +340,6 @@ fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
         return;
     }
     emit_box_current_value_as_mixed(emitter, &repr);
-}
-
-/// Loads the descriptor entry slot from the first invoker argument into `call_reg`.
-fn emit_descriptor_entry_to_call_reg(emitter: &mut Emitter, call_reg: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, x0", call_reg));              // keep descriptor while loading its native entry
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, rdi", call_reg));             // keep descriptor while loading its native entry
-        }
-    }
-    callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
 }
 
 /// Loads the saved descriptor entry slot into `call_reg` after a `setjmp` boundary.
@@ -689,8 +762,9 @@ fn emit_loaded_indexed_array_callback_call(
     }
 
     // -- append hidden capture arguments and dispatch to the callable entry --
+    let visible_arg_count = arg_types.len();
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, visible_arg_count, sig, emitter, ctx);
     sig.return_type.clone()
 }
 
@@ -801,8 +875,9 @@ fn emit_loaded_assoc_array_callback_call(
     }
 
     // -- append hidden capture arguments and dispatch to the callable entry --
+    let visible_arg_count = arg_types.len();
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, visible_arg_count, sig, emitter, ctx);
     sig.return_type.clone()
 }
 
@@ -1142,20 +1217,7 @@ fn push_loaded_invoker_ref_cell_value_arg(
     data: &mut DataSection,
 ) -> PhpType {
     emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter, ctx);
-    let release_mixed_after_coerce = target_ty.is_some_and(|target_ty| {
-        !matches!(target_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-            && can_coerce_result_to_type(&PhpType::Mixed, target_ty)
-    });
-    if release_mixed_after_coerce {
-        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-    }
-    let (pushed_ty, _boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
-    if release_mixed_after_coerce {
-        release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
-    }
-    abi::emit_push_result_value(emitter, &pushed_ty);
-    pushed_ty
+    push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data)
 }
 
 /// Boxes the value referenced by an invoker marker into an owned Mixed cell.
@@ -1629,6 +1691,14 @@ fn push_materialized_mixed_hash_value_arg(
     }
     let (pushed_ty, _boxed_to_mixed) =
         coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
+    // Unboxing borrows the heap child; argument cleanup owns a separate reference.
+    // Acquire it before releasing a temporary source box. An unchanged borrowed
+    // Mixed cell also needs its own reference, whereas a fresh source box transfers.
+    if matches!(pushed_ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_))
+        || (pushed_ty == PhpType::Mixed && !release_source_mixed_after_coerce)
+    {
+        abi::emit_incref_if_refcounted(emitter, &pushed_ty);
+    }
     if release_mixed_after_coerce {
         release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
     }
@@ -1847,6 +1917,10 @@ fn emit_float_literal_to_result(emitter: &mut Emitter, data: &mut DataSection, v
 
 /// Emits a null default into result registers for the target storage shape.
 fn emit_null_default_to_result(emitter: &mut Emitter, target_ty: Option<&PhpType>) -> PhpType {
+    if target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::TaggedScalar) {
+        crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+        return PhpType::TaggedScalar;
+    }
     if target_ty.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))) {
         let tag_reg = abi::int_result_reg(emitter);
         let lo_reg = abi::secondary_scratch_reg(emitter);
@@ -1947,6 +2021,10 @@ fn coerce_result_to_type(
     if source_ty == target_ty {
         return;
     }
+    if target_ty.codegen_repr() == PhpType::TaggedScalar {
+        nullable_args::coerce_to_tagged_scalar(emitter, ctx, data, source_ty);
+        return;
+    }
     if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         match target_ty.codegen_repr() {
             PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) => {
@@ -1991,6 +2069,11 @@ fn coerce_result_to_type(
 fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
     if source_ty == target_ty {
         return true;
+    }
+    if target_ty.codegen_repr() == PhpType::TaggedScalar {
+        return matches!(source_ty.codegen_repr(),
+            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+            | PhpType::Mixed | PhpType::Void | PhpType::Never | PhpType::TaggedScalar);
     }
     if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return matches!(
@@ -2044,12 +2127,14 @@ fn coerce_to_string(
 fn emit_bool_to_string(emitter: &mut Emitter, ctx: &mut InvokerEmitContext) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("cbz x0, 1f");                                  // false skips itoa and renders as the empty string
+            let false_label = emitter.unique_local_label("bool_to_str_false");
+            let done_label = emitter.unique_local_label("bool_to_str_done");
+            emitter.instruction(&format!("cbz x0, {}", false_label));           // false skips itoa and renders as the empty string
             abi::emit_call_label(emitter, "__rt_itoa");
-            emitter.instruction("b 2f");                                        // skip the false arm after rendering "1"
-            emitter.raw("1:");
+            emitter.instruction(&format!("b {}", done_label));                  // skip the false arm after rendering "1"
+            emitter.label(&false_label);
             emitter.instruction("mov x2, #0");                                  // empty string result: zero length is enough
-            emitter.raw("2:");
+            emitter.label(&done_label);
         }
         Arch::X86_64 => {
             let false_label = ctx.next_label("bool_to_str_false");
@@ -2085,6 +2170,11 @@ fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, pushed_ty: 
 /// Restores a pushed result value after releasing another value.
 fn restore_pushed_value_after_release(emitter: &mut Emitter, pushed_ty: &PhpType) {
     match pushed_ty.codegen_repr() {
+        PhpType::TaggedScalar => {
+            let payload = abi::int_result_reg(emitter);
+            let tag = crate::codegen::sentinels::tagged_scalar_tag_reg(emitter);
+            abi::emit_pop_reg_pair(emitter, payload, tag);
+        }
         PhpType::Float => abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter)),
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
@@ -2130,15 +2220,93 @@ fn push_descriptor_captures_as_hidden_args(
 fn call_target_with_pushed_args(
     call_reg: &str,
     arg_types: &[PhpType],
+    visible_arg_count: usize,
     sig: &FunctionSig,
     emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
 ) {
+    ctx.cleanup_types = arg_types[..visible_arg_count].to_vec();
+    preserve_visible_argument_owners(
+        emitter,
+        arg_types,
+        visible_arg_count,
+        ctx.cleanup_base_offset,
+    );
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
     save_concat_offset_before_nested_call(emitter);
     abi::emit_call_reg(emitter, call_reg);
     restore_concat_offset_after_nested_call(emitter, &sig.return_type);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
+    abi::emit_preserve_return_value(emitter, &sig.return_type, ctx.return_offset);
+    release_visible_argument_owners(
+        emitter,
+        arg_types,
+        visible_arg_count,
+        ctx.cleanup_base_offset,
+    );
+    abi::emit_restore_return_value(emitter, &sig.return_type, ctx.return_offset);
+}
+
+/// Copies caller-owned visible arguments from the evaluation stack into fixed invoker slots.
+fn preserve_visible_argument_owners(
+    emitter: &mut Emitter,
+    arg_types: &[PhpType],
+    visible_arg_count: usize,
+    cleanup_base_offset: usize,
+) {
+    let slot_sizes = arg_types
+        .iter()
+        .map(|ty| match ty.codegen_repr() {
+            PhpType::Void | PhpType::Never => 0,
+            _ => 16,
+        })
+        .collect::<Vec<_>>();
+    let mut temp_offsets = vec![0usize; arg_types.len()];
+    let mut running = 0usize;
+    for index in (0..arg_types.len()).rev() {
+        temp_offsets[index] = running;
+        running += slot_sizes[index];
+    }
+    let scratch = abi::secondary_scratch_reg(emitter);
+    for (index, ty) in arg_types.iter().take(visible_arg_count).enumerate() {
+        if !invoker_argument_needs_owner_cleanup(ty) {
+            continue;
+        }
+        abi::emit_load_temporary_stack_slot(emitter, scratch, temp_offsets[index]);
+        abi::store_at_offset(emitter, scratch, cleanup_base_offset + index * 16);
+    }
+}
+
+/// Releases caller-owned visible arguments after the descriptor target has returned.
+fn release_visible_argument_owners(
+    emitter: &mut Emitter,
+    arg_types: &[PhpType],
+    visible_arg_count: usize,
+    cleanup_base_offset: usize,
+) {
+    for (index, ty) in arg_types.iter().take(visible_arg_count).enumerate() {
+        if !invoker_argument_needs_owner_cleanup(ty) {
+            continue;
+        }
+        abi::load_at_offset(
+            emitter,
+            abi::int_result_reg(emitter),
+            cleanup_base_offset + index * 16,
+        );
+        if matches!(ty.codegen_repr(), PhpType::Str) {
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_decref_if_refcounted(emitter, ty);
+        }
+    }
+}
+
+/// Reports whether a visible descriptor argument carries a caller-owned heap reference.
+fn invoker_argument_needs_owner_cleanup(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+        || ty.codegen_repr().is_refcounted()
+        || matches!(ty.codegen_repr(), PhpType::Callable)
 }
 
 /// Saves the current concat offset before the nested callable target runs.
@@ -2590,6 +2758,7 @@ mod tests {
     /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
     #[test]
     fn arm64_invoker_boundary_uses_large_offset_frame_helpers() {
+        const INVOKER_BOUNDARY_BASE_OFFSET: usize = 320;
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
 
         emit_invoker_exception_boundary_push(

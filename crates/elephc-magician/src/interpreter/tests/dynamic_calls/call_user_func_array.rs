@@ -121,18 +121,25 @@ fn execute_program_call_user_func_array_releases_literal_callback_and_arg_array(
         "literal call argument array should be released after dispatch"
     );
 }
-/// Verifies `call_user_func_array` releases literal temporaries after a fatal dispatch.
+/// Unknown named arguments throw PHP Error while still releasing literal callback/argument temporaries.
 #[test]
-fn execute_program_call_user_func_array_releases_literal_temporaries_after_fatal() {
+fn execute_program_call_user_func_array_releases_literal_temporaries_after_named_argument_error() {
     let program =
         parse_fragment(br#"return call_user_func_array("strlen", ["unknown" => "abcd"]);"#)
             .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let result = execute_program(&program, &mut scope, &mut values);
+    let mut context = ElephcEvalContext::new();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
 
-    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+    let error = context.take_pending_throw().expect("PHP Error must remain catchable");
+    let class = values.object_class_name(error).unwrap();
+    assert_eq!(values.get(class), FakeValue::String("Error".into()));
+    let FakeValue::Object(properties) = values.get(error) else { panic!("expected Error object"); };
+    let message = FakeOps::object_property(&properties, "message").expect("Error message");
+    assert_eq!(values.get(message), FakeValue::String("Unknown named parameter $unknown".into()));
     assert!(
         values
             .releases

@@ -28,6 +28,8 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Float => PhpType::Float,
         TypeSpec::Str => PhpType::Str,
         TypeSpec::Bool => PhpType::Bool,
+        TypeSpec::False => PhpType::False,
+        TypeSpec::Union(members) => PhpType::Union(members.iter().map(type_spec_to_php).collect()),
         TypeSpec::Mixed => PhpType::Mixed,
         TypeSpec::Void => PhpType::Void,
         TypeSpec::Ptr => PhpType::Pointer(None),
@@ -89,6 +91,21 @@ mod tests {
     fn scalar_type_spec_converts() {
         assert_eq!(type_spec_to_php(&TypeSpec::Int), PhpType::Int);
         assert_eq!(type_spec_to_php(&TypeSpec::Str), PhpType::Str);
+    }
+
+    /// Public civil-time results use a boxed int|false union; raw helpers keep integer ABI.
+    #[test]
+    fn mktime_union_return_uses_boxed_representation() {
+        for name in ["mktime", "gmmktime"] {
+            let contract = elephc_builtin_contract::lookup(name).unwrap();
+            let ty = type_spec_to_php(&contract.returns);
+            assert_eq!(ty, PhpType::Union(vec![PhpType::Int, PhpType::False]));
+            assert_eq!(ty.codegen_repr(), PhpType::Mixed);
+        }
+        for name in ["__elephc_mktime_raw", "__elephc_gmmktime_raw"] {
+            let contract = elephc_builtin_contract::lookup(name).unwrap();
+            assert_eq!(type_spec_to_php(&contract.returns), PhpType::Int);
+        }
     }
 
     /// Verifies a null default lowers to the same Expr the legacy `null_lit()` helper produces.

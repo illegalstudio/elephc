@@ -22,6 +22,7 @@ pub(super) fn eval_const(
         EvalConst::Int(value) => values.int(*value),
         EvalConst::Float(value) => values.float(*value),
         EvalConst::String(value) => values.string(value),
+        EvalConst::ByteString(value) => values.string_bytes_value(value),
     }
 }
 
@@ -61,6 +62,13 @@ fn eval_predefined_constant(
     name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if name.trim_start_matches('\\').eq_ignore_ascii_case("E_STRICT")
+        && crate::eval_php_profile::eval_php_version_id() >= 80400
+    {
+        values.deprecated(
+            "\nDeprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed",
+        )?;
+    }
     let Some(value) = eval_predefined_constant_value(name) else {
         return Ok(None);
     };
@@ -106,7 +114,19 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
 /// linked into and the PHP profile it emulates, under the catalogued name.
 fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> {
     let is_macos = cfg!(target_os = "macos");
+    if let Some(value) = elephc_builtin_contract::locale_category_value(
+        name, cfg!(any(target_os = "macos", target_os = "ios")),
+    ) {
+        return Some(EvalPredefinedConstant::Int(value));
+    }
     Some(match name {
+        "E_ALL" => {
+            let id = crate::eval_php_profile::eval_php_version_id();
+            let profile = elephc_builtin_contract::PhpVersion::ALL.iter()
+                .copied().find(|profile| profile.version_id() == id)
+                .unwrap_or_default();
+            EvalPredefinedConstant::Int(profile.all_error_levels())
+        }
         "ICONV_IMPL" => EvalPredefinedConstant::String(elephc_iconv::implementation_name(is_macos)),
         "ICONV_VERSION" => EvalPredefinedConstant::String(elephc_iconv::ICONV_VERSION),
         "PHP_OS" => EvalPredefinedConstant::String(eval_php_os_name()),
@@ -121,8 +141,12 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         "PHP_MINOR_VERSION" => EvalPredefinedConstant::Int(
             crate::eval_php_profile::eval_php_minor_version(),
         ),
-        "PHP_RELEASE_VERSION" => EvalPredefinedConstant::Int(EVAL_PHP_RELEASE_VERSION),
-        "PHP_EXTRA_VERSION" => EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION),
+        "PHP_RELEASE_VERSION" => EvalPredefinedConstant::Int(
+            crate::eval_php_profile::eval_php_release_version(),
+        ),
+        "PHP_EXTRA_VERSION" => EvalPredefinedConstant::String(
+            crate::eval_php_profile::eval_php_extra_version(),
+        ),
         "PHP_SAPI" => EvalPredefinedConstant::String(EVAL_PHP_SAPI),
         "DIRECTORY_SEPARATOR" => EvalPredefinedConstant::String("/"),
         // Platform `fnmatch(3)` flag values; the fnmatch/glob builtins interpret the same bits.

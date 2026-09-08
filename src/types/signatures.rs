@@ -134,7 +134,8 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
 /// - first-class callable builtin sig construction
 /// - optimizer effect modeling for builtins
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
-    crate::builtins::registry::function_sig(name)
+    super::date_reflection_signatures::php_src_date_function_sig(name)
+        .or_else(|| crate::builtins::registry::function_sig(name))
         .or_else(|| compiler_resident_builtin_call_sig(name))
 }
 
@@ -156,6 +157,10 @@ fn compiler_resident_builtin_call_sig(name: &str) -> Option<FunctionSig> {
             PhpType::Void,
         )),
         "buffer_new" => Some(fixed(&["length"])),
+        "__elephc_new_instance_without_constructor" => Some(with_return_type(
+            fixed(&["class"]),
+            PhpType::Mixed,
+        )),
         _ => None,
     }
 }
@@ -174,7 +179,8 @@ fn with_return_type(mut signature: FunctionSig, return_type: PhpType) -> Functio
 /// Called from:
 /// - first-class callable lowering for builtin references
 pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
-    crate::builtins::registry::first_class_callable_sig(name)
+    super::date_reflection_signatures::php_src_date_function_sig(name)
+        .or_else(|| crate::builtins::registry::first_class_callable_sig(name))
 }
 
 /// Constructs a signature with all parameters required (no defaults).

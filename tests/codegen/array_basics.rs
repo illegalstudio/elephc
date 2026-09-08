@@ -181,6 +181,41 @@ fn test_array_push() {
     assert_eq!(out, "3 3");
 }
 
+/// Verifies `$array[]` materializes an indexed array when the local has no prior assignment.
+#[test]
+fn test_array_push_initializes_undefined_local() {
+    let out = compile_and_run(
+        "<?php $values[] = 'first'; $values[] = 'second'; echo count($values), '|', implode(',', $values);",
+    );
+    assert_eq!(out, "2|first,second");
+}
+
+/// Verifies indexed writes in a loop initialize an absent local once and retain prior iterations.
+#[test]
+fn test_array_index_write_initializes_undefined_local_in_loop() {
+    let out = compile_and_run(
+        "<?php for ($i = 0; $i < 3; $i++) { $values[$i] = $i + 10; } echo count($values), '|', $values[0], ',', $values[2];",
+    );
+    assert_eq!(out, "3|10,12");
+}
+
+/// Verifies the boxed-Mixed array setter reaches its null-safe runtime initializer before its
+/// by-reference marker probe when the first write occurs inside a loop.
+#[test]
+fn test_mixed_array_index_write_initializes_undefined_local_in_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$base = new DateTime("2024-01-01T00:00:00Z");
+for ($i = 0; $i < 2; $i++) {
+    $copy = clone $base;
+    $values[$i] = $copy->add(new DateInterval("P{$i}D"));
+}
+echo count($values), "|", $values[0]->format("Y-m-d"), ",", $values[1]->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "2|2024-01-01,2024-01-02");
+}
+
 /// Verifies array push builtin.
 #[test]
 fn test_array_push_builtin() {
@@ -1392,6 +1427,21 @@ echo (in_array("hello", $a) ? "y" : "n"),
 "#,
     );
     assert_eq!(out, "yyn");
+}
+
+/// Verifies a boxed Mixed needle scans boxed Mixed slots after the indexed-array header.
+#[test]
+fn test_in_array_mixed_needle_over_mixed_array_uses_element_payload() {
+    let out = compile_and_run(
+        r#"<?php
+$codes = ["??"];
+$row = ["country_code" => "AU", "latitude" => 1.5];
+echo in_array($row["country_code"], $codes) ? "bad" : "miss";
+array_push($codes, $row["country_code"]);
+echo "|", in_array($row["country_code"], $codes) ? "hit" : "bad";
+"#,
+    );
+    assert_eq!(out, "miss|hit");
 }
 
 /// Regression: the loop-widening prescan must not treat a variable defined only inside

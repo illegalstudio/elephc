@@ -11,6 +11,24 @@
 
 use crate::support::{compile_and_run, compile_and_run_capture};
 
+/// Verifies a pre-call type failure becomes a PHP TypeError without executing the callable body
+/// or leaking a Rust panic through the eval bridge.
+fn assert_uncaught_eval_type_error(label: &str, success: bool, stdout: &str, stderr: &str) {
+    assert!(!success, "{label}: expected an uncaught TypeError");
+    assert!(
+        stdout.contains("Fatal error: Uncaught TypeError:"),
+        "{label}: stdout did not contain the PHP TypeError: {stdout}"
+    );
+    assert!(!stdout.contains("bad"), "{label}: callable continued after TypeError: {stdout}");
+    assert!(
+        !stdout.contains("panicked at")
+            && !stdout.contains("thread '")
+            && !stderr.contains("panicked at")
+            && !stderr.contains("thread '"),
+        "{label}: output leaked a Rust panic: stdout={stdout:?} stderr={stderr:?}"
+    );
+}
+
 /// Verifies AOT function callables write back by-reference args before catchable throws.
 #[test]
 fn test_eval_aot_function_callables_write_back_by_ref_args_before_throw() {
@@ -137,21 +155,11 @@ echo "bad";');
 
     for (label, source) in cases {
         let out = compile_and_run_capture(source);
-        assert!(
-            !out.success,
-            "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
-            out.stdout, out.stderr
-        );
-        assert_eq!(out.stdout, "", "{label}: unexpected stdout");
-        assert!(
-            out.stderr.contains("Fatal error: eval() runtime failed"),
-            "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
-            out.stderr
-        );
-        assert!(
-            !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-            "{label}: stderr leaked a Rust panic: {}",
-            out.stderr
+        assert_uncaught_eval_type_error(
+            label,
+            out.success,
+            &out.stdout,
+            &out.stderr,
         );
     }
 }
@@ -312,22 +320,7 @@ echo "bad";');
 "#,
     );
 
-    assert!(
-        !out.success,
-        "expected eval runtime fatal, stdout={:?} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
-    assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
-    );
+    assert_uncaught_eval_type_error("instance method", out.success, &out.stdout, &out.stderr);
 }
 
 /// Verifies AOT static method argument-prep fatals restore the eval bridge frame.
@@ -350,22 +343,7 @@ echo "bad";');
 "#,
     );
 
-    assert!(
-        !out.success,
-        "expected eval runtime fatal, stdout={:?} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
-    assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
-    );
+    assert_uncaught_eval_type_error("static method", out.success, &out.stdout, &out.stderr);
 }
 
 /// Verifies AOT static method callable variants restore the eval bridge frame on prep fatal.
@@ -559,21 +537,11 @@ echo "bad";');
 
     for (label, source) in cases {
         let out = compile_and_run_capture(source);
-        assert!(
-            !out.success,
-            "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
-            out.stdout, out.stderr
-        );
-        assert_eq!(out.stdout, "", "{label}: unexpected stdout");
-        assert!(
-            out.stderr.contains("Fatal error: eval() runtime failed"),
-            "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
-            out.stderr
-        );
-        assert!(
-            !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-            "{label}: stderr leaked a Rust panic: {}",
-            out.stderr
+        assert_uncaught_eval_type_error(
+            label,
+            out.success,
+            &out.stdout,
+            &out.stderr,
         );
     }
 }
@@ -599,21 +567,11 @@ echo "bad";');
 "#,
     );
 
-    assert!(
-        !out.success,
-        "expected eval runtime fatal, stdout={:?} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
-    assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
+    assert_uncaught_eval_type_error(
+        "first-class method",
+        out.success,
+        &out.stdout,
+        &out.stderr,
     );
 }
 
@@ -638,21 +596,11 @@ echo "bad";');
 "#,
     );
 
-    assert!(
-        !out.success,
-        "expected eval runtime fatal, stdout={:?} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
-    assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
+    assert_uncaught_eval_type_error(
+        "Closure::fromCallable method",
+        out.success,
+        &out.stdout,
+        &out.stderr,
     );
 }
 

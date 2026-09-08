@@ -34,8 +34,20 @@ pub fn emit_array_ensure_unique(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_ensure_unique ---");
     emitter.label_global("__rt_array_ensure_unique");
 
-    // -- null and sentinel-null arrays are already trivially unique --
-    emitter.instruction("cbz x0, __rt_array_ensure_unique_done");               // null inputs do not need copy-on-write splitting
+    // -- materialize an empty array for a write through an uninitialized PHP local --
+    emitter.instruction("cbnz x0, __rt_array_ensure_unique_non_null");           // existing indexed arrays continue to the copy-on-write check
+    emitter.instruction("sub sp, sp, #32");                                     // reserve an aligned frame for the allocation call
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve the caller frame and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
+    emitter.instruction("mov x0, #4");                                          // allocate the standard initial four-element capacity
+    emitter.instruction("mov x1, #16");                                         // reserve the widest indexed payload slots; first write specializes metadata
+    emitter.instruction("bl __rt_array_new");                                   // materialize PHP's implicit [] for the write context
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the allocation frame
+    emitter.instruction("ret");                                                 // return the newly allocated unique indexed array
+    emitter.label("__rt_array_ensure_unique_non_null");
+
+    // -- sentinel-null arrays are already trivially unique --
     crate::codegen_support::abi::emit_load_int_immediate(
         emitter,
         "x9",
@@ -81,8 +93,16 @@ fn emit_array_ensure_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_ensure_unique");
 
     emitter.instruction("mov rax, rdi");                                        // default to returning the original indexed-array pointer when no copy-on-write split is needed
-    emitter.instruction("test rdi, rdi");                                       // null indexed-array pointers are already trivially unique
-    emitter.instruction("je __rt_array_ensure_unique_done");                    // return immediately for null inputs without touching heap metadata
+    emitter.instruction("test rdi, rdi");                                       // does this write target an uninitialized PHP local?
+    emitter.instruction("jne __rt_array_ensure_unique_non_null");               // existing indexed arrays continue to the copy-on-write check
+    emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a frame for the allocation call
+    emitter.instruction("mov rdi, 4");                                          // allocate the standard initial four-element capacity
+    emitter.instruction("mov rsi, 16");                                         // reserve the widest indexed payload slots; first write specializes metadata
+    emitter.instruction("call __rt_array_new");                                 // materialize PHP's implicit [] for the write context
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the newly allocated unique indexed array
+    emitter.label("__rt_array_ensure_unique_non_null");
     crate::codegen_support::abi::emit_load_int_immediate(
         emitter,
         "r10",

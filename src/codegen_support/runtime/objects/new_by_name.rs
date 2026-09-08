@@ -112,6 +112,21 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("b __rt_nbn_zero");                                     // continue zeroing
 
     emitter.label("__rt_nbn_done");
+    // Constructor-free allocation must initialize the dynamic-property tail too.
+    emitter.instruction("ldr x12, [sp, #32]");                                  // recover the concrete class id
+    abi::emit_symbol_address(emitter, "x10", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x10, [x10, x12, lsl #3]");                         // does this layout include a dynamic-property hash?
+    emitter.instruction("cbz x10, __rt_nbn_dynamic_ready");                     // layouts without a tail need no hash allocation
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve the object across hash allocation
+    emitter.instruction("mov x0, #4");                                          // match direct object allocation's initial hash capacity
+    emitter.instruction("mov x1, #7");                                          // dynamic-property values are boxed Mixed cells
+    emitter.instruction("bl __rt_hash_new");                                    // create the owned dynamic-property table
+    emitter.instruction("ldr x9, [sp, #16]");                                   // recover the object payload
+    emitter.instruction("ldr x10, [sp, #40]");                                  // recover its complete payload size
+    emitter.instruction("sub x10, x10, #8");                                    // locate the dynamic-property tail slot
+    emitter.instruction("str x0, [x9, x10]");                                   // transfer the hash into the object
+    emitter.instruction("mov x0, x9");                                          // restore the allocated object result
+    emitter.label("__rt_nbn_dynamic_ready");
     // -- run the per-class property-default thunk, if this class has one --
     emitter.instruction("ldr x12, [sp, #32]");                                  // reload the matched class_id
     abi::emit_symbol_address(emitter, "x10", "_class_propinit_ptrs");
@@ -193,10 +208,8 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_nbn_generic_alloc_x86");
     emitter.instruction("mov rax, rdx");                                        // allocation size
     emitter.instruction("call __rt_heap_alloc");                                // rax = object pointer
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    )); // object heap-kind word with the x86_64 marker
+    let object_kind = crate::codegen_support::sentinels::x86_64_heap_kind_word(4);
+    emitter.instruction(&format!("mov r10, 0x{object_kind:x}"));                // object heap-kind word with the x86_64 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload class_id
@@ -213,6 +226,22 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_nbn_zero_x86");                               // continue zeroing
 
     emitter.label("__rt_nbn_done_x86");
+    // Constructor-free allocation must initialize the dynamic-property tail too.
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // recover the concrete class id
+    abi::emit_symbol_address(emitter, "r10", "_class_object_dynamic_prop_flags");
+    emitter.instruction("mov r10, QWORD PTR [r10 + rcx*8]");                    // does this layout include a dynamic-property hash?
+    emitter.instruction("test r10, r10");                                       // inspect the dynamic-tail flag
+    emitter.instruction("jz __rt_nbn_dynamic_ready_x86");                       // layouts without a tail need no hash allocation
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the object across hash allocation
+    emitter.instruction("mov edi, 4");                                          // match direct object allocation's initial hash capacity
+    emitter.instruction("mov esi, 7");                                          // dynamic-property values are boxed Mixed cells
+    emitter.instruction("call __rt_hash_new");                                  // create the owned dynamic-property table
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // recover the object payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // recover its complete payload size
+    emitter.instruction("sub r10, 8");                                          // locate the dynamic-property tail slot
+    emitter.instruction("mov QWORD PTR [r9 + r10], rax");                       // transfer the hash into the object
+    emitter.instruction("mov rax, r9");                                         // restore the allocated object result
+    emitter.label("__rt_nbn_dynamic_ready_x86");
     // -- run the per-class property-default thunk, if this class has one --
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the matched class_id
     abi::emit_symbol_address(emitter, "r10", "_class_propinit_ptrs"); // property-init thunk table base

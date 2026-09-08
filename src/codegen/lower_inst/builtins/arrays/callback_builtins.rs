@@ -474,6 +474,12 @@ pub(super) fn lower_in_array_with_mode(
         InArrayCase::BoolNeedleStringArray => {
             lower_in_array_bool_needle_string_array(ctx, needle, array)?
         }
+        InArrayCase::MixedNeedleStringExact => {
+            lower_in_array_mixed_needle_string_array(ctx, needle, array, "__rt_str_eq")?
+        }
+        InArrayCase::MixedNeedleStringLoose => {
+            lower_in_array_mixed_needle_string_array(ctx, needle, array, "__rt_str_loose_eq")?
+        }
         InArrayCase::MixedIntExact => lower_in_array_mixed_int(ctx, needle, array, true)?,
         InArrayCase::MixedIntLoose => lower_in_array_mixed_int(ctx, needle, array, false)?,
         InArrayCase::MixedStringExact => {
@@ -482,7 +488,12 @@ pub(super) fn lower_in_array_with_mode(
         InArrayCase::MixedStringLoose => {
             lower_in_array_mixed_string(ctx, needle, array, "__rt_str_loose_eq")?
         }
+        InArrayCase::MixedMixedExact => {
+            lower_in_array_mixed_mixed(ctx, needle, array, InArrayMode::Strict)?
+        }
+        InArrayCase::MixedMixedLoose => {
+            lower_in_array_mixed_mixed(ctx, needle, array, InArrayMode::Loose)?
+        }
     }
     Ok(())
 }
-

@@ -34,6 +34,19 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_method_call_result_with_ownership(object, method_name, evaluated_args, context, values, &mut false)
+}
+
+/// Preserves a proven native result owner without changing dynamic or magic-method dispatch.
+pub(in crate::interpreter) fn eval_method_call_result_with_ownership(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    owned: &mut bool,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    *owned = false;
     let Ok(identity) = values.object_identity(object) else {
         let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
         return values.method_call(object, method_name, evaluated_args);
@@ -480,14 +493,18 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
                 }
             }
         }
-        return eval_native_method_with_evaluated_args(
+        let result = eval_native_method_result_bridge_scope(
             object,
             &class_name,
             method_name,
             evaluated_args,
+            None,
+            None,
             context,
             values,
-        );
+        )?;
+        *owned = result.owned;
+        return Ok(result.value);
     };
     let called_class_name = class.name().to_string();
     if eval_enum_static_builtin_applies(&called_class_name, method_name, context).is_some() {
@@ -539,7 +556,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
                     values,
                 )?
             {
-                return eval_native_method_with_evaluated_args_bridge_scope(
+                let result = eval_native_method_result_bridge_scope(
                     object,
                     &parent,
                     method_name,
@@ -548,17 +565,23 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
                     Some(&called_class_name),
                     context,
                     values,
-                );
+                )?;
+                *owned = result.owned;
+                return Ok(result.value);
             }
             if eval_native_instance_magic_method_available(&parent, context, values)? {
-                return eval_native_method_with_evaluated_args(
+                let result = eval_native_method_result_bridge_scope(
                     object,
                     &parent,
                     method_name,
                     evaluated_args,
+                    None,
+                    None,
                     context,
                     values,
-                );
+                )?;
+                *owned = result.owned;
+                return Ok(result.value);
             }
         }
     }
@@ -705,6 +728,7 @@ pub(super) fn eval_closure_object_method_result(
                 called_class,
                 native_class,
                 bridge_scope,
+                owns_receiver: false,
             };
             eval_evaluated_callable_with_by_value_call_args(
                 &callable, call_args, context, values,
@@ -766,6 +790,7 @@ pub(super) fn eval_closure_object_invoke_result(
             called_class,
             native_class,
             bridge_scope,
+            owns_receiver: false,
         },
         EvalClosureObjectTarget::StaticMethod {
             class_name,

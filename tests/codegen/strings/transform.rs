@@ -65,6 +65,13 @@ fn test_str_repeat() {
     assert_eq!(out, "ababab");
 }
 
+/// Verifies `str_repeat()` applies PHP's weak scalar-to-string coercion to its first argument.
+#[test]
+fn test_str_repeat_coerces_integer_source_to_string() {
+    let out = compile_and_run(r#"<?php echo str_repeat(7, 3);"#);
+    assert_eq!(out, "777");
+}
+
 /// Verifies str_repeat handles large results that exceed the small-string inline buffer threshold (32768+ bytes), confirming the result is heap-allocated and its reported length is correct.
 #[test]
 fn test_str_repeat_large_heap_backed_result() {

@@ -262,7 +262,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_callable_expr(
 }
 
 /// Validates and builds the retained target for a static-method first-class callable.
-fn eval_static_method_callable_target(
+pub(in crate::interpreter) fn eval_static_method_callable_target(
     dispatch_class: String,
     method_name: String,
     called_class: Option<String>,

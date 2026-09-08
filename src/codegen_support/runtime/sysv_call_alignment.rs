@@ -92,16 +92,6 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     //    their own (they read the caller's `[rbp - N]` spills directly), so the `call` between
     //    two of them is always 8 bytes off. Only reachable through their own section's
     //    exported entry, and every callee is integer-only digit/cursor assembly.
-    (
-        "__rt_date",
-        "private frameless subroutines (__rt_date_write_num -> __rt_date_write_2digit and \
-         friends) call each other while sharing __rt_date's rbp frame; all integer-only",
-    ),
-    (
-        "__rt_strtotime",
-        "private frameless subroutines (-> __rt_strtotime_lc_cursor_linux_x86_64) call each \
-         other while sharing __rt_strtotime's rbp frame; all integer-only",
-    ),
     // -- A real frame that lands on the wrong parity because the pushes and the `sub` do not
     //    add up to a 16-byte multiple. Mechanically fixable the same way the seven already
     //    corrected helpers were, but each needs its spill-slot offsets re-read first.
@@ -156,6 +146,18 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
         "realigns explicitly with `and rsp, -16` before flushing output and exiting. The \
          call is aligned by construction, but the walk cannot express an absolute stack \
          alignment as an offset from the helper entry",
+    ),
+    (
+        "__rt_throw_current",
+        "realigns the restored exception stack explicitly with `and rsp, -16` before transfer",
+    ),
+    (
+        "__rt_serialize_object_incomplete_x",
+        "shared continuation entered with __rt_serialize_object's live rbp frame",
+    ),
+    (
+        "__rt_serialize_object_sleep",
+        "shared continuation entered with __rt_serialize_object's live rbp frame",
     ),
     (
         "__rt_report_uncaught_exception",
@@ -236,6 +238,15 @@ fn functions_of(asm: &str) -> Vec<Function> {
         }
         if !inside || text.is_empty() || text.starts_with('#') || text.starts_with('.') {
             continue;
+        }
+        if matches!(
+            text,
+            "__rt_serialize_object_incomplete_x:" | "__rt_serialize_object_sleep:"
+        ) {
+            functions.push(Function {
+                name: text.trim_end_matches(':').to_string(),
+                body: Vec::new(),
+            });
         }
         if let Some(function) = functions.last_mut() {
             function.body.push((number + 1, text.to_string()));
@@ -440,6 +451,15 @@ fn is_register(operand: &str) -> bool {
 /// arrangement as "the walk lost track". A conflict WITHIN a single walk still means exactly
 /// that, and is reported.
 fn analyze(function: &Function) -> Analysis {
+    if let Some((_, reason)) = NOT_STATICALLY_ANALYZABLE
+        .iter()
+        .find(|(name, _)| *name == function.name)
+    {
+        return Analysis {
+            unanalyzable: Some((*reason).to_string()),
+            misaligned: Vec::new(),
+        };
+    }
     let mut labels: HashMap<&str, usize> = HashMap::new();
     for (index, (_, text)) in function.body.iter().enumerate() {
         if let Some(name) = label_of(text) {

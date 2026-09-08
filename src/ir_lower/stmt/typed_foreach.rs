@@ -106,6 +106,26 @@ pub(super) fn lower_foreach(
     let source = retain_object_foreach_source(ctx, source, array.span);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
+    if is_dateperiod_foreach_value(ctx, &source_php_ty) {
+        let method_name = if value_by_ref {
+            "__elephc_assert_foreach_by_reference"
+        } else {
+            "__elephc_assert_iterable_initialized"
+        };
+        let method = ctx.intern_string(method_name);
+        ctx.emit_value(
+            Op::MethodCall,
+            vec![source.value],
+            Some(Immediate::Data(method)),
+            PhpType::Void,
+            Op::MethodCall.default_effects(),
+            Some(array.span),
+        );
+        if value_by_ref {
+            ctx.builder.terminate(Terminator::Unreachable);
+            return;
+        }
+    }
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
     let value_needs_null_init = !ctx.local_slots.contains_key(value_var);
     // A foreach over a concretely-indexed array (`Array` of a non-Mixed element
@@ -140,7 +160,7 @@ pub(super) fn lower_foreach(
         .then(|| pin_by_ref_foreach_borrowed_source(ctx, source, array.span))
         .flatten();
     if let Some(key_var) = key_var {
-        initialize_foreach_mixed_local_if_needed(ctx, key_var, key_needs_null_init, array.span);
+        initialize_foreach_mixed_local_if_needed(ctx, key_var, key_needs_null_init);
     }
     if value_by_ref {
         let value_ty = foreach_ref_value_type(&source_ty);
@@ -159,7 +179,6 @@ pub(super) fn lower_foreach(
                 ctx,
                 value_var,
                 value_needs_null_init,
-                array.span,
             );
         } else if value_needs_null_init {
             ctx.declare_local(value_var, value_ty.clone());
@@ -258,6 +277,31 @@ pub(super) fn lower_foreach(
     }
 }
 
+/// Returns true when a foreach source is a concrete `DatePeriod` or descendant.
+///
+/// The explicit preflight keeps the initialization exception inside the active EIR try region;
+/// the generic runtime `IterStart` dispatch cannot otherwise transfer an exception thrown by its
+/// implicit `IteratorAggregate::getIterator()` call to the surrounding catch block.
+fn is_dateperiod_foreach_value(
+    ctx: &LoweringContext<'_, '_>,
+    source_type: &PhpType,
+) -> bool {
+    let PhpType::Object(class_name) = source_type else {
+        return false;
+    };
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(name) = current {
+        if name == "DatePeriod" {
+            return true;
+        }
+        current = ctx
+            .classes
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
+}
+
 /// Lowers the `foreach` source expression under the loop's binding mode.
 ///
 /// A by-value loop iterates a copy, so it keeps the ordinary retaining read: the extra
@@ -351,24 +395,22 @@ pub(super) fn foreach_ref_value_type(source_ty: &PhpType) -> PhpType {
     }
 }
 
-/// Initializes a fresh foreach loop variable to boxed null before the first iteration.
+/// Declares a fresh mixed foreach variable without overwriting it at runtime.
+///
+/// The frame prologue zero-initializes cleanup-tracked Mixed slots, which is the
+/// uninitialized/null sentinel before the first assignment. Avoiding a synthetic
+/// store here is essential when the same foreach statement executes repeatedly:
+/// PHP preserves the previous loop value when a later iterable is empty.
 pub(super) fn initialize_foreach_mixed_local_if_needed(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     needs_init: bool,
-    span: Span,
 ) {
     if !needs_init {
         return;
     }
-    // This setup can run once per outer-loop iteration at runtime, overwriting
-    // the loop variable. `store_local` owns the carried release: it frees the
-    // previous runtime occupant when this synthetic store is loop-carried.
     ctx.declare_local(name, PhpType::Mixed);
     ctx.set_local_type(name, PhpType::Mixed);
-    let null = emit_null_value(ctx, Some(span));
-    let boxed = ctx.box_value_as_mixed(null, PhpType::Mixed, Some(span));
-    ctx.store_foreach_initializer_local_only(name, boxed, PhpType::Mixed, Some(span));
 }
 
 /// Takes the loop's own reference on an object `foreach` source.

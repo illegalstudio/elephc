@@ -30,6 +30,11 @@ use crate::parser::ast::{CallableTarget, CastType, Expr, ExprKind, StaticReceive
 use crate::names::Name;
 use crate::types::PhpType;
 
+/// Identifies by-value object arguments that require a runtime class/interface guard.
+pub(crate) fn requires_object_argument_guard(expected: &PhpType, actual: &PhpType) -> bool {
+    matches!(expected, PhpType::Object(_)) && *actual == PhpType::Mixed
+}
+
 /// How a declared parameter binds an argument whose type does not already match.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ParamBinding {
@@ -72,10 +77,18 @@ pub(crate) fn classify_param_binding(
     if expected == actual {
         return ParamBinding::Identity;
     }
+    if let Some(inner @ PhpType::Int) = nullable_scalar_member(expected) {
+        if *actual == PhpType::Void {
+            return ParamBinding::Identity;
+        }
+        return classify_param_binding(inner, actual, arg);
+    }
     if *expected == PhpType::Callable {
         return classify_callable_string_binding(actual, arg);
     }
     match (expected.codegen_repr(), actual.codegen_repr()) {
+        (PhpType::Int, PhpType::Bool) => ParamBinding::Cast(CastType::Int),
+        (PhpType::Bool, PhpType::Int) => ParamBinding::Cast(CastType::Bool),
         // `string $s` accepts every other scalar. `(string)` is total for int, float and
         // bool, produces no PHP notice, and elephc's cast already matches PHP byte for byte
         // (including `(string)false === ""` and float precision).
@@ -119,12 +132,20 @@ impl StrictScalar {
     }
 }
 
-/// Classifies a declared type as one of PHP's scalar type declarations, or `None` when strict
-/// mode has nothing to say about it.
-///
-/// The *declared* type is inspected rather than `codegen_repr()`, which would flatten a union to
-/// `Mixed` and a resource to `Int` and so invent scalar identities strict mode must not judge.
+/// Extracts the scalar member of a nullable declaration without treating general unions as scalars.
+fn nullable_scalar_member(ty: &PhpType) -> Option<&PhpType> {
+    let PhpType::Union(members) = ty else { return None; };
+    if members.len() != 2 || !members.contains(&PhpType::Void) {
+        return None;
+    }
+    members.iter().find(|member| matches!(member,
+        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False))
+}
+
+/// Returns the scalar kind compared by strict parameter binding, unwrapping nullability.
+/// Uses declared types, not codegen representations, so resources are not mistaken for integers.
 fn strict_scalar_kind(ty: &PhpType) -> Option<StrictScalar> {
+    let ty = nullable_scalar_member(ty).unwrap_or(ty);
     match ty {
         PhpType::Int => Some(StrictScalar::Int),
         PhpType::Float => Some(StrictScalar::Float),
@@ -465,6 +486,20 @@ pub(crate) fn scalar_param_cast(expected: &PhpType, actual: &PhpType) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Nullable integer binding retains null and applies the same weak/strict scalar rules.
+    #[test]
+    fn nullable_integer_binding_keeps_null_and_scalar_policy() {
+        let nullable = PhpType::Union(vec![PhpType::Int, PhpType::Void]);
+        let argument = Expr::new(ExprKind::FloatLiteral(23.0), crate::span::Span::dummy());
+        assert!(matches!(classify_param_binding(&nullable, &PhpType::Float, &argument),
+            ParamBinding::Const(ExprKind::IntLiteral(23))));
+        let null = Expr::new(ExprKind::Null, crate::span::Span::dummy());
+        assert!(matches!(classify_param_binding(&nullable, &PhpType::Void, &null), ParamBinding::Identity));
+        assert!(strict_param_binding_rejection(&nullable, &PhpType::Float).is_some());
+        assert!(strict_param_binding_rejection(&nullable, &PhpType::Void).is_none());
+        assert!(strict_param_binding_rejection(&nullable, &PhpType::Int).is_none());
+    }
 
     /// Builds a string-literal argument expression for the binding classifiers.
     fn string_arg(text: &str) -> Expr {

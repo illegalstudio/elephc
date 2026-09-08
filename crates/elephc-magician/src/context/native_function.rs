@@ -12,6 +12,7 @@ use super::*;
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
+    pub(super) name: String,
     pub(super) descriptor: *mut c_void,
     pub(super) invoker: NativeFunctionInvoker,
     pub(super) param_count: usize,
@@ -32,6 +33,7 @@ impl NativeFunction {
         param_count: usize,
     ) -> Self {
         Self {
+            name: String::from("{callable}"),
             descriptor,
             invoker,
             param_count,
@@ -43,6 +45,16 @@ impl NativeFunction {
             return_type: None,
             bridge_supported: true,
         }
+    }
+
+    /// Records the PHP-visible callable identity used by diagnostics.
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        self.name = name.into();
+    }
+
+    /// Returns the PHP-visible callable identity used by diagnostics.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Returns the visible positional parameter count accepted by this callback.

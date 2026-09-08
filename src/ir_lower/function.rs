@@ -20,8 +20,8 @@ use crate::ir_lower::context::{
 use crate::ir_lower::effects_lookup;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    AttributeGroup, BinOp, CastType, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind,
-    TypeExpr,
+    AttributeGroup, BinOp, CastType, ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt,
+    StmtKind, TypeExpr,
 };
 use crate::names::Name;
 use crate::span::Span;
@@ -82,7 +82,7 @@ pub(crate) fn lower_main(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -204,7 +204,7 @@ pub(crate) fn lower_user_function(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -260,6 +260,9 @@ pub(crate) fn lower_class_method(
         is_method: true,
         is_static,
         by_ref_return: signature.by_ref_return,
+        is_date_serialize_method: !is_static
+            && !signature.by_ref_return
+            && is_date_serialize_method(class_name, method_name, &module.class_infos),
         ..FunctionFlags::default()
     };
     function.source_signature = Some(source_signature(&name, &signature));
@@ -310,7 +313,7 @@ pub(crate) fn lower_class_method(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -329,6 +332,35 @@ pub(crate) fn lower_class_method(
     );
     add_closures(module, closures);
     module.class_methods.push(function);
+}
+
+/// Returns whether one instance method belongs to the DateTime serialization family.
+///
+/// The flag covers builtin methods and user overrides on descendants. The returned payload may be
+/// either indexed or associative, but only an associative source needs the typed hash-to-array
+/// owner transfer; the EIR validator uses this flag to reject that transfer in unrelated methods.
+fn is_date_serialize_method(
+    class_name: &str,
+    method_name: &str,
+    classes: &std::collections::HashMap<String, ClassInfo>,
+) -> bool {
+    if php_symbol_key(method_name) != "__serialize" {
+        return false;
+    }
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(candidate) = current {
+        if matches!(
+            candidate,
+            "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+        ) {
+            return true;
+        }
+        current = classes
+            .get(candidate)
+            .and_then(|class_info| class_info.parent.as_deref())
+            .map(|name| name.trim_start_matches('\\'));
+    }
+    false
 }
 
 /// Returns the local-binding decision maps an eval-AOT fragment lowers against: all three EMPTY.
@@ -406,7 +438,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &bind_kill_sites,
         &retype_sites,
         &mixed_storage_store_sites,
@@ -517,7 +549,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &bind_kill_sites,
         &retype_sites,
         &mixed_storage_store_sites,
@@ -572,7 +604,14 @@ pub(crate) fn lower_property_init_thunk(
         return;
     }
     let web = module.web;
-    let body = property_init_body(class_info);
+    // By-name allocation already zeroes compact Throwable fields. Keep a thunk
+    // so runtime metadata retains declared defaults, but do not allocate generic
+    // trace/previous property owners that compact construction would overwrite.
+    let body = if crate::types::builtin_classes::is_compact_throwable_class(class_name) {
+        Vec::new()
+    } else {
+        property_init_body(class_info)
+    };
     let function_name = format!("_class_propinit_{}", class_info.class_id);
     let this_type = PhpType::Object(class_name.to_string());
     let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
@@ -621,7 +660,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -976,7 +1015,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
-        &check_result.string_incdec_locals,
+        &check_result.boxed_string_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -1184,7 +1223,7 @@ fn lower_closure_function_with_signature(
         parent.throw_access_sites,
         parent.builtin_call_types,
         parent.loop_storage_types,
-        parent.string_incdec_locals,
+        parent.boxed_string_locals,
         parent.bind_kill_sites,
         parent.retype_sites,
         parent.mixed_storage_store_sites,
@@ -1225,7 +1264,7 @@ fn lower_body_into_function(
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     loop_storage_types: &crate::types::LoopStorageTypes,
-    string_incdec_locals: &std::collections::HashSet<(String, String)>,
+    boxed_string_locals: &std::collections::HashSet<(String, String)>,
     bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     retype_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     mixed_storage_store_sites: &std::collections::HashMap<
@@ -1278,7 +1317,7 @@ fn lower_body_into_function(
         throw_access_sites,
         builtin_call_types,
         loop_storage_types,
-        string_incdec_locals,
+        boxed_string_locals,
         bind_kill_sites,
         retype_sites,
         mixed_storage_store_sites,
@@ -1908,6 +1947,46 @@ fn direct_closure_return_expr_type(
                     }
                 }
             }
+        }
+    }
+    if let ExprKind::MethodCall { object, method, .. } = &expr.kind {
+        let receiver_name = match &object.kind {
+            ExprKind::Variable(name) => Some(name.as_str()),
+            ExprKind::This => Some("this"),
+            _ => None,
+        };
+        if let Some(receiver_name) = receiver_name {
+            let receiver_ty = captures
+                .iter()
+                .find(|(capture_name, _, _)| capture_name == receiver_name)
+                .map(|(_, ty, _)| ty)
+                .or_else(|| {
+                    params
+                        .iter()
+                        .find(|(param_name, _)| param_name == receiver_name)
+                        .map(|(_, ty)| ty)
+                });
+            if let Some(PhpType::Object(class)) = receiver_ty {
+                if let Some(signature) = classes
+                    .get(class.trim_start_matches('\\'))
+                    .and_then(|info| method_signature(info, method, false))
+                {
+                    return signature.return_type.clone();
+                }
+            }
+        }
+    }
+    if let ExprKind::StaticMethodCall {
+        receiver: StaticReceiver::Named(class),
+        method,
+        ..
+    } = &expr.kind
+    {
+        if let Some(signature) = classes
+            .get(class.as_str().trim_start_matches('\\'))
+            .and_then(|info| method_signature(info, method, true))
+        {
+            return signature.return_type.clone();
         }
     }
     crate::types::checker::infer_expr_type_syntactic(expr)

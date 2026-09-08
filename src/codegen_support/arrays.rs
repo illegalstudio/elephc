@@ -25,6 +25,7 @@ pub(crate) fn emit_array_value_type_stamp(
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
+        PhpType::Callable => 10,
         PhpType::Mixed => 7,
         PhpType::Union(_) => 7,
         PhpType::Void => 8,

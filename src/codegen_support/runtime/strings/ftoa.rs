@@ -1,6 +1,6 @@
 //! Purpose:
 //! Emits the `__rt_ftoa` runtime helper assembly for float-to-string conversion.
-//! Reproduces PHP's default `precision = 14` layout (`echo`, `(string)`, `print_r`,
+//! Reproduces PHP's configured `precision` layout (`echo`, `(string)`, `print_r`,
 //! string interpolation) and, through `__rt_ftoa_repr`, PHP's
 //! `serialize_precision = -1` layout used by `var_dump`.
 //!
@@ -9,7 +9,7 @@
 //!
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
-//! - PHP formats a float for `echo` with `zend_gcvt(value, 14, '.', 'E')`. C's `%.14G`
+//! - PHP formats a float for `echo` with `zend_gcvt(value, precision, '.', 'E')`. C's `%G`
 //!   already picks the *same* notation (exponential when the decimal exponent is `>= 14`
 //!   or `<= -5`) and the same 14-significant-digit rounding, but it differs in two
 //!   byte-level details that `__rt_ftoa` fixes up while copying the snprintf scratch into
@@ -27,7 +27,7 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-/// Converts a double-precision float to a PHP-compatible byte string at `precision = 14`.
+/// Converts a double-precision float to a PHP-compatible byte string at the configured precision.
 ///
 /// # Input
 /// - ARM64: `d0` holds the float value
@@ -38,7 +38,7 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// - x86_64: `rax` = pointer to string, `rdx` = length
 ///
 /// # Behavior
-/// Formats the float with `snprintf("%.14G", …)` into a stack scratch buffer, then copies
+/// Formats the float with the cached `%G` precision into a stack scratch buffer, then copies
 /// the bytes into the global `_concat_buf` at the current `_concat_off` cursor while
 /// applying PHP's `zend_gcvt` fixups (mandatory `.0` mantissa fraction in exponential
 /// form, unpadded exponent, unsigned `NAN`), and advances `_concat_off` by the number of
@@ -54,17 +54,17 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     }
 
     emitter.blank();
-    emitter.comment("--- runtime: ftoa (precision=14, PHP zend_gcvt layout) ---");
+    emitter.comment("--- runtime: ftoa (configured PHP precision, zend_gcvt layout) ---");
     emitter.label_global("__rt_ftoa");
 
-    // -- set up stack frame (80 bytes: variadic slot, 48-byte scratch, saved FP/LR) --
-    emitter.instruction("sub sp, sp, #80");                                     // allocate the variadic slot, snprintf scratch, and saved-register area
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
+    // -- set up stack frame (112 bytes: variadic slot, 80-byte scratch, saved FP/LR) --
+    emitter.instruction("sub sp, sp, #112");                                    // allocate the variadic slot, snprintf scratch, and saved-register area
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish new frame pointer
 
-    // -- call snprintf(scratch, 48, "%.14G", double) --
+    // -- call snprintf(scratch, 80, configured %G, double) --
     emitter.instruction("add x0, sp, #8");                                      // snprintf destination = stack scratch buffer
-    emitter.instruction("mov x1, #48");                                         // scratch buffer size limit
+    emitter.instruction("mov x1, #80");                                         // scratch buffer size limit
     abi::emit_symbol_address(emitter, "x2", "_fmt_g");
     // -- Apple ARM64 variadic ABI: float arg goes on stack, not in SIMD reg --
     emitter.instruction("str d0, [sp]");                                        // push double onto stack for variadic call
@@ -149,8 +149,8 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, x2");                                    // advance it past the emitted bytes
     emitter.instruction("str x10, [x9]");                                       // publish the updated concat offset
 
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -163,29 +163,29 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
 /// - `rax` = pointer to formatted string, `rdx` = length
 ///
 /// # Behavior
-/// Same as `emit_ftoa` but for the Linux x86_64 target: `snprintf("%.14G", …)` into a
-/// 48-byte stack scratch buffer, then the same `zend_gcvt` fixup copy into `_concat_buf`.
+/// Same as `emit_ftoa` but for the Linux x86_64 target: `snprintf()` with the cached `%G`
+/// precision into an 80-byte stack scratch buffer, then the same fixup copy into `_concat_buf`.
 /// Sets `eax = 1` to signal one SIMD register argument to `snprintf`.
 fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
-    emitter.comment("--- runtime: ftoa (precision=14, PHP zend_gcvt layout) ---");
+    emitter.comment("--- runtime: ftoa (configured PHP precision, zend_gcvt layout) ---");
     emitter.label_global("__rt_ftoa");
 
     emitter.instruction("push rbp");                                            // save the caller frame pointer before using stack locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the formatting helper
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned scratch space for the snprintf result
+    emitter.instruction("sub rsp, 96");                                         // reserve aligned scratch space for the snprintf result
 
-    emitter.instruction("lea rdi, [rbp - 56]");                                 // snprintf destination = stack scratch buffer
-    emitter.instruction("mov esi, 48");                                         // scratch buffer size limit
+    emitter.instruction("lea rdi, [rbp - 88]");                                 // snprintf destination = stack scratch buffer
+    emitter.instruction("mov esi, 80");                                         // scratch buffer size limit
     abi::emit_symbol_address(emitter, "rdx", "_fmt_g");
     emitter.instruction("mov eax, 1");                                          // SysV variadic ABI: one SIMD register is live for the double argument
-    emitter.instruction("call snprintf");                                       // format the double at 14 significant digits
+    emitter.instruction("call snprintf");                                       // format the double at the configured significant digits
 
     abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat write offset
     abi::emit_symbol_address(emitter, "r8", "_concat_buf");
     emitter.instruction("lea r10, [r8 + r9]");                                  // result start = concat_buf + offset
     emitter.instruction("mov r11, r10");                                        // r11 = write cursor, r10 = result start
-    emitter.instruction("lea rsi, [rbp - 56]");                                 // rsi = read cursor into the snprintf scratch
+    emitter.instruction("lea rsi, [rbp - 88]");                                 // rsi = read cursor into the snprintf scratch
     emitter.instruction("xor ecx, ecx");                                        // ecx = "mantissa already has a '.'" flag
 
     emitter.instruction("movzx eax, BYTE PTR [rsi]");                           // first formatted byte
@@ -258,7 +258,7 @@ fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, rdx");                                         // advance it past the emitted bytes
     abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat offset
 
-    emitter.instruction("add rsp, 64");                                         // release the local scratch area before returning
+    emitter.instruction("add rsp, 96");                                         // release the full local scratch area before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return pointer+length in rax/rdx
 }
@@ -407,6 +407,9 @@ mod tests {
         assert!(asm.contains("mov eax, 1\n"));
         assert!(asm.contains("call snprintf\n"));
         assert!(asm.contains("sub rdx, rax\n"));
+        assert!(asm.contains("sub rsp, 96\n"));
+        assert!(asm.contains("add rsp, 96\n"));
+        assert!(!asm.contains("add rsp, 64\n"));
     }
 
     /// Verifies that both targets emit the `zend_gcvt` fixup path: the mandatory `.0`

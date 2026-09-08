@@ -1,13 +1,14 @@
 //! Purpose:
 //! End-to-end heap-ownership tests for builtins whose runtime helper returns a FRESH owned
-//! heap string: `tempnam()`, `getcwd()`, `microtime()` and `json_encode()`.
+//! heap string: `tempnam()`, `getcwd()`, `microtime()`, `json_encode()`, `date()` and
+//! `gmdate()`.
 //!
 //! THE BUG THESE PIN. `value_is_scratch_string`
 //! (`src/codegen/lower_inst/ownership.rs`) decides whether an `Op::Release` on a `Str`
 //! actually emits a `__rt_heap_free_safe`. For an `Op::RuntimeCall` it releases ONLY when the
 //! callee declares `BuiltinResultOwnership::Fresh`; everything else falls into the default
 //! `MayAliasArguments` bucket and is treated as borrowed concat scratch, so the release is
-//! skipped silently. All four builtins here allocate through `__rt_str_persist` yet sat in
+//! skipped silently. All six builtins here produce independently owned results yet sat in
 //! that default bucket, so each leaked one heap block PER CALL:
 //!
 //! ```text
@@ -20,10 +21,10 @@
 //! the emitted assembly contained ZERO `__rt_decref_any`. That gap between a correct IR and a
 //! no-op backend is why this was invisible to every existing suite.
 //!
-//! WHY THIS FILE AND NOT FOUR SEPARATE ONES. This is a recurring FAMILY, not four incidents:
+//! WHY THIS FILE AND NOT SIX SEPARATE ONES. This is a recurring FAMILY, not six incidents:
 //! `RuntimeFnId::result_ownership` already carries three in-line comments documenting the
 //! identical mistake being fixed for `array_flip`, `print_r` and `strstr`. Pinning the family
-//! in one place is what makes the fourth recurrence visible as a pattern.
+//! in one place is what makes each recurrence visible as a pattern.
 //!
 //! Called from:
 //! - `cargo test --test fresh_result_ownership_leak_tests` through Rust's test harness.
@@ -150,7 +151,7 @@ fn assert_output_and_clean_heap(prefix: &str, source: &str, expected_stdout: &st
 }
 
 // ---------------------------------------------------------------------------
-// The four builtins that leaked, each in the repeated-call shape that showed it.
+// The six builtins that leaked, each in the repeated-call shape that showed it.
 // ---------------------------------------------------------------------------
 
 /// Verifies repeated `tempnam()` calls reclaim every generated path string.
@@ -217,6 +218,30 @@ for ($i = 0; $i < 5; $i++) {
 echo $total, "\n";
 "#;
     assert_output_and_clean_heap("elephc_leak_json_encode", source, "35\n");
+}
+
+/// Verifies repeated `date()` and `gmdate()` calls reclaim every rendered string.
+///
+/// Both runtime helpers render new bytes and therefore cannot alias their heap-built format
+/// argument. Reading that argument after every call also pins the safety half of the `Fresh`
+/// contract: releasing a result must not invalidate argument storage.
+#[test]
+fn repeated_date_and_gmdate_calls_leave_a_clean_heap() {
+    let source = r#"<?php
+$format = str_repeat("Y-m-d", 1);
+$total = 0;
+for ($i = 0; $i < 40; $i++) {
+    $local = date($format, 0);
+    $utc = gmdate($format, 0);
+    $total += strlen($local) + strlen($utc);
+}
+echo $format, "|", $total, "\n";
+"#;
+    assert_output_and_clean_heap(
+        "elephc_leak_date_gmdate",
+        source,
+        "Y-m-d|800\n",
+    );
 }
 
 // ---------------------------------------------------------------------------

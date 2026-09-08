@@ -2,7 +2,7 @@
 title: "imagefilledarc() — internals"
 description: "Compiler internals for imagefilledarc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 500
+  order: 501
 ---
 
 ## `imagefilledarc()` — internals

@@ -2,7 +2,7 @@
 title: "cairo_move_to()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 418
+  order: 419
 ---
 
 ## cairo_move_to()

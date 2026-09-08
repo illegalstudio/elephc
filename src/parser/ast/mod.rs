@@ -20,6 +20,7 @@ pub use expr::{
     MagicConstant, StaticReceiver,
 };
 pub use ffi::{CType, ExternField, ExternParam, PackedField};
+pub(crate) use operators::is_synthetic_unary_plus;
 pub use operators::BinOp;
 pub use oop::{
     Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl,

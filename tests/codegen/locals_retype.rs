@@ -456,7 +456,7 @@ fn test_compound_assign_retype_leaves_a_clean_heap() {
 
 /// A `string` local that is a `++` target, retyped to `int`, then incremented again.
 ///
-/// `CheckResult::string_incdec_locals` is keyed by (scope, name) with no binding identity, so
+/// `CheckResult::boxed_string_locals` is keyed by (scope, name) with no binding identity, so
 /// the entry the FIRST binding needs is still present at the retyped one. This pins that the
 /// int binding increments as an int (`5` -> `6`) while the string binding still increments as
 /// PHP's string increment (`"a1"` -> `"a2"`).
@@ -2715,4 +2715,56 @@ fn test_by_ref_foreach_still_writes_through_and_unsets() {
         "expected a clean heap, got: {}",
         out.stderr
     );
+}
+
+/// Branches may assign a fresh object or scalar to the same untyped local.
+#[test]
+fn test_branch_object_scalar_retype_uses_mixed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class RetypeBox {}
+if ($argc > 1) { $value = new RetypeBox(); } else { $value = $argc; }
+echo is_object($value) ? get_class($value) : gettype($value);
+"#,
+    );
+    assert_eq!(out, "integer");
+}
+
+/// A previously unseen PHP global starts as boxed Mixed and may receive an object in a method.
+#[test]
+fn test_uninitialized_global_accepts_object_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+global $shared;
+class GlobalRetypeBox { public function publish(): void { global $shared; $shared = $this; } }
+(new GlobalRetypeBox())->publish();
+echo get_class($shared);
+"#,
+    );
+    assert_eq!(out, "GlobalRetypeBox");
+}
+
+/// An untyped by-value parameter may become an object inside a conditional branch.
+#[test]
+fn test_untyped_parameter_accepts_conditional_object_retype() {
+    let out = compile_and_run(
+        r#"<?php
+class ParamRetypeBox {}
+function normalize_param($value): string {
+    if (!empty($value) && !is_object($value)) { $value = new ParamRetypeBox(); }
+    return get_class($value);
+}
+echo normalize_param("box");
+"#,
+    );
+    assert_eq!(out, "ParamRetypeBox");
+}
+
+/// A depth-zero assignment expression returns and stores its newly retyped scalar value.
+#[test]
+fn test_assignment_expression_accepts_untyped_scalar_retype() {
+    let out = compile_and_run(
+        r#"<?php $value = "1"; echo (($value = 0) === 0 ? "T" : "F"), ":", gettype($value);"#,
+    );
+    assert_eq!(out, "T:integer");
 }

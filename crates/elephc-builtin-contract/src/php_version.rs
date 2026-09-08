@@ -135,6 +135,11 @@ impl PhpVersion {
         ""
     }
 
+    /// Returns E_ALL, excluding E_STRICT from PHP 8.4 onward.
+    pub const fn all_error_levels(self) -> i64 {
+        if self.version_id() >= 80400 { 30719 } else { 32767 }
+    }
+
     /// Returns the matching Zend Engine language-profile version.
     pub const fn zend_version(self) -> &'static str {
         match self {
@@ -201,6 +206,28 @@ mod tests {
     #[test]
     fn patch_versions_are_rejected() {
         assert!("8.4.1".parse::<PhpVersion>().is_err());
+        assert!("8.5.10-dev".parse::<PhpVersion>().is_err());
+        assert!("8.6-dev".parse::<PhpVersion>().is_err());
+    }
+
+    /// Minor profiles report no upstream patch or prerelease version.
+    #[test]
+    fn profiles_do_not_report_development_versions() {
+        for version in PhpVersion::ALL {
+            assert_eq!(version.release(), 0);
+            assert_eq!(version.extra_version(), "");
+            assert!(!version.version_string().contains('-'));
+            assert!(!version.zend_version().contains('-'));
+        }
+    }
+
+    /// E_ALL changes at the PHP 8.4 minor-version boundary.
+    #[test]
+    fn all_error_levels_follow_the_minor_profile() {
+        assert_eq!(PhpVersion::Php83.all_error_levels(), 32767);
+        assert_eq!(PhpVersion::Php84.all_error_levels(), 30719);
+        assert_eq!(PhpVersion::Php85.all_error_levels(), 30719);
+        assert_eq!(PhpVersion::Php86.all_error_levels(), 30719);
     }
 
     /// Verifies the enum's derived ordering follows semantic PHP version order.

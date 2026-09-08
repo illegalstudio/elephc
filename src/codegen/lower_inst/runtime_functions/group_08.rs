@@ -40,6 +40,18 @@ pub(super) fn lower(
         RuntimeFnId::ElephcObjectPropValue => Some({
             crate::codegen::lower_inst::builtins::object_props::lower_object_prop_value(ctx, inst)
         }),
+        RuntimeFnId::DateMagicAppendProperties => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_date_magic_append_properties(ctx, inst)
+        }),
+        RuntimeFnId::DateMagicAppendPropertiesForced => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_date_magic_append_properties_forced(ctx, inst)
+        }),
+        RuntimeFnId::DateMagicRestoreProperties => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_date_magic_restore_properties(ctx, inst)
+        }),
+        RuntimeFnId::DateMagicFilterReferences => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_date_magic_filter_references(ctx, inst)
+        }),
         RuntimeFnId::ElephcPtrIsNull => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_is_null(ctx, inst)
         }),

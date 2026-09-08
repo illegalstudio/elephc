@@ -53,6 +53,17 @@ pub(in crate::interpreter) fn eval_call_arg_values(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    eval_call_arg_values_with_temporaries(args, context, caller_scope, values, None)
+}
+
+/// Evaluates arguments with an optional source-owner ledger independent of forwarded argument clones.
+pub(in crate::interpreter) fn eval_call_arg_values_with_temporaries(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+    mut temporaries: Option<&mut Vec<RuntimeCellHandle>>,
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     let mut evaluated_args = Vec::with_capacity(args.len());
     let mut saw_named = false;
 
@@ -62,6 +73,9 @@ pub(in crate::interpreter) fn eval_call_arg_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             let spread = eval_expr(arg.value(), context, caller_scope, values)?;
+            if let Some(owners) = temporaries.as_deref_mut() {
+                record_scalar_argument_temporary(arg.value(), spread, owners, values)?;
+            }
             if !values.is_array_like(spread)? {
                 return Err(EvalStatus::RuntimeFatal);
             }
@@ -79,6 +93,9 @@ pub(in crate::interpreter) fn eval_call_arg_values(
             saw_named = true;
             let (value, ref_target) =
                 eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+            if let Some(owners) = temporaries.as_deref_mut() {
+                record_scalar_argument_temporary(arg.value(), value, owners, values)?;
+            }
             evaluated_args.push(EvaluatedCallArg {
                 name: Some(name.to_string()),
                 value,
@@ -91,6 +108,9 @@ pub(in crate::interpreter) fn eval_call_arg_values(
             return Err(EvalStatus::RuntimeFatal);
         }
         let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+        if let Some(owners) = temporaries.as_deref_mut() {
+            record_scalar_argument_temporary(arg.value(), value, owners, values)?;
+        }
         evaluated_args.push(EvaluatedCallArg {
             name: None,
             value,

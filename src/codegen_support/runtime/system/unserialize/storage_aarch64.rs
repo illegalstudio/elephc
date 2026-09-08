@@ -16,6 +16,15 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // stores the parsed value into the matching object slot per the property's tag.
     emitter.label_global("__rt_obj_store_prop");
     emitter.instruction("ldr x9, [x0]");                                        // class id from the object header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
+    emitter.instruction("ldr x10, [x10]");                                     // load stdClass's generated class id
+    emitter.instruction("cmp x9, x10");                                        // does the receiver use dynamic property storage?
+    emitter.instruction("b.ne __rt_obj_store_prop_declared");                  // fixed-layout objects use the generated property table
+    emitter.instruction("str x30, [sp, #-16]!");                               // preserve the return address across stdClass insertion
+    emitter.instruction("bl __rt_stdclass_set");                               // args already carry object, key pair, and boxed value
+    emitter.instruction("ldr x30, [sp], #16");                                 // restore the caller return address
+    emitter.instruction("ret");                                                // dynamic property stored
+    emitter.label("__rt_obj_store_prop_declared");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_serprop_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // property-info table for this class
     emitter.instruction("ldr x11, [x10]");                                      // property count
@@ -49,8 +58,15 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_obj_store_prop_str");                        // store pointer and length
     emitter.instruction("cmp x7, #4");                                          // is this an indexed-array slot?
     emitter.instruction("b.eq __rt_obj_store_prop_arr");                        // convert the parsed hash to an indexed array
+    emitter.instruction("cmp x7, #11");                                         // is this an inline TaggedScalar slot?
+    emitter.instruction("b.eq __rt_obj_store_prop_tagged_scalar");              // restore payload plus the parsed runtime tag
     emitter.instruction("ldr x9, [x3, #8]");                                    // typed scalar/object/hash: unbox the low word
     emitter.instruction("str x9, [x8]");                                        // store it inline in the slot
+    emitter.instruction("ret");                                                 // property stored
+    emitter.label("__rt_obj_store_prop_tagged_scalar");
+    emitter.instruction("ldr x9, [x3, #8]");                                    // load the scalar payload from the parsed Mixed cell
+    emitter.instruction("ldr x10, [x3]");                                       // load the parsed int/null runtime tag
+    emitter.instruction("stp x9, x10, [x8]");                                  // restore the inline TaggedScalar words
     emitter.instruction("ret");                                                 // property stored
     emitter.label("__rt_obj_store_prop_arr");
     emitter.instruction("stp x8, x30, [sp, #-16]!");                            // save the slot address and return address

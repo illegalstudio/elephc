@@ -14,9 +14,11 @@ pub(crate) mod callable_reachability;
 pub(crate) mod context;
 mod enum_singletons;
 mod eval_callable_helpers;
+mod eval_arg_ownership;
 mod eval_class_constant_helpers;
 mod eval_constructor_helpers;
 mod eval_method_helpers;
+mod eval_method_results;
 mod eval_property_helpers;
 mod eval_ref_arg_helpers;
 mod eval_reflection_helpers;
@@ -346,11 +348,14 @@ fn finalize_user_asm(
     }
     let eval_callable_support_needed =
         eval_bridge && eval_callable_helpers::module_needs_eval_callable_descriptor_support(module);
+    let eval_dynamic_callable_support_needed = eval_bridge
+        && eval_callable_helpers::module_needs_eval_dynamic_callable_descriptor_support(module);
     let eval_callable_support = eval_callable_helpers::emit_eval_callable_descriptor_support(
         module,
         &mut emitter,
         &mut data,
         eval_callable_support_needed,
+        eval_dynamic_callable_support_needed,
     );
     if eval_bridge {
         eval_constructor_helpers::emit_eval_constructor_helpers(

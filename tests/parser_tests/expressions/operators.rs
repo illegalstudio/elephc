@@ -22,6 +22,19 @@ fn test_arithmetic_precedence() {
     assert_eq!(stmts, vec![expected]);
 }
 
+/// Verifies unary plus binds to its operand before surrounding multiplication
+/// and lowers to Zend's operand-times-one numeric conversion path.
+#[test]
+fn test_unary_plus_precedence() {
+    let stmts = parse_source("<?php echo +2 * 3;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::binop(Expr::int_lit(2), BinOp::Mul, Expr::int_lit(1)),
+        BinOp::Mul,
+        Expr::int_lit(3),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
 /// Verifies that `<?php echo "a" . "b";` parses as a binary concat operation.
 /// The `.` operator concatenates two string literals.
 #[test]

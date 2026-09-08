@@ -23,7 +23,12 @@ pub(super) fn builtin_reflection_named_type() -> FlattenedClass {
         is_readonly_class: false,
         properties: vec![
             builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
-            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            builtin_property(
+                "__attrs",
+                Visibility::Private,
+                Some(object_array_type("ReflectionAttribute")),
+                empty_array(),
+            ),
             builtin_property(
                 "__allows_null",
                 Visibility::Private,
@@ -68,7 +73,12 @@ pub(super) fn builtin_reflection_union_type() -> FlattenedClass {
                 Some(object_array_type("ReflectionNamedType")),
                 empty_array(),
             ),
-            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            builtin_property(
+                "__attrs",
+                Visibility::Private,
+                Some(object_array_type("ReflectionAttribute")),
+                empty_array(),
+            ),
             builtin_property(
                 "__allows_null",
                 Visibility::Private,
@@ -118,7 +128,12 @@ pub(super) fn builtin_reflection_intersection_type() -> FlattenedClass {
                 Some(object_array_type("ReflectionNamedType")),
                 empty_array(),
             ),
-            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            builtin_property(
+                "__attrs",
+                Visibility::Private,
+                Some(object_array_type("ReflectionAttribute")),
+                empty_array(),
+            ),
             builtin_property(
                 "__allows_null",
                 Visibility::Private,

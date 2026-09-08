@@ -660,7 +660,11 @@ fn iterator_apply_array_items(
     Ok(items)
 }
 
-/// Loads the single object operand into the canonical integer result register.
+/// Loads a PHP object or Closure descriptor into the canonical integer result register.
+///
+/// Generic `object` properties lower as boxed Mixed cells so Closure tag 10 retains its
+/// descriptor ownership. Both tag 6 object pointers and tag 10 descriptors carry a stable
+/// object handle, while every other boxed shape is a defensive type failure.
 fn load_object_operand(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -670,6 +674,38 @@ fn load_object_operand(
     let ty = ctx.load_value_to_result(value)?;
     match ty {
         PhpType::Object(_) => Ok(()),
+        PhpType::Mixed | PhpType::Union(_) => {
+            let object_label = ctx.next_label("spl_mixed_object_operand");
+            let error_label = ctx.next_label("spl_mixed_object_operand_error");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #6");                      // ordinary boxed object payloads own a stable object handle
+                    ctx.emitter.instruction(&format!("b.eq {}", object_label)); // accept the unboxed object pointer
+                    ctx.emitter.instruction("cmp x0, #10");                     // Closure descriptors are PHP objects with independent layout
+                    ctx.emitter.instruction(&format!("b.ne {}", error_label));  // reject any other Mixed shape before handle lookup
+                    ctx.emitter.label(&object_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // publish the object or Closure descriptor pointer
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 6");                      // ordinary boxed object payloads own a stable object handle
+                    ctx.emitter.instruction(&format!("je {}", object_label));   // accept the unboxed object pointer
+                    ctx.emitter.instruction("cmp rax, 10");                     // Closure descriptors are PHP objects with independent layout
+                    ctx.emitter.instruction(&format!("jne {}", error_label));   // reject any other Mixed shape before handle lookup
+                    ctx.emitter.label(&object_label);
+                    ctx.emitter.instruction("mov rax, rdi");                    // publish the object or Closure descriptor pointer
+                }
+            }
+            let done_label = ctx.next_label("spl_mixed_object_operand_done");
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&error_label);
+            super::super::exceptions::emit_type_error(
+                ctx,
+                &format!("{}(): Argument #1 ($object) must be of type object", name),
+            );
+            ctx.emitter.label(&done_label);
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name,
@@ -1555,9 +1591,7 @@ fn reload_saved_iterator_receiver_at_offset(
             ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", offset));     // reload iterator receiver from below preserved key state
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
-                &format!("mov rdi, QWORD PTR [rsp + {}]", offset)
-            );                                                                  // reload iterator receiver from below preserved key state
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", offset)); // reload iterator receiver from below preserved key state
         }
     }
 }

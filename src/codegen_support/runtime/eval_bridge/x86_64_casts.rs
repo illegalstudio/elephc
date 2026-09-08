@@ -157,6 +157,8 @@ pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells to tag and object payload
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means PHP object
     emitter.instruction("je __elephc_eval_value_object_identity_object_x86");   // return the payload pointer for object values
+    emitter.instruction("cmp rax, 10");                                         // runtime tag 10 means a PHP Closure descriptor
+    emitter.instruction("je __elephc_eval_value_object_identity_object_x86");   // callables use their descriptor payload as object identity
     emitter.instruction("xor eax, eax");                                        // return zero for non-object values
     emitter.instruction("jmp __elephc_eval_value_object_identity_done_x86");    // skip the object-payload result
     emitter.label("__elephc_eval_value_object_identity_object_x86");
@@ -173,7 +175,10 @@ pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // pass the boxed Mixed argument to mixed_unbox
     emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells to tag and object payload
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means PHP object
-    emitter.instruction("jne __elephc_eval_value_object_handle_zero_x86");      // non-object values carry no PHP handle
+    emitter.instruction("je 1f");                                               // ordinary objects resolve through the shared handle pool
+    emitter.instruction("cmp rax, 10");                                         // runtime tag 10 means a PHP Closure descriptor
+    emitter.instruction("jne __elephc_eval_value_object_handle_zero_x86");      // non-object and non-callable values carry no PHP handle
+    emitter.label("1");
     emitter.instruction("mov rax, rdi");                                        // pass the unboxed object payload to the handle pool
     emitter.instruction("call __rt_object_handle_of");                          // rax = this object's PHP handle
     emitter.instruction("jmp __elephc_eval_value_object_handle_done_x86");      // return the resolved handle

@@ -123,10 +123,32 @@ impl Parser {
 
     /// Parses a complete eval fragment until EOF.
     pub(super) fn parse_program(mut self) -> Result<EvalProgram, EvalParseError> {
+        let strict_types = if self.at_keyword("declare") {
+            self.parse_strict_types_declare()?
+        } else {
+            false
+        };
         let mut statements = Vec::new();
         while !matches!(self.current(), TokenKind::Eof) {
             statements.extend(self.parse_stmt()?);
         }
-        Ok(EvalProgram::new(self.source_len, statements))
+        Ok(EvalProgram::new(self.source_len, strict_types, statements))
+    }
+
+    /// Parses the file-scoped `declare(strict_types=0|1);` directive accepted by eval.
+    fn parse_strict_types_declare(&mut self) -> Result<bool, EvalParseError> {
+        self.expect_keyword("declare")?;
+        self.expect(TokenKind::LParen)?;
+        self.expect_keyword("strict_types")?;
+        self.expect(TokenKind::Equal)?;
+        let enabled = match self.current() {
+            TokenKind::Int(0) => false,
+            TokenKind::Int(1) => true,
+            _ => return Err(EvalParseError::UnsupportedConstruct),
+        };
+        self.advance();
+        self.expect(TokenKind::RParen)?;
+        self.expect_semicolon()?;
+        Ok(enabled)
     }
 }

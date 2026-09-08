@@ -42,6 +42,7 @@ sidebar:
 | [`fdiv()`](./math/fdiv.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
 | [`floor()`](./math/floor.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`fmod()`](./math/fmod.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
+| [`getrandmax()`](./math/getrandmax.md) | `(): int` | `int` | ✓ | — |
 | [`hexdec()`](./math/hexdec.md) | `(string $hex_string): mixed` | `mixed` | ✓ | — |
 | [`hypot()`](./math/hypot.md) | `(float $x, float $y): float` | `float` | ✓ | ✓ |
 | [`intdiv()`](./math/intdiv.md) | `(int $num1, int $num2): int` | `int` | ✓ | ✓ |

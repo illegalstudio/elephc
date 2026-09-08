@@ -290,6 +290,15 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
             collect_refs_expr(object, out);
             collect_refs_expr(value, out);
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            collect_refs_expr(object, out);
+            collect_refs_expr(property, out);
+            collect_refs_expr(value, out);
+        }
         StmtKind::PropertyArrayAssign {
             object,
             index,

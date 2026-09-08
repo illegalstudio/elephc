@@ -1,6 +1,7 @@
 //! Purpose:
 //! Precomputes local-slot facts consumed repeatedly by EIR assembly lowering.
-//! Tracks explicit stores, ref-cell representation changes, and owned parameter slots.
+//! Tracks explicit and mutation-driven stores, ref-cell representation changes, and owned
+//! parameter slots.
 //!
 //! Called from:
 //! - `crate::codegen::context::FunctionContext::new()`.
@@ -50,6 +51,9 @@ impl LocalSlotAnalysis {
                     stored_slots.insert(slot);
                 }
             }
+            if let Some(slot) = mutation_writeback_slot(function, inst.op, &inst.operands) {
+                stored_slots.insert(slot);
+            }
             if let Some(slot) =
                 ref_cell_target_slot(function, inst.op, inst.immediate.as_ref(), &inst.operands)
             {
@@ -79,7 +83,8 @@ impl LocalSlotAnalysis {
         }
     }
 
-    /// Returns whether this slot receives an owned value via `StoreLocal`.
+    /// Returns whether this slot receives an owned value via `StoreLocal` or an in-place array
+    /// mutation whose backend writes a possibly allocated/reallocated pointer back to the slot.
     pub(super) fn has_store(&self, slot: LocalSlotId) -> bool {
         self.stored_slots.contains(&slot)
     }
@@ -113,6 +118,23 @@ impl LocalSlotAnalysis {
     pub(super) fn owns_parameter_slot(&self, slot: LocalSlotId) -> bool {
         self.owned_parameter_slots.contains(&slot)
     }
+}
+
+/// Resolves array mutations whose backend writes the returned container pointer to the loaded
+/// source local. Treating these operations as stores keeps never-initialized write-context locals
+/// zeroed before `$array[]` or `$array[$key]` materializes their first runtime array.
+fn mutation_writeback_slot(
+    function: &Function,
+    op: Op,
+    operands: &[ValueId],
+) -> Option<LocalSlotId> {
+    if !matches!(op, Op::ArrayPush | Op::ArraySet) {
+        return None;
+    }
+    operands
+        .first()
+        .copied()
+        .and_then(|value| loaded_local_slot(function, value))
 }
 
 /// Returns by-reference parameter slots, whose incoming representation is already a cell pointer.

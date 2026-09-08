@@ -107,7 +107,7 @@ America/Dawson_Creek	CA	55.76666	-120.23334	MST - BC (Dawson Cr, Ft St John)
 America/Denver	US	39.73916	-104.98417	Mountain (most areas)
 America/Detroit	US	42.331379999999996	-83.04584	Eastern - MI (most areas)
 America/Dominica	DM	15.299999999999997	-61.400000000000006	
-America/Edmonton	CA	53.55000000000001	-113.46667	Mountain - AB, BC(E), NT(E), SK(W)
+America/Edmonton	CA	53.55000000000001	-113.46667	CST - AB, BC(E), NT(E), SK(W)
 America/Eirunepe	BR	-6.666669999999996	-69.86667	Amazonas (west)
 America/El_Salvador	SV	13.700000000000003	-89.2	
 America/Ensenada	??	-90	-180	
@@ -215,7 +215,7 @@ America/Thunder_Bay	??	-90	-180
 America/Tijuana	MX	32.53333000000001	-117.01667	Baja California
 America/Toronto	CA	43.650000000000006	-79.38334	Eastern - ON & QC (most areas)
 America/Tortola	VG	18.450000000000003	-64.61667	
-America/Vancouver	CA	49.26666	-123.11667	Pacific - BC (most areas)
+America/Vancouver	CA	49.26666	-123.11667	MST - BC (most areas)
 America/Virgin	??	-90	-180	
 America/Whitehorse	CA	60.71665999999999	-135.05001	MST - Yukon (east)
 America/Winnipeg	CA	49.88333	-97.15001	Central - ON (west), Manitoba

@@ -169,6 +169,10 @@ pub(super) fn reflection_class_constant_owner_metadata(
     metadata: ReflectionClassConstantMetadata,
 ) -> ReflectionOwnerMetadata {
     let is_final = metadata.is_final;
+    let is_deprecated = metadata
+        .attr_names
+        .iter()
+        .any(|name| php_symbol_key(name.trim_start_matches('\\')) == "deprecated");
     let modifiers = reflection_class_constant_modifiers(&metadata.visibility, is_final);
     let member_flags =
         reflection_member_flags(false, &metadata.visibility, is_final, false, false, false);
@@ -200,7 +204,7 @@ pub(super) fn reflection_class_constant_owner_metadata(
         type_metadata: metadata.type_metadata,
         property_default_value: None,
         required_parameter_count: 0,
-        is_deprecated: false,
+        is_deprecated,
         is_generator: false,
         prototype_member: None,
         is_final,
@@ -328,20 +332,23 @@ pub(super) fn reflection_interface_class_constant_lookup(
     };
     let declaring_interface =
         interface_constant_declaring_interface(info, interface_name, constant_name);
-    let is_final = ctx
-        .module
-        .interface_infos
-        .get(declaring_interface)
-        .is_some_and(|info| info.final_constants.contains(constant_name));
+    let declaring_info = ctx.module.interface_infos.get(declaring_interface);
+    let is_final =
+        declaring_info.is_some_and(|info| info.final_constants.contains(constant_name));
     let value = reflection_constant_value(ctx, declaring_interface, None, value_expr, 0)?;
     Ok(Some(ReflectionClassConstantMetadata {
         declaring_class_name: declaring_interface.to_string(),
-        attr_names: Vec::new(),
-        attr_args: Vec::new(),
+        attr_names: declaring_info
+            .and_then(|info| info.constant_attribute_names.get(constant_name))
+            .cloned()
+            .unwrap_or_default(),
+        attr_args: declaring_info
+            .and_then(|info| info.constant_attribute_args.get(constant_name))
+            .cloned()
+            .unwrap_or_default(),
         value,
-        type_metadata: info
-            .constant_types
-            .get(constant_name)
+        type_metadata: declaring_info
+            .and_then(|info| info.constant_types.get(constant_name))
             .and_then(reflection_declared_type_metadata),
         visibility: Visibility::Public,
         is_final,
@@ -412,4 +419,3 @@ pub(super) fn is_reflection_enum(ctx: &FunctionContext<'_>, enum_name: &str) -> 
         .keys()
         .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == enum_key)
 }
-

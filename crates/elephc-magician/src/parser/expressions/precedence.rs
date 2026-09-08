@@ -314,6 +314,13 @@ impl Parser {
             let expr = self.parse_unary()?;
             return Ok(EvalExpr::Clone(Box::new(expr)));
         }
+        if self.consume(TokenKind::At) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::Suppress,
+                expr: Box::new(expr),
+            });
+        }
         if self.consume(TokenKind::Plus) {
             let expr = self.parse_unary()?;
             return Ok(EvalExpr::Unary {

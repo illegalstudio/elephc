@@ -316,7 +316,8 @@ use scope_io::*;
 #[allow(unused_imports)]
 use scope_reload::*;
 #[allow(unused_imports)]
-use status::*;
+pub(in crate::codegen::lower_inst::builtins) use status::emit_eval_status_check;
+use status::eval_mixed_unbox_low_payload_reg;
 
 pub(super) use calls::lower_eval;
 pub(super) use dynamic_calls::{

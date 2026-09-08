@@ -10,6 +10,62 @@
 use super::super::*;
 use super::support::*;
 
+/// Verifies eval `error_reporting()` shares PHP's query/update semantics and constants.
+#[test]
+fn execute_program_dispatches_error_reporting_builtin() {
+    let program = parse_fragment(
+        br#"echo error_reporting(); echo ":";
+echo error_reporting(0); echo ":";
+echo error_reporting(); echo ":";
+echo call_user_func("error_reporting", E_ALL & ~E_DEPRECATED); echo ":";
+echo error_reporting();
+return error_reporting(null);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "30719:30719:0:0:22527");
+    assert_eq!(values.get(result), FakeValue::Int(22527));
+}
+
+/// Verifies eval E_STRICT reads emit a mask-aware PHP 8.4+ deprecation.
+#[test]
+fn execute_program_deprecates_e_strict_reads() {
+    let program = parse_fragment(br#"return E_STRICT;"#).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(2048));
+    assert_eq!(
+        values.warnings,
+        vec!["\nDeprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed"]
+    );
+}
+
+/// Verifies eval `setlocale()` tries array, variadic, and callable candidates in PHP order.
+#[test]
+fn execute_program_dispatches_setlocale_builtin() {
+    let program = parse_fragment(
+        br#"echo setlocale(LC_ALL, ["__elephc_invalid_locale__", "C"]); echo ":";
+echo setlocale(LC_ALL, "__elephc_invalid_locale__", "C"); echo ":";
+echo call_user_func("setlocale", LC_ALL, 0);
+return setlocale(LC_ALL, ["__elephc_invalid_locale__"]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "C:C:C");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
 /// Verifies eval zero-argument system builtins return native-compatible values.
 #[test]
 fn execute_program_dispatches_zero_arg_system_builtins() {
@@ -253,6 +309,9 @@ echo ":" . (date("U", $ts) === strval($ts) ? "U" : "bad");
 echo ":" . call_user_func("date", "Y", $ts);
 $named = call_user_func_array("mktime", ["hour" => 0, "minute" => 0, "second" => 0, "month" => 1, "day" => 1, "year" => 2000]);
 echo ":" . date(format: "Y", timestamp: $named);
+$short = call_user_func_array("mktime", ["hour" => 0, "minute" => 0, "second" => 0]);
+$positional = mktime(0, 0, 0);
+echo ":" . ($short === $positional ? "defaults" : "bad");
 echo ":"; echo function_exists("date");
 return function_exists("mktime");"#,
         )
@@ -264,10 +323,33 @@ return function_exists("mktime");"#,
 
     assert_eq!(
         values.output,
-        "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:1"
+        "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:defaults:1"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Silence restores masks on normal and exceptional exits and keeps explicit changes.
+#[test]
+fn execute_program_error_suppression_restores_masks() {
+    let program = parse_fragment(br#"
+error_reporting(E_NOTICE);
+echo @error_reporting(), ":", error_reporting(), ":";
+function change_mask() { error_reporting(E_WARNING); return error_reporting(); }
+echo @change_mask(), ":", error_reporting(), ":";
+error_reporting(E_NOTICE);
+function throw_silenced() { throw new Exception("silenced"); }
+try { @throw_silenced(); } catch (Exception $e) {}
+@date_default_timezone_set("Invalid/Suppressed");
+date_default_timezone_set("Invalid/Notice");
+echo error_reporting();
+"#).expect("silence fixture parses");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("silence fixture executes");
+    assert_eq!(values.output, "0:8:2:2:8");
+    assert_eq!(values.warnings.len(), 1);
+    assert!(values.warnings[0].contains("Invalid/Notice"));
+}
+
 /// Verifies eval UTC calendar builtins and timezone probes are callable-visible.
 #[test]
 fn execute_program_dispatches_extended_calendar_builtins() {
@@ -313,7 +395,7 @@ $full = strtotime("2024-06-15 12:30:45");
 echo ":" . date("Y-m-d H:i:s", $full);
 $short = strtotime("2024-06-15T12:30");
 echo ":" . date("Y-m-d H:i:s", $short);
-echo ":" . (strtotime("2024/06/15") === -1 ? "bad" : "wrong");
+echo ":" . (strtotime("not a date") === false ? "bad" : "wrong");
 $call = call_user_func("strtotime", "2024-01-02 03:04:05");
 echo ":" . date("Y-m-d H:i:s", $call);
 $spread = call_user_func_array("strtotime", ["datetime" => "2024-01-02"]);
@@ -335,14 +417,14 @@ return function_exists("strtotime");"#,
         );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval `microtime()` returns a plausible float timestamp by all call paths.
+/// Verifies eval `microtime()` preserves PHP's string/float result-mode contract.
 #[test]
 fn execute_program_dispatches_microtime_builtin() {
     let program = parse_fragment(
-        br#"echo microtime() > 1000000000 ? "now" : "bad"; echo ":";
-echo microtime(as_float: false) > 1000000000 ? "named" : "bad"; echo ":";
-echo call_user_func("microtime", true) > 1000000000 ? "call" : "bad"; echo ":";
-echo call_user_func_array("microtime", ["as_float" => true]) > 1000000000 ? "array" : "bad";
+        br#"echo is_string(microtime()) ? "now" : "bad"; echo ":";
+echo is_string(microtime(as_float: false)) ? "named" : "bad"; echo ":";
+echo is_float(call_user_func("microtime", true)) ? "call" : "bad"; echo ":";
+echo is_float(call_user_func_array("microtime", ["as_float" => true])) ? "array" : "bad";
 echo ":";
 return function_exists("microtime");"#,
     )
@@ -793,6 +875,146 @@ return function_exists("get_loaded_extensions");"#,
         format!("{count}:Core:json:opcache:{curl_label}:1:Zend OPcache:no-reflection:array")
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `get_extension_funcs()` preserves the date inventory and fallback contract.
+#[test]
+fn execute_program_dispatches_get_extension_funcs_builtin() {
+    let program = parse_fragment(
+        br#"$date = get_extension_funcs("DATE");
+echo count($date) . ":" . $date[0] . ":" . $date[47] . ":";
+echo get_extension_funcs("missing") === false ? "false" : "bad";
+return function_exists("get_extension_funcs");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "48:strtotime:date_sun_info:false");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval applies php-src scalar binding and exposes invalid types as catchable errors.
+#[test]
+fn execute_program_get_extension_funcs_coercions_are_php_compatible() {
+    let program = parse_fragment(
+        br#"echo get_extension_funcs(0) === false ? "scalar" : "bad";
+try {
+    get_extension_funcs([]);
+} catch (TypeError $error) {
+    echo "|" . $error->getMessage();
+}
+return get_extension_funcs(null) === false;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "scalar|get_extension_funcs(): Argument #1 ($extension) must be of type string, array given"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(
+        values.warnings,
+        vec!["\nDeprecated: get_extension_funcs(): Passing null to parameter #1 ($extension) of type string is deprecated"]
+    );
+}
+
+/// Verifies eval strict-types calls reject scalar coercion for get_extension_funcs().
+#[test]
+fn execute_program_get_extension_funcs_honors_strict_types() {
+    let program = parse_fragment(
+        br#"declare(strict_types=1);
+try {
+    get_extension_funcs(0);
+    echo "bad";
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "get_extension_funcs(): Argument #1 ($extension) must be of type string, int given"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert!(values.warnings.is_empty());
+}
+
+/// Verifies eval callables retain their defining compilation unit's strictness.
+#[test]
+fn execute_program_get_extension_funcs_retains_callable_lexical_strictness() {
+    let strict_definitions = parse_fragment(
+        br#"declare(strict_types=1);
+function strict_eval_function() { return get_extension_funcs(0); }
+$strict_eval_closure = static function() { return get_extension_funcs(0); };
+class StrictEvalMethod { public static function direct() { return get_extension_funcs(0); } }
+trait StrictEvalTrait { public function imported() { return get_extension_funcs(0); } }
+class StrictEvalTraitConsumer { use StrictEvalTrait; }"#,
+    )
+    .expect("parse strict callable definitions");
+    let weak_calls = parse_fragment(
+        br#"try { strict_eval_function(); echo "function"; } catch (TypeError $error) { echo "F"; }
+try { $strict_eval_closure(); echo "closure"; } catch (TypeError $error) { echo "C"; }
+try { StrictEvalMethod::direct(); echo "method"; } catch (TypeError $error) { echo "M"; }
+$trait_consumer = new StrictEvalTraitConsumer();
+try { $trait_consumer->imported(); echo "trait"; } catch (TypeError $error) { echo "T"; }
+return true;"#,
+    )
+    .expect("parse weak callable invocations");
+    let weak_definitions = parse_fragment(
+        br#"function weak_eval_function() { return get_extension_funcs(0) === false; }
+$weak_eval_closure = static function() { return get_extension_funcs(0) === false; };
+class WeakEvalMethod { public static function direct() { return get_extension_funcs(0) === false; } }
+trait WeakEvalTrait { public function imported() { return get_extension_funcs(0) === false; } }
+class WeakEvalTraitConsumer { use WeakEvalTrait; }"#,
+    )
+    .expect("parse weak callable definitions");
+    let strict_calls = parse_fragment(
+        br#"declare(strict_types=1);
+$trait_consumer = new WeakEvalTraitConsumer();
+return weak_eval_function()
+    && $weak_eval_closure()
+    && WeakEvalMethod::direct()
+    && $trait_consumer->imported();"#,
+    )
+    .expect("parse strict callable invocations");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program_with_context(
+        &mut context,
+        &strict_definitions,
+        &mut scope,
+        &mut values,
+    )
+    .expect("declare strict callables");
+    let weak_result = execute_program_with_context(&mut context, &weak_calls, &mut scope, &mut values)
+        .expect("weak caller must catch each strict callable error");
+
+    assert_eq!(values.output, "FCMT");
+    assert_eq!(values.get(weak_result), FakeValue::Bool(true));
+
+    execute_program_with_context(&mut context, &weak_definitions, &mut scope, &mut values)
+        .expect("declare weak callables");
+    let strict_result =
+        execute_program_with_context(&mut context, &strict_calls, &mut scope, &mut values)
+            .expect("strict caller must not alter weak callable bodies");
+
+    assert_eq!(values.get(strict_result), FakeValue::Bool(true));
+    assert!(values.warnings.is_empty());
 }
 
 /// Verifies eval `extension_loaded()` resolves the compile-time-known extension set.

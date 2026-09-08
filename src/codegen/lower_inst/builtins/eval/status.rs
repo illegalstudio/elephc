@@ -10,7 +10,9 @@
 use super::*;
 
 /// Emits a fatal diagnostic when the eval bridge reports any non-zero status.
-pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
+pub(in crate::codegen::lower_inst::builtins) fn emit_eval_status_check(
+    ctx: &mut FunctionContext<'_>,
+) {
     let ok_label = ctx.next_label("eval_status_ok");
     let parse_error_label = ctx.next_label("eval_status_parse_error");
     let throwable_label = ctx.next_label("eval_status_throwable");
@@ -27,7 +29,7 @@ pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
     );
     emit_eval_fatal_message(ctx, EVAL_RUNTIME_FATAL_MESSAGE);
     ctx.emitter.label(&parse_error_label);
-    emit_eval_fatal_message(ctx, EVAL_PARSE_ERROR_MESSAGE);
+    crate::codegen::lower_inst::exceptions::emit_parse_error(ctx, EVAL_PARSE_ERROR_MESSAGE);
     ctx.emitter.label(&throwable_label);
     emit_eval_throw_current(ctx);
     ctx.emitter.label(&unsupported_label);

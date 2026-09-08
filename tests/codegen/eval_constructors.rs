@@ -10,6 +10,32 @@
 
 use crate::support::{compile_and_run, compile_and_run_capture};
 
+/// Verifies a constructor argument TypeError names the constructor and does not cross the eval
+/// bridge as a Rust panic or continue into the constructor body.
+fn assert_constructor_type_error(
+    label: &str,
+    callable: &str,
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+) {
+    assert!(!success, "{label}: constructor unexpectedly succeeded");
+    assert!(
+        stdout.contains("Fatal error: Uncaught TypeError:")
+            && stdout.contains(&format!("{callable}::__construct(): Argument #2")),
+        "{label}: stdout did not contain the named constructor TypeError: {stdout}"
+    );
+    assert!(!stdout.contains("{callable}"), "{label}: unresolved callable placeholder: {stdout}");
+    assert!(!stdout.contains("bad"), "{label}: constructor continued after TypeError: {stdout}");
+    assert!(
+        !stdout.contains("panicked at")
+            && !stdout.contains("thread '")
+            && !stderr.contains("panicked at")
+            && !stderr.contains("thread '"),
+        "{label}: output leaked a Rust panic: stdout={stdout:?} stderr={stderr:?}"
+    );
+}
+
 /// Verifies AOT constructor by-reference args write back to eval lvalue targets.
 #[test]
 fn test_eval_dynamic_new_constructor_by_ref_writes_back_to_lvalue_targets() {
@@ -293,21 +319,12 @@ echo "bad";');
 "#,
     );
 
-    assert!(
-        !out.success,
-        "expected eval runtime fatal, stdout={:?} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        out.stderr
-    );
-    assert!(
-        !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-        "stderr leaked a Rust panic: {}",
-        out.stderr
+    assert_constructor_type_error(
+        "positional",
+        "EvalCtorPrepFatalBridge",
+        out.success,
+        &out.stdout,
+        &out.stderr,
     );
 }
 
@@ -351,21 +368,17 @@ echo "bad";');
 
     for (label, source) in cases {
         let out = compile_and_run_capture(source);
-        assert!(
-            !out.success,
-            "{label}: expected eval runtime fatal, stdout={:?} stderr={}",
-            out.stdout, out.stderr
-        );
-        assert_eq!(out.stdout, "", "{label}: unexpected stdout");
-        assert!(
-            out.stderr.contains("Fatal error: eval() runtime failed"),
-            "{label}: stderr did not contain eval runtime fatal diagnostic: {}",
-            out.stderr
-        );
-        assert!(
-            !out.stderr.contains("panicked at") && !out.stderr.contains("thread '"),
-            "{label}: stderr leaked a Rust panic: {}",
-            out.stderr
+        let callable = if label == "named" {
+            "EvalCtorNamedPrepFatalBridge"
+        } else {
+            "EvalCtorSpreadPrepFatalBridge"
+        };
+        assert_constructor_type_error(
+            label,
+            callable,
+            out.success,
+            &out.stdout,
+            &out.stderr,
         );
     }
 }

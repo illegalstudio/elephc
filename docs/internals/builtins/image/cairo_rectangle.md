@@ -2,7 +2,7 @@
 title: "cairo_rectangle() — internals"
 description: "Compiler internals for cairo_rectangle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 428
+  order: 429
 ---
 
 ## `cairo_rectangle()` — internals

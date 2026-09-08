@@ -7216,7 +7216,10 @@ echo function_exists("sys_get_temp_dir");');
     // interpreter cannot read `--php-version` itself, so the compiler forwards the profile to
     // it; this program compiles with the default, hence 8.5.0. `eval_follows_a_non_default_profile`
     // in `php_version_surface_tests` is where the forwarding itself is measured.
-    assert_eq!(out, "time:8.5.0:/tmp:cwd:call-time:8.5.0:call-cwd:/tmp:1111");
+    assert_eq!(
+        out,
+        "time:8.5.0:/tmp:cwd:call-time:8.5.0:call-cwd:/tmp:1111"
+    );
 }
 
 /// Verifies eval `date()` formats timestamps and `mktime()` creates them.
@@ -7231,13 +7234,98 @@ echo ":" . (date("U", $ts) === strval($ts) ? "U" : "bad");
 echo ":" . call_user_func("date", "Y", $ts);
 $named = call_user_func_array("mktime", ["hour" => 0, "minute" => 0, "second" => 0, "month" => 1, "day" => 1, "year" => 2000]);
 echo ":" . date(format: "Y", timestamp: $named);
+$short = call_user_func_array("mktime", ["hour" => 0, "minute" => 0, "second" => 0]);
+$positional = mktime(0, 0, 0);
+echo ":" . ($short === $positional ? "defaults" : "bad");
 echo ":"; echo function_exists("date"); echo function_exists("mktime");');
 "#,
     );
     assert_eq!(
         out,
-        "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:11"
+        "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:defaults:11"
     );
+}
+
+/// Verifies opaque eval date calls use the same timelib tokens, parsing, aliases, and validation.
+#[test]
+fn test_eval_datetime_uses_shared_timelib_and_alias_binding() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo gmdate("W|P|e|c|u|v", 0), "|";
+echo strtotime("+1 day", 0);');
+"#,
+    );
+    assert_eq!(
+        out,
+        "01|+00:00|UTC|1970-01-01T00:00:00+00:00|000000|000|86400"
+    );
+}
+
+/// Verifies eval rejects invalid timezone identifiers without replacing the previous timezone.
+#[test]
+fn test_eval_datetime_rejects_invalid_default_timezone() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$mask = error_reporting(0);
+date_default_timezone_set("Europe/Paris");
+$valid = date_default_timezone_set("Definitely/Not_A_Zone");
+error_reporting($mask);
+if ($valid) { echo "bad"; } else { echo date_default_timezone_get(); }');
+"#,
+    );
+    assert_eq!(out, "Europe/Paris");
+}
+
+/// Verifies AOT and opaque eval calls mutate and observe one request timezone state.
+#[test]
+fn test_eval_datetime_shares_default_timezone_with_aot() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("Europe/Paris");
+eval('echo date_default_timezone_get(), "|";
+date_default_timezone_set("America/New_York");');
+echo date_default_timezone_get(), "|";
+eval('echo date("H", 0);');
+"#,
+    );
+    assert_eq!(out, "Europe/Paris|America/New_York|19");
+}
+
+/// Verifies eval procedural date factories preserve their false-on-invalid contract.
+#[test]
+fn test_eval_datetime_factory_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$created = date_create("not a date");
+if ($created === false) { echo "false"; } else { echo "bad"; }');
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies eval date aliases bind reordered named arguments.
+#[test]
+fn test_eval_datetime_named_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$date = new DateTime("@0");
+echo date_format(format: "Y-m-d", object: $date);');
+"#,
+    );
+    assert_eq!(out, "1970-01-01");
+}
+
+/// Verifies named eval mktime arguments are evaluated once before builtin fallback dispatch.
+#[test]
+fn test_eval_named_gmmktime_argument_is_evaluated_once() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function eval_gmmktime_hour() { static $n = 0; $n++; return $n; }
+gmmktime(year: 2024, day: 1, month: 1, second: 0, minute: 0, hour: eval_gmmktime_hour());
+echo eval_gmmktime_hour();');
+"#,
+    );
+    assert_eq!(out, "2");
 }
 
 /// Verifies eval function probes recognize the DateTime/calendar aliases that static elephc
@@ -7405,6 +7493,19 @@ echo get_class($a), ":", $a->format("Y"), ":", $b->format("Y-m-d"), ":", $c->for
     assert_eq!(out, "DateTimeImmutable:1970:2021-07-08:2021-07-08");
 }
 
+/// Verifies DateTime constructors invoked inside eval initialize the native object before any
+/// cross-conversion factory reads it.
+#[test]
+fn test_eval_datetime_construction_preserves_the_requested_instant() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return (new DateTimeImmutable("2020-05-06"))->format("Y-m-d");'), ":";
+echo eval('return (new DateTime("2021-07-08"))->format("Y-m-d");');
+"#,
+    );
+    assert_eq!(out, "2020-05-06:2021-07-08");
+}
+
 /// A `Class::method` string callable, whose class and method are inside ONE literal.
 ///
 /// See `test_eval_reaches_datetime_through_a_literal_callable` for why these four channels are
@@ -7498,7 +7599,7 @@ $full = strtotime("2024-06-15 12:30:45");
 echo ":" . date("Y-m-d H:i:s", $full);
 $short = strtotime("2024-06-15T12:30");
 echo ":" . date("Y-m-d H:i:s", $short);
-echo ":" . (strtotime("2024/06/15") === -1 ? "bad" : "wrong");
+echo ":" . (strtotime("not a date") === false ? "bad" : "wrong");
 $call = call_user_func("strtotime", "2024-01-02 03:04:05");
 echo ":" . date("Y-m-d H:i:s", $call);
 $spread = call_user_func_array("strtotime", ["datetime" => "2024-01-02"]);
@@ -7512,15 +7613,15 @@ echo function_exists("strtotime");');
     );
 }
 
-/// Verifies eval `microtime()` returns a plausible floating timestamp by all call paths.
+/// Verifies eval `microtime()` preserves PHP's string/float result-mode contract.
 #[test]
 fn test_eval_dispatches_microtime_builtin_call() {
     let out = compile_and_run(
         r#"<?php
-eval('echo microtime() > 1000000000 ? "now" : "bad"; echo ":";
-echo microtime(as_float: false) > 1000000000 ? "named" : "bad"; echo ":";
-echo call_user_func("microtime", true) > 1000000000 ? "call" : "bad"; echo ":";
-echo call_user_func_array("microtime", ["as_float" => true]) > 1000000000 ? "array" : "bad";
+eval('echo is_string(microtime()) ? "now" : "bad"; echo ":";
+echo is_string(microtime(as_float: false)) ? "named" : "bad"; echo ":";
+echo is_float(call_user_func("microtime", true)) ? "call" : "bad"; echo ":";
+echo is_float(call_user_func_array("microtime", ["as_float" => true])) ? "array" : "bad";
 echo ":"; echo function_exists("microtime");');
 "#,
     );
@@ -9798,6 +9899,47 @@ echo eval('return define("EvalErrorContractConst", 2) ? "bad" : "ok";');
     );
 }
 
+/// Verifies eval and static code share one `error_reporting()` mask and suppress eval warnings.
+#[test]
+fn test_eval_error_reporting_shares_runtime_mask_with_static_code() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo error_reporting(), "|";
+eval('echo error_reporting(0), "|"; define("EvalMaskedConstant", 1); define("EvalMaskedConstant", 2);');
+echo error_reporting(), "|";
+echo eval('return error_reporting(E_ALL);'), "|";
+echo error_reporting();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "30719|30719|0|0|30719");
+    assert_eq!(out.stderr, "");
+}
+
+/// Verifies eval E_STRICT reads use the shared E_DEPRECATED runtime channel.
+#[test]
+fn test_eval_e_strict_deprecation_matches_php_src() {
+    let out = compile_and_run_capture(r#"<?php eval('echo E_STRICT, "\n";');"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2048\n");
+    assert_eq!(
+        out.stderr,
+        "\nDeprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed"
+    );
+}
+
+/// Verifies eval `setlocale()` exposes target `LC_*` constants and candidate ordering.
+#[test]
+fn test_eval_setlocale_matches_static_process_locale_state() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return setlocale(LC_ALL, ["__elephc_invalid_locale__", "C"]);'), "|";
+echo setlocale(LC_ALL, 0);
+"#,
+    );
+    assert_eq!(out, "C|C");
+}
+
 /// Verifies malformed input, builtin failure, and non-callables do not leak Rust panics.
 #[test]
 fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
@@ -11956,14 +12098,17 @@ class EvalMethodArrayArgBox {
     }
 
     public function run() {
-        return eval('return $this->countItems([1, 2, 3]) . ":" . EvalMethodArrayArgBox::countStatic([4, 5]);');
+        return eval('return $this->countItems([1, 2, 3]) . ":" .
+            EvalMethodArrayArgBox::countStatic([4, 5]) . ":" .
+            $this->countItems(["left" => 6, "right" => 7]) . ":" .
+            EvalMethodArrayArgBox::countStatic(["only" => 8]);');
     }
 }
 
 echo (new EvalMethodArrayArgBox())->run();
 "#,
     );
-    assert_eq!(out, "3:2");
+    assert_eq!(out, "3:2:2:1");
 }
 
 /// Verifies eval fragments can pass iterable arguments to AOT methods and constructors.
@@ -15639,8 +15784,10 @@ echo $box->id();');
 "#,
     );
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.contains(
+            "EvalReturnBadScalar::id(): Return value must be of type int, string returned"
+        ),
+        "stderr did not contain the PHP return TypeError: {err}"
     );
 
     let err = compile_and_run_expect_failure(
@@ -15668,11 +15815,13 @@ $child->make();');
 "#,
     );
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.contains(
+            "EvalReturnStaticRuntimeBase::make(): Return value must be of type static, object returned"
+        ),
+        "stderr did not contain the PHP static return TypeError: {err}"
     );
 
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 eval('class EvalReturnImplicitBad {
     public function id(): ?int {}
@@ -15681,10 +15830,7 @@ $box = new EvalReturnImplicitBad();
 $box->id();');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+    assert_eq!(out, "");
 }
 
 /// Verifies eval-declared abstract classes can defer interface methods to concrete children.

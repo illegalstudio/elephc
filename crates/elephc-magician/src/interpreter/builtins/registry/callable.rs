@@ -47,11 +47,14 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
         context,
         values,
     )?;
-    if !values.is_array_like(arg_array)? {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let evaluated_args = eval_array_call_arg_values(arg_array, context, values)?;
-    eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+    let result = (|| {
+        if !values.is_array_like(arg_array)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let evaluated_args = eval_array_call_arg_values(arg_array, context, values)?;
+        eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+    })();
+    finish_evaluated_callable(callback, result, context, values)
 }
 
 /// Dispatches `call_user_func` with optional lexical scope for special class receivers.
@@ -66,12 +69,13 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values_from_scope(
     };
     let callback =
         eval_call_user_func_callback(*callback, "call_user_func", lexical_scope, context, values)?;
-    eval_evaluated_callable_with_call_user_func_values(
+    let result = eval_evaluated_callable_with_call_user_func_values(
         &callback,
         callback_args.to_vec(),
         context,
         values,
-    )
+    );
+    finish_evaluated_callable(callback, result, context, values)
 }
 
 /// Normalizes a `call_user_func*` callback and maps non-invokable objects to PHP's TypeError.
@@ -84,10 +88,17 @@ fn eval_call_user_func_callback(
 ) -> Result<EvaluatedCallable, EvalStatus> {
     match eval_callable_with_optional_scope(callback, context, lexical_scope, values) {
         Ok(callback) => {
-            eval_validate_call_user_func_callback(&callback, function_name, context, values)?;
+            if let Err(status) =
+                eval_validate_call_user_func_callback(&callback, function_name, context, values)
+            {
+                let _ = release_evaluated_callable(callback, None, values);
+                return Err(status);
+            }
             Ok(callback)
         }
-        Err(EvalStatus::UnsupportedConstruct) if values.type_tag(callback)? == EVAL_TAG_OBJECT => {
+        Err(EvalStatus::UnsupportedConstruct)
+            if matches!(values.type_tag(callback)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) =>
+        {
             eval_call_user_func_type_error(
                 function_name,
                 "no array or string given",
@@ -97,6 +108,36 @@ fn eval_call_user_func_callback(
         }
         Err(status) => Err(status),
     }
+}
+
+/// Releases a normalization-owned receiver, or transfers it when the returned cell is that owner.
+pub(in crate::interpreter) fn release_evaluated_callable(
+    callback: EvaluatedCallable,
+    returned_cell: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if let EvaluatedCallable::ObjectMethod { object, owns_receiver: true, .. } = callback {
+        if returned_cell != Some(object) {
+            values.release(object)?;
+        }
+    }
+    Ok(())
+}
+
+/// Finishes one normalization owner after invocation, preserving the original invocation error.
+pub(in crate::interpreter) fn finish_evaluated_callable(
+    callback: EvaluatedCallable,
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let escaped = match &result {
+        Ok(value) => Some(*value),
+        Err(EvalStatus::UncaughtThrowable) => context.pending_throw(),
+        Err(_) => None,
+    };
+    let cleanup = release_evaluated_callable(callback, escaped, values);
+    result.and_then(|value| cleanup.map(|()| value))
 }
 
 /// Normalizes one PHP callback value for eval dynamic callable dispatch.
@@ -137,7 +178,7 @@ pub(in crate::interpreter) fn eval_callable_with_optional_scope(
             owner,
         });
     }
-    if values.type_tag(callback)? == EVAL_TAG_OBJECT {
+    if matches!(values.type_tag(callback)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) {
         return eval_object_callable(callback, context, values);
     }
     if values.is_array_like(callback)? {
@@ -224,6 +265,7 @@ fn eval_closure_object_target_callable(target: &EvalClosureObjectTarget) -> Eval
             called_class: called_class.clone(),
             native_class: native_class.clone(),
             bridge_scope: bridge_scope.clone(),
+            owns_receiver: false,
         },
         EvalClosureObjectTarget::StaticMethod {
             class_name,
@@ -272,14 +314,27 @@ pub(in crate::interpreter) fn eval_array_callable(
         Err(status) => {
             values.release(zero)?;
             values.release(one)?;
+            values.release(receiver)?;
             return Err(status);
         }
     };
     values.release(zero)?;
     values.release(one)?;
-    let method =
-        String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
-    match values.type_tag(receiver)? {
+    let method = match consume_callable_string(method, values) {
+        Ok(method) => method,
+        Err(status) => {
+            let _ = values.release(receiver);
+            return Err(status);
+        }
+    };
+    let receiver_tag = match values.type_tag(receiver) {
+        Ok(tag) => tag,
+        Err(status) => {
+            let _ = values.release(receiver);
+            return Err(status);
+        }
+    };
+    match receiver_tag {
         EVAL_TAG_OBJECT => {
             let native_dispatch = context
                 .eval_object_callable_native_dispatch(callback, receiver, &method)
@@ -301,11 +356,11 @@ pub(in crate::interpreter) fn eval_array_callable(
                 called_class,
                 native_class,
                 bridge_scope,
+                owns_receiver: true,
             })
         }
         EVAL_TAG_STRING => {
-            let class_name = String::from_utf8(values.string_bytes(receiver)?)
-                .map_err(|_| EvalStatus::RuntimeFatal)?;
+            let class_name = consume_callable_string(receiver, values)?;
             if let Some(callable) = eval_special_class_array_callable(
                 &class_name,
                 &method,
@@ -334,8 +389,22 @@ pub(in crate::interpreter) fn eval_array_callable(
                 bridge_scope,
             })
         }
-        _ => Err(EvalStatus::UnsupportedConstruct),
+        _ => {
+            values.release(receiver)?;
+            Err(EvalStatus::UnsupportedConstruct)
+        }
     }
+}
+
+/// Copies a fetched callable name to Rust and releases its temporary runtime-cell owner.
+fn consume_callable_string(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let bytes = values.string_bytes(value);
+    let cleanup = values.release(value);
+    let bytes = bytes.and_then(|bytes| cleanup.map(|()| bytes))?;
+    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Resolves deprecated `self`/`static`/`parent` callable arrays inside method scope.
@@ -365,6 +434,7 @@ fn eval_special_class_array_callable(
                 called_class: Some(receiver.called_class),
                 native_class: None,
                 bridge_scope: None,
+                owns_receiver: false,
             }));
         }
     }

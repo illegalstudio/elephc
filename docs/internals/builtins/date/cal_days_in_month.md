@@ -2,7 +2,7 @@
 title: "cal_days_in_month() — internals"
 description: "Compiler internals for cal_days_in_month(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 183
+  order: 184
 ---
 
 ## `cal_days_in_month()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:672](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L672) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:877](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L877) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

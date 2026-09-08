@@ -9,6 +9,7 @@
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
 use crate::errors::CompileError;
+use crate::names::{php_symbol_key, property_hook_get_method};
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::types::{PhpType, TypeEnv};
 
@@ -27,6 +28,14 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if self.current_method.as_deref() == Some("__construct")
+            && matches!(object.kind, ExprKind::This)
+        {
+            if let Some(class_name) = &self.current_class {
+                self.constructor_properties_read
+                    .insert((class_name.clone(), property.to_string()));
+            }
+        }
         // Flow-narrowing: a ternary like `$var->prop instanceof X ? ... : ...` records the
         // narrowed type of a simple property access under a synthetic env key (see
         // `branch_guard_narrowing`). Consult it first so a guarded branch sees the narrowed type.
@@ -234,6 +243,10 @@ impl Checker {
                 return Ok(ty);
             }
             if let Some((_, (_, ty))) = class_info.visible_property(property) {
+                let getter = php_symbol_key(&property_hook_get_method(property));
+                if let Some(signature) = class_info.methods.get(&getter) {
+                    return Ok(signature.return_type.clone());
+                }
                 return Ok(ty.clone());
             }
             if let Some(sig) = class_info.methods.get("__get") {
@@ -245,10 +258,10 @@ impl Checker {
                 // value is statically `Mixed` because we cannot infer it.
                 return Ok(PhpType::Mixed);
             }
-            return Err(CompileError::new(
-                expr.span,
-                &format!("Undefined property: {}::{}", class_name, property),
-            ));
+            // PHP permits reads of undeclared object properties. The runtime emits an
+            // E_WARNING naming the receiver's concrete class and evaluates the read as null.
+            // Keep the result Mixed so codegen can preserve that warning/null behavior.
+            return Ok(PhpType::Mixed);
         }
         Err(CompileError::new(
             expr.span,

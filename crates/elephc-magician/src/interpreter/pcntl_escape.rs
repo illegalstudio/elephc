@@ -107,9 +107,9 @@ pub(crate) fn value_contains_foreign_pcntl_callable(
                         return Err(status);
                     }
                 };
-                let properties = match eval_debug_object_properties(
+                let properties = match eval_object_storage_properties(
                     value,
-                    Some(identity),
+                    identity,
                     &class_name,
                     context,
                     values,

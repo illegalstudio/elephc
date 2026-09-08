@@ -8,13 +8,17 @@
 //! - Coercions and result restoration preserve the declared slot representation.
 
 use super::*;
+use crate::codegen::lower_inst::enums::emit_mixed_tag_branch;
+use crate::codegen::platform::Arch;
 
 /// Loads an SSA value in the shape required by a typed object property store.
 pub(super) fn load_property_store_value_to_result(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
-    slot_ty: &PhpType,
+    slot: &PropertySlot,
 ) -> Result<()> {
+    let slot_ty = &slot.php_type;
+    let storage_ty = &slot.storage_type;
     let value_ty = ctx.value_php_type(value)?;
     if can_box_value_for_mixed_property(&value_ty, slot_ty) {
         let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
@@ -80,34 +84,310 @@ pub(super) fn load_property_store_value_to_result(
         }
         return Ok(());
     }
-    if can_coerce_tagged_scalar_to_int_property(&value_ty, slot_ty) {
+    if can_coerce_scalar_to_int_property(&value_ty, slot_ty) {
         ctx.load_value_to_result(value)?;
         crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
         return Ok(());
     }
     if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        if matches!(slot_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            ctx.load_value_to_result(value)?;
+            emit_mixed_typed_property_value(ctx, slot, None);
+            return Ok(());
+        }
         load_value_to_first_int_arg(ctx, value)?;
         match slot_ty.codegen_repr() {
             PhpType::Str => emit_mixed_string_for_persistent_store(ctx),
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
-            PhpType::Object(_) => property_values::emit_mixed_object_for_property_store(ctx),
+            PhpType::Object(expected_class) => {
+                ctx.load_value_to_result(value)?;
+                emit_mixed_typed_property_value(ctx, slot, Some(&expected_class));
+            }
             _ => {}
         }
         return Ok(());
     }
     let loaded_ty = ctx.load_value_to_result(value)?;
-    if matches!(slot_ty.codegen_repr(), PhpType::Str) {
+    if storage_ty.codegen_repr() == PhpType::Mixed {
+        emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty.codegen_repr());
+        return Ok(());
+    }
+    if matches!(storage_ty.codegen_repr(), PhpType::Str) {
         abi::emit_call_label(ctx.emitter, "__rt_str_persist");
         return Ok(());
     }
-    if matches!(slot_ty.codegen_repr(), PhpType::Callable) {
+    if matches!(storage_ty.codegen_repr(), PhpType::Callable) {
         callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
-    } else if slot_ty.codegen_repr().is_refcounted() {
+    } else if storage_ty.codegen_repr().is_refcounted() {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty.codegen_repr());
     }
     Ok(())
+}
+
+/// Validates a boxed `Mixed` before retaining a concrete typed-property payload.
+///
+/// Both packed and associative storage are valid PHP arrays. Object properties additionally
+/// accept only the declared class or one of its subclasses. Every rejected runtime shape throws
+/// php-src's typed-property `TypeError` before ownership changes or slot writes occur.
+fn emit_mixed_typed_property_value(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    expected_object_class: Option<&str>,
+) {
+    let accepted = ctx.next_label("mixed_typed_property_accepted");
+    let hash_to_indexed = ctx.next_label("mixed_typed_property_hash_to_indexed");
+    let done = ctx.next_label("mixed_typed_property_done");
+    let bool_case = ctx.next_label("mixed_typed_property_bool");
+    let true_case = ctx.next_label("mixed_typed_property_true");
+    let false_case = ctx.next_label("mixed_typed_property_false");
+    let object_case = ctx.next_label("mixed_typed_property_object");
+    let incomplete_object_case = ctx.next_label("mixed_typed_property_incomplete_object");
+    let fallback_case = ctx.next_label("mixed_typed_property_unknown");
+    let generic_object = expected_object_class
+        .is_some_and(|class_name| class_name.trim_start_matches('\\').is_empty());
+    let closure_object = expected_object_class.is_some_and(|class_name| {
+        class_name
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("Closure")
+    });
+    let expected_type = if generic_object {
+        "object".to_string()
+    } else {
+        expected_object_class
+            .unwrap_or("array")
+            .trim_start_matches('\\')
+            .to_string()
+    };
+    let mut scalar_types = vec![(0, "int"), (1, "string"), (2, "float"), (8, "null"), (9, "resource"), (10, "Closure")];
+    if expected_object_class.is_some() {
+        scalar_types.extend([(4, "array"), (5, "array")]);
+    }
+    let scalar_cases = scalar_types
+        .into_iter()
+        .map(|(tag, type_name)| (tag, type_name, ctx.next_label("mixed_typed_property_type_error")))
+        .collect::<Vec<_>>();
+    let mut object_cases = ctx
+        .module
+        .class_infos
+        .iter()
+        .map(|(class_name, info)| (info.class_id, class_name.trim_start_matches('\\').to_string()))
+        .collect::<Vec<_>>();
+    object_cases.sort_by_key(|(class_id, _)| *class_id);
+    let accepted_object_class_ids = expected_object_class.map(|_| {
+        if generic_object {
+            return object_cases
+                .iter()
+                .map(|(class_id, _)| *class_id)
+                .collect::<Vec<_>>();
+        }
+        object_cases
+            .iter()
+            .filter_map(|(class_id, class_name)| {
+                can_store_object_for_object_property(
+                    ctx,
+                    &PhpType::Object(class_name.clone()),
+                    &slot.php_type,
+                )
+                .then_some(*class_id)
+            })
+            .collect::<Vec<_>>()
+    })
+        .unwrap_or_default();
+    let object_error_cases = object_cases
+        .iter()
+        .map(|(class_id, class_name)| {
+            (
+                *class_id,
+                typed_property_type_error(slot, class_name, &expected_type),
+                ctx.next_label("mixed_typed_property_object_error"),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let tag_reg = abi::int_result_reg(ctx.emitter);
+    if expected_object_class.is_none() {
+        emit_mixed_tag_branch(ctx, tag_reg, 4, &accepted);
+        emit_mixed_tag_branch(
+            ctx,
+            tag_reg,
+            5,
+            if matches!(slot.storage_type.codegen_repr(), PhpType::Array(_)) {
+                &hash_to_indexed
+            } else {
+                &accepted
+            },
+        );
+    }
+    emit_mixed_tag_branch(ctx, tag_reg, 3, &bool_case);
+    emit_mixed_tag_branch(
+        ctx,
+        tag_reg,
+        6,
+        if generic_object { &accepted } else { &object_case },
+    );
+    if generic_object || closure_object {
+        emit_mixed_tag_branch(ctx, tag_reg, 10, &accepted);
+    }
+    for (tag, _, label) in &scalar_cases {
+        emit_mixed_tag_branch(ctx, tag_reg, *tag, label);
+    }
+    abi::emit_jump(ctx.emitter, &fallback_case);
+
+    ctx.emitter.label(&bool_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_case));        // name a false boxed value exactly as PHP's property TypeError does
+            abi::emit_jump(ctx.emitter, &true_case);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");                           // inspect the unboxed boolean payload before formatting its TypeError
+            ctx.emitter.instruction(&format!("jz {}", false_case));             // a zero payload is PHP false
+            abi::emit_jump(ctx.emitter, &true_case);
+        }
+    }
+
+    ctx.emitter.label(&object_case);
+    let class_id_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    let payload_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    abi::emit_load_from_address(ctx.emitter, class_id_reg, payload_reg, 0);
+    if !generic_object {
+        abi::emit_load_int_immediate(ctx.emitter, candidate_reg, -2);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, candidate_reg)); // identify the reserved __PHP_Incomplete_Class object id
+                ctx.emitter.instruction(&format!("b.eq {}", incomplete_object_case)); // preserve php-src's concrete incomplete-object diagnostic
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, candidate_reg)); // identify the reserved __PHP_Incomplete_Class object id
+                ctx.emitter.instruction(&format!("je {}", incomplete_object_case)); // preserve php-src's concrete incomplete-object diagnostic
+            }
+        }
+    }
+    for class_id in &accepted_object_class_ids {
+        abi::emit_load_int_immediate(ctx.emitter, candidate_reg, *class_id as i64);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, candidate_reg)); // compare the concrete payload class with the declared object-property hierarchy
+                ctx.emitter.instruction(&format!("b.eq {}", accepted));         // accept an instance of the declared object type or a subclass
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, candidate_reg)); // compare the concrete payload class with the declared object-property hierarchy
+                ctx.emitter.instruction(&format!("je {}", accepted));           // accept an instance of the declared object type or a subclass
+            }
+        }
+    }
+    for (class_id, _, label) in &object_error_cases {
+        abi::emit_load_int_immediate(ctx.emitter, candidate_reg, *class_id as i64);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, candidate_reg)); // compare the payload object's class id with this static PHP name
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // raise the matching concrete-object property TypeError
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, candidate_reg)); // compare the payload object's class id with this static PHP name
+                ctx.emitter.instruction(&format!("je {}", label));              // raise the matching concrete-object property TypeError
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, &fallback_case);
+
+    ctx.emitter.label(&true_case);
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &typed_property_type_error(slot, "true", &expected_type),
+    );
+    ctx.emitter.label(&false_case);
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &typed_property_type_error(slot, "false", &expected_type),
+    );
+    for (_, type_name, label) in &scalar_cases {
+        ctx.emitter.label(label);
+        crate::codegen::lower_inst::exceptions::emit_type_error(
+            ctx,
+            &typed_property_type_error(slot, type_name, &expected_type),
+        );
+    }
+    for (_, message, label) in &object_error_cases {
+        ctx.emitter.label(label);
+        crate::codegen::lower_inst::exceptions::emit_type_error(ctx, message);
+    }
+    ctx.emitter.label(&incomplete_object_case);
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &typed_property_type_error(slot, "__PHP_Incomplete_Class", &expected_type),
+    );
+    ctx.emitter.label(&fallback_case);
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &typed_property_type_error(slot, "object", &expected_type),
+    );
+
+    ctx.emitter.label(&accepted);
+    match slot.storage_type.codegen_repr() {
+        PhpType::Mixed => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+        PhpType::Callable => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),         // publish the accepted Closure descriptor as the property-store result
+                Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),        // publish the accepted Closure descriptor as the property-store result
+            }
+            callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
+        }
+        storage_ty => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),         // publish the accepted indexed/hash payload as the property-store result
+                Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),        // publish the accepted indexed/hash payload as the property-store result
+            }
+            abi::emit_incref_if_refcounted(ctx.emitter, &storage_ty);
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_to_indexed);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                             // pass the decoded numeric-key hash to the indexed-array converter
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_indexed_array");
+        }
+        Arch::X86_64 => {
+            // `__rt_mixed_unbox` already leaves the low payload in rdi.
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_indexed_array");
+        }
+    }
+    ctx.emitter.label(&done);
+}
+
+/// Formats php-src's typed-property assignment error for one rejected runtime value name.
+fn typed_property_type_error(
+    slot: &PropertySlot,
+    actual_type: &str,
+    expected_type: &str,
+) -> String {
+    let property = format!(
+        "{}::${}",
+        slot.declaring_class_name.trim_start_matches('\\'),
+        slot.property,
+    );
+    if slot.is_reference {
+        format!(
+            "Cannot assign {} to reference held by property {} of type {}",
+            actual_type, property, expected_type,
+        )
+    } else {
+        format!(
+            "Cannot assign {} to property {} of type {}",
+            actual_type, property, expected_type,
+        )
+    }
 }
 
 /// Emits a compact packed-field store without writing object-property metadata words.

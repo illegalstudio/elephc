@@ -98,7 +98,7 @@ return $box->read("not numeric");"#,
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("non-numeric string should fail int parameter type");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 }
 
 /// Verifies eval-declared method class/interface type hints accept matching eval objects.

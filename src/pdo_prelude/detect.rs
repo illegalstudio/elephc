@@ -524,6 +524,11 @@ fn stmt_refs_pdo(stmt: &Stmt) -> bool {
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_pdo(object) || expr_refs_pdo(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_refs_pdo(object) || expr_refs_pdo(property) || expr_refs_pdo(value),
         StmtKind::PropertyArrayAssign {
             object,
             index,

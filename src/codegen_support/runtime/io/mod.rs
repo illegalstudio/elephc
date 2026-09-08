@@ -273,7 +273,8 @@ pub(crate) use user_wrapper_url_stat::{
 };
 pub(crate) use print_r_walk::{
     emit_print_r_close, emit_print_r_hash, emit_print_r_indexed, emit_print_r_int_key,
-    emit_print_r_open, emit_print_r_spaces, emit_print_r_str_key, emit_print_r_value,
+    emit_print_r_object_properties, emit_print_r_open, emit_print_r_spaces, emit_print_r_str_key,
+    emit_print_r_value,
 };
 pub(crate) use print_r_buffer::{emit_pr_append, emit_pr_finish, emit_pr_write};
 pub(crate) use ob_buffer::{
@@ -287,7 +288,8 @@ pub(crate) use ob_handler::{
 pub(crate) use ob_status::{emit_ob_get_status, emit_ob_list_handlers, emit_ob_status_entry};
 pub(crate) use var_dump_object::{
     emit_var_dump_emit_object_key, emit_var_dump_emit_recursion_line,
-    emit_var_dump_emit_uninit_line, emit_var_dump_object, emit_var_dump_open_object,
+    emit_var_dump_emit_uninit_line, emit_var_dump_object, emit_var_dump_open_debug_object,
+    emit_var_dump_open_object,
     emit_vd_obj_count, emit_vd_obj_desc, emit_vd_seen_find, emit_vd_seen_pop, emit_vd_seen_push,
 };
 pub(crate) use var_dump_walk::{

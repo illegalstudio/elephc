@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// Routes one eval bridge status through the shared fatal/throwable handling.
+pub(in crate::codegen::lower_inst) fn emit_eval_bridge_status_check(
+    ctx: &mut FunctionContext<'_>,
+) {
+    eval::emit_eval_status_check(ctx);
+}
+
 /// Lowers a statically-known eval fragment through the current bridge fallback path.
 pub(in crate::codegen::lower_inst) fn lower_eval_literal_call(
     ctx: &mut FunctionContext<'_>,
@@ -284,4 +291,3 @@ pub(in crate::codegen::lower_inst) fn lower_eval_static_property_set(
 ) -> Result<()> {
     eval::lower_eval_static_property_set(ctx, inst, value, class_name, property_name)
 }
-

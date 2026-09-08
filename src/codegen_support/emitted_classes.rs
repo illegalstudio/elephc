@@ -301,6 +301,15 @@ fn collect_dynamic_object_factory_classes_in_stmt(
         | StmtKind::StaticPropertyArrayPush { value: expr, .. } => {
             collect_dynamic_object_factory_classes_in_expr(expr, classes, names);
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            collect_dynamic_object_factory_classes_in_expr(object, classes, names);
+            collect_dynamic_object_factory_classes_in_expr(property, classes, names);
+            collect_dynamic_object_factory_classes_in_expr(value, classes, names);
+        }
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {

@@ -25,6 +25,66 @@ echo sum3(...$args, c: 30);
     assert_eq!(out, "60");
 }
 
+/// Verifies heterogeneous spread elements are unboxed for concrete object parameters.
+#[test]
+fn test_heterogeneous_spread_unboxes_concrete_object_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class StartBoundary {}
+class IntervalBoundary {}
+class Inspector {
+    public function inspect(
+        StartBoundary $start,
+        IntervalBoundary $interval,
+        mixed $end,
+        int $options = 0,
+    ): void {
+        echo get_class($start), "|", get_class($interval), "|", get_class($end), "|", $options;
+    }
+}
+$args = [new StartBoundary(), new IntervalBoundary(), new StartBoundary()];
+(new Inspector())->inspect(...$args);
+"#,
+    );
+    assert_eq!(
+        out,
+        "StartBoundary|IntervalBoundary|StartBoundary|0"
+    );
+}
+
+/// Verifies a function-returned spread array and its object elements are released post-call.
+#[test]
+fn test_function_returned_spread_releases_temporary_array_after_call() {
+    let out = compile_and_run(
+        r#"<?php
+class StartBoundary {}
+class IntervalBoundary {}
+class Inspector {
+    public function inspect(
+        StartBoundary $start,
+        IntervalBoundary $interval,
+        mixed $end,
+        int $options = 0,
+    ): void {
+        echo get_class($start), "|", get_class($interval), "|", get_class($end), "|", $options, "\n";
+    }
+}
+function make_args(): array {
+    return [new StartBoundary(), new IntervalBoundary(), new StartBoundary()];
+}
+$inspector = new Inspector();
+$inspector->inspect(...make_args());
+echo spl_object_id(new StartBoundary()), "|";
+echo spl_object_id(new IntervalBoundary()), "|";
+echo spl_object_id(new StartBoundary());
+"#,
+    );
+    assert_eq!(
+        out,
+        "StartBoundary|IntervalBoundary|StartBoundary|0\n4|4|4"
+    );
+}
+
 /// Verifies named arguments after a short spread fill gaps using defaults;
 /// `sum3(...$args, c: 30)` with `$args = [10]` uses default `$b = 2` and `$c = 30`, output "42".
 #[test]

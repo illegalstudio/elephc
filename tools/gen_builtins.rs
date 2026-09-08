@@ -262,6 +262,8 @@ fn type_name(ty: TypeSpec) -> String {
         TypeSpec::Float => "float".to_string(),
         TypeSpec::Str => "string".to_string(),
         TypeSpec::Bool => "bool".to_string(),
+        TypeSpec::False => "false".to_string(),
+        TypeSpec::Union(members) => members.iter().map(|member| type_name(*member)).collect::<Vec<_>>().join("|"),
         TypeSpec::Mixed => "mixed".to_string(),
         TypeSpec::Void => "void".to_string(),
         // elephc extensions to the neutral spelling. Without these the generated pages would

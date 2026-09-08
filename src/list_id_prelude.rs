@@ -19,8 +19,8 @@
 //!   a use, so non-datetime binaries never carry the ~13 KB baked table.
 //! - The internal `$countryCode` default is `""` (not `null`): `=== null` on a
 //!   null-defaulted param miscompiles, and the function is internal so no user
-//!   observes the default. PER_COUNTRY with an empty country throws `ValueError`
-//!   with PHP's exact message, matching the interpreter.
+//!   observes the default. A hidden entry-point label keeps procedural and OOP
+//!   validation messages exact without duplicating the baked filtering table.
 
 use crate::parser::ast::{BinOp, CastType, Program};
 use crate::synthetic_class::{
@@ -31,27 +31,16 @@ use crate::synthetic_class::{
 mod detect;
 mod table;
 
-/// The `ValueError` message PHP raises when `PER_COUNTRY` is requested without a country.
-/// Reproduced verbatim, including the argument numbering, because the interpreter's exact
-/// text is what programs match on.
-const PER_COUNTRY_WITHOUT_COUNTRY: &str = "DateTimeZone::listIdentifiers(): Argument #2 ($countryCode) must be a two-letter ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is DateTimeZone::PER_COUNTRY";
+/// Shared suffix of the `ValueError` raised for an invalid `PER_COUNTRY` country code.
+const INVALID_PER_COUNTRY_SUFFIX: &str = "(): Argument #2 ($countryCode) must be a two-letter ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is DateTimeZone::PER_COUNTRY";
 
-/// Builds `__elephc_list_identifiers`, which filters the baked timezone table by group mask
-/// or by country.
+/// Builds the shared php-src group/country filter used by both public call surfaces.
 ///
-/// The parameters are UNTYPED, as in the PHP form: the internal `$countryCode` default is
-/// `""` rather than `null` because `=== null` on a null-defaulted parameter miscompiles, and
-/// the function is internal so no user observes the default.
-///
-/// The table used to be spliced into the source text through a `__ELEPHC_TZ_GROUPS_TABLE__`
-/// placeholder. It is now simply the string literal the body reads, so there is no
-/// placeholder to collide with table content and no escaping question.
-pub(crate) fn list_id_declarations() -> Program {
-    internal_declarations(|| {
-        vec![function("__elephc_list_identifiers")
-            .param_untyped_default("timezoneGroup", e_int(2047))
-            .param_untyped_default("countryCode", e_str(""))
-            .body(vec![
+/// The caller supplies `timezoneGroup`, `countryCode`, and the PHP-visible `entryPoint`
+/// variable names. Keeping this as AST data makes reflection invocation of the synthetic
+/// method follow the same filtering and `ValueError` path as resolver-desugared direct calls.
+pub(crate) fn list_identifier_filter_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![
                 s_assign("table", e_str(table::TIMEZONE_GROUPS_TABLE)),
                 s_assign(
                     "rows",
@@ -61,20 +50,31 @@ pub(crate) fn list_id_declarations() -> Program {
                 s_assign(
                     "perCountry",
                     e_binop(
-                        e_binop(e_var("timezoneGroup"), BinOp::BitAnd, e_int(4096)),
-                        BinOp::NotEq,
-                        e_int(0),
+                        e_var("timezoneGroup"),
+                        BinOp::StrictEq,
+                        e_int(4096),
                     ),
                 ),
                 s_if(
                     e_binop(
                         e_var("perCountry"),
                         BinOp::And,
-                        e_binop(e_var("countryCode"), BinOp::StrictEq, e_str("")),
+                        e_binop(
+                            e_call(
+                                "strlen",
+                                vec![e_cast(CastType::String, e_var("countryCode"))],
+                            ),
+                            BinOp::StrictNotEq,
+                            e_int(2),
+                        ),
                     ),
                     vec![s_throw(e_new(
                         "ValueError",
-                        vec![e_str(PER_COUNTRY_WITHOUT_COUNTRY)],
+                        vec![e_binop(
+                            e_var("entryPoint"),
+                            BinOp::Concat,
+                            e_str(INVALID_PER_COUNTRY_SUFFIX),
+                        )],
                     ))],
                     vec![],
                     None,
@@ -106,24 +106,52 @@ pub(crate) fn list_id_declarations() -> Program {
                                 ),
                                 s_if(
                                     e_binop(
-                                        e_binop(
-                                            e_var("mask"),
-                                            BinOp::BitAnd,
-                                            e_var("timezoneGroup"),
-                                        ),
-                                        BinOp::NotEq,
-                                        e_int(0),
+                                        e_var("timezoneGroup"),
+                                        BinOp::StrictEq,
+                                        e_int(4095),
                                     ),
                                     vec![s_array_push("result", e_var("name"))],
                                     vec![],
-                                    None,
+                                    Some(vec![s_if(
+                                        e_binop(
+                                            e_binop(e_var("mask"), BinOp::StrictNotEq, e_int(2048)),
+                                            BinOp::And,
+                                            e_binop(
+                                                e_binop(
+                                                    e_var("mask"),
+                                                    BinOp::BitAnd,
+                                                    e_var("timezoneGroup"),
+                                                ),
+                                                BinOp::NotEq,
+                                                e_int(0),
+                                            ),
+                                        ),
+                                        vec![s_array_push("result", e_var("name"))],
+                                        vec![],
+                                        None,
+                                    )]),
                                 ),
                             ]),
                         ),
                     ],
                 ),
                 s_return(e_var("result")),
-            ])
+            ]
+}
+
+/// Builds `__elephc_list_identifiers`, which filters the baked timezone table by group mask
+/// or by country.
+///
+/// The parameters are UNTYPED, as in the PHP form: the internal `$countryCode` default is
+/// `""` rather than `null` because `=== null` on a null-defaulted parameter miscompiles, and
+/// the function is internal so no user observes the default.
+pub(crate) fn list_id_declarations() -> Program {
+    internal_declarations(|| {
+        vec![function("__elephc_list_identifiers")
+            .param_untyped_default("timezoneGroup", e_int(2047))
+            .param_untyped_default("countryCode", e_str(""))
+            .param_untyped_default("entryPoint", e_str("DateTimeZone::listIdentifiers"))
+            .body(list_identifier_filter_body())
             .build()]
     })
 }
@@ -151,10 +179,10 @@ mod tests {
     use super::*;
     use crate::parser::ast::StmtKind;
 
-    /// Both parameters stay UNTYPED. A hint here would change how the checker infers the
+    /// All three parameters stay UNTYPED. A hint here would change how the checker infers the
     /// callers' argument types, which is a signature change rather than a transcription.
     #[test]
-    fn both_parameters_stay_untyped() {
+    fn all_parameters_stay_untyped() {
         let decl = list_id_declarations()
             .into_iter()
             .next()
@@ -162,7 +190,7 @@ mod tests {
         let StmtKind::FunctionDecl { params, .. } = &decl.kind else {
             panic!("expected a function declaration");
         };
-        assert_eq!(params.len(), 2);
+        assert_eq!(params.len(), 3);
         assert!(params.iter().all(|(_, ty, _, _)| ty.is_none()));
     }
 }

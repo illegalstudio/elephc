@@ -50,6 +50,9 @@ pub(super) struct ExceptionFlowAnalysis {
     function_returns: HashMap<String, PhpType>,
     static_method_returns: HashMap<String, PhpType>,
     instance_method_returns: HashMap<String, PhpType>,
+    function_declared_returns: HashSet<String>,
+    static_method_declared_returns: HashSet<String>,
+    instance_method_declared_returns: HashSet<String>,
 }
 
 /// Installs exception summaries for one optimizer pass and restores the previous analysis.
@@ -210,12 +213,18 @@ impl ExceptionFlowAnalysis {
         let mut static_method_bodies = HashMap::new();
         let mut instance_method_bodies = HashMap::new();
         let mut class_contexts = HashMap::new();
+        let mut function_declared_returns = HashSet::new();
+        let mut static_method_declared_returns = HashSet::new();
+        let mut instance_method_declared_returns = HashSet::new();
         collect_exception_bodies(
             program,
             &mut function_bodies,
             &mut static_method_bodies,
             &mut instance_method_bodies,
             &mut class_contexts,
+            &mut function_declared_returns,
+            &mut static_method_declared_returns,
+            &mut instance_method_declared_returns,
         );
         let function_returns = type_metadata
             .map(|(functions, _, _)| {
@@ -255,6 +264,30 @@ impl ExceptionFlowAnalysis {
                     .collect()
             })
             .unwrap_or_default();
+        if let Some((functions, classes, _)) = type_metadata {
+            function_declared_returns.extend(
+                functions
+                    .iter()
+                    .filter(|(_, signature)| signature.declared_return)
+                    .map(|(name, _)| php_symbol_key(name)),
+            );
+            for (class_name, class) in classes {
+                static_method_declared_returns.extend(
+                    class
+                        .static_methods
+                        .iter()
+                        .filter(|(_, signature)| signature.declared_return)
+                        .map(|(method, _)| method_effect_key(class_name, method)),
+                );
+                instance_method_declared_returns.extend(
+                    class
+                        .methods
+                        .iter()
+                        .filter(|(_, signature)| signature.declared_return)
+                        .map(|(method, _)| method_effect_key(class_name, method)),
+                );
+            }
+        }
         let declared_classes = class_contexts.keys().cloned().collect();
         let mut hierarchy = if let Some((_, classes, interfaces)) = type_metadata {
             ExceptionHierarchy::from_type_metadata(classes, interfaces, declared_classes)
@@ -273,12 +306,24 @@ impl ExceptionFlowAnalysis {
             function_returns,
             static_method_returns,
             instance_method_returns,
+            function_declared_returns,
+            static_method_declared_returns,
+            instance_method_declared_returns,
         };
 
         for _ in 0..MAX_EXCEPTION_SUMMARY_ITERATIONS {
-            let next_functions = analysis.summarize_bodies(&function_bodies);
-            let next_static_methods = analysis.summarize_bodies(&static_method_bodies);
-            let next_instance_methods = analysis.summarize_bodies(&instance_method_bodies);
+            let next_functions = analysis.summarize_bodies(
+                &function_bodies,
+                &analysis.function_declared_returns,
+            );
+            let next_static_methods = analysis.summarize_bodies(
+                &static_method_bodies,
+                &analysis.static_method_declared_returns,
+            );
+            let next_instance_methods = analysis.summarize_bodies(
+                &instance_method_bodies,
+                &analysis.instance_method_declared_returns,
+            );
             if next_functions == analysis.function_throws
                 && next_static_methods == analysis.static_method_throws
                 && next_instance_methods == analysis.instance_method_throws
@@ -302,14 +347,20 @@ impl ExceptionFlowAnalysis {
     }
 
     /// Recomputes all summaries for one callable category from the preceding fixed-point state.
-    fn summarize_bodies(&self, bodies: &HashMap<String, ExceptionBody<'_>>) -> HashMap<String, ThrownTypes> {
+    fn summarize_bodies(
+        &self,
+        bodies: &HashMap<String, ExceptionBody<'_>>,
+        declared_returns: &HashSet<String>,
+    ) -> HashMap<String, ThrownTypes> {
         bodies
             .iter()
             .map(|(name, body)| {
-                (
-                    name.clone(),
-                    self.block_throws(body.body, &HashMap::new(), body.class_context),
-                )
+                let mut thrown =
+                    self.block_throws(body.body, &HashMap::new(), body.class_context);
+                if declared_returns.contains(&php_symbol_key(name)) {
+                    thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                }
+                (name.clone(), thrown)
             })
             .collect()
     }
@@ -492,7 +543,10 @@ impl ExceptionFlowAnalysis {
                 .combined(self.block_throws(body, bindings, class_context)),
             StmtKind::Foreach { array, body, .. } => self
                 .expr_throws(array, bindings, class_context)
-                .combined(self.block_throws(body, bindings, class_context)),
+                .combined(self.block_throws(body, bindings, class_context))
+                // Iterator initialization, current()/next(), and compiler-inserted guards can
+                // throw even when the source expression and loop body are otherwise pure.
+                .combined(ThrownTypes::unknown()),
             StmtKind::Switch {
                 subject,
                 cases,
@@ -611,6 +665,12 @@ impl ExceptionFlowAnalysis {
             }
             ExprKind::FunctionCall { name, args } => {
                 let mut thrown = self.expr_list_throws(args, bindings, class_context);
+                if self
+                    .function_declared_returns
+                    .contains(&php_symbol_key(name.as_str()))
+                {
+                    thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                }
                 if let Some(summary) = self.function_throws.get(name.as_str()) {
                     return thrown.combined(summary.clone());
                 }
@@ -638,6 +698,12 @@ impl ExceptionFlowAnalysis {
             } => {
                 let mut thrown = self.expr_list_throws(args, bindings, class_context);
                 if let Some(class_name) = resolve_exception_receiver(receiver, class_context) {
+                    if self
+                        .static_method_declared_returns
+                        .contains(&method_effect_key(&class_name, method))
+                    {
+                        thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                    }
                     if let Some(summary) = self.resolve_method_value(
                         &class_name,
                         method,
@@ -665,6 +731,12 @@ impl ExceptionFlowAnalysis {
                     .expr_throws(object, bindings, class_context)
                     .combined(self.expr_list_throws(args, bindings, class_context));
                 if let Some(class_name) = exact_receiver_class(object, class_context) {
+                    if self
+                        .instance_method_declared_returns
+                        .contains(&method_effect_key(&class_name, method))
+                    {
+                        thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                    }
                     if let Some(summary) = self.resolve_method_value(
                         &class_name,
                         method,
@@ -998,6 +1070,9 @@ fn binary_op_exact_throw_type(
     op: &BinOp,
     right: &Expr,
 ) -> Option<&'static str> {
+    if crate::parser::ast::is_synthetic_unary_plus(op, right) {
+        return Some("TypeError");
+    }
     let left_is_numeric_literal = matches!(
         &left.kind,
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)

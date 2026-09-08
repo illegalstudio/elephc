@@ -2,7 +2,7 @@
 title: "mktime() — internals"
 description: "Compiler internals for mktime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 238
+  order: 239
 ---
 
 ## `mktime()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/mktime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/mktime.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,10 +25,10 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Requirements**: `static (1 requirements)`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function mktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int
+function mktime(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 6 arguments.
+- **Arity**: takes 1–6 arguments (5 optional).
 
 ## Eval interpreter (magician)
 

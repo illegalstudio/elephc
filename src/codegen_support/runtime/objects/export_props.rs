@@ -219,6 +219,10 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x14]");                                       // load the slot low word (the payload)
     emitter.instruction("ldr x0, [x13, #24]");                                  // load the property's runtime value tag
 
+    emitter.instruction("cmp x0, #11");                                         // does the descriptor describe an inline nullable scalar?
+    emitter.instruction("csel x0, x2, x0, eq");                                 // box tagged scalars using their stored int-or-null tag
+    emitter.instruction("csel x2, xzr, x2, eq");                                // tagged scalar payloads have no third value word
+
     emitter.instruction("cmp x0, #4");                                          // only pointer-shaped tags can carry a null payload
     emitter.instruction("b.lt __rt_obj_prop_value_box");                        // scalar payloads box exactly as stored
     emit_branch_if_null_container(emitter, "x1", "x9", "__rt_obj_prop_value_null"); // a zero/sentinel pointer is PHP null
@@ -279,6 +283,12 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_obj_prop_value_null_x86");                     // PHP omits it, so report PHP null
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the slot low word (the payload)
     emitter.instruction("mov rax, QWORD PTR [rax + 24]");                       // load the property's runtime value tag
+
+    emitter.instruction("cmp rax, 11");                                         // does the descriptor describe an inline nullable scalar?
+    emitter.instruction("jne __rt_obj_prop_value_tag_ready_x86");               // ordinary property tags already use canonical value words
+    emitter.instruction("mov rax, rsi");                                        // dispatch tagged scalars using their stored int-or-null tag
+    emitter.instruction("xor esi, esi");                                        // tagged scalar payloads have no third value word
+    emitter.label("__rt_obj_prop_value_tag_ready_x86");
 
     emitter.instruction("cmp rax, 4");                                          // only pointer-shaped tags can carry a null payload
     emitter.instruction("jl __rt_obj_prop_value_box_x86");                      // scalar payloads box exactly as stored

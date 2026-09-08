@@ -160,7 +160,7 @@ pub(super) fn resolve_instance_method_callable(
 ) -> Option<StaticCallableBinding> {
     let class_name = instance_callable_object_class(ctx, object)?;
     let method_key = php_symbol_key(&method);
-    let signature = class_method_signature(ctx, &class_name, &method_key)?.clone();
+    let signature = runtime_class_method_signature(ctx, &class_name, &method_key)?;
     Some(StaticCallableBinding::InstanceMethod {
         object: Box::new(object.clone()),
         method,
@@ -325,7 +325,7 @@ pub(crate) fn lower_bound_closure_for_assignment(
 
 /// Resolves the statically-known class name of an object expression used as an instance-call
 /// receiver, including declared property and chained-call results.
-pub(super) fn instance_callable_object_class(
+pub(crate) fn instance_callable_object_class(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
 ) -> Option<String> {

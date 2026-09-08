@@ -2,7 +2,7 @@
 title: "realpath_cache_size() — internals"
 description: "Compiler internals for realpath_cache_size(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 296
+  order: 297
 ---
 
 ## `realpath_cache_size()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/realpath_cache_size.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/realpath_cache_size.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

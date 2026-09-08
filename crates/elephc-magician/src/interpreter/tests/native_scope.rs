@@ -49,7 +49,7 @@ fn execute_program_checks_registered_native_function_return_type() {
     let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect_err("native return type mismatch should fail");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 }
 
 /// Verifies raw native by-reference staging is released when invoker argument setup fails.

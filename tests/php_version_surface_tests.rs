@@ -13,27 +13,18 @@
 //!   (macOS aarch64 local).
 //!
 //! - THE VERSION RULE UNDER TEST. elephc targets a PHP LANGUAGE PROFILE selected by
-//!   `--php-version` (8.2/8.3/8.4/8.5, default 8.5), not an upstream patch release, so it
-//!   reports `8.<minor>.0`. Reference PHP 8.5.6 reports `8.5.6`. This is the SAME deliberate
-//!   `.0` divergence `opcache_get_configuration()['version']['version']` already documents in
-//!   `docs/php/opcache.md`; every assertion below that names a `.0` patch is asserting elephc's
-//!   documented value, not reference's.
+//!   `--php-version` (default 8.5). Profiles report stable `8.<minor>.0` values,
+//!   independently of the exact php-src revision used for parity auditing.
+//!   `PHP_VERSION_ID` uses the reference `major * 10000 + minor * 100 + release` formula.
 //!
-//!   `PHP_VERSION_ID` uses the reference formula, verified on 8.5.6:
-//!   `php -d xdebug.mode=off -r 'echo PHP_VERSION_ID;'` prints `80506` for `8.5.6`, i.e.
-//!   `major * 10000 + minor * 100 + release`. With `release == 0` that gives `80500`, so the
-//!   string and the id agree — which is the property `constants_are_internally_consistent`
-//!   exists to keep true.
-//!
-//! - WHERE REFERENCE IS MATCHED EXACTLY (values captured from `php -d xdebug.mode=off`, 8.5.6):
-//!   `PHP_EXTRA_VERSION` is `""`; `PHP_MAJOR_VERSION` is `8`; `PHP_SAPI` is `cli` for a CLI
+//! - PROFILE AND RUNTIME INVARIANTS:
+//!   `PHP_EXTRA_VERSION` is empty; `PHP_MAJOR_VERSION` is `8`; `PHP_SAPI` is `cli` for a CLI
 //!   binary; `phpversion($unknown)` is `false`; extension-name matching is case-insensitive
 //!   (`phpversion('core') === phpversion('Core')`); every bundled extension reports the
-//!   interpreter's own version (`Core`, `json`, `pcre`, `Zend OPcache`, … all `8.5.6` there);
+//!   interpreter's own version (`Core`, `json`, `pcre`, `Zend OPcache`, … all `8.5.0`);
 //!   `ini_restore()` returns `NULL`.
 //!
-//! - WHERE ELEPHC DELIBERATELY DIVERGES: the `.0` patch component of `PHP_VERSION` /
-//!   `phpversion()` / `zend_version()` (see above), and `PHP_SAPI` under `--web`, which is
+//! - WHERE ELEPHC DELIBERATELY DIVERGES: `PHP_SAPI` under `--web`, which is
 //!   `cli-server` — elephc's `--web` binary embeds its own HTTP listener with no external
 //!   server, which is exactly what reference's built-in server is, and it is the only reference
 //!   SAPI name that describes a standalone PHP binary speaking HTTP.
@@ -265,9 +256,7 @@ echo PHP_VERSION, "|", PHP_VERSION_ID, "|", PHP_MAJOR_VERSION, "|", PHP_MINOR_VE
 
 /// Every constant reports the compile target's profile, for every maintained `--php-version`.
 ///
-/// elephc's documented values (NOT reference's, which for 8.5.6 would be
-/// `8.5.6|80506|8|5|6||cli`): the patch component is `0` because `--php-version` selects a
-/// language profile, matching the OPcache surface's `8.5.0`.
+/// Compatibility profiles have patch zero and no development suffix.
 #[test]
 fn version_constants_follow_the_compile_target_profile() {
     for (profile, expected) in [
@@ -292,8 +281,8 @@ fn version_constants_default_to_the_newest_profile() {
 /// The constants must never contradict each other inside one binary.
 ///
 /// This is the guard against the failure mode the whole design exists to avoid: a binary
-/// reporting `PHP_VERSION 8.5.0` alongside `PHP_VERSION_ID 80506`. The formula asserted is
-/// reference PHP's, verified on 8.5.6 (`echo PHP_VERSION_ID;` → `80506`), and the string
+/// reporting a version string whose components disagree with `PHP_VERSION_ID`. The formula is
+/// reference PHP's, and the string
 /// equality asserts the components spell out the reported version string. Both are asserted
 /// INSIDE the compiled program, so the check runs against the baked literals.
 #[test]
@@ -373,8 +362,7 @@ echo PHP_OS, "|", PHP_OS === "Darwin" || PHP_OS === "Linux" ? "known" : "BAD", "
 /// `phpversion()` reports the PHP language version, not elephc's own package version.
 ///
 /// REGRESSION ANCHOR: `phpversion()` used to return the COMPILER's version (`0.26.2`), which is
-/// the bug this test pins shut. Reference PHP 8.5.6 returns `8.5.6`; elephc returns the
-/// profile's `.0` form.
+/// the bug this test pins shut. The default value follows the selected minor profile.
 #[test]
 fn phpversion_reports_the_language_version_not_the_compiler_version() {
     let source = r#"<?php
@@ -386,10 +374,8 @@ echo phpversion(), "\n";
 
 /// `phpversion($extension)` answers `string|false` for literal names, case-insensitively.
 ///
-/// Reference PHP 8.5.6 verified: `phpversion('json')`, `phpversion('Core')`,
-/// `phpversion('core')` and `phpversion('Zend OPcache')` all return `'8.5.6'` (every bundled
-/// extension reports the interpreter's own version), and `phpversion('nope_xyz')` returns
-/// `false`. elephc reports the same shape with its `.0` patch.
+/// Every bundled extension reports the interpreter's own version, while an unknown extension
+/// returns `false`.
 ///
 /// REGRESSION ANCHOR: `phpversion($extension)` used to be rejected at compile time with
 /// "phpversion() takes no arguments".
@@ -514,10 +500,7 @@ fn phpversion_rejects_bad_arguments_at_compile_time() {
 
 /// `zend_version()` reports the Zend Engine track for the compile target.
 ///
-/// Reference PHP 8.5.6 reports `4.5.6`: the Zend Engine major runs four behind PHP's and its
-/// minor moves with PHP's. elephc reports `4.<minor>.0` — the engine major/minor claim is exact,
-/// the patch is `0` under the same rule as `PHP_VERSION` because there is no engine build to
-/// have a patch level.
+/// Zend version strings follow stable `4.<minor>.0` profile spellings.
 #[test]
 fn zend_version_tracks_the_profile() {
     let source = r#"<?php
@@ -718,11 +701,7 @@ echo PHP_SAPI, "|", PHP_VERSION, "|", PHP_VERSION_ID, "|", zend_version(), "\n";
 
 /// The OPcache version surface and the PHP version surface agree inside one binary.
 ///
-/// `opcache_get_configuration()['version']['version']` is the PRECEDENT this whole design
-/// follows — it already reported `8.<minor>.0` before `PHP_VERSION` existed. This test is the
-/// contract that keeps the two from ever splitting.
-///
-/// REGRESSION ANCHOR for the OPcache side: the `.0` value there must not change.
+/// This is the contract that keeps the two surfaces from ever splitting.
 #[test]
 fn opcache_version_and_php_version_agree() {
     let source = r#"<?php

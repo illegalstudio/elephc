@@ -2,7 +2,7 @@
 title: "imagebmp()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 460
+  order: 461
 ---
 
 ## imagebmp()

@@ -113,6 +113,17 @@ pub fn compute(
         state.behavioral.classes.extend(group.classes.iter().cloned());
         state.behavioral.methods.extend(group.methods.iter().cloned());
     }
+    for group in options
+        .inventory
+        .groups
+        .values()
+        .filter(|group| options.structural_groups.contains(&group.id))
+    {
+        state.reach.functions.extend(group.functions.iter().cloned());
+        state.reach.classes.extend(group.classes.iter().cloned());
+        state.reach.methods.extend(group.methods.iter().cloned());
+        state.reach.externs.extend(group.externs.iter().cloned());
+    }
     if options.eval_forced {
         state.keep_everything();
     }
@@ -677,16 +688,24 @@ impl GraphState {
         self.instantiated_classes
             .extend(usage.instantiated_classes.iter().cloned());
         for (class, method, is_static) in usage.methods {
+            let name_dispatch = self
+                .index
+                .classes
+                .get(&class)
+                .is_some_and(|node| matches!(node.kind, ClassKind::Interface))
+                || self.checker_interface_methods.contains_key(&class);
             self.reach.classes.insert(class.clone());
             let key = (class.clone(), method.clone(), is_static);
             self.reach.methods.insert(key.clone());
             if behavioral {
                 self.behavioral.classes.insert(class);
                 self.behavioral.methods.insert(key);
-                self.behavioral
-                    .referenced_methods
-                    .insert((method, is_static));
-            } else {
+                if name_dispatch {
+                    self.behavioral
+                        .referenced_methods
+                        .insert((method, is_static));
+                }
+            } else if name_dispatch {
                 self.structural_referenced_methods
                     .insert((method, is_static));
             }

@@ -8,27 +8,32 @@
 //!
 //! Key details:
 //! - `self` resolves to the declaring owner, while `static` resolves to the called class.
-//! - Return values use weak scalar coercions like parameter binding, with dedicated handling for `void` and `never`.
+//! - Return coercion follows the declaring callable's lexical strictness, unlike caller-site parameter binding.
+//! - Type mismatches use the interpreter's catchable TypeError channel.
 
 use super::*;
 
 /// Applies one declared function or method return type to a completed control result.
 pub(in crate::interpreter) fn eval_declared_return_control_value(
+    callable_name: &str,
     return_type: Option<&EvalParameterType>,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
+    strict_types: bool,
     control: EvalControl,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match control {
-        EvalControl::None => eval_declared_implicit_return_value(return_type, values),
+        EvalControl::None => eval_declared_implicit_return_value(callable_name, return_type, context, values),
         EvalControl::ReturnVoid => eval_declared_void_return_value(return_type, values),
         EvalControl::Return(result) => eval_declared_explicit_return_value(
             return_type,
+            callable_name,
             return_owner,
             called_class_name,
-            result,
+            strict_types,
+            result.value,
             context,
             values,
         ),
@@ -62,10 +67,13 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
     if eval_declared_return_type_is_never(return_type) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let callable_name = context.current_function().unwrap_or("{callable}").to_string();
     eval_declared_return_value(
         return_type,
+        &callable_name,
         return_owner,
         called_class_name,
+        context.strict_types(),
         value,
         context,
         values,
@@ -74,16 +82,20 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
 
 /// Materializes an implicit return according to the declared return type.
 fn eval_declared_implicit_return_value(
+    callable_name: &str,
     return_type: Option<&EvalParameterType>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(return_type) = return_type else {
         return values.null();
     };
-    if eval_declared_return_type_is_void(return_type) {
+    if eval_declared_return_type_is_void(return_type)
+        || eval_declared_return_type_allows_null(return_type)
+    {
         return values.null();
     }
-    Err(EvalStatus::RuntimeFatal)
+    eval_throw_missing_return_type_error(callable_name, return_type, context, values)
 }
 
 /// Materializes `return;` according to the declared return type.
@@ -103,8 +115,10 @@ fn eval_declared_void_return_value(
 /// Validates or coerces an explicit returned value according to a declared return type.
 fn eval_declared_explicit_return_value(
     return_type: Option<&EvalParameterType>,
+    callable_name: &str,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
+    strict_types: bool,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -119,8 +133,10 @@ fn eval_declared_explicit_return_value(
     }
     eval_declared_return_value(
         return_type,
+        callable_name,
         return_owner,
         called_class_name,
+        strict_types,
         value,
         context,
         values,
@@ -130,8 +146,10 @@ fn eval_declared_explicit_return_value(
 /// Applies a non-void declared return type to one returned runtime value.
 fn eval_declared_return_value(
     return_type: &EvalParameterType,
+    callable_name: &str,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
+    strict_types: bool,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -146,8 +164,14 @@ fn eval_declared_return_value(
     )? {
         return Ok(value);
     }
+    if eval_declared_return_accepts_int_to_float(return_type, value, values)? {
+        return values.cast_float(value);
+    }
     if return_type.is_intersection() {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_return_type_error(callable_name, return_type, value, context, values);
+    }
+    if strict_types {
+        return eval_throw_return_type_error(callable_name, return_type, value, context, values);
     }
     for variant in return_type.variants() {
         if let Some(coerced) =
@@ -156,7 +180,39 @@ fn eval_declared_return_value(
             return Ok(coerced);
         }
     }
-    Err(EvalStatus::RuntimeFatal)
+    eval_throw_return_type_error(callable_name, return_type, value, context, values)
+}
+
+/// Schedules PHP's catchable TypeError for one rejected declared return value.
+fn eval_throw_return_type_error<T>(
+    callable_name: &str,
+    return_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let expected = eval_parameter_type_name(return_type);
+    let actual = eval_runtime_type_name(value, values)?;
+    eval_throw_type_error(
+        &format!("{callable_name}(): Return value must be of type {expected}, {actual} returned"),
+        context,
+        values,
+    )
+}
+
+/// Schedules PHP's catchable TypeError for an implicit non-nullable return.
+fn eval_throw_missing_return_type_error<T>(
+    callable_name: &str,
+    return_type: &EvalParameterType,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let expected = eval_parameter_type_name(return_type);
+    eval_throw_type_error(
+        &format!("{callable_name}(): Return value must be of type {expected}, none returned"),
+        context,
+        values,
+    )
 }
 
 /// Returns whether a value already satisfies one declared return type.
@@ -262,6 +318,21 @@ fn eval_declared_return_variant_accepts_exact(
         EvalParameterTypeVariant::Object => Ok(tag == EVAL_TAG_OBJECT),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
     }
+}
+
+/// Returns whether PHP's strict-safe `int` to `float` widening applies to this return type.
+fn eval_declared_return_accepts_int_to_float(
+    return_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_INT || return_type.is_intersection() {
+        return Ok(false);
+    }
+    Ok(return_type
+        .variants()
+        .iter()
+        .any(|variant| matches!(variant, EvalParameterTypeVariant::Float)))
 }
 
 /// Returns whether an object value satisfies one class-like declared return target.

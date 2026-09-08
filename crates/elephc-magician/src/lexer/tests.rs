@@ -86,6 +86,76 @@ fn double_quoted_escape_table_is_unchanged() {
     );
 }
 
+/// Hexadecimal escapes preserve raw non-UTF-8 bytes after merging the byte-oriented scanner.
+#[test]
+fn double_quoted_hex_byte_escapes() {
+    assert_eq!(kinds(r#""\xff\Xfe\x00";"#),
+        vec![TokenKind::ByteString(vec![255, 254, 0]), TokenKind::Semicolon, TokenKind::Eof]);
+}
+
+/// Octal escapes consume at most three digits and preserve byte overflow and NUL semantics.
+#[test]
+fn double_quoted_octal_byte_escapes() {
+    assert_eq!(kinds(r#""\0\012\1014";"#),
+        vec![string("\0\nA4"), TokenKind::Semicolon, TokenKind::Eof]);
+    assert_eq!(kinds(r#""\377\400\777";"#),
+        vec![
+            TokenKind::CompileWarning(crate::eval_ir::EvalCompileWarning {
+                message: "Octal escape sequence overflow \\400 is greater than \\377".into(), line: 1,
+            }),
+            TokenKind::CompileWarning(crate::eval_ir::EvalCompileWarning {
+                message: "Octal escape sequence overflow \\777 is greater than \\377".into(), line: 1,
+            }),
+            TokenKind::ByteString(vec![255, 0, 255]), TokenKind::Semicolon, TokenKind::Eof]);
+    assert_eq!(kinds(r"'\000';"),
+        vec![string(r"\000"), TokenKind::Semicolon, TokenKind::Eof]);
+}
+
+/// Cached programs retain warnings in lexical order, including nested interpolated literals.
+#[test]
+fn octal_compile_warnings_survive_parser_cache() {
+    let code = br#"$array = []; echo "\400{$array["\777"]}\401";"#;
+    let first = crate::parse_cache::parse_fragment_cached(code).unwrap();
+    let second = crate::parse_cache::parse_fragment_cached(code).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+    let warnings = first.compile_warnings();
+    assert_eq!(warnings.len(), 3);
+    for (warning, escape) in warnings.iter().zip(["400", "777", "401"]) {
+        assert_eq!(warning.message, format!("Octal escape sequence overflow \\{escape} is greater than \\377"));
+        assert_eq!(warning.line, 1);
+    }
+}
+
+/// Failed grammar and later lexical failures retain warnings across cache hits.
+#[test]
+fn octal_compile_warnings_survive_failed_parser_cache() {
+    for code in [
+        br#""\400"; return );"#.as_slice(),
+        br#""\400"; /*"#.as_slice(),
+        br#""\400"#.as_slice(),
+        br#""\400\"#.as_slice(),
+        br#""\400{$value"#.as_slice(),
+    ] {
+        let first = crate::parse_cache::parse_fragment_cached(code).unwrap_err();
+        let second = crate::parse_cache::parse_fragment_cached(code).unwrap_err();
+        assert_eq!(first, second);
+        assert_eq!(first.compile_warnings().len(), 1);
+        assert_eq!(first.compile_warnings()[0].message,
+            "Octal escape sequence overflow \\400 is greater than \\377");
+        assert_eq!(first.compile_warnings()[0].line, 1);
+        assert_eq!(first.status(), crate::errors::EvalStatus::ParseError);
+    }
+}
+
+/// Failed interpolation tokens report warning lines relative to the enclosing source.
+#[test]
+fn failed_interpolation_warning_line_is_absolute() {
+    let source = "\"\n{$array[\"\\400\"] \u{1}}\"";
+    let error = tokenize(source).unwrap_err();
+    assert_eq!(error.compile_warnings().len(), 1);
+    assert_eq!(error.compile_warnings()[0].line, 2);
+}
+
 /// Verifies a simple `$name` expands to a parenthesized concatenation.
 ///
 /// The leading empty string literal is deliberate: it is what makes the resulting `.`

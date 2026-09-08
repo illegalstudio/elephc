@@ -2,7 +2,7 @@
 title: "stream_get_filters() — internals"
 description: "Compiler internals for stream_get_filters(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 370
+  order: 371
 ---
 
 ## `stream_get_filters()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_filters.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_filters.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

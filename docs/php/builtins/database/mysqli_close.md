@@ -2,7 +2,7 @@
 title: "mysqli_close()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 102
+  order: 103
 ---
 
 ## mysqli_close()

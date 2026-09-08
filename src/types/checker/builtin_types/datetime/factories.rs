@@ -46,14 +46,17 @@ pub(super) fn datetime_get_last_errors(class_name: &str) -> ClassMethod {
 }
 
 /// PHP source backing the cross-conversion factories (`createFromInterface`,
-/// `createFromImmutable`, `createFromMutable`): copy the source object's instant and display
-/// timezone into a fresh instance of the target class. `__TARGET__` is substituted with the
-/// target class name.
+/// `createFromImmutable`, `createFromMutable`): clone the source object's timelib state into
+/// a fresh target-class instance. `createFromTimestamp()` deliberately starts in GMT, so an
+/// absent timezone remains absent instead of becoming an explicit UTC zone. `__TARGET__` is
+/// substituted with the target class name.
 #[cfg(test)]
 pub(super) const CREATE_FROM_OBJECT_SRC: &str = r#"<?php
-$d = new __TARGET__();
-$d = $d->setTimestamp($object->getTimestamp());
-$d = $d->setTimezone($object->getTimezone());
+$d = __TARGET__::createFromTimestamp($object->getTimestamp());
+$timezone = $object->getTimezone();
+if ($timezone !== false) {
+    $d = $d->setTimezone($timezone);
+}
 return $d;
 "#;
 
@@ -97,6 +100,7 @@ pub(super) const CREATE_FROM_TIMESTAMP_SRC: &str = r#"<?php
 $d = new __CFT_CLASS__();
 $secs = intval(floor($timestamp));
 $d = $d->setTimestamp($secs);
+$d->__elephc_is_localtime = true;
 $d = $d->setMicrosecond(intval(round(($timestamp - $secs) * 1000000)));
 return $d;
 "#;

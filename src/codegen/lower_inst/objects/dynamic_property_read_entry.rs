@@ -35,7 +35,7 @@ pub(in crate::codegen::lower_inst) fn lower_nullsafe_prop_get(
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
-    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    materialize_loaded_property_result(ctx, inst, &slot.storage_type)?;
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
     emit_boxed_null(ctx);
@@ -177,7 +177,7 @@ pub(super) fn lower_const_dynamic_prop_get(
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
-    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    materialize_loaded_property_result(ctx, inst, &slot.storage_type)?;
     store_if_result(ctx, inst)
 }
 
@@ -223,11 +223,17 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
         ctx.emitter.label(label);
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-        if candidate.slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+        if let Some(target) =
+            property_hook_get_target(ctx, &candidate.slot.class_name, &candidate.slot.property)?
+        {
+            emit_property_hook_get_result(ctx, inst, object, base_reg, &candidate.slot, &target)?;
+        } else {
+            if candidate.slot.is_declared {
+                emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+            }
+            emit_property_load(ctx, &candidate.slot, base_reg)?;
+            materialize_loaded_property_result(ctx, inst, &candidate.slot.storage_type)?;
         }
-        emit_property_load(ctx, &candidate.slot, base_reg)?;
-        materialize_loaded_property_result(ctx, inst, &candidate.slot.php_type)?;
         abi::emit_release_temporary_stack(ctx.emitter, 32);
         abi::emit_jump(ctx.emitter, &done_label);
     }

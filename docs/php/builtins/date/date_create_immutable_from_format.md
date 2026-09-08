@@ -2,7 +2,7 @@
 title: "date_create_immutable_from_format()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 193
+  order: 194
 ---
 
 ## date_create_immutable_from_format()

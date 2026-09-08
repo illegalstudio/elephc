@@ -2,7 +2,7 @@
 title: "mysqli_fetch_fields() — internals"
 description: "Compiler internals for mysqli_fetch_fields(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 120
+  order: 121
 ---
 
 ## `mysqli_fetch_fields()` — internals

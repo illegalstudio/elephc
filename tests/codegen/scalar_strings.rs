@@ -227,3 +227,32 @@ fn test_argv_first_entry_exists() {
     assert!(out.ends_with("/test"), "unexpected argv[0]: {out}");
 }
 
+/// Process arguments use ordinary boxed global storage inside native functions.
+#[test]
+fn test_argv_native_global_storage() {
+    let out = compile_and_run(r#"<?php
+function process_arguments(): void {
+    global $argc, $argv;
+    echo $argc, '|', count($argv), '|', strlen($argv[0]) > 0 ? 'yes' : 'no';
+}
+process_arguments();
+"#);
+    assert_eq!(out, "1|1|yes");
+}
+
+/// Opaque eval updates boxed process globals without breaking subsequent native reads.
+#[test]
+fn test_argv_eval_global_storage() {
+    let out = compile_and_run(r#"<?php
+function process_arguments(): void {
+    global $argc, $argv;
+    echo $argc, '|', count($argv), '|', $argv[0], ';';
+}
+$code = 'global $argc, $argv; $argc = 2; $argv = ["changed", "extra"];';
+eval(substr($code, $argc - 1));
+process_arguments();
+eval(substr($code, 0));
+process_arguments();
+"#);
+    assert_eq!(out, "2|2|changed;2|2|changed;");
+}

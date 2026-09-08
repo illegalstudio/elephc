@@ -2,7 +2,7 @@
 title: "stream_resolve_include_path()"
 description: "Resolves filename against the include path."
 sidebar:
-  order: 377
+  order: 378
 ---
 
 ## stream_resolve_include_path()

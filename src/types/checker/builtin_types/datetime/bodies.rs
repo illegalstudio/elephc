@@ -26,7 +26,6 @@ use crate::synthetic_class::{
     e_new,
     e_not,
     e_null,
-    e_post_inc,
     e_prop,
     e_static_call,
     e_static_prop,
@@ -41,74 +40,181 @@ use crate::synthetic_class::{
     s_break,
     s_continue,
     s_expr,
-    s_for,
     s_foreach,
     s_if,
     s_prop_assign,
     s_return,
+    s_return_void,
     s_static_prop_assign,
     s_throw,
     s_while,
 };
 
-/// Reproduces `CONSTRUCT_SRC`.
+/// Reproduces `super::compliance_core::CONSTRUCT_SRC`.
 pub(super) fn construct() -> Vec<Stmt> {
     vec![
-        s_prop_assign(e_this(), "microsecond", e_static_call("DateTime", "__elephc_extract_micros", vec![e_var("datetime")])),
-        s_assign("datetime", e_static_call("DateTime", "__elephc_strip_micros", vec![e_var("datetime")])),
+        s_assign("__originalDateTime", e_binop(e_var("datetime"), BinOp::Concat, e_str(""))),
         s_if(
-            e_binop(e_var("timezone"), BinOp::StrictEq, e_null()),
+            e_binop(e_binop(e_var("__originalDateTime"), BinOp::StrictEq, e_str("")), BinOp::Or, e_binop(e_var("__originalDateTime"), BinOp::StrictEq, e_str("now"))),
             vec![
-                s_if(
-                    e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
-                    vec![
-                        s_prop_assign(e_this(), "timestamp", e_call("time", vec![])),
-                    ],
-                    vec![],
-                    Some(vec![
-                    s_assign("__ts", e_call("strtotime", vec![e_var("datetime")])),
-                    s_if(
-                        e_binop(e_var("__ts"), BinOp::StrictEq, e_bool(false)),
-                        vec![
-                            s_throw(e_new("DateMalformedStringException", vec![e_binop(e_binop(e_str("Failed to parse time string ("), BinOp::Concat, e_var("datetime")), BinOp::Concat, e_str(")"))])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_prop_assign(e_this(), "timestamp", e_var("__ts")),
-                ]),
-                ),
-                s_prop_assign(e_this(), "timezone_name", e_call("date_default_timezone_get", vec![])),
+                s_static_prop_assign("DateTime", "lastParseResult", e_str("")),
             ],
             vec![],
             Some(vec![
-            s_assign("tzname", e_method_call(e_var("timezone"), "getName", vec![])),
-            s_if(
-                e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
-                vec![
-                    s_prop_assign(e_this(), "timestamp", e_call("time", vec![])),
-                ],
-                vec![],
-                Some(vec![
-                s_assign("saved", e_call("date_default_timezone_get", vec![])),
-                s_expr(e_call("date_default_timezone_set", vec![e_var("tzname")])),
+                s_assign("__parseResult", e_static_call("DateTime", "__elephc_date_parse", vec![e_var("__originalDateTime")])),
+                s_if(
+                    e_binop(
+                        e_binop(e_index(e_var("__parseResult"), e_str("error_count")), BinOp::StrictEq, e_int(0)),
+                        BinOp::And,
+                        e_binop(e_index(e_var("__parseResult"), e_str("warning_count")), BinOp::StrictEq, e_int(0)),
+                    ),
+                    vec![
+                        s_static_prop_assign("DateTime", "lastParseResult", e_str("")),
+                    ],
+                    vec![],
+                    Some(vec![
+                        s_static_prop_assign("DateTime", "lastParseResult", e_var("__parseResult")),
+                    ]),
+                ),
+            ]),
+        ),
+        s_if(
+            e_binop(e_var("datetime"), BinOp::StrictEq, e_str("")),
+            vec![
+                s_assign("datetime", e_str("now")),
+            ],
+            vec![],
+            None,
+        ),
+        s_prop_assign(e_this(), "microsecond", e_static_call("DateTime", "__elephc_extract_micros", vec![e_var("datetime")])),
+        s_assign("datetime", e_static_call("DateTime", "__elephc_strip_micros", vec![e_var("datetime")])),
+        s_if(
+            e_binop(e_call("substr", vec![e_var("__originalDateTime"), e_int(0), e_int(1)]), BinOp::StrictEq, e_str("@")),
+            vec![
                 s_assign("__ts", e_call("strtotime", vec![e_var("datetime")])),
                 s_if(
                     e_binop(e_var("__ts"), BinOp::StrictEq, e_bool(false)),
                     vec![
-                        s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
-                        s_throw(e_new("DateMalformedStringException", vec![e_binop(e_binop(e_str("Failed to parse time string ("), BinOp::Concat, e_var("datetime")), BinOp::Concat, e_str(")"))])),
+                        s_throw(e_new("DateMalformedStringException", vec![e_static_call("DateTime", "__elephc_malformed_time_message", vec![e_str(""), e_var("__originalDateTime")])])),
                     ],
                     vec![],
                     None,
                 ),
                 s_prop_assign(e_this(), "timestamp", e_var("__ts")),
-                s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
-            ]),
-            ),
-            s_prop_assign(e_this(), "timezone_name", e_var("tzname")),
-        ]),
+                s_prop_assign(e_this(), "timezone_name", e_str("+00:00")),
+                s_prop_assign(e_this(), "__elephc_is_localtime", e_bool(true)),
+                s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
+                s_return_void(),
+            ],
+            vec![],
+            None,
         ),
+        s_assign("__zoneData", e_call("explode", vec![e_str("\t"), e_static_call("DateTime", "__elephc_extract_constructor_zone", vec![e_var("datetime")])])),
+        s_assign("__detectedZone", e_index(e_var("__zoneData"), e_int(0))),
+        s_assign("datetime", e_index(e_var("__zoneData"), e_int(1))),
+        s_if(
+            e_binop(e_var("__detectedZone"), BinOp::StrictNotEq, e_str("")),
+            vec![
+                s_if(
+                    e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
+                    vec![
+                        s_assign("__ts", e_call("microtime", vec![e_bool(true)])),
+                        s_prop_assign(e_this(), "timestamp", e_call("intval", vec![e_var("__ts")])),
+                        s_prop_assign(e_this(), "microsecond", e_call("intval", vec![e_binop(e_binop(e_var("__ts"), BinOp::Sub, e_this_prop("timestamp")), BinOp::Mul, e_int(1000000))])),
+                        s_if(
+                            e_binop(e_static_call("DateTime", "__elephc_timezone_type", vec![e_var("__detectedZone")]), BinOp::StrictNotEq, e_int(3)),
+                            vec![
+                                s_assign("__saved", e_call("date_default_timezone_get", vec![])),
+                                s_assign("__wall", e_call("date", vec![e_str("Y-m-d H:i:s"), e_this_prop("timestamp")])),
+                                s_expr(e_call("date_default_timezone_set", vec![e_static_call("DateTime", "__elephc_runtime_timezone_name", vec![e_var("__detectedZone")])])),
+                                s_prop_assign(e_this(), "timestamp", e_call("strtotime", vec![e_var("__wall")])),
+                                s_expr(e_call("date_default_timezone_set", vec![e_var("__saved")])),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                    ],
+                    vec![],
+                    Some(vec![
+                        s_assign("__saved", e_call("date_default_timezone_get", vec![])),
+                        s_expr(e_call("date_default_timezone_set", vec![e_static_call("DateTime", "__elephc_runtime_timezone_name", vec![e_var("__detectedZone")])])),
+                        s_assign("__ts", e_call("strtotime", vec![e_var("datetime")])),
+                        s_expr(e_call("date_default_timezone_set", vec![e_var("__saved")])),
+                        s_if(
+                            e_binop(e_var("__ts"), BinOp::StrictEq, e_bool(false)),
+                            vec![
+                                s_throw(e_new("DateMalformedStringException", vec![e_static_call("DateTime", "__elephc_malformed_time_message", vec![e_str(""), e_var("__originalDateTime")])])),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_prop_assign(e_this(), "timestamp", e_var("__ts")),
+                    ]),
+                ),
+                s_prop_assign(e_this(), "timezone_name", e_var("__detectedZone")),
+            ],
+            vec![],
+            Some(vec![
+                s_if(
+                    e_binop(e_var("timezone"), BinOp::StrictEq, e_null()),
+                    vec![
+                        s_if(
+                            e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
+                            vec![
+                                s_assign("__ts", e_call("microtime", vec![e_bool(true)])),
+                                s_prop_assign(e_this(), "timestamp", e_call("intval", vec![e_var("__ts")])),
+                                s_prop_assign(e_this(), "microsecond", e_call("intval", vec![e_binop(e_binop(e_var("__ts"), BinOp::Sub, e_this_prop("timestamp")), BinOp::Mul, e_int(1000000))])),
+                            ],
+                            vec![],
+                            Some(vec![
+                                s_assign("__ts", e_call("strtotime", vec![e_var("datetime")])),
+                                s_if(
+                                    e_binop(e_var("__ts"), BinOp::StrictEq, e_bool(false)),
+                                    vec![
+                                        s_throw(e_new("DateMalformedStringException", vec![e_static_call("DateTime", "__elephc_malformed_time_message", vec![e_str(""), e_var("__originalDateTime")])])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_prop_assign(e_this(), "timestamp", e_var("__ts")),
+                            ]),
+                        ),
+                        s_prop_assign(e_this(), "timezone_name", e_call("date_default_timezone_get", vec![])),
+                    ],
+                    vec![],
+                    Some(vec![
+                        s_assign("tzname", e_static_call("DateTimeZone", "__elephc_export_name", vec![e_var("timezone")])),
+                        s_if(
+                            e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
+                            vec![
+                                s_assign("__ts", e_call("microtime", vec![e_bool(true)])),
+                                s_prop_assign(e_this(), "timestamp", e_call("intval", vec![e_var("__ts")])),
+                                s_prop_assign(e_this(), "microsecond", e_call("intval", vec![e_binop(e_binop(e_var("__ts"), BinOp::Sub, e_this_prop("timestamp")), BinOp::Mul, e_int(1000000))])),
+                            ],
+                            vec![],
+                            Some(vec![
+                                s_assign("saved", e_call("date_default_timezone_get", vec![])),
+                                s_expr(e_call("date_default_timezone_set", vec![e_static_call("DateTime", "__elephc_runtime_timezone_name", vec![e_var("tzname")])])),
+                                s_assign("__ts", e_call("strtotime", vec![e_var("datetime")])),
+                                s_if(
+                                    e_binop(e_var("__ts"), BinOp::StrictEq, e_bool(false)),
+                                    vec![
+                                        s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
+                                        s_throw(e_new("DateMalformedStringException", vec![e_static_call("DateTime", "__elephc_malformed_time_message", vec![e_str(""), e_var("__originalDateTime")])])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_prop_assign(e_this(), "timestamp", e_var("__ts")),
+                                s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
+                            ]),
+                        ),
+                        s_prop_assign(e_this(), "timezone_name", e_var("tzname")),
+                    ]),
+                ),
+            ]),
+        ),
+        s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
     ]
 }
 
@@ -221,9 +327,17 @@ pub(super) fn format() -> Vec<Stmt> {
 /// stops matching is a compile error rather than a `replace()` that quietly does nothing.
 pub(super) fn create_from_object(target: &str) -> Vec<Stmt> {
     vec![
-        s_assign("d", e_new(target, vec![])),
-        s_assign("d", e_method_call(e_var("d"), "setTimestamp", vec![e_method_call(e_var("object"), "getTimestamp", vec![])])),
-        s_assign("d", e_method_call(e_var("d"), "setTimezone", vec![e_method_call(e_var("object"), "getTimezone", vec![])])),
+        s_assign("d", e_static_call(target, "createFromTimestamp", vec![e_method_call(e_var("object"), "getTimestamp", vec![])])),
+        s_assign("timezone", e_method_call(e_var("object"), "getTimezone", vec![])),
+        s_if(
+            e_binop(e_var("timezone"), BinOp::StrictNotEq, e_bool(false)),
+            vec![s_assign(
+                "d",
+                e_method_call(e_var("d"), "setTimezone", vec![e_var("timezone")]),
+            )],
+            vec![],
+            None,
+        ),
         s_return(e_var("d")),
     ]
 }
@@ -234,6 +348,7 @@ pub(super) fn create_from_timestamp(class_name: &str) -> Vec<Stmt> {
         s_assign("d", e_new(class_name, vec![])),
         s_assign("secs", e_call("intval", vec![e_call("floor", vec![e_var("timestamp")])])),
         s_assign("d", e_method_call(e_var("d"), "setTimestamp", vec![e_var("secs")])),
+        s_prop_assign(e_var("d"), "__elephc_is_localtime", e_bool(true)),
         s_assign("d", e_method_call(e_var("d"), "setMicrosecond", vec![e_call("intval", vec![e_call("round", vec![e_binop(e_binop(e_var("timestamp"), BinOp::Sub, e_var("secs")), BinOp::Mul, e_int(1000000))])])])),
         s_return(e_var("d")),
     ]
@@ -253,6 +368,63 @@ pub(super) fn get_last_errors(class_name: &str) -> Vec<Stmt> {
             None,
         ),
         s_return(e_array_assoc(vec![(e_str("warning_count"), e_int(0)), (e_str("warnings"), e_array(vec![])), (e_str("error_count"), e_var("ec")), (e_str("errors"), e_var("errs"))])),
+    ]
+}
+
+/// Builds the timelib-backed `DateTime::getLastErrors()` body without reparsing PHP source.
+pub(super) fn timelib_get_last_errors() -> Vec<Stmt> {
+    vec![
+        s_assign("lastResult", e_static_prop("DateTime", "lastParseResult")),
+        s_if(
+            e_binop(e_var("lastResult"), BinOp::StrictEq, e_str("")),
+            vec![s_return(e_bool(false))],
+            vec![],
+            None,
+        ),
+        s_assign(
+            "parsed",
+            e_ternary(
+                e_call("is_array", vec![e_var("lastResult")]),
+                e_var("lastResult"),
+                e_call("__elephc_timelib_decode_parse_result", vec![e_var("lastResult")]),
+            ),
+        ),
+        s_if(
+            e_binop(
+                e_binop(
+                    e_index(e_var("parsed"), e_str("error_count")),
+                    BinOp::StrictEq,
+                    e_int(0),
+                ),
+                BinOp::And,
+                e_binop(
+                    e_index(e_var("parsed"), e_str("warning_count")),
+                    BinOp::StrictEq,
+                    e_int(0),
+                ),
+            ),
+            vec![s_return(e_bool(false))],
+            vec![],
+            None,
+        ),
+        s_return(e_array_assoc(vec![
+            (
+                e_str("warning_count"),
+                e_index(e_var("parsed"), e_str("warning_count")),
+            ),
+            (
+                e_str("warnings"),
+                e_index(e_var("parsed"), e_str("warnings")),
+            ),
+            (
+                e_str("error_count"),
+                e_index(e_var("parsed"), e_str("error_count")),
+            ),
+            (
+                e_str("errors"),
+                e_index(e_var("parsed"), e_str("errors")),
+            ),
+        ])),
     ]
 }
 
@@ -3759,7 +3931,7 @@ pub(super) fn create_from_format(class_name: &str) -> Vec<Stmt> {
                 vec![],
                 Some(vec![
                 s_assign("saved", e_call("date_default_timezone_get", vec![])),
-                s_expr(e_call("date_default_timezone_set", vec![e_method_call(e_var("timezone"), "getName", vec![])])),
+                s_expr(e_call("date_default_timezone_set", vec![e_static_call("DateTimeZone", "__elephc_export_name", vec![e_var("timezone")])])),
                 s_assign("ts", e_call("__elephc_mktime_raw", vec![e_var("H"), e_var("mi"), e_var("se"), e_var("mo"), e_var("da"), e_var("Y")])),
                 s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
             ]),
@@ -3773,7 +3945,7 @@ pub(super) fn create_from_format(class_name: &str) -> Vec<Stmt> {
                 s_if(
                     e_binop(e_var("timezone"), BinOp::StrictNotEq, e_null()),
                     vec![
-                        s_expr(e_call("date_default_timezone_set", vec![e_method_call(e_var("timezone"), "getName", vec![])])),
+                        s_expr(e_call("date_default_timezone_set", vec![e_static_call("DateTimeZone", "__elephc_export_name", vec![e_var("timezone")])])),
                     ],
                     vec![],
                     None,
@@ -3837,7 +4009,7 @@ pub(super) fn create_from_format(class_name: &str) -> Vec<Stmt> {
         s_if(
             e_binop(e_var("timezone"), BinOp::StrictNotEq, e_null()),
             vec![
-                s_prop_assign(e_var("o"), "timezone_name", e_method_call(e_var("timezone"), "getName", vec![])),
+                s_prop_assign(e_var("o"), "timezone_name", e_static_call("DateTimeZone", "__elephc_export_name", vec![e_var("timezone")])),
             ],
             vec![],
             None,
@@ -3886,15 +4058,12 @@ pub(super) fn modify_preamble() -> Vec<Stmt> {
     ]
 }
 
-/// Builds `return [<identifiers>];` for `DateTimeZone::listIdentifiers()`.
+/// Builds the exact shared filter for `DateTimeZone::listIdentifiers()`.
 ///
-/// Takes the identifiers as data rather than as a PHP fragment: the old form formatted 419
-/// quoted strings into `<?php return [...];` and parsed the result, which is a tokenizer pass
-/// over ~10 KB of generated source on every compile that reaches this class.
-pub(super) fn list_identifiers(identifiers: &[&str]) -> Vec<Stmt> {
-    vec![s_return(e_array(
-        identifiers.iter().map(|id| e_str(id)).collect(),
-    ))]
+/// Reuses the direct-AST prelude body so resolver-desugared and reflection-invoked calls share
+/// php-src's group, BC, country, and validation semantics without parsed PHP source.
+pub(super) fn list_identifiers() -> Vec<Stmt> {
+    crate::list_id_prelude::list_identifier_filter_body()
 }
 
 /// Reproduces `GET_LOCATION_SRC` — `DateTimeZone::getLocation()`.
@@ -3917,7 +4086,17 @@ pub(super) fn tz_get_location() -> Vec<Stmt> {
 /// Reproduces `GET_TRANSITIONS_SRC` — `DateTimeZone::getTransitions()`.
 pub(super) fn tz_get_transitions() -> Vec<Stmt> {
     vec![
-        s_assign("raw", e_call("elephc_tz_transitions", vec![e_this_prop("name")])),
+        s_assign(
+            "raw",
+            e_call(
+                "elephc_tz_transitions_range",
+                vec![
+                    e_this_prop("name"),
+                    e_var("timestampBegin"),
+                    e_var("timestampEnd"),
+                ],
+            ),
+        ),
         s_if(
             e_binop(e_var("raw"), BinOp::StrictEq, e_str("")),
             vec![
@@ -3927,53 +4106,16 @@ pub(super) fn tz_get_transitions() -> Vec<Stmt> {
             None,
         ),
         s_assign("lines", e_call("explode", vec![e_str("\n"), e_var("raw")])),
-        s_assign("all", e_array(vec![])),
+        s_assign("result", e_array(vec![])),
         s_foreach(e_var("lines"), None, "line", vec![
             s_assign("g", e_call("explode", vec![e_str("\t"), e_var("line")])),
-            s_array_push("all", e_array_assoc(vec![(e_str("ts"), e_cast(CastType::Int, e_index(e_var("g"), e_int(0)))), (e_str("offset"), e_cast(CastType::Int, e_index(e_var("g"), e_int(1)))), (e_str("isdst"), e_binop(e_index(e_var("g"), e_int(2)), BinOp::StrictEq, e_str("1"))), (e_str("abbr"), e_index(e_var("g"), e_int(3))), (e_str("time"), e_index(e_var("g"), e_int(4)))])),
-        ]),
-        s_assign("n", e_call("count", vec![e_var("all")])),
-        s_assign("result", e_array(vec![])),
-        s_assign("active", e_neg(e_int(1))),
-        s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("n"))), Some(s_expr(e_post_inc("i"))), vec![
-            s_if(
-                e_binop(e_index(e_index(e_var("all"), e_var("i")), e_str("ts")), BinOp::LtEq, e_var("timestampBegin")),
-                vec![
-                    s_assign("active", e_var("i")),
-                ],
-                vec![],
-                None,
-            ),
-        ]),
-        s_if(
-            e_binop(e_var("active"), BinOp::GtEq, e_int(0)),
-            vec![
-                s_assign("a", e_index(e_var("all"), e_var("active"))),
-                s_assign("ats", e_cast(CastType::Int, e_index(e_var("a"), e_str("ts")))),
-                s_if(
-                    e_binop(e_var("timestampBegin"), BinOp::LtEq, e_var("ats")),
-                    vec![
-                        s_array_push("result", e_var("a")),
-                    ],
-                    vec![],
-                    Some(vec![
-                    s_array_push("result", e_array_assoc(vec![(e_str("ts"), e_var("timestampBegin")), (e_str("time"), e_call("gmdate", vec![e_str("Y-m-d\\TH:i:sP"), e_var("timestampBegin")])), (e_str("offset"), e_index(e_var("a"), e_str("offset"))), (e_str("isdst"), e_index(e_var("a"), e_str("isdst"))), (e_str("abbr"), e_index(e_var("a"), e_str("abbr")))])),
-                ]),
-                ),
-            ],
-            vec![],
-            None,
-        ),
-        s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("n"))), Some(s_expr(e_post_inc("i"))), vec![
-            s_if(
-                e_binop(e_binop(e_index(e_index(e_var("all"), e_var("i")), e_str("ts")), BinOp::Gt, e_var("timestampBegin")), BinOp::And, e_binop(e_index(e_index(e_var("all"), e_var("i")), e_str("ts")), BinOp::LtEq, e_var("timestampEnd"))),
-                vec![
-                    s_assign("r", e_index(e_var("all"), e_var("i"))),
-                    s_array_push("result", e_array_assoc(vec![(e_str("ts"), e_index(e_var("r"), e_str("ts"))), (e_str("time"), e_index(e_var("r"), e_str("time"))), (e_str("offset"), e_index(e_var("r"), e_str("offset"))), (e_str("isdst"), e_index(e_var("r"), e_str("isdst"))), (e_str("abbr"), e_index(e_var("r"), e_str("abbr")))])),
-                ],
-                vec![],
-                None,
-            ),
+            s_array_push("result", e_array_assoc(vec![
+                (e_str("ts"), e_cast(CastType::Int, e_index(e_var("g"), e_int(0)))),
+                (e_str("time"), e_index(e_var("g"), e_int(4))),
+                (e_str("offset"), e_cast(CastType::Int, e_index(e_var("g"), e_int(1)))),
+                (e_str("isdst"), e_binop(e_index(e_var("g"), e_int(2)), BinOp::StrictEq, e_str("1"))),
+                (e_str("abbr"), e_index(e_var("g"), e_int(3))),
+            ])),
         ]),
         s_return(e_var("result")),
     ]

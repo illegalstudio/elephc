@@ -277,7 +277,11 @@ pub(in crate::interpreter) fn eval_curl_setopt_callback(
     // failure only appeared as a silently skipped callback at transfer time. The probe is
     // `is_callable()`'s own.
     let callable_is_valid = match eval_callable(value, context, values) {
-        Ok(callable) => eval_callable_probe_exists(&callable, context, values)?,
+        Ok(callable) => {
+            let result = eval_callable_probe_exists(&callable, context, values);
+            let cleanup = release_evaluated_callable(callable, None, values);
+            result.and_then(|valid| cleanup.map(|()| valid))?
+        }
         Err(_) => false,
     };
     if !callable_is_valid {
@@ -429,7 +433,17 @@ where
                     // Normalized ONCE per transfer rather than once per callback
                     // invocation: a write callback fires per chunk, and re-resolving a
                     // method/closure callable thousands of times would be pure overhead.
-                    Some(eval_callable(cell, context, values)?)
+                    match eval_callable(cell, context, values) {
+                        Ok(callable) => Some(callable),
+                        Err(status) => {
+                            for (_, _, callable) in installed {
+                                if let Some(callable) = callable {
+                                    let _ = release_evaluated_callable(callable, None, values);
+                                }
+                            }
+                            return Err(status);
+                        }
+                    }
                 }
                 EvalCurlCallbackSlot::Silent => None,
                 EvalCurlCallbackSlot::Empty => continue,
@@ -459,7 +473,32 @@ where
         // caller resumes it in the very next statement — it still has to consult the
         // bridge's gate to know a throw is why the transfer stopped, which is why resuming
         // is a separate call rather than an `Err` from here.
-        Ok((outcome, frame.parked.take()))
+        let parked = frame.parked.take();
+        let mut escaped_receiver = if parked == Some(EvalStatus::UncaughtThrowable) {
+            context.pending_throw()
+        } else {
+            None
+        };
+        let mut cleanup = Ok(());
+        for (_, _, callable) in std::mem::take(&mut frame.installed) {
+            if let Some(callable) = callable {
+                // Several callback slots may own the same receiver. Transfer
+                // only one owner to the throwable and release the other pins.
+                let transfer = match &callable {
+                    EvaluatedCallable::ObjectMethod { object, owns_receiver: true, .. }
+                        if escaped_receiver == Some(*object) => escaped_receiver.take(),
+                    _ => None,
+                };
+                let released = release_evaluated_callable(callable, transfer, values);
+                if cleanup.is_ok() {
+                    cleanup = released;
+                }
+            }
+        }
+        if parked.is_none() {
+            cleanup?;
+        }
+        Ok((outcome, parked))
     }
 }
 

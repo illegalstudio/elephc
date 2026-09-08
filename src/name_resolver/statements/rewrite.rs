@@ -217,6 +217,15 @@ pub(super) fn resolve_regular_stmt(
             property: property.clone(),
             value: ctx.expr(value),
         },
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => StmtKind::DynamicPropertyArrayPush {
+            object: Box::new(ctx.expr(object)),
+            property: Box::new(ctx.expr(property)),
+            value: ctx.expr(value),
+        },
         StmtKind::PropertyArrayAssign {
             object,
             property,

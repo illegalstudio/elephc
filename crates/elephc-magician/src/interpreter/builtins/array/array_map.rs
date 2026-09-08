@@ -90,19 +90,25 @@ fn eval_array_map_result_from_scope(
             values,
         )?)
     };
-    let len = values.array_len(*array)?;
-    let mut result = values.assoc_new(len)?;
-    for position in 0..len {
-        let key = values.array_iter_key(*array, position)?;
-        let value = values.array_get(*array, key)?;
-        let mapped = if let Some(callback) = callback.as_ref() {
-            eval_evaluated_callable_with_values(callback, vec![value], context, values)?
-        } else {
-            value
-        };
-        result = values.array_set(result, key, mapped)?;
+    let result = (|| {
+        let len = values.array_len(*array)?;
+        let mut result = values.assoc_new(len)?;
+        for position in 0..len {
+            let key = values.array_iter_key(*array, position)?;
+            let value = values.array_get(*array, key)?;
+            let mapped = if let Some(callback) = callback.as_ref() {
+                eval_evaluated_callable_with_values(callback, vec![value], context, values)?
+            } else {
+                value
+            };
+            result = values.array_set(result, key, mapped)?;
+        }
+        Ok(result)
+    })();
+    match callback {
+        Some(callback) => finish_evaluated_callable(callback, result, context, values),
+        None => result,
     }
-    Ok(result)
 }
 
 /// Maps multiple eval arrays with optional lexical scope for callback names.
@@ -126,35 +132,41 @@ fn eval_array_map_variadic_result_from_scope(
             values,
         )?)
     };
-    let mut lengths = Vec::with_capacity(arrays.len());
-    let mut max_len = 0;
-    for array in arrays {
-        let len = values.array_len(*array)?;
-        max_len = max_len.max(len);
-        lengths.push(len);
-    }
-
-    let mut result = values.array_new(max_len)?;
-    for position in 0..max_len {
-        let mut callback_args = Vec::with_capacity(arrays.len());
-        for (array, len) in arrays.iter().zip(lengths.iter()) {
-            let value = if position < *len {
-                let key = values.array_iter_key(*array, position)?;
-                values.array_get(*array, key)?
-            } else {
-                values.null()?
-            };
-            callback_args.push(value);
+    let result = (|| {
+        let mut lengths = Vec::with_capacity(arrays.len());
+        let mut max_len = 0;
+        for array in arrays {
+            let len = values.array_len(*array)?;
+            max_len = max_len.max(len);
+            lengths.push(len);
         }
-        let mapped = if let Some(callback) = callback.as_ref() {
-            eval_evaluated_callable_with_values(callback, callback_args, context, values)?
-        } else {
-            eval_array_map_zipped_row(callback_args, values)?
-        };
-        let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        result = values.array_set(result, key, mapped)?;
+
+        let mut result = values.array_new(max_len)?;
+        for position in 0..max_len {
+            let mut callback_args = Vec::with_capacity(arrays.len());
+            for (array, len) in arrays.iter().zip(lengths.iter()) {
+                let value = if position < *len {
+                    let key = values.array_iter_key(*array, position)?;
+                    values.array_get(*array, key)?
+                } else {
+                    values.null()?
+                };
+                callback_args.push(value);
+            }
+            let mapped = if let Some(callback) = callback.as_ref() {
+                eval_evaluated_callable_with_values(callback, callback_args, context, values)?
+            } else {
+                eval_array_map_zipped_row(callback_args, values)?
+            };
+            let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            result = values.array_set(result, key, mapped)?;
+        }
+        Ok(result)
+    })();
+    match callback {
+        Some(callback) => finish_evaluated_callable(callback, result, context, values),
+        None => result,
     }
-    Ok(result)
 }
 
 /// Builds one row for `array_map(null, $a, $b, ...)`.

@@ -118,6 +118,15 @@ impl Rewriter {
                 self.walk_expr(object);
                 self.walk_expr(value);
             }
+            StmtKind::DynamicPropertyArrayPush {
+                object,
+                property,
+                value,
+            } => {
+                self.walk_expr(object);
+                self.walk_expr(property);
+                self.walk_expr(value);
+            }
             StmtKind::PropertyArrayAssign {
                 object,
                 index,

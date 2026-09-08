@@ -59,6 +59,7 @@ pub(crate) fn collect_constants(
     let str_const = |value: String| (ExprKind::StringLiteral(value), PhpType::Str);
     let int_const = |value: i64| (ExprKind::IntLiteral(value), PhpType::Int);
     let computed = [
+        ("E_ALL", int_const(php_version.all_error_levels())),
         ("PHP_OS", str_const(target_platform.php_os_name().to_string())),
         ("PHP_OS_FAMILY", str_const(target_platform.php_os_family_name().to_string())),
         ("PHP_VERSION", str_const(php_version.version_string().to_string())),
@@ -95,6 +96,13 @@ pub(crate) fn collect_constants(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
+    }
+    for constant in registered_constants() {
+        if let Some(value) = elephc_builtin_contract::locale_category_value(
+            constant.name, target_platform == Platform::MacOS,
+        ) {
+            constants.insert(constant.name.to_string(), int_const(value));
+        }
     }
     collect_constant_decls(program, &mut constants);
     constants

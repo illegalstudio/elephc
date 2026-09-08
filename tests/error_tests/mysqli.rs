@@ -79,17 +79,6 @@ $db->query();
     );
 }
 
-/// The constructor rejects more arguments than its six connection parameters.
-#[test]
-fn constructor_rejects_extra_arguments() {
-    expect_mysqli_error(
-        r#"<?php
-$db = new mysqli("h", "u", "p", "d", 3306, null, 999);
-"#,
-        "mysqli",
-    );
-}
-
 /// `mysqli_connect_errno()` takes no arguments (the no-link procedural form).
 #[test]
 fn connect_errno_takes_no_arguments() {

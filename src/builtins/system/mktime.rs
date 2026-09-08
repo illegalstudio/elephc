@@ -6,13 +6,20 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - No `check` hook is needed: `mktime` is a pure-data builtin whose return type
-//!   (`Int`) is fully determined by its declaration.
+//! - Optional civil fields use a single post-argument clock snapshot.
 
+/// PHP date-format tokens in the six civil-argument positions; hour has no default.
+pub(crate) const MKTIME_COMPONENT_FORMATS: [&str; 6] = ["G", "i", "s", "n", "j", "Y"];
+
+/// Selects shared nullable-field preparation before the typed local/UTC runtime call.
+pub(crate) const fn mktime_semantics(utc: bool) -> crate::builtins::semantics::BuiltinSemantics {
+    let target = if utc { crate::ir::RuntimeFnId::Gmmktime } else { crate::ir::RuntimeFnId::Mktime };
+    let mut semantics = crate::builtins::semantics::runtime_fn_semantics(target);
+    semantics.argument_lowering = crate::builtins::semantics::BuiltinArgumentLowering::Mktime { utc };
+    semantics
+}
 
 builtin! {
     contract: "mktime",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Mktime,
-    ),
+    semantics: mktime_semantics(false),
 }

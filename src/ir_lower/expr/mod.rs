@@ -12,7 +12,7 @@
 
 use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId,
-    MixedNumericOp, Op, Ownership, Terminator, ValueId,
+    MixedNumericOp, Op, Ownership, RuntimeCallTarget, Terminator, ValueId,
 };
 use crate::ir_lower::context::{
     value_ir_type, ClosureCapture, LoweredValue, LoweringContext, StaticCallableBinding,
@@ -34,6 +34,7 @@ use std::collections::HashSet;
 
 mod constants;
 mod nullsafe_chain;
+mod builtin_graphs;
 mod ref_place_args;
 mod scalar_literals;
 mod numeric_binary;
@@ -44,6 +45,7 @@ mod lazy_branches;
 mod pipe;
 mod assignments;
 mod function_calls;
+mod object_argument_guards;
 use function_calls::resolve_registry_builtin_result_type;
 mod eval_barriers;
 mod lazy_isset;
@@ -56,6 +58,7 @@ mod callable_tracking;
 mod callable_resolution;
 mod unset;
 mod array_builtin_args;
+mod mktime_args;
 mod builtin_special_args;
 mod call_arg_coercion;
 mod positional_spreads;
@@ -76,6 +79,7 @@ mod object_construction;
 mod property_access;
 mod property_fetch_for_write;
 mod method_calls;
+mod date_interface_calls;
 mod reflection_class_calls;
 mod reflection_method_calls;
 mod reflection_property_calls;
@@ -111,6 +115,7 @@ use callable_tracking::*;
 use callable_resolution::*;
 use unset::*;
 use array_builtin_args::*;
+use mktime_args::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
 use positional_spreads::*;
@@ -143,9 +148,15 @@ use scoped_values::*;
 use generators::*;
 use instanceof_coercions::*;
 use merge_temps::*;
+use builtin_graphs::*;
 
 pub(crate) use callable_resolution::{
-    is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
+    instance_callable_object_class, is_bound_closure_assignment_shape,
+    lower_bound_closure_for_assignment,
+};
+pub(crate) use assignments::lower_dynamic_property_array_push;
+pub(crate) use builtin_graphs::{
+    lower_array_end_from_value, lower_constant_from_name_value, lower_get_object_vars_from_value,
 };
 pub(crate) use callable_tracking::{
     lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
@@ -175,7 +186,7 @@ pub(super) use assoc_array_literals::{
     array_access_expr_value_type_for_ir, method_call_expr_type_for_ir,
     property_access_expr_type_for_ir,
 };
-pub(super) use call_return_types::call_return_type;
+use call_return_types::{call_return_type, eir_user_function_return_type};
 pub(super) use merge_temps::coerce_container_to_mixed_payload;
 pub(super) use nullable_method_calls::lower_dynamic_method_call_with_receiver;
 pub(super) use static_method_calls::static_method_call_expr_type_for_ir;
@@ -446,6 +457,7 @@ fn static_callable_builtin_result_type(
 /// "must not be accessed before initialization" error that a plain read raises. The
 /// slot probe therefore runs first, and the ordinary null-check read is only reached
 /// on the initialized branch.
+#[allow(dead_code)]
 fn lower_initialized_property_isset(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
@@ -591,6 +603,7 @@ fn lower_initialized_static_property_isset(
 /// it answers without the read that would have consumed it — and gates that release on
 /// `value_is_owning_temporary`, because a borrowed `?C` receiver represents as a boxed Mixed and
 /// a type-gated release frees what the next statement still needs.
+#[allow(dead_code)]
 fn lower_initialized_property_empty(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,

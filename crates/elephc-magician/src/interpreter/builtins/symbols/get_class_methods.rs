@@ -88,6 +88,9 @@ fn eval_class_method_names_for_scope(
                 eval_push_unique_method_name(&mut names, &mut seen, name);
                 continue;
             };
+            if is_datetime_implementation_helper(&declaring_class, &name) {
+                continue;
+            }
             if validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok() {
                 eval_push_unique_method_name(&mut names, &mut seen, name);
             }
@@ -135,11 +138,32 @@ fn eval_visible_runtime_method_names(
         else {
             continue;
         };
+        if is_datetime_implementation_helper(&declaring_class, &name) {
+            continue;
+        }
         if validate_eval_member_access(&declaring_class, visibility, context).is_ok() {
             result.push(name);
         }
     }
     Ok(result)
+}
+
+/// Returns whether one resolved method belongs to Elephc's hidden ext/date implementation.
+fn is_datetime_implementation_helper(declaring_class: &str, method_name: &str) -> bool {
+    method_name
+        .trim_start_matches('\\')
+        .starts_with("__elephc_date_magic_restore$")
+        || (method_name
+            .trim_start_matches('\\')
+            .to_ascii_lowercase()
+            .starts_with("__elephc_")
+            && matches!(
+                declaring_class
+                    .trim_start_matches('\\')
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "datetime" | "datetimeimmutable" | "datetimezone" | "dateinterval" | "dateperiod"
+            ))
 }
 
 /// Adds generated/AOT parent method names inherited by one eval class.

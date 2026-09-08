@@ -218,16 +218,30 @@ pub(super) fn lower_assoc_spread_only_args(
     if !is_assoc_spread_source(ctx, inner) || sig.variadic.is_some() {
         return None;
     }
-    let spread = lower_expr(ctx, inner);
-    let spread_type = ctx.builder.value_php_type(spread.value);
-    let temp_name = ctx.declare_hidden_temp(spread_type.clone());
-    store_value_into_temp(ctx, &temp_name, spread_type, spread, arg.span);
-    let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
+    let (spread_expr, cleanup_temp) = if matches!(&inner.kind, ExprKind::Variable(_)) {
+        (inner.as_ref().clone(), None)
+    } else {
+        let spread = lower_expr(ctx, inner);
+        let spread_type = ctx.builder.value_php_type(spread.value);
+        let temp_name = ctx.declare_hidden_temp(spread_type.clone());
+        store_value_into_temp(ctx, &temp_name, spread_type, spread, arg.span);
+        (
+            Expr::new(ExprKind::Variable(temp_name.clone()), inner.span),
+            Some(temp_name),
+        )
+    };
     let mut operands = Vec::with_capacity(sig.params.len());
     for (idx, (param_name, _)) in sig.params.iter().enumerate() {
         let default = sig.defaults.get(idx).and_then(|default| default.as_ref());
         let param_expr = assoc_spread_param_expr(&spread_expr, param_name, default, arg.span);
         operands.push(lower_expr(ctx, &param_expr).value);
+    }
+    if let Some(cleanup_temp) = cleanup_temp {
+        if let Some(anchor) = operands.first().copied() {
+            ctx.register_call_arg_temp_cleanup(anchor, cleanup_temp);
+        } else {
+            ctx.clear_hidden_temp(&cleanup_temp, Some(arg.span));
+        }
     }
     Some(operands)
 }

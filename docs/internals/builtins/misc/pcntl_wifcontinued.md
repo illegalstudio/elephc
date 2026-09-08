@@ -2,7 +2,7 @@
 title: "pcntl_wifcontinued() — internals"
 description: "Compiler internals for pcntl_wifcontinued(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 647
+  order: 653
 ---
 
 ## `pcntl_wifcontinued()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_wifcontinued.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_wifcontinued.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -295,3 +295,126 @@ echo $r, "|", gettype($r);
     );
     assert_eq!(out, "9.2233720368548E+18|double");
 }
+
+/// A nullable object reaching a non-null declared return throws a catchable TypeError instead
+/// of exposing the boxed-null sentinel as an object pointer.
+#[test]
+fn test_declared_object_return_boundary_rejects_null() {
+    let out = compile_and_run(
+        r#"<?php
+class ReturnTarget {}
+function nullable_target(bool $ok): ?ReturnTarget {
+    return $ok ? new ReturnTarget() : null;
+}
+function required_target(bool $ok): ReturnTarget {
+    return nullable_target($ok);
+}
+echo get_class(required_target(true)), "|";
+try {
+    required_target(false);
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "ReturnTarget|required_target(): Return value must be of type ReturnTarget, null returned"
+    );
+}
+
+/// An incompatible runtime object names its concrete class in the return TypeError.
+#[test]
+fn test_declared_object_return_boundary_names_wrong_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ExpectedReturn {}
+class ActualReturn {}
+class ReturnHolder {
+    public static ExpectedReturn|ActualReturn $value;
+}
+function dynamic_return(): ExpectedReturn { return ReturnHolder::$value; }
+function scalar_return(): ExpectedReturn { return 1; }
+ReturnHolder::$value = new ActualReturn();
+try {
+    dynamic_return();
+} catch (TypeError $error) {
+    echo $error->getMessage(), "|";
+}
+try {
+    scalar_return();
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "dynamic_return(): Return value must be of type ExpectedReturn, ActualReturn returned|scalar_return(): Return value must be of type ExpectedReturn, int returned"
+    );
+}
+
+/// The generic `object` return accepts every object class and rejects nullable null values.
+#[test]
+fn test_declared_generic_object_return_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+class GenericObjectReturn {}
+function any_object(?GenericObjectReturn $value): object {
+    return $value;
+}
+echo get_class(any_object(new GenericObjectReturn())), "|";
+try {
+    any_object(null);
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "GenericObjectReturn|any_object(): Return value must be of type object, null returned"
+    );
+}
+
+/// False members returned by internal builtins follow PHP's weak scalar return coercions.
+#[test]
+fn test_declared_scalar_returns_coerce_internal_false_results() {
+    let out = compile_and_run(
+        r#"<?php
+function missing_file_contents(): string {
+    return @file_get_contents("/definitely/not/present");
+}
+function missing_readfile(): int {
+    return @readfile("/definitely/not/present");
+}
+function eof_character(mixed $stream): string {
+    return fgetc($stream);
+}
+function missing_position(): int {
+    return strpos("abc", "z");
+}
+$stream = fopen("php://memory", "r");
+var_dump(missing_file_contents(), missing_readfile(), eof_character($stream), missing_position());
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(0) \"\"\nint(0)\nstring(0) \"\"\nint(0)\n"
+    );
+}
+
+/// After excluding literal false, the remaining bool member still coerces to an int return.
+#[test]
+fn test_declared_int_return_coerces_true_after_false_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function guarded_bool(int|bool $value): int {
+    if ($value === false) { throw new Exception("false"); }
+    return $value;
+}
+var_dump(guarded_bool(true), guarded_bool(4));
+"#,
+    );
+    assert_eq!(out, "int(1)\nint(4)\n");
+}

@@ -345,9 +345,12 @@ pub(super) fn lower_mixed_numeric_binop(
     inst: &Instruction,
 ) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
-    let rhs = expect_operand(inst, 1)?;
     let op = expect_mixed_numeric_op(inst)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
+    if op == MixedNumericOp::UnaryPlus {
+        return lower_mixed_unary_plus(ctx, inst, lhs, &lhs_ty);
+    }
+    let rhs = expect_operand(inst, 1)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
     let left_box_temp = !is_mixed_like(&lhs_ty);
     let right_box_temp = !is_mixed_like(&rhs_ty);
@@ -377,6 +380,352 @@ pub(super) fn lower_mixed_numeric_binop(
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     store_if_result(ctx, inst)
+}
+
+/// Lowers PHP unary plus for operands whose runtime value can change the result or throw.
+fn lower_mixed_unary_plus(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operand: ValueId,
+    operand_ty: &PhpType,
+) -> Result<()> {
+    match operand_ty {
+        PhpType::Str => {
+            ctx.load_value_to_result(operand)?;
+            emit_unary_plus_string(ctx, inst, None, None);
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            super::exceptions::emit_type_error(ctx, "Unsupported operand types: array * int");
+        }
+        PhpType::Object(class_name) => {
+            super::exceptions::emit_type_error(
+                ctx,
+                &format!(
+                    "Unsupported operand types: {} * int",
+                    class_name.trim_start_matches('\\')
+                ),
+            );
+        }
+        PhpType::Resource(_) => {
+            super::exceptions::emit_type_error(ctx, "Unsupported operand types: resource * int");
+        }
+        PhpType::Callable => {
+            super::exceptions::emit_type_error(ctx, "Unsupported operand types: Closure * int");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_dynamic_unary_plus(ctx, inst, operand, operand_ty, false)?;
+        }
+        PhpType::Iterable => {
+            emit_dynamic_unary_plus(ctx, inst, operand, operand_ty, true)?;
+        }
+        other => {
+            return Err(CodegenIrError::invalid_module(format!(
+                "unary plus runtime lowering received PHP type {:?}",
+                other
+            )))
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Converts one string operand with PHP's numeric-string grammar or throws its exact TypeError.
+fn emit_unary_plus_string(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    boxed_temp: Option<bool>,
+    done: Option<&str>,
+) {
+    let numeric = ctx.next_label("unary_plus_string_numeric");
+    let leading_numeric = ctx.next_label("unary_plus_string_leading_numeric");
+    let invalid = ctx.next_label("unary_plus_string_invalid");
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_cstr");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_php_num_scan");
+            ctx.emitter.instruction(&format!("cbnz x1, {}", numeric));
+            ctx.emitter.instruction("ldrb w9, [x0]");                          // an empty clipped run means the string has no numeric prefix
+            ctx.emitter.instruction(&format!("cbnz w9, {}", leading_numeric));
+            abi::emit_jump(ctx.emitter, &invalid);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                           // pass the C-string scratch pointer to the PHP numeric scanner
+            abi::emit_call_label(ctx.emitter, "__rt_php_num_scan");
+            ctx.emitter.instruction("test rdx, rdx");
+            ctx.emitter.instruction(&format!("jnz {}", numeric));
+            ctx.emitter.instruction("cmp BYTE PTR [rax], 0");                  // an empty clipped run means the string has no numeric prefix
+            ctx.emitter.instruction(&format!("jne {}", leading_numeric));
+            abi::emit_jump(ctx.emitter, &invalid);
+        }
+    }
+
+    ctx.emitter.label(&leading_numeric);
+    emit_unary_plus_non_numeric_warning(ctx, inst);
+    abi::emit_jump(ctx.emitter, &numeric);
+
+    ctx.emitter.label(&invalid);
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    if let Some(is_temp) = boxed_temp {
+        cleanup_dynamic_unary_plus_operand(ctx, is_temp);
+    }
+    super::exceptions::emit_type_error(ctx, "Unsupported operand types: string * int");
+
+    ctx.emitter.label(&numeric);
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x3, xzr"),              // a zero delta converts the numeric string without changing its value
+        Arch::X86_64 => ctx.emitter.instruction("xor ecx, ecx"),               // a zero delta converts the numeric string without changing its value
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_inc_dec");
+    if let Some(is_temp) = boxed_temp {
+        finish_dynamic_unary_plus_result(ctx, is_temp);
+    }
+    if let Some(done) = done {
+        abi::emit_jump(ctx.emitter, done);
+    }
+}
+
+/// Dispatches unary plus by the runtime tag of a boxed Mixed or Iterable operand.
+fn emit_dynamic_unary_plus(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operand: ValueId,
+    operand_ty: &PhpType,
+    boxed_temp: bool,
+) -> Result<()> {
+    let scalar = ctx.next_label("unary_plus_scalar");
+    let string = ctx.next_label("unary_plus_string");
+    let boolean = ctx.next_label("unary_plus_bool");
+    let null = ctx.next_label("unary_plus_null");
+    let array = ctx.next_label("unary_plus_array");
+    let object = ctx.next_label("unary_plus_object");
+    let resource = ctx.next_label("unary_plus_resource");
+    let closure = ctx.next_label("unary_plus_closure");
+    let done = ctx.next_label("unary_plus_done");
+
+    materialize_value_as_mixed(ctx, operand, operand_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_unary_plus_tag_branch(ctx, 0, &scalar);
+    emit_unary_plus_tag_branch(ctx, 2, &scalar);
+    emit_unary_plus_tag_branch(ctx, 1, &string);
+    emit_unary_plus_tag_branch(ctx, 3, &boolean);
+    emit_unary_plus_tag_branch(ctx, 4, &array);
+    emit_unary_plus_tag_branch(ctx, 5, &array);
+    emit_unary_plus_tag_branch(ctx, 6, &object);
+    emit_unary_plus_tag_branch(ctx, 8, &null);
+    emit_unary_plus_tag_branch(ctx, 9, &resource);
+    emit_unary_plus_tag_branch(ctx, 10, &closure);
+    cleanup_dynamic_unary_plus_operand(ctx, boxed_temp);
+    super::exceptions::emit_type_error(ctx, "Unsupported operand types: unknown * int");
+
+    ctx.emitter.label(&scalar);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rsi, rdx");                               // adapt unboxed high payload to the Mixed boxer ABI
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    finish_dynamic_unary_plus_result(ctx, boxed_temp);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&boolean);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #0");                             // unary plus converts bool to PHP int
+            ctx.emitter.instruction("mov x2, xzr");                            // integer boxes have no high payload
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, 0");                             // unary plus converts bool to PHP int
+            ctx.emitter.instruction("xor esi, esi");                           // integer boxes have no high payload
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    finish_dynamic_unary_plus_result(ctx, boxed_temp);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&null);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #0");                             // unary plus converts null to integer zero
+            ctx.emitter.instruction("mov x1, xzr");
+            ctx.emitter.instruction("mov x2, xzr");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, 0");                             // unary plus converts null to integer zero
+            ctx.emitter.instruction("xor edi, edi");
+            ctx.emitter.instruction("xor esi, esi");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    finish_dynamic_unary_plus_result(ctx, boxed_temp);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&string);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                               // move the unboxed pointer into the string-result register
+    }
+    emit_unary_plus_string(ctx, inst, Some(boxed_temp), Some(&done));
+
+    ctx.emitter.label(&array);
+    cleanup_dynamic_unary_plus_operand(ctx, boxed_temp);
+    super::exceptions::emit_type_error(ctx, "Unsupported operand types: array * int");
+
+    ctx.emitter.label(&resource);
+    cleanup_dynamic_unary_plus_operand(ctx, boxed_temp);
+    super::exceptions::emit_type_error(ctx, "Unsupported operand types: resource * int");
+
+    ctx.emitter.label(&closure);
+    cleanup_dynamic_unary_plus_operand(ctx, boxed_temp);
+    super::exceptions::emit_type_error(ctx, "Unsupported operand types: Closure * int");
+
+    ctx.emitter.label(&object);
+    emit_dynamic_unary_plus_object_error(ctx, boxed_temp);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits PHP's suppression-aware warning for a string with a trailing nonnumeric suffix.
+fn emit_unary_plus_non_numeric_warning(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    let masked = ctx.next_label("unary_plus_warning_masked");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_rt_error_reporting", 0);
+            ctx.emitter.instruction("tst x9, #2");                              // E_WARNING must be enabled in the active mask
+            ctx.emitter.instruction(&format!("b.eq {}", masked));
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_rt_error_reporting", 0);
+            ctx.emitter.instruction("test r10, 2");                             // E_WARNING must be enabled in the active mask
+            ctx.emitter.instruction(&format!("jz {}", masked));
+        }
+    }
+    emit_unary_plus_warning_fragment(ctx, b"\nWarning: A non-numeric value encountered");
+    if let Some(span) = inst.span.filter(|span| span.line > 0) {
+        let source = ctx.module.source_path.as_deref().unwrap_or("Unknown");
+        emit_unary_plus_warning_fragment(ctx, format!(" in {source} on line ").as_bytes());
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            i64::from(span.line),
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_itoa");
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                           // pass the rendered line pointer to the diagnostic writer
+            ctx.emitter.instruction("mov rsi, rdx");                           // pass the rendered line length to the diagnostic writer
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_diag_write");
+    }
+    emit_unary_plus_warning_fragment(ctx, b"\n");
+    ctx.emitter.label(&masked);
+}
+
+/// Writes one static unary-plus warning fragment through the diagnostic runtime.
+fn emit_unary_plus_warning_fragment(ctx: &mut FunctionContext<'_>, fragment: &[u8]) {
+    let (label, len) = ctx.data.add_string(fragment);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_write");
+}
+
+/// Emits a branch when the unboxed Mixed tag matches one unary-plus runtime case.
+fn emit_unary_plus_tag_branch(ctx: &mut FunctionContext<'_>, tag: u8, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));
+            ctx.emitter.instruction(&format!("b.eq {}", label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {}", tag));
+            ctx.emitter.instruction(&format!("je {}", label));
+        }
+    }
+}
+
+/// Releases the saved operand slot, including a temporary box created for Iterable values.
+fn cleanup_dynamic_unary_plus_operand(ctx: &mut FunctionContext<'_>, boxed_temp: bool) {
+    if boxed_temp {
+        decref_mixed_temp_at(ctx, 0);
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
+/// Preserves a newly boxed result while releasing the saved unary-plus operand slot.
+fn finish_dynamic_unary_plus_result(ctx: &mut FunctionContext<'_>, boxed_temp: bool) {
+    if boxed_temp {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        decref_mixed_temp_at(ctx, 16);
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
+/// Builds `<runtime class> * int` and throws the catchable unary-plus TypeError.
+fn emit_dynamic_unary_plus_object_error(ctx: &mut FunctionContext<'_>, boxed_temp: bool) {
+    let (name_ptr, name_len) = abi::string_result_regs(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x1]");                           // load the runtime class id from the object payload
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
+            ctx.emitter.instruction("lsl x11, x9, #4");                        // scale the class id to its 16-byte metadata row
+            ctx.emitter.instruction("add x10, x10, x11");
+            ctx.emitter.instruction(&format!("ldr {}, [x10]", name_ptr));
+            ctx.emitter.instruction(&format!("ldr {}, [x10, #8]", name_len));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rdi]");                // load the runtime class id from the object payload
+            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
+            ctx.emitter.instruction("shl r9, 4");                              // scale the class id to its 16-byte metadata row
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9]", name_ptr));
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", name_len));
+        }
+    }
+    emit_unary_plus_message_prefix(ctx, "Unsupported operand types: ");
+    emit_unary_plus_message_suffix(ctx, " * int");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    abi::emit_push_reg_pair(ctx.emitter, name_ptr, name_len);
+    if boxed_temp {
+        decref_mixed_temp_at(ctx, 16);
+    }
+    abi::emit_pop_reg_pair(ctx.emitter, name_ptr, name_len);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    super::exceptions::emit_type_error_from_string_result(ctx);
+}
+
+/// Prepends one static fragment to the current runtime-built unary-plus message.
+fn emit_unary_plus_message_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
+    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
+    let (right_ptr, right_len) = unary_plus_concat_right_regs(ctx);
+    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+    ctx.emitter.instruction(&format!("mov {}, {}", right_ptr, text_ptr));
+    ctx.emitter.instruction(&format!("mov {}, {}", right_len, text_len));
+    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix_label);
+    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+}
+
+/// Appends one static fragment to the current runtime-built unary-plus message.
+fn emit_unary_plus_message_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
+    let (right_ptr, right_len) = unary_plus_concat_right_regs(ctx);
+    let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
+    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+}
+
+/// Returns the target registers consumed by `__rt_concat` for its right operand.
+fn unary_plus_concat_right_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    }
 }
 
 /// Returns true when a PHP type is already represented as a boxed Mixed pointer.
@@ -438,5 +787,6 @@ fn mixed_numeric_helper(op: MixedNumericOp) -> &'static str {
         MixedNumericOp::Sub => "__rt_mixed_numeric_sub",
         MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
         MixedNumericOp::Pow => "__rt_mixed_numeric_pow",
+        MixedNumericOp::UnaryPlus => unreachable!("unary plus is lowered before helper selection"),
     }
 }

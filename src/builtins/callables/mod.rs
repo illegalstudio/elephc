@@ -19,6 +19,7 @@ pub(crate) mod support;
 
 // Group A — no check hook
 pub mod get_class;
+pub mod get_object_vars;
 pub mod get_parent_class;
 pub mod is_a;
 pub mod is_subclass_of;
@@ -46,7 +47,6 @@ pub mod call_user_func_array;
 // Singletons
 pub mod class_alias;
 pub mod function_exists;
-pub mod get_object_vars;
 pub mod method_exists;
 pub mod preg_replace_callback;
 pub mod property_exists;
@@ -55,6 +55,8 @@ pub mod property_exists;
 // prelude. They have no PHP-visible counterpart to alias: PHP would use
 // `get_object_vars()` / `$v instanceof UnitEnum`, neither of which elephc can
 // express for a runtime `mixed` today.
+#[allow(non_snake_case)]
+pub mod __elephc_object_clone_internal;
 #[allow(non_snake_case)]
 pub mod __elephc_object_is_enum;
 #[allow(non_snake_case)]

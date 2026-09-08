@@ -2,7 +2,7 @@
 title: "pcntl_sigprocmask()"
 description: "Changes the signal mask and optionally writes the prior blocked signals."
 sidebar:
-  order: 638
+  order: 644
 ---
 
 ## pcntl_sigprocmask()

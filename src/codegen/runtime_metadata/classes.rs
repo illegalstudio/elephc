@@ -129,13 +129,16 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
         "Throwable",
         "Error",               // _spl_error_class_id
         "TypeError",           // _spl_type_error_class_id
+        "CompileError",        // parent of runtime ParseError
+        "ParseError",          // _spl_parse_error_class_id
         "ValueError",          // _spl_value_error_class_id
         "ArithmeticError",     // _spl_arithmetic_error_class_id
         "DivisionByZeroError", // _spl_division_by_zero_error_class_id
         "JsonException",       // _json_exception_class_id
         // `JsonException extends Exception` DIRECTLY, as in reference PHP, so the ancestor
         // expansion brings Exception back regardless; naming it here only states the dependency
-        // the catch-time walk relies on. (It also has `_exception_class_id` of its own.)
+        // the catch-time walk relies on. The serialization runtime uses
+        // `_spl_exception_class_id` for its Closure error helper.
         "Exception",
     ] {
         if module.class_infos.contains_key(class_name) {

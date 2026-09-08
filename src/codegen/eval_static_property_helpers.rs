@@ -523,9 +523,10 @@ fn emit_aarch64_static_property_scope_check(
     target_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = aarch64_scope_offsets(mode);
+    let no_scope = emitter.unique_local_label("eval_static_property_no_scope");
     emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));       // reload the active eval class-scope pointer
     emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));       // reload the active eval class-scope length
-    emitter.instruction("cbz x1, 1f");                                          // skip scoped dispatch outside a class scope
+    emitter.instruction(&format!("cbz x1, {}", no_scope));                      // skip scoped dispatch outside a class scope
     for scope_name in &slot.allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
         emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));   // reload the active eval class-scope pointer
@@ -535,7 +536,7 @@ fn emit_aarch64_static_property_scope_check(
         emitter.instruction("bl __rt_strcasecmp");                              // compare current eval scope with an allowed class
         emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch when scoped visibility is satisfied
     }
-    emitter.label("1");
+    emitter.label(&no_scope);
 }
 
 /// Emits x86_64 visibility checks for a protected/private static-property bridge hit.
@@ -547,6 +548,7 @@ fn emit_x86_64_static_property_scope_check(
     target_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = x86_64_scope_offsets(mode);
+    let no_scope = emitter.unique_local_label("eval_static_property_no_scope");
     emitter.instruction(
         &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
     );                                                                          // reload the active eval class-scope pointer
@@ -554,7 +556,7 @@ fn emit_x86_64_static_property_scope_check(
         &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
     );                                                                          // reload the active eval class-scope length
     emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
-    emitter.instruction("jz 1f");                                               // skip scoped dispatch outside a class scope
+    emitter.instruction(&format!("jz {}", no_scope));                           // skip scoped dispatch outside a class scope
     for scope_name in &slot.allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
         emitter.instruction(
@@ -569,7 +571,7 @@ fn emit_x86_64_static_property_scope_check(
         emitter.instruction("test rax, rax");                                   // check whether the current scope matched
         emitter.instruction(&format!("je {}", target_label));                   // dispatch when scoped visibility is satisfied
     }
-    emitter.label("1");
+    emitter.label(&no_scope);
 }
 
 /// Returns ARM64 stack offsets for the class-scope pointer and length.

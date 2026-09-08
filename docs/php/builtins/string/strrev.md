@@ -2,7 +2,7 @@
 title: "strrev()"
 description: "Reverses a string."
 sidebar:
-  order: 834
+  order: 841
 ---
 
 ## strrev()

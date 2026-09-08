@@ -18,7 +18,7 @@ use crate::parser::ast::{
     AttributeGroup, BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind,
     TraitUse, TypeExpr,
 };
-use crate::types::{CheckResult, FunctionSig};
+use crate::types::{CheckResult, FunctionSig, PhpType};
 
 mod expressions;
 
@@ -243,6 +243,7 @@ struct Scanner<'a> {
 pub(super) struct CallSignatureIndex {
     functions: HashMap<String, FunctionSig>,
     methods: HashMap<(String, String, bool), FunctionSig>,
+    property_classes: HashMap<(String, String), HashSet<String>>,
     class_parents: HashMap<String, Option<String>>,
 }
 
@@ -296,6 +297,17 @@ impl CallSignatureIndex {
                     }))
             })
             .collect();
+        let property_classes = check_result
+            .classes
+            .iter()
+            .flat_map(|(class, info)| {
+                let class = php_symbol_key(class);
+                info.properties.iter().filter_map(move |(property, property_type)| {
+                    let classes = php_type_classes(property_type);
+                    (!classes.is_empty()).then(|| ((class.clone(), property.clone()), classes))
+                })
+            })
+            .collect();
         let class_parents = check_result
             .classes
             .iter()
@@ -309,8 +321,21 @@ impl CallSignatureIndex {
         Self {
             functions,
             methods,
+            property_classes,
             class_parents,
         }
+    }
+
+    /// Returns concrete object classes stored in a declared property on any receiver candidate.
+    fn property(&self, owners: &HashSet<String>, property: &str) -> HashSet<String> {
+        owners
+            .iter()
+            .filter_map(|owner| {
+                self.property_classes
+                    .get(&(owner.clone(), property.to_string()))
+            })
+            .flat_map(|classes| classes.iter().cloned())
+            .collect()
     }
 
     /// Returns the signature of one direct free-function call.
@@ -364,6 +389,17 @@ impl CallSignatureIndex {
             })
             .cloned()
             .collect()
+    }
+}
+
+/// Extracts concrete object members from one checker-resolved PHP type.
+fn php_type_classes(php_type: &PhpType) -> HashSet<String> {
+    match php_type.codegen_repr() {
+        PhpType::Object(class) if !class.is_empty() => {
+            [php_symbol_key(&class)].into_iter().collect()
+        }
+        PhpType::Union(members) => members.iter().flat_map(php_type_classes).collect(),
+        _ => HashSet::new(),
     }
 }
 
@@ -459,6 +495,16 @@ impl Scanner<'_> {
                 self.record_instance_method(object, &property_hook_get_method(property));
                 self.record_instance_method(object, &property_hook_set_method(property));
                 self.scan_expr(object);
+                self.scan_expr(value);
+            }
+            StmtKind::DynamicPropertyArrayPush {
+                object,
+                property,
+                value,
+            } => {
+                self.usage.hazards.dynamic_method = true;
+                self.scan_expr(object);
+                self.scan_expr(property);
                 self.scan_expr(value);
             }
             StmtKind::PropertyArrayAssign {

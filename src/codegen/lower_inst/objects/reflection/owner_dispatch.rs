@@ -34,6 +34,11 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
 ) -> Result<()> {
     if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
         emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
+    } else if class_name == "ReflectionClass"
+        && function_only_uses_reflection_class_for_constructorless_allocation(ctx)
+    {
+        let reflected_name = reflection_class_reflected_name(ctx, inst)?;
+        emit_reflection_owner_name_only(ctx, class_name, reflected_name.as_deref())?;
     } else {
         let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
         emit_reflection_owner_object(ctx, class_name, &metadata)?;
@@ -86,18 +91,72 @@ pub(super) fn emit_reflection_owner_from_runtime_object(
 
     emit_runtime_object_class_dispatch(ctx, object_operand, &candidates, &case_labels, &fallback_label)?;
 
-    let fallback_metadata = reflection_class_metadata_for_name(ctx, &candidates[0].class_name)?;
+    let fallback_metadata = if class_name == "ReflectionObject"
+        && php_symbol_key(&candidates[0].class_name) == "dateinterval"
+    {
+        reflection_date_interval_object_metadata(ctx, false)?
+    } else {
+        reflection_class_metadata_for_name(ctx, &candidates[0].class_name)?
+    };
     emit_reflection_owner_object(ctx, class_name, &fallback_metadata)?;
     emit_reflection_dispatch_jump(ctx, &done_label);                            // skip runtime reflection candidates after fallback allocation
 
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
+        if class_name == "ReflectionObject"
+            && php_symbol_key(&candidate.class_name) == "dateinterval"
+        {
+            emit_date_interval_reflection_object(
+                ctx,
+                object_operand,
+                &candidate.class_name,
+                &done_label,
+            )?;
+            continue;
+        }
         let metadata = reflection_class_metadata_for_name(ctx, &candidate.class_name)?;
         emit_reflection_owner_object(ctx, class_name, &metadata)?;
         emit_reflection_dispatch_jump(ctx, &done_label);                        // finish after materializing the matched runtime class
     }
 
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Materializes state-dependent `ReflectionObject(DateInterval)` property metadata.
+#[rustfmt::skip]
+fn emit_date_interval_reflection_object(
+    ctx: &mut FunctionContext<'_>,
+    object_operand: ValueId,
+    class_name: &str,
+    done_label: &str,
+) -> Result<()> {
+    let from_string_offset = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .and_then(|info| info.property_offsets.get("_from_string"))
+        .copied()
+        .ok_or_else(|| CodegenIrError::missing_entry("DateInterval::_from_string", 0))?;
+    let relative_label = ctx.next_label("reflection_date_interval_relative");
+    ctx.load_value_to_result(object_operand)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x9, [x0, #{}]", from_string_offset)); // load DateInterval's relative-string discriminator
+            ctx.emitter.instruction(&format!("cbnz x9, {}", relative_label));   // select the two-property relative interval surface
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [rax + {}], 0", from_string_offset)); // test DateInterval's relative-string discriminator
+            ctx.emitter.instruction(&format!("jne {}", relative_label));        // select the two-property relative interval surface
+        }
+    }
+    let component_metadata = reflection_date_interval_object_metadata(ctx, false)?;
+    emit_reflection_owner_object(ctx, "ReflectionObject", &component_metadata)?;
+    emit_reflection_dispatch_jump(ctx, done_label);                              // finish after materializing component interval metadata
+    ctx.emitter.label(&relative_label);
+    let relative_metadata = reflection_date_interval_object_metadata(ctx, true)?;
+    emit_reflection_owner_object(ctx, "ReflectionObject", &relative_metadata)?;
+    emit_reflection_dispatch_jump(ctx, done_label);                              // finish after materializing relative interval metadata
     Ok(())
 }
 
@@ -277,4 +336,3 @@ pub(super) fn reflection_interface_extends_interface(
         .iter()
         .any(|parent| reflection_interface_extends_interface(ctx, parent, target_interface))
 }
-

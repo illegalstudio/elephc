@@ -103,7 +103,7 @@ pub(super) fn lower_catch_current(ctx: &mut FunctionContext<'_>, inst: &Instruct
     store_if_result(ctx, inst)
 }
 
-/// Takes the active exception into an owned SSA result and clears the runtime slot.
+/// Takes the active exception into an owned SSA result and clears catch-scoped runtime state.
 pub(super) fn lower_catch_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let result = inst
         .result
@@ -112,5 +112,13 @@ pub(super) fn lower_catch_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_load_symbol_to_result(ctx.emitter, "_exc_value", &result_ty);
     ctx.store_result_value(result)?;
     abi::emit_store_zero_to_symbol(ctx.emitter, "_exc_value", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_unser_trace_active", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_unser_trace_exception_ptr", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_dateperiod_foreach_trace_active", 0);
+    abi::emit_store_zero_to_symbol(
+        ctx.emitter,
+        "_dateperiod_foreach_trace_exception_ptr",
+        0,
+    );
     Ok(())
 }

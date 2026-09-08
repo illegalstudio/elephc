@@ -111,28 +111,34 @@ fn eval_array_filter_result_from_scope(
         }
         _ => None,
     };
-    let mode = match mode {
-        Some(mode) => eval_array_filter_mode_value(mode, values)?,
-        None => EVAL_ARRAY_FILTER_USE_VALUE,
-    };
-
-    let len = values.array_len(array)?;
-    let mut result = values.assoc_new(len)?;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let keep = if let Some(callback) = callback.as_ref() {
-            let args = eval_array_filter_callback_args(mode, key, value)?;
-            let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
-            values.truthy(result)?
-        } else {
-            values.truthy(value)?
+    let result = (|| {
+        let mode = match mode {
+            Some(mode) => eval_array_filter_mode_value(mode, values)?,
+            None => EVAL_ARRAY_FILTER_USE_VALUE,
         };
-        if keep {
-            result = values.array_set(result, key, value)?;
+
+        let len = values.array_len(array)?;
+        let mut result = values.assoc_new(len)?;
+        for position in 0..len {
+            let key = values.array_iter_key(array, position)?;
+            let value = values.array_get(array, key)?;
+            let keep = if let Some(callback) = callback.as_ref() {
+                let args = eval_array_filter_callback_args(mode, key, value)?;
+                let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
+                values.truthy(result)?
+            } else {
+                values.truthy(value)?
+            };
+            if keep {
+                result = values.array_set(result, key, value)?;
+            }
         }
+        Ok(result)
+    })();
+    match callback {
+        Some(callback) => finish_evaluated_callable(callback, result, context, values),
+        None => result,
     }
-    Ok(result)
 }
 
 /// Reads and validates the optional `array_filter()` callback mode.

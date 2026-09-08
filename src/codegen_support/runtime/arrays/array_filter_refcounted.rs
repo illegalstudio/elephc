@@ -10,6 +10,10 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
+use crate::codegen_support::abi;
 
 use super::value_error;
 
@@ -33,7 +37,9 @@ pub fn emit_array_filter_refcounted(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_filter_refcounted");
 
     // -- set up stack frame, save callee-saved registers --
-    emitter.instruction("sub sp, sp, #112");                                    // allocate stack frame
+    let frame_bytes = 112 + TRY_HANDLER_SLOT_SIZE;
+    let handler = 112;
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_bytes));              // allocate refcounted-filter locals plus an exception handler
     emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #96");                                    // set up new frame pointer
     emitter.instruction("stp x19, x20, [sp, #80]");                             // save callee-saved x19 and x20
@@ -63,6 +69,17 @@ pub fn emit_array_filter_refcounted(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x10");                                         // use the same element width as the source array
     emitter.instruction("bl __rt_array_new");                                   // allocate destination array
     emitter.instruction("str x0, [sp, #24]");                                   // save destination array pointer
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler));               // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler + 8));           // preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("add x10, sp, #{}", handler));                 // materialize the refcounted-filter handler record
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("add x0, sp, #{}", handler + TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch callback exceptions while retained payloads are live
+    emitter.instruction("cbnz x0, __rt_array_filter_ref_throw");                // deep-release retained payloads before rethrow
     emitter.instruction("mov x20, #0");                                         // initialize source index
     emitter.instruction("mov x21, #0");                                         // initialize destination length tracker
 
@@ -152,11 +169,28 @@ pub fn emit_array_filter_refcounted(emitter: &mut Emitter) {
     emitter.label("__rt_array_filter_ref_done");
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload destination array pointer
     emitter.instruction("str x21, [x0]");                                       // set filtered array length
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler));               // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after success
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
     emitter.instruction("ldr x21, [sp, #72]");                                  // restore callee-saved x21
     emitter.instruction("ldp x19, x20, [sp, #80]");                             // restore callee-saved x19 and x20
     emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #112");                                    // deallocate stack frame
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // deallocate locals and exception handler
     emitter.instruction("ret");                                                 // return filtered array
+
+    emitter.label("__rt_array_filter_ref_throw");
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler));               // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the partially built refcounted result array
+    emitter.instruction("bl __rt_decref_array");                                // deep-release retained payloads and the destination container
+    emitter.instruction("ldr x21, [sp, #72]");                                  // restore destination-length register
+    emitter.instruction("ldp x19, x20, [sp, #80]");                             // restore callback and source-index registers
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // discard the protected refcounted-filter frame
+    emitter.instruction("b __rt_throw_current");                                // resume exception propagation at the caller handler
 
     emitter.label("__rt_array_filter_ref_invalid_mode");
     value_error::emit_throw_value_error_aarch64(
@@ -183,7 +217,9 @@ fn emit_array_filter_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r12");                                            // preserve the callback address register because the filter loop calls through it repeatedly
     emitter.instruction("push r13");                                            // preserve the source-index register because the loop keeps it live across callback invocations
     emitter.instruction("push r14");                                            // preserve the destination-length register because kept-element count survives callback invocations
-    emitter.instruction("sub rsp, 72");                                         // reserve local slots for refcounted-filter bookkeeping, mode, and optional callback environment
+    let frame_bytes = 96 + TRY_HANDLER_SLOT_SIZE;
+    let local_bytes = frame_bytes - 24;
+    emitter.instruction(&format!("sub rsp, {}", local_bytes));                  // reserve refcounted-filter locals plus an exception handler
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the filtering loop
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the source array pointer so the loop can reload it after callback and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save optional callback environment pointer for captured-closure wrappers
@@ -204,6 +240,18 @@ fn emit_array_filter_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, r11");                                        // request destination slots with the same width as the source array
     emitter.instruction("call __rt_array_new");                                 // allocate the destination array that will retain the kept refcounted payloads
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the destination array pointer for the filtering loop and final return path
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes)); // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes - 8)); // preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("lea r10, [rbp - {}]", frame_bytes));          // materialize the refcounted-filter handler record
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("lea rdi, [rbp - {}]", frame_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch callback exceptions while retained payloads are live
+    emitter.instruction("test eax, eax");                                       // did control return through longjmp?
+    emitter.instruction("jnz __rt_array_filter_ref_throw_x86");                 // deep-release retained payloads before rethrow
     emitter.instruction("xor r13d, r13d");                                      // start the source index at zero before scanning the source array
     emitter.instruction("xor r14d, r14d");                                      // start the destination kept-element count at zero before the first callback
 
@@ -292,12 +340,30 @@ fn emit_array_filter_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_filter_ref_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the destination array pointer for final length publication and return
     emitter.instruction("mov QWORD PTR [rax], r14");                            // publish the number of kept payloads as the destination array logical length
-    emitter.instruction("add rsp, 72");                                         // release the refcounted-filter local bookkeeping slots before restoring callee-saved registers
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes)); // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after success
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("add rsp, {}", local_bytes));                  // release locals and exception handler
     emitter.instruction("pop r14");                                             // restore the caller destination-length callee-saved register
     emitter.instruction("pop r13");                                             // restore the caller source-index callee-saved register
     emitter.instruction("pop r12");                                             // restore the caller callback callee-saved register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the filtered array pointer
     emitter.instruction("ret");                                                 // return the filtered destination array pointer in rax
+
+    emitter.label("__rt_array_filter_ref_throw_x86");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes)); // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the partially built refcounted result array
+    emitter.instruction("call __rt_decref_array");                              // deep-release retained payloads and the destination container
+    emitter.instruction(&format!("add rsp, {}", local_bytes));                  // discard locals and exception handler
+    emitter.instruction("pop r14");                                             // restore destination-length register
+    emitter.instruction("pop r13");                                             // restore source-index register
+    emitter.instruction("pop r12");                                             // restore callback register
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("jmp __rt_throw_current");                              // resume exception propagation at the caller handler
 
     emitter.label("__rt_array_filter_ref_invalid_mode_x86");
     value_error::emit_throw_value_error_x86_64(

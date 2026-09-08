@@ -9,6 +9,100 @@
 
 use crate::support::*;
 
+/// Verifies callback helpers release partially built native owners before rethrowing.
+#[test]
+fn test_callback_exception_boundaries_release_partial_results() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function throw_on_two(int $value): int {
+    if ($value === 2) { throw new Exception("stop"); }
+    return $value;
+}
+function throw_string_on_two(int $value): string {
+    if ($value === 2) { throw new Exception("stop"); }
+    return "ok";
+}
+function throw_compare(int $left, int $right): int {
+    if ($left === 2) { throw new Exception("stop"); }
+    return $left <=> $right;
+}
+function throw_preg(array $matches): string { throw new Exception("stop"); }
+$caught = 0;
+$source = [1, 2, 3];
+$other = [3];
+for ($i = 0; $i < 20; $i++) {
+    try { array_map("throw_on_two", $source); } catch (Exception) { $caught++; }
+    try { array_map("throw_string_on_two", $source); } catch (Exception) { $caught++; }
+    try { array_filter($source, "throw_on_two"); } catch (Exception) { $caught++; }
+    try { array_udiff($source, $other, "throw_compare"); } catch (Exception) { $caught++; }
+    try { preg_replace_callback('/./', "throw_preg", 'ab'); } catch (Exception) { $caught++; }
+}
+unset($source);
+unset($other);
+echo $caught;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "100");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected callback exception owners to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies JsonSerializable prefix and result owners are balanced on success and throw paths.
+#[test]
+fn test_jsonserializable_exception_boundaries_release_native_owners() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class DatePayload implements JsonSerializable {
+    public bool $throw;
+    public function __construct(bool $throw) {
+        $this->throw = $throw;
+    }
+    public function jsonSerialize(): mixed {
+        if ($this->throw) { throw new Exception("stop"); }
+        return ["stamp" => "1970-01-01T00:00:00+00:00", "fresh" => str_repeat("x", 64)];
+    }
+}
+class NestedPayload implements JsonSerializable {
+    public DatePayload $payload;
+    public function __construct(DatePayload $payload) { $this->payload = $payload; }
+    public function jsonSerialize(): mixed { return [$this->payload]; }
+}
+$caught = 0;
+$key = str_repeat("prefix", 100);
+$ok = new DatePayload(false);
+$throwing = new DatePayload(true);
+$nested = new NestedPayload($throwing);
+$okArg = [$key => $ok];
+$throwArg = [$key => $throwing];
+$nestedArg = [$key => $nested];
+for ($i = 0; $i < 20; $i++) {
+    json_encode($okArg, 0, 8);
+    try { json_encode($throwArg, 0, 8); } catch (Exception) { $caught++; }
+    try { json_encode($nestedArg, 0, 8); } catch (Exception) { $caught++; }
+}
+unset($nestedArg);
+unset($throwArg);
+unset($okArg);
+unset($key);
+unset($nested);
+unset($throwing);
+unset($ok);
+echo $caught;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "40");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected JsonSerializable owners to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies fresh disk-space results do not retain owned temporary directory arguments.
 /// Each result is a newly boxed float-or-false cell and therefore cannot alias the `getcwd()`
 /// string passed to the builtin; the old may-alias classification leaked one path per call.
@@ -891,13 +985,13 @@ echo count($x->a);
 /// Regression test: overwriting a static array must release the payloads appended
 /// to the old array. The scalar is boxed into Mixed and retained by
 /// `__rt_array_push_refcounted`; only the replacement static array should remain
-/// live at exit. Asserts exactly one live block (the current static array).
+/// live until process-exit cleanup. Asserts that cleanup leaves the heap clean.
 #[test]
 fn test_regression_static_property_array_push_scalar_releases_old_payload() {
     // Static storage itself is process-lifetime state, but an overwritten
     // static array must release the payloads appended to the old array. The
     // scalar is boxed into Mixed and then retained by `__rt_array_push_refcounted`;
-    // only the replacement static array should remain live at exit.
+    // only the replacement static array remains before process-exit cleanup.
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class C { public static array $a; }
@@ -910,9 +1004,8 @@ echo count(C::$a);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "0");
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
-        "expected only the current static array to remain live, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected static-property cleanup to leave a clean heap, got: {}",
         out.stderr
     );
 }
@@ -920,14 +1013,13 @@ echo count(C::$a);
 /// Regression test: pushing an owned array literal into a Mixed-element static
 /// property array needs both the container-aware boxer and the post-push release.
 /// After the static property is overwritten the old array and appended literal
-/// should be gone; only the replacement static array remains live. Asserts exactly
-/// one live block.
+/// should be gone; process-exit cleanup must also release the replacement array.
 #[test]
 fn test_regression_static_property_array_push_array_value_releases_old_payload() {
     // Pushing an owned array literal into a Mixed-element static property array
     // needs both the container-aware boxer and the post-push release. After the
     // static property is overwritten, the old array and appended literal should
-    // be gone; only the replacement static array remains live by design.
+    // be gone; process-exit cleanup also releases the replacement static array.
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class C { public static array $a; }
@@ -940,9 +1032,8 @@ echo count(C::$a);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "0");
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
-        "expected only the current static array to remain live, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected static-property cleanup to leave a clean heap, got: {}",
         out.stderr
     );
 }
@@ -953,8 +1044,8 @@ echo count(C::$a);
 /// which takes its own retained reference to the object; the owning `new C()`
 /// temporary is a separate reference that must be released after the store, or
 /// each overwrite leaks one object. Twenty iterations must stay bounded — only the
-/// final boxed value remains live in the process-lifetime static slot (one block),
-/// never a per-iteration accumulation of twenty.
+/// final boxed value remains live until process-exit cleanup, which must release it;
+/// no per-iteration accumulation is permitted.
 #[test]
 fn test_regression_static_property_object_overwrite_releases_old_object() {
     let out = compile_and_run_with_heap_debug(
@@ -971,9 +1062,8 @@ echo "done";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
-        "expected only the final boxed static value to remain live (bounded), got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected static-property cleanup to leave a clean heap, got: {}",
         out.stderr
     );
 }
@@ -1005,9 +1095,8 @@ echo "done";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
-        "expected only the current static object to remain live, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected static-property cleanup to leave a clean heap, got: {}",
         out.stderr
     );
 }
@@ -1690,6 +1779,28 @@ echo "done";
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: initialized refcounted static properties release their final value before
+/// heap-debug reporting, including a `mixed` slot whose runtime payload changes shape.
+#[test]
+fn test_static_property_final_value_is_released_at_process_exit() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class StaticOwner {
+    public static mixed $value = "initial";
+}
+StaticOwner::$value = ["final"];
+echo StaticOwner::$value[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "final");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the final static-property value to be released, got: {}",
         out.stderr
     );
 }
@@ -4426,6 +4537,75 @@ echo $sum, "\n";
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected alternating alias/non-alias paths to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a static method whose fallback concatenates a string parameter releases an owning
+/// property-read argument temporary after every non-aliasing call.
+///
+/// Concatenation always creates independent storage. Treating that return as unknown provenance
+/// suppressed the argument release, leaking one 48-byte copy per call in helpers shaped like
+/// `DateTime::__elephc_runtime_timezone_name()`.
+#[test]
+fn test_static_concat_return_releases_owned_string_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ZoneName {
+    public string $value = "UTC";
+
+    public static function normalize(string $value): string {
+        $upper = strtoupper($value);
+        if ($upper === "UTC") {
+            return "UTC";
+        }
+        return "" . $value;
+    }
+}
+
+$zone = new ZoneName();
+for ($i = 0; $i < 40; $i++) {
+    $name = ZoneName::normalize($zone->value);
+}
+echo $name;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "UTC");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected static concat-return arguments to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies `clone` releases an owning boxed element read from mixed array storage.
+///
+/// The shallow clone borrows the source object while copying it. Before the source-temp cleanup,
+/// every `clone $objects[0]` left the freshly boxed `ArrayGet` cell live after the clone itself
+/// had been assigned and reclaimed.
+#[test]
+fn test_clone_releases_mixed_array_read_source() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Item {
+    public int $value = 7;
+}
+
+for ($i = 0; $i < 4; $i++) {
+    $items[$i] = new Item();
+}
+for ($i = 0; $i < 40; $i++) {
+    $copy = clone $items[0];
+}
+echo $copy->value;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clone source temporaries to be released, got: {}",
         out.stderr
     );
 }

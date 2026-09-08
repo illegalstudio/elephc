@@ -2,7 +2,7 @@
 title: "imagecreate()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 485
+  order: 486
 ---
 
 ## imagecreate()

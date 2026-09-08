@@ -27,11 +27,14 @@ use super::constants::resolve_lexical_class_constant_value;
 #[derive(Default)]
 pub(super) struct ClassBuildState {
     pub(super) allow_dynamic_properties: bool,
+    pub(super) dynamic_properties_deprecated: bool,
     pub(super) prop_types: Vec<(String, PhpType)>,
     pub(super) property_offsets: HashMap<String, usize>,
     pub(super) property_declaring_classes: HashMap<String, String>,
+    pub(super) property_slot_declaring_classes: Vec<String>,
     pub(super) defaults: Vec<Option<Expr>>,
     pub(super) property_visibilities: HashMap<String, Visibility>,
+    pub(super) property_slot_visibilities: Vec<Visibility>,
     pub(super) property_set_visibilities: HashMap<String, Visibility>,
     pub(super) declared_properties: HashSet<String>,
     pub(super) property_declared_slots: Vec<bool>,
@@ -88,6 +91,7 @@ impl ClassBuildState {
             state.inherit_static_methods(parent);
             state.interfaces = parent.interfaces.clone();
             state.allow_dynamic_properties = parent.allow_dynamic_properties;
+            state.dynamic_properties_deprecated = parent.dynamic_properties_deprecated;
         }
         state
     }
@@ -125,6 +129,8 @@ impl ClassBuildState {
                 )
             })
             .collect();
+        let explicitly_allows_dynamic_properties = class_has_allow_dynamic_properties(class);
+        let internal_date_dynamic_properties = class_has_internal_date_dynamic_properties(class);
         Ok(ClassInfo {
             class_id,
             declaration_span: class.span,
@@ -133,7 +139,10 @@ impl ClassBuildState {
             is_final: class.is_final,
             is_readonly_class: class.is_readonly_class,
             allow_dynamic_properties: self.allow_dynamic_properties
-                || class_has_allow_dynamic_properties(class),
+                || explicitly_allows_dynamic_properties
+                || internal_date_dynamic_properties,
+            dynamic_properties_deprecated: !explicitly_allows_dynamic_properties
+                && (self.dynamic_properties_deprecated || internal_date_dynamic_properties),
             constants: class
                 .constants
                 .iter()
@@ -188,8 +197,10 @@ impl ClassBuildState {
             properties: self.prop_types,
             property_offsets: self.property_offsets,
             property_declaring_classes: self.property_declaring_classes,
+            property_slot_declaring_classes: self.property_slot_declaring_classes,
             defaults: self.defaults,
             property_visibilities: self.property_visibilities,
+            property_slot_visibilities: self.property_slot_visibilities,
             property_set_visibilities: self.property_set_visibilities,
             declared_properties: self.declared_properties,
             property_declared_slots: self.property_declared_slots,
@@ -386,8 +397,7 @@ fn scoped_receiver_type_name(
     }
 }
 
-/// Returns `true` if the class declaration carries the PHP 8.2
-/// `#[\AllowDynamicProperties]` marker attribute.
+/// Returns `true` if the declaration carries PHP's `AllowDynamicProperties` attribute.
 pub(super) fn class_has_allow_dynamic_properties(class: &FlattenedClass) -> bool {
     class.attributes.iter().any(|group| {
         group.attributes.iter().any(|attr| {
@@ -397,6 +407,14 @@ pub(super) fn class_has_allow_dynamic_properties(class: &FlattenedClass) -> bool
             )
         })
     })
+}
+
+/// Returns `true` for internal ext/date bases that accept deprecated dynamic properties.
+fn class_has_internal_date_dynamic_properties(class: &FlattenedClass) -> bool {
+    matches!(
+        class.name.trim_start_matches('\\'),
+        "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+    )
 }
 
 impl ClassBuildState {
@@ -422,6 +440,22 @@ impl ClassBuildState {
                     .get(index)
                     .copied()
                     .unwrap_or_else(|| parent.reference_properties.contains(name)),
+            );
+            self.property_slot_declaring_classes.push(
+                parent
+                    .property_slot_declaring_classes
+                    .get(index)
+                    .cloned()
+                    .or_else(|| parent.property_declaring_classes.get(name).cloned())
+                    .unwrap_or_default(),
+            );
+            self.property_slot_visibilities.push(
+                parent
+                    .property_slot_visibilities
+                    .get(index)
+                    .cloned()
+                    .or_else(|| parent.property_visibilities.get(name).cloned())
+                    .unwrap_or(Visibility::Public),
             );
             if let Some(visibility) = parent.property_visibilities.get(name) {
                 self.property_visibilities

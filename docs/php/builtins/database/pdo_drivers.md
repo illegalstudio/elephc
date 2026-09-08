@@ -2,7 +2,7 @@
 title: "pdo_drivers()"
 description: "Implemented by the compiler-injected PDO prelude."
 sidebar:
-  order: 182
+  order: 183
 ---
 
 ## pdo_drivers()

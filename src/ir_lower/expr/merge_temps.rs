@@ -119,7 +119,7 @@ pub(super) fn nullable_aware_branch_merge_type(left: &PhpType, right: &PhpType) 
 /// Returns true when a PHP type can materialize PHP null at runtime.
 pub(super) fn php_type_allows_null(php_type: &PhpType) -> bool {
     match php_type {
-        PhpType::Void | PhpType::Never | PhpType::Mixed => true,
+        PhpType::Void | PhpType::Never | PhpType::Mixed | PhpType::TaggedScalar => true,
         PhpType::Union(members) => members
             .iter()
             .any(|member| matches!(member, PhpType::Void | PhpType::Never | PhpType::Mixed)),

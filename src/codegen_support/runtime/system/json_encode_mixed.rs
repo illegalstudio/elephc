@@ -56,6 +56,8 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_encode_mixed_assoc");                   // encode nested associative arrays recursively
     emitter.instruction("cmp x9, #6");                                          // is the boxed value an object instance?
     emitter.instruction("b.eq __rt_json_encode_mixed_object");                  // encode objects via the public-property descriptor walker
+    emitter.instruction("cmp x9, #10");                                         // is the boxed value a Closure descriptor?
+    emitter.instruction("b.eq __rt_json_encode_mixed_closure");                 // Closures encode as empty JSON objects
     emitter.instruction("cmp x9, #8");                                          // is the boxed value null?
     emitter.instruction("b.eq __rt_json_encode_mixed_null");                    // encode null via json_encode_null
     emitter.instruction("b __rt_json_encode_mixed_null");                       // remaining tags (resource, ...) currently encode as null
@@ -104,6 +106,10 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.label("__rt_json_encode_mixed_object_regular");
     emitter.instruction("b __rt_json_encode_object");                           // tail-call to the object JSON encoder for declared classes
 
+    emitter.label("__rt_json_encode_mixed_closure");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed Closure descriptor payload
+    emitter.instruction("b __rt_json_encode_closure");                          // tail-call to the empty Closure JSON object encoder
+
     emitter.label("__rt_json_encode_mixed_null");
     emitter.instruction("b __rt_json_encode_null");                             // tail-call to JSON null encoding
 }
@@ -146,6 +152,8 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_encode_mixed_assoc");                     // encode nested associative arrays recursively
     emitter.instruction("cmp r10, 6");                                          // is the boxed payload an object instance?
     emitter.instruction("je __rt_json_encode_mixed_object");                    // encode objects via the public-property descriptor walker
+    emitter.instruction("cmp r10, 10");                                         // is the boxed payload a Closure descriptor?
+    emitter.instruction("je __rt_json_encode_mixed_closure");                   // Closures encode as empty JSON objects
     emitter.instruction("cmp r10, 8");                                          // is the boxed payload null?
     emitter.instruction("je __rt_json_encode_mixed_null");                      // encode explicit null payloads through the shared helper
     emitter.instruction("jmp __rt_json_encode_mixed_null");                     // remaining tags (resource, ...) currently encode as null on x86_64 too
@@ -192,6 +200,10 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_encode_mixed_object_regular");
     emitter.instruction("jmp __rt_json_encode_object");                         // tail-call to the object JSON encoder for declared classes
+
+    emitter.label("__rt_json_encode_mixed_closure");
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed Closure descriptor payload
+    emitter.instruction("jmp __rt_json_encode_closure");                        // tail-call to the empty Closure JSON object encoder
 
     emitter.label("__rt_json_encode_mixed_null");
     emitter.instruction("jmp __rt_json_encode_null");                           // tail-call to the shared JSON null encoder

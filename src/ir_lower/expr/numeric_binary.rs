@@ -41,6 +41,9 @@ pub(super) fn lower_numeric_binary(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    if crate::parser::ast::is_synthetic_unary_plus(op, right) {
+        return lower_unary_plus(ctx, left, expr);
+    }
     let lhs = lower_expr(ctx, left);
     let rhs = lower_expr(ctx, right);
     if matches!(op, BinOp::Add) {
@@ -242,6 +245,34 @@ pub(super) fn lower_numeric_binary(
     )
 }
 
+/// Lowers PHP unary plus while preserving its runtime numeric-string and TypeError semantics.
+fn lower_unary_plus(
+    ctx: &mut LoweringContext<'_, '_>,
+    operand: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let value = lower_expr(ctx, operand);
+    let php_type = ctx.builder.value_php_type(value.value);
+    match php_type {
+        PhpType::Int | PhpType::Float => value,
+        PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Never | PhpType::TaggedScalar => {
+            coerce_to_int(ctx, value, operand)
+        }
+        _ => {
+            let result = ctx.emit_value(
+                Op::MixedNumericBinop,
+                vec![value.value],
+                Some(Immediate::MixedNumericOp(MixedNumericOp::UnaryPlus)),
+                PhpType::Mixed,
+                Op::MixedNumericBinop.default_effects(),
+                Some(expr.span),
+            );
+            release_binary_operand_temporary(ctx, value, expr.span);
+            result
+        }
+    }
+}
+
 /// Returns the EIR opcode and result type for PHP array union operands.
 pub(super) fn array_union_plan(
     ctx: &LoweringContext<'_, '_>,
@@ -372,4 +403,3 @@ pub(super) fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
         _ => None,
     }
 }
-

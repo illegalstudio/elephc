@@ -20,6 +20,7 @@ mod errors;
 mod eval_aot;
 mod exports;
 mod func_args;
+mod get_extension_funcs_prelude;
 mod global_decls;
 mod hash_prelude;
 mod image_prelude;

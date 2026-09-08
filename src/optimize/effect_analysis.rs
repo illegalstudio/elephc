@@ -69,9 +69,12 @@ pub(super) fn compute_program_callable_effects(
                             let mut instance_method_updates = Vec::new();
 
                             for (name, function) in &function_bodies {
-                                let effect = never_declared_effect(
+                                let effect = declared_return_effect(
+                                    function.declared_return_may_throw,
+                                    never_declared_effect(
                                     function.declared_never,
                                     block_effect(&function.body),
+                                    ),
                                 );
                                 if function_effects.get(name).copied() != Some(effect) {
                                     function_updates.push((name.clone(), effect));
@@ -83,7 +86,10 @@ pub(super) fn compute_program_callable_effects(
                                     Some(method.context.clone()),
                                     || block_effect(&method.body),
                                 );
-                                let effect = never_declared_effect(method.declared_never, effect);
+                                let effect = declared_return_effect(
+                                    method.declared_return_may_throw,
+                                    never_declared_effect(method.declared_never, effect),
+                                );
                                 if static_method_effects.get(name).copied() != Some(effect) {
                                     static_method_updates.push((name.clone(), effect));
                                 }
@@ -94,7 +100,10 @@ pub(super) fn compute_program_callable_effects(
                                     Some(method.context.clone()),
                                     || block_effect(&method.body),
                                 );
-                                let effect = never_declared_effect(method.declared_never, effect);
+                                let effect = declared_return_effect(
+                                    method.declared_return_may_throw,
+                                    never_declared_effect(method.declared_never, effect),
+                                );
                                 if instance_method_effects.get(name).copied() != Some(effect) {
                                     instance_method_updates.push((name.clone(), effect));
                                 }
@@ -160,6 +169,7 @@ fn collect_program_function_bodies<'a>(
                     FunctionEffectBody {
                         body,
                         declared_never: is_never_return_type(return_type),
+                        declared_return_may_throw: declared_return_may_throw(return_type),
                     },
                 );
             }
@@ -194,6 +204,9 @@ fn collect_program_static_method_bodies<'a>(
                                 context: context.clone(),
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
+                                declared_return_may_throw: declared_return_may_throw(
+                                    &method.return_type,
+                                ),
                             },
                         );
                     }
@@ -230,6 +243,9 @@ fn collect_program_instance_method_bodies<'a>(
                                 context: context.clone(),
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
+                                declared_return_may_throw: declared_return_may_throw(
+                                    &method.return_type,
+                                ),
                             },
                         );
                     }
@@ -340,6 +356,31 @@ pub(super) fn method_effect_key(class_name: &str, method_name: &str) -> String {
 /// Returns true if the type expression is `Never`.
 fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {
     matches!(return_type, Some(TypeExpr::Never))
+}
+
+/// Returns whether PHP can raise `TypeError` while enforcing this declared return contract.
+fn declared_return_may_throw(return_type: &Option<TypeExpr>) -> bool {
+    match return_type {
+        None | Some(TypeExpr::Void | TypeExpr::Never) => false,
+        Some(TypeExpr::Named(name))
+            if name
+                .as_str()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("mixed") =>
+        {
+            false
+        }
+        _ => true,
+    }
+}
+
+/// Adds the catchable runtime return-boundary effect for an ordinary declared return type.
+fn declared_return_effect(may_throw: bool, effect: Effect) -> Effect {
+    if may_throw {
+        effect.with_may_throw()
+    } else {
+        effect
+    }
 }
 
 /// Adjusts an effect when the callable has a `never` return type. A `never` function is

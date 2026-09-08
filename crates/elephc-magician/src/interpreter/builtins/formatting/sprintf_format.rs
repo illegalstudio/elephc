@@ -46,6 +46,9 @@ pub(in crate::interpreter) fn eval_parse_sprintf_spec(
         spec.precision = Some(precision.unwrap_or(0));
         index = next_index;
     }
+    if index < format.len() && format[index] == b'l' {
+        index += 1;
+    }
     if index >= format.len() {
         return Err(EvalStatus::RuntimeFatal);
     }

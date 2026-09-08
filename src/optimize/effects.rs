@@ -32,6 +32,9 @@ pub(super) use calls::{
 /// `catch` clause that is supposed to observe them. A literal right operand that is provably
 /// safe keeps the expression pure so ordinary arithmetic is not pessimized.
 fn binary_op_may_throw(op: &BinOp, right: &Expr) -> bool {
+    if crate::parser::ast::is_synthetic_unary_plus(op, right) {
+        return true;
+    }
     match op {
         BinOp::Div | BinOp::Mod => !matches!(
             &right.kind,
@@ -79,7 +82,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::StaticPropertyAssign { value, .. } => {
             expr_effect(value).with_side_effects()
         }
-        StmtKind::RefAssign { .. } => Effect::PURE.with_side_effects(),
+        StmtKind::RefAssign { source, .. } => expr_effect(source).with_side_effects(),
         StmtKind::ArrayPush { value, .. } | StmtKind::StaticPropertyArrayPush { value, .. } => {
             expr_effect(value).with_side_effects().with_may_throw()
         }
@@ -109,6 +112,15 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                 .with_side_effects()
                 .with_may_throw()
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_effect(object)
+            .combine(expr_effect(property))
+            .combine(expr_effect(value))
+            .with_side_effects()
+            .with_may_throw(),
         StmtKind::If {
             condition,
             then_body,
@@ -164,7 +176,8 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             .combine(block_effect(body)),
         StmtKind::Foreach { array, body, .. } => expr_effect(array)
             .combine(block_effect(body))
-            .with_side_effects(),
+            .with_side_effects()
+            .with_may_throw(),
         StmtKind::Switch {
             subject,
             cases,
@@ -254,7 +267,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .with_may_throw(),
         ExprKind::BinaryOp { left, op, right } => {
             let operands = expr_effect(left).combine(expr_effect(right));
-            if binary_op_may_throw(op, right) {
+            if crate::parser::ast::is_synthetic_unary_plus(op, right) {
+                operands.with_side_effects().with_may_throw()
+            } else if binary_op_may_throw(op, right) {
                 operands.with_may_throw()
             } else {
                 operands

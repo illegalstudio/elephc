@@ -5,8 +5,10 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` reproduces the legacy return-type rule: an indexed array yields
+//! - `check` reproduces the legacy return-type rule: a concrete indexed array yields
 //!   `Array<Int>` (positional keys) while an associative array yields `Array<key>`.
+//!   `Array<Mixed>` remains runtime-polymorphic because Elephc uses that static shape for
+//!   either packed or hash storage, so its result is `Array<Mixed>`.
 //!   A check hook is required because the return type depends on the inferred
 //!   argument type, which the `builtin!` `returns:` field cannot express.
 //! - A `Mixed` argument (an array read out of a `mixed`-typed value: a builtin/prelude return,
@@ -41,6 +43,9 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match ty {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+        }
         PhpType::Array(_) => Ok(PhpType::Array(Box::new(PhpType::Int))),
         PhpType::AssocArray { key, .. } => Ok(PhpType::Array(key)),
         PhpType::Mixed => Ok(PhpType::Array(Box::new(PhpType::Mixed))),

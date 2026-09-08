@@ -2,7 +2,7 @@
 title: "gettimeofday() — internals"
 description: "Compiler internals for gettimeofday(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 220
+  order: 221
 ---
 
 ## `gettimeofday()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:764](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L764) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:972](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L972) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

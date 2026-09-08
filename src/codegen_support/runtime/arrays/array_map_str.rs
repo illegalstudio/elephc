@@ -10,6 +10,57 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
+use crate::codegen_support::abi;
+
+/// Installs an AArch64 exception boundary at one stack-relative handler record.
+fn emit_string_map_handler_aarch64(emitter: &mut Emitter, handler: usize, throw_label: &str) {
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler));               // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler + 8));           // preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("add x10, sp, #{}", handler));                 // materialize this helper's handler record
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("add x0, sp, #{}", handler + TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch callback exceptions while string owners are live
+    emitter.instruction(&format!("cbnz x0, {}", throw_label));                  // release the partial string array before rethrow
+}
+
+/// Restores the AArch64 handler and diagnostic state after success or longjmp.
+fn emit_string_map_handler_restore_aarch64(emitter: &mut Emitter, handler: usize) {
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler));               // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression state
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+}
+
+/// Installs a SysV x86_64 exception boundary below one rbp-relative frame.
+fn emit_string_map_handler_x86(emitter: &mut Emitter, frame: usize, throw_label: &str) {
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame));      // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame - 8));  // preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("lea r10, [rbp - {}]", frame));                // materialize this helper's handler record
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("lea rdi, [rbp - {}]", frame - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch callback exceptions while string owners are live
+    emitter.instruction("test eax, eax");                                       // did control return through longjmp?
+    emitter.instruction(&format!("jnz {}", throw_label));                       // release the partial string array before rethrow
+}
+
+/// Restores the x86_64 handler and diagnostic state after success or longjmp.
+fn emit_string_map_handler_restore_x86(emitter: &mut Emitter, frame: usize) {
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame));      // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression state
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+}
 
 /// Applies a user callback to each element of a source array, producing a new string array.
 ///
@@ -42,7 +93,9 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_map_str");
 
     // -- set up stack frame, save callee-saved registers --
-    emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack
+    let frame_bytes = 80 + TRY_HANDLER_SLOT_SIZE;
+    let handler = 80;
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_bytes));              // allocate string-map locals plus an exception handler
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // set up new frame pointer
     emitter.instruction("stp x19, x20, [sp, #48]");                             // save callee-saved x19, x20
@@ -63,6 +116,7 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #16");                                         // x1 = element size (16 bytes for string)
     emitter.instruction("bl __rt_array_new");                                   // allocate new array → x0
     emitter.instruction("mov x20, x0");                                         // x20 = new array pointer (callee-saved)
+    emit_string_map_handler_aarch64(emitter, handler, "__rt_array_map_str_throw");
 
     // -- set up loop counter --
     emitter.instruction("mov x0, #0");                                          // x0 = loop index i = 0
@@ -112,6 +166,8 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     emitter.instruction("str x1, [x9, x10]");                                   // store string pointer
     emitter.instruction("add x10, x10, #8");                                    // advance to length slot
     emitter.instruction("str x2, [x9, x10]");                                   // store string length
+    emitter.instruction("add x10, x0, #1");                                     // compute the number of fully initialized string slots
+    emitter.instruction("str x10, [x20]");                                      // publish initialized slots for exceptional deep cleanup
 
     // -- advance loop --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload loop index
@@ -124,13 +180,24 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x20");                                         // x0 = new array pointer
     emitter.instruction("ldr x9, [sp, #16]");                                   // x9 = length
     emitter.instruction("str x9, [x0]");                                        // set new array length
+    emit_string_map_handler_restore_aarch64(emitter, handler);
 
     // -- tear down stack frame and return --
     emitter.instruction("ldr x21, [sp, #40]");                                  // restore callee-saved x21
     emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore callee-saved x19, x20
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // deallocate locals and the exception handler
     emitter.instruction("ret");                                                 // return with x0 = new mapped string array
+
+    emitter.label("__rt_array_map_str_throw");
+    emit_string_map_handler_restore_aarch64(emitter, handler);
+    emitter.instruction("mov x0, x20");                                         // pass the partially built string array for deep cleanup
+    emitter.instruction("bl __rt_decref_array");                                // release every published string and the destination container
+    emitter.instruction("ldr x21, [sp, #40]");                                  // restore the callback environment register
+    emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore callback and destination registers
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // discard the protected string-map frame
+    emitter.instruction("b __rt_throw_current");                                // resume exception propagation at the caller handler
 }
 
 /// Applies a callback that returns already-owned strings to each source element.
@@ -150,7 +217,9 @@ pub fn emit_array_map_str_owned(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_map_str_owned");
 
     // -- set up stack frame, save callee-saved registers --
-    emitter.instruction("sub sp, sp, #80");                                     // allocate string-map-owned loop metadata
+    let frame_bytes = 80 + TRY_HANDLER_SLOT_SIZE;
+    let handler = 80;
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_bytes));              // allocate owned-string map locals plus an exception handler
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish the helper frame pointer
     emitter.instruction("stp x19, x20, [sp, #48]");                             // save callee-saved callback and destination registers
@@ -170,6 +239,7 @@ pub fn emit_array_map_str_owned(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #16");                                         // request 16-byte destination slots for owned strings
     emitter.instruction("bl __rt_array_new");                                   // allocate destination array storage
     emitter.instruction("mov x20, x0");                                         // keep destination array pointer across callback calls
+    emit_string_map_handler_aarch64(emitter, handler, "__rt_array_map_str_owned_throw");
 
     // -- set up loop counter --
     emitter.instruction("mov x0, #0");                                          // initialize logical loop index to zero
@@ -211,6 +281,8 @@ pub fn emit_array_map_str_owned(emitter: &mut Emitter) {
     emitter.instruction("str x1, [x9, x10]");                                   // store owned string pointer in destination slot
     emitter.instruction("add x10, x10, #8");                                    // advance to destination string length word
     emitter.instruction("str x2, [x9, x10]");                                   // store owned string length in destination slot
+    emitter.instruction("add x10, x0, #1");                                     // compute the number of fully initialized owned-string slots
+    emitter.instruction("str x10, [x20]");                                      // publish initialized slots for exceptional deep cleanup
 
     // -- advance loop --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload loop index before incrementing
@@ -223,11 +295,22 @@ pub fn emit_array_map_str_owned(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x20");                                         // return destination array pointer
     emitter.instruction("ldr x9, [sp, #16]");                                   // load source length for destination length publication
     emitter.instruction("str x9, [x0]");                                        // publish mapped destination length
+    emit_string_map_handler_restore_aarch64(emitter, handler);
     emitter.instruction("ldr x21, [sp, #40]");                                  // restore callee-saved callback environment register
     emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore callback and destination callee-saved registers
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release string-map-owned frame storage
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // release locals and the exception handler
     emitter.instruction("ret");                                                 // return mapped string array pointer in x0
+
+    emitter.label("__rt_array_map_str_owned_throw");
+    emit_string_map_handler_restore_aarch64(emitter, handler);
+    emitter.instruction("mov x0, x20");                                         // pass the partially built owned-string array for cleanup
+    emitter.instruction("bl __rt_decref_array");                                // release published owned strings and the destination container
+    emitter.instruction("ldr x21, [sp, #40]");                                  // restore the callback environment register
+    emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore callback and destination registers
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // discard the protected owned-string map frame
+    emitter.instruction("b __rt_throw_current");                                // resume exception propagation at the caller handler
 }
 
 /// x86_64 Linux implementation of `emit_array_map_str`.
@@ -243,7 +326,9 @@ fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the callback, source array metadata, and destination array pointer
     emitter.instruction("push r12");                                            // preserve the callback address register because the mapping loop calls through it repeatedly
     emitter.instruction("push r13");                                            // preserve the loop-index register because the mapping loop keeps it live across callback invocations
-    emitter.instruction("sub rsp, 48");                                         // reserve local slots for source metadata, destination array pointer, and optional callback environment
+    let frame_bytes = 64 + TRY_HANDLER_SLOT_SIZE;
+    let local_bytes = frame_bytes - 16;
+    emitter.instruction(&format!("sub rsp, {}", local_bytes));                  // reserve string-map locals plus an exception handler
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the string-mapping loop
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the source array pointer so the loop can reload it after callback and persist helper calls
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save optional callback environment pointer for captured-closure wrappers
@@ -255,6 +340,7 @@ fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 16");                                         // request 16-byte destination slots because array_map_str always returns strings
     emitter.instruction("call __rt_array_new");                                 // allocate the destination string array with the same logical capacity as the source array
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the destination array pointer for the loop body and final return path
+    emit_string_map_handler_x86(emitter, frame_bytes, "__rt_array_map_str_throw_x");
     emitter.instruction("xor r13d, r13d");                                      // start the string-mapping loop at logical index zero
 
     emitter.label("__rt_array_map_str_loop");
@@ -291,11 +377,22 @@ fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_map_str_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the destination array pointer for final length publication and return
-    emitter.instruction("add rsp, 48");                                         // release the string-map local bookkeeping slots before restoring callee-saved registers
+    emit_string_map_handler_restore_x86(emitter, frame_bytes);
+    emitter.instruction(&format!("add rsp, {}", local_bytes));                  // release locals and the exception handler
     emitter.instruction("pop r13");                                             // restore the caller loop-index callee-saved register
     emitter.instruction("pop r12");                                             // restore the caller callback callee-saved register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the mapped string array pointer
     emitter.instruction("ret");                                                 // return the mapped destination string array pointer in rax
+
+    emitter.label("__rt_array_map_str_throw_x");
+    emit_string_map_handler_restore_x86(emitter, frame_bytes);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the partially built destination string array
+    emitter.instruction("call __rt_decref_array");                              // release every appended string and the destination container
+    emitter.instruction(&format!("add rsp, {}", local_bytes));                  // discard locals and the exception handler
+    emitter.instruction("pop r13");                                             // restore the loop-index register
+    emitter.instruction("pop r12");                                             // restore the callback register
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_throw_current");                              // resume exception propagation at the caller handler
 }
 
 /// x86_64 Linux implementation of `emit_array_map_str_owned`.
@@ -312,7 +409,9 @@ fn emit_array_map_str_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for loop metadata
     emitter.instruction("push r12");                                            // preserve callback address across descriptor callback calls
     emitter.instruction("push r13");                                            // preserve loop index across descriptor callback calls
-    emitter.instruction("sub rsp, 48");                                         // reserve source, destination, width, and environment slots
+    let frame_bytes = 64 + TRY_HANDLER_SLOT_SIZE;
+    let local_bytes = frame_bytes - 16;
+    emitter.instruction(&format!("sub rsp, {}", local_bytes));                  // reserve owned-string map locals plus an exception handler
     emitter.instruction("mov r12, rdi");                                        // keep callback address in a callee-saved register
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save source array pointer for every loop iteration
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save descriptor callback environment pointer
@@ -324,6 +423,7 @@ fn emit_array_map_str_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 16");                                         // request 16-byte string slots for destination values
     emitter.instruction("call __rt_array_new");                                 // allocate destination string array storage
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save destination array pointer for direct slot stores
+    emit_string_map_handler_x86(emitter, frame_bytes, "__rt_array_map_str_owned_throw_x");
     emitter.instruction("xor r13d, r13d");                                      // initialize loop index to zero
 
     emitter.label("__rt_array_map_str_owned_loop");
@@ -354,15 +454,27 @@ fn emit_array_map_str_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rcx], rax");                            // transfer owned string pointer into destination slot
     emitter.instruction("mov QWORD PTR [rcx + 8], rdx");                        // transfer owned string length into destination slot
     emitter.instruction("add r13, 1");                                          // advance loop index after storing the mapped string
+    emitter.instruction("mov QWORD PTR [r10], r13");                            // publish initialized owned strings for exceptional cleanup
     emitter.instruction("jmp __rt_array_map_str_owned_loop");                   // continue mapping owned string results
 
     emitter.label("__rt_array_map_str_owned_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload destination array pointer for return
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload source length for destination length publication
     emitter.instruction("mov QWORD PTR [rax], r10");                            // publish destination array length
-    emitter.instruction("add rsp, 48");                                         // release owned-string map local slots
+    emit_string_map_handler_restore_x86(emitter, frame_bytes);
+    emitter.instruction(&format!("add rsp, {}", local_bytes));                  // release locals and the exception handler
     emitter.instruction("pop r13");                                             // restore loop-index callee-saved register
     emitter.instruction("pop r12");                                             // restore callback-address callee-saved register
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return mapped string array pointer in rax
+
+    emitter.label("__rt_array_map_str_owned_throw_x");
+    emit_string_map_handler_restore_x86(emitter, frame_bytes);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the partially built owned-string array
+    emitter.instruction("call __rt_decref_array");                              // release every published string and the destination container
+    emitter.instruction(&format!("add rsp, {}", local_bytes));                  // discard locals and the exception handler
+    emitter.instruction("pop r13");                                             // restore the loop-index register
+    emitter.instruction("pop r12");                                             // restore the callback register
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_throw_current");                              // resume exception propagation at the caller handler
 }

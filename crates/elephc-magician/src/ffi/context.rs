@@ -62,7 +62,21 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
     crate::eval_php_profile::set_eval_php_version_id(version_id);
 }
 
-/// Frees a process-level eval context handle allocated by the eval bridge.
+/// Retains one owner of a process-level eval context handle.
+///
+/// # Safety
+/// `ctx` must be null or a live pointer returned by `__elephc_eval_context_new`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_acquire(
+    ctx: *mut ElephcEvalContext,
+) -> *mut ElephcEvalContext {
+    if let Some(context) = unsafe { ctx.as_ref() } {
+        context.acquire_owner();
+    }
+    ctx
+}
+
+/// Releases one owner of a process-level eval context handle.
 ///
 /// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP
 /// before the context (and, transitively, its `EvalStreamResources`) actually drops — see
@@ -89,33 +103,55 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
-    if ctx.is_null() || crate::context::pcntl_runtime::defer_context_free(ctx) {
-        return;
-    }
+    let Some(context) = (unsafe { ctx.as_ref() }) else { return; };
+    if !context.release_owner() { return; }
+    // Reserve the last owner while PCNTL decides whether signal handlers keep
+    // this context alive. A deferred release is consumed by drop_eval_context_now.
+    context.acquire_owner();
+    if crate::context::pcntl_runtime::defer_context_free(ctx) { return; }
     unsafe { drop_eval_context_now(ctx) };
 }
 
-/// Unregisters every process-global callback into one context, then drops it immediately.
-///
-/// PCNTL calls this only after the last retained signal handler stops referencing
-/// a context whose normal ABI teardown was deferred.
+/// Releases a deferred teardown owner, preserving other live ABI owners.
 ///
 /// # Safety
-/// `ctx` must point to a live context allocated by `__elephc_eval_context_new`
-/// and no process-global PCNTL handler may still reference it.
+/// The pointer must identify a live context with an owner reserved for teardown;
+/// PCNTL callers must have removed the last handler reference before releasing it.
 pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
+    let Some(context) = (unsafe { ctx.as_ref() }) else { return; };
+    if context.release_owner() {
+        unsafe { eval_context_drop_final_owner(ctx) };
+    }
+}
+
+/// Tears down the final context owner while containing every independent cleanup stage.
+///
+/// # Safety
+/// The context's owner count must have transitioned to zero with no PCNTL handlers remaining.
+unsafe fn eval_context_drop_final_owner(ctx: *mut ElephcEvalContext) {
     #[cfg(all(feature = "curl", not(test)))]
-    if let Some(context) = unsafe { ctx.as_mut() } {
-        let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
-        context
-            .stream_resources_mut()
-            .release_curl_easy_private_values(&mut values);
+    run_context_cleanup_stage(|| {
+        if let Some(context) = unsafe { ctx.as_mut() } {
+            let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
+            context.stream_resources_mut().release_curl_easy_private_values(&mut values);
+        }
+    });
+    run_context_cleanup_stage(|| {
+        if let Some(context) = unsafe { ctx.as_ref() } {
+            context.unregister_dynamic_object_context();
+        }
+    });
+    run_context_cleanup_stage(|| {
+        crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
+    });
+    run_context_cleanup_stage(|| { drop(unsafe { Box::from_raw(ctx) }); });
+}
+
+/// Contains a teardown panic and its payload so neither can unwind through the C ABI.
+pub(super) fn run_context_cleanup_stage(stage: impl FnOnce()) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(stage)) {
+        std::mem::forget(payload);
     }
-    if let Some(context) = unsafe { ctx.as_ref() } {
-        context.unregister_dynamic_object_context();
-    }
-    crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
-    unsafe { drop(Box::from_raw(ctx)) };
 }
 
 /// Records source metadata for the next eval fragment executed in this context.

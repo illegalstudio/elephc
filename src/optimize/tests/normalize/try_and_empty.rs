@@ -190,6 +190,39 @@ fn test_normalize_control_flow_inlines_non_throwing_try_catch() {
     assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
+/// Preserves a catch around foreach because iterator startup, advancement, or user callbacks may
+/// throw even when the source expression and loop body are otherwise effect-free.
+#[test]
+fn test_normalize_control_flow_keeps_try_catch_around_foreach() {
+    let foreach = Stmt::new(
+        StmtKind::Foreach {
+            array: Expr::var("items"),
+            key_var: None,
+            value_var: "value".into(),
+            value_by_ref: false,
+            body: Vec::new(),
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![foreach],
+            catches: vec![crate::parser::ast::CatchClause {
+                exception_types: vec![Name::unqualified("Throwable")],
+                variable: Some("e".into()),
+                body: vec![Stmt::echo(Expr::int_lit(9))],
+            }],
+            finally_body: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    assert!(matches!(pruned[0].kind, StmtKind::Try { .. }));
+}
+
 /// Emits try body followed by finally body when the try is non-throwing
 /// and a finally clause exists, preserving execution order.
 #[test]

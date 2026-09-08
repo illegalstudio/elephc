@@ -172,6 +172,80 @@ echo function_exists("does_not_exist_alias_xyz") ? "x" : "X";"#,
     assert_eq!(values.output, "1".repeat(59) + ":CNIX");
 }
 
+/// Omitted civil fields share one frozen clock sample across year/day boundaries.
+#[test]
+fn mktime_defaults_use_one_clock_sample() {
+    for name in ["mktime", "gmmktime"] {
+        for timezone in ["UTC", "Europe/Paris", "America/New_York"] {
+            for timestamp in [-1, 1_704_067_199, 1_704_067_200] {
+                for count in [1, 6] {
+                    let mut context = ElephcEvalContext::new();
+                    context.set_default_timezone(timezone.to_owned());
+                    let mut values = FakeOps::default();
+                    let mut args = (0..count).map(|_| values.null().unwrap()).collect::<Vec<_>>();
+                    let zone = if name == "gmmktime" { "UTC" } else { timezone };
+                    let hour = eval_timezone_broken_down_time(timestamp, zone).unwrap().tm_hour;
+                    args[0] = values.int(hour).unwrap();
+                    let mut samples = 0;
+                    let result = eval_mktime_with_clock(name, &args, &context, &mut values, || {
+                        samples += 1;
+                        Ok(timestamp)
+                    }).expect("frozen mktime");
+                    assert_eq!(samples, 1);
+                    assert_eq!(values.get(result), FakeValue::Int(timestamp), "{name}/{timezone}/{count}");
+                }
+            }
+        }
+    }
+}
+
+/// Every procedural date/calendar alias checks zero/extra arity before native dispatch.
+#[test]
+fn date_alias_shared_binding_validates_all_arities() {
+    for name in [
+        "idate", "mktime", "gmmktime", "date_create", "date_create_immutable",
+        "date_create_from_format", "date_create_immutable_from_format",
+        "date_parse_from_format", "date_parse", "date_sun_info", "date_sunrise",
+        "date_sunset", "strptime", "timezone_name_from_abbr", "cal_to_jd",
+        "cal_from_jd", "cal_days_in_month", "cal_info", "gregoriantojd",
+        "jdtogregorian", "juliantojd", "jdtojulian", "frenchtojd", "jdtofrench",
+        "jewishtojd", "jdtojewish", "jddayofweek", "jdmonthname", "jdtounix",
+        "unixtojd", "easter_days", "easter_date", "gettimeofday", "date_get_last_errors",
+        "strftime", "gmstrftime", "timezone_open", "timezone_identifiers_list",
+        "timezone_location_get", "timezone_transitions_get", "timezone_abbreviations_list",
+        "timezone_version_get", "date_interval_create_from_date_string", "date_diff",
+        "date_format", "date_add", "date_sub", "date_modify", "date_timestamp_get",
+        "date_timestamp_set", "date_timezone_get", "date_timezone_set", "date_offset_get",
+        "date_date_set", "date_isodate_set", "date_time_set", "date_interval_format",
+        "timezone_name_get", "timezone_offset_get",
+    ] {
+        let shape = eval_builtin_signature_shape(name).expect("alias has shared metadata");
+        let maximum = shape.required_param_count + shape.default_param_count;
+        assert!(shape.variadic.is_none(), "{name}");
+        for index in shape.required_param_count..maximum {
+            assert!(eval_builtin_default_value(name, index).is_some(), "unmaterializable {name}/{index}");
+        }
+        for count in [0, maximum + 1] {
+            let mut context = ElephcEvalContext::new();
+            let mut values = FakeOps::default();
+            let args = (0..count).map(|_| EvaluatedCallArg {
+                name: None,
+                value: values.null().expect("fake cell"),
+                ref_target: None,
+            }).collect();
+            let result = bind_evaluated_builtin_args(name, args, &mut context, &mut values);
+            if count == 0 && shape.required_param_count == 0 {
+                assert!(result.expect(name).is_empty());
+                continue;
+            }
+            assert_eq!(result, Err(EvalStatus::UncaughtThrowable), "{name}/{count}");
+            let exception = context.take_pending_throw().expect("catchable argument error");
+            let class = values.object_class_name(exception).expect("exception class");
+            assert_eq!(values.get(class), FakeValue::String("ArgumentCountError".into()), "{name}");
+        }
+    }
+}
+
 /// Verifies simple procedural date/time aliases execute directly and by callable.
 #[test]
 fn execute_program_dispatches_simple_date_procedural_aliases() {

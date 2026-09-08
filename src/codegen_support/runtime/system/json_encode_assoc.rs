@@ -225,6 +225,8 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_assoc_value_object");                   // encode objects via the descriptor walker
     emitter.instruction("cmp x12, #7");                                         // is this value a boxed mixed payload?
     emitter.instruction("b.eq __rt_json_assoc_value_mixed");                    // encode boxed mixed payloads recursively
+    emitter.instruction("cmp x12, #10");                                        // is this value a Closure descriptor?
+    emitter.instruction("b.eq __rt_json_assoc_value_closure");                  // Closures encode as empty JSON objects
     emitter.instruction("cmp x12, #8");                                         // is this value null?
     emitter.instruction("b.eq __rt_json_assoc_value_null");                     // encode null via json_encode_null
     emitter.instruction("b __rt_json_assoc_value_null");                        // unsupported tags currently encode as null
@@ -270,6 +272,11 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #64]");                                   // load boxed mixed pointer from value_lo
     emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed payload recursively
     emitter.instruction("b __rt_json_assoc_value_copy");                        // copy the encoded mixed payload into concat_buf
+
+    emitter.label("__rt_json_assoc_value_closure");
+    emitter.instruction("ldr x0, [sp, #64]");                                   // load the Closure descriptor payload from value_lo
+    emitter.instruction("bl __rt_json_encode_closure");                         // encode the Closure as an empty JSON object
+    emitter.instruction("b __rt_json_assoc_value_copy");                        // copy the encoded Closure slice into concat_buf
 
     emitter.label("__rt_json_assoc_value_null");
     emitter.instruction("bl __rt_json_encode_null");                            // encode null or unsupported payloads as JSON null
@@ -594,6 +601,8 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_assoc_value_object");                     // encode objects through the object descriptor walker
     emitter.instruction("cmp r10, 7");                                          // is the associative-array value a boxed mixed payload?
     emitter.instruction("je __rt_json_assoc_value_mixed");                      // encode boxed mixed payloads through the mixed JSON helper
+    emitter.instruction("cmp r10, 10");                                         // is the associative-array value a Closure descriptor?
+    emitter.instruction("je __rt_json_assoc_value_closure");                    // Closures encode as empty JSON objects
     emitter.instruction("cmp r10, 8");                                          // is the associative-array value explicit null?
     emitter.instruction("je __rt_json_assoc_value_null");                       // encode explicit null payloads through the shared helper
     emitter.instruction("jmp __rt_json_assoc_value_null");                      // unsupported payload families currently degrade to JSON null
@@ -638,6 +647,11 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_assoc_value_mixed");
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the boxed mixed pointer from the saved hash-entry low payload word
     emitter.instruction("call __rt_json_encode_mixed");                         // encode the boxed mixed payload recursively into a JSON slice
+    emitter.instruction("jmp __rt_json_assoc_value_copy");                      // copy the encoded JSON value slice into concat_buf
+
+    emitter.label("__rt_json_assoc_value_closure");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the Closure descriptor payload from value_lo
+    emitter.instruction("call __rt_json_encode_closure");                       // encode the Closure as an empty JSON object
     emitter.instruction("jmp __rt_json_assoc_value_copy");                      // copy the encoded JSON value slice into concat_buf
 
     emitter.label("__rt_json_assoc_value_null");

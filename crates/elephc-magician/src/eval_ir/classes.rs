@@ -317,6 +317,25 @@ impl EvalClass {
         self
     }
 
+    /// Attaches lexical strictness to methods declared directly by this class.
+    ///
+    /// Imported trait methods retain the strictness of the trait compilation unit
+    /// that originally declared their bodies.
+    pub fn with_direct_method_strict_types(mut self, strict_types: bool) -> Self {
+        self.methods = self
+            .methods
+            .into_iter()
+            .map(|method| {
+                if method.trait_origin().is_none() {
+                    method.with_strict_types(strict_types)
+                } else {
+                    method
+                }
+            })
+            .collect();
+        self
+    }
+
     /// Returns the original source spelling of this eval-declared class name.
     pub fn name(&self) -> &str {
         &self.name

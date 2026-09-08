@@ -479,6 +479,21 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             strict_types,
             attributes: Vec::new(),
         }],
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::DynamicPropertyArrayPush {
+                object: Box::new(prune_expr(*object)),
+                property: Box::new(prune_expr(*property)),
+                value: prune_expr(value),
+            },
+            span,
+            source_mode,
+            strict_types,
+            attributes: Vec::new(),
+        }],
         StmtKind::ArrayAssign { array, index, value } => vec![Stmt {
             kind: StmtKind::ArrayAssign {
                 array,

@@ -96,18 +96,15 @@ pub(super) fn lower_closure_with_context(
     // defined inside an instance method, with no `use($this)` needed. The parser
     // never lists `$this` as a capture, so thread it through the existing capture
     // machinery here: load the enclosing `this` and append it to the captures so
-    // the closure body gets a `this` local. Only capture when the body actually
-    // references `$this` (directly or in a nested closure) — adding an unused
-    // capture would push otherwise capture-free closures through capture-only
-    // runtime paths. Nested closures compose: each level captures `this` from the
-    // level above.
-    // A method-defined closure loads the enclosing `this`; a top-level closure
-    // that uses `$this` (bound later via `Closure::bind`) gets a null `this`
-    // slot the bind fills, typed `Mixed` for runtime-dispatched member access.
+    // the closure body gets a `this` local. Every non-static Closure owns this
+    // slot, even when its body does not read it: php-src exposes a bound receiver
+    // through Closure debug information and `Closure::bind` may attach one later.
+    // Nested closures compose by capturing the current slot from their parent.
+    // A method-defined closure loads the enclosing `this`; a top-level closure gets
+    // a null slot that `Closure::bind` may replace, typed Mixed for runtime dispatch.
     let with_this;
     let captures: &[String] = if !is_static
         && !captures.iter().any(|name| name == "this")
-        && crate::types::checker::closure_body_uses_this(body)
     {
         with_this = captures
             .iter()
@@ -127,7 +124,7 @@ pub(super) fn lower_closure_with_context(
             // Top-level closure: no enclosing `$this`. Start with a null receiver
             // that `Closure::bind` overwrites; `Mixed` so members dispatch at
             // runtime against the bound object's class.
-            (lower_null(ctx, expr), PhpType::Mixed)
+            (lower_boxed_null(ctx, expr), PhpType::Mixed)
         } else {
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
@@ -278,6 +275,15 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_writes_local(object, name) || expr_writes_local(value, name)
+        }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_writes_local(object, name)
+                || expr_writes_local(property, name)
+                || expr_writes_local(value, name)
         }
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
             expr_writes_local(condition, name)
@@ -552,6 +558,15 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_contains_eval_call(object) || expr_contains_eval_call(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_contains_eval_call(object)
+                || expr_contains_eval_call(property)
+                || expr_contains_eval_call(value)
+        }
         StmtKind::If {
             condition,
             then_body,
@@ -773,4 +788,3 @@ pub(super) fn callable_target_contains_eval_call(target: &CallableTarget) -> boo
 pub(super) fn is_eval_call_name(name: &Name) -> bool {
     php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval"
 }
-

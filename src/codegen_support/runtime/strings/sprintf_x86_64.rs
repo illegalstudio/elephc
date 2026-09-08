@@ -304,13 +304,23 @@ fn emit_spec_parser(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_sprintf_endspec_x64");                         // yes → stop formatting
     emitter.instruction("movzx r8d, BYTE PTR [r12]");                           // peek at the current specifier byte
     emitter.instruction("cmp r8b, 46");                                         // '.' precision introducer?
-    emitter.instruction("jne __rt_sprintf_stype_x64");                          // no → the conversion character follows
+    emitter.instruction("jne __rt_sprintf_slength_x64");                        // no → try PHP's optional `l` length modifier
     emitter.instruction("add r12, 1");                                          // consume the '.'
     emitter.instruction("sub r13, 1");                                          // account for the consumed byte
     emitter.instruction("xor r10d, r10d");                                      // precision accumulator ('.' alone means 0)
     emitter.instruction("xor r11d, r11d");                                      // precision digit count
     emit_scan_decimal(emitter, "__rt_sprintf_p_x64", "r12", "r13");
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // store the parsed precision
+
+    // -- optional single `l` modifier --
+    emitter.label("__rt_sprintf_slength_x64");
+    emitter.instruction("test r13, r13");                                       // format ended before the conversion?
+    emitter.instruction("jz __rt_sprintf_endspec_x64");                         // yes → stop formatting
+    emitter.instruction("movzx r8d, BYTE PTR [r12]");                           // peek at the possible length modifier
+    emitter.instruction("cmp r8b, 108");                                        // ASCII `l`
+    emitter.instruction("jne __rt_sprintf_stype_x64");                          // current byte is already the conversion
+    emitter.instruction("add r12, 1");                                          // consume the modifier
+    emitter.instruction("sub r13, 1");                                          // account for the consumed byte
 
     // -- conversion character --
     emitter.label("__rt_sprintf_stype_x64");

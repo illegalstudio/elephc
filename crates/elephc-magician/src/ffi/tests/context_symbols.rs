@@ -52,6 +52,25 @@ fn context_new_returns_current_version_handle() {
     assert_eq!(version, ABI_VERSION);
 }
 
+/// Verifies a retained context survives the frame owner's first release.
+#[test]
+fn retained_context_drops_only_after_its_last_owner_releases() {
+    let ctx = __elephc_eval_context_new();
+    assert_eq!(unsafe { __elephc_eval_context_acquire(ctx) }, ctx);
+    unsafe { __elephc_eval_context_free(ctx) };
+    assert_eq!(unsafe { (*ctx).abi_version() }, ABI_VERSION);
+    unsafe { __elephc_eval_context_free(ctx) };
+}
+
+/// Verifies a panicking cleanup stage is contained and does not prevent later stages.
+#[test]
+fn context_cleanup_stages_contain_panics_and_continue() {
+    let completed = std::cell::Cell::new(false);
+    run_context_cleanup_stage(|| panic!("injected teardown panic"));
+    run_context_cleanup_stage(|| completed.set(true));
+    assert!(completed.get());
+}
+
 /// Verifies call-site metadata can be set through the stable context ABI.
 #[test]
 fn context_set_call_site_records_file_dir_and_line() {

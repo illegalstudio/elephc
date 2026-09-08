@@ -35,6 +35,9 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
     let key = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
     match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            lower_dynamic_php_array_key_exists(ctx, inst, key, array)
+        }
         PhpType::Array(_) => lower_indexed_array_key_exists(ctx, inst, key, array),
         PhpType::AssocArray { .. } => lower_assoc_array_key_exists(ctx, inst, key, array),
         PhpType::Mixed | PhpType::Union(_) => {
@@ -45,6 +48,89 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
             other
         ))),
     }
+}
+
+/// Lowers key lookup for a declared PHP `array` whose runtime storage may be
+/// either an indexed array or an associative hash.
+fn lower_dynamic_php_array_key_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    key: ValueId,
+    array: ValueId,
+) -> Result<()> {
+    let hash_label = ctx.next_label("array_key_exists_dynamic_hash");
+    let indexed_label = ctx.next_label("array_key_exists_dynamic_indexed");
+    let missing_label = ctx.next_label("array_key_exists_dynamic_missing");
+    let done_label = ctx.next_label("array_key_exists_dynamic_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 identifies associative hash storage
+            ctx.emitter
+                .instruction(&format!("b.eq {}", hash_label)); // route hashes through the associative lookup helper
+            ctx.emitter.instruction("cmp x0, #2");                              // heap kind 2 identifies indexed-array storage
+            ctx.emitter
+                .instruction(&format!("b.eq {}", indexed_label)); // route indexed arrays through the bounds helper
+            ctx.emitter
+                .instruction(&format!("b {}", missing_label)); // invalid/null array storage contains no keys
+
+            ctx.emitter.label(&indexed_label);
+            materialize_hash_key_aarch64(ctx, key)?;
+            ctx.emitter.instruction("cmn x2, #1");                              // normalized integer keys carry the -1 high-word sentinel
+            ctx.emitter
+                .instruction(&format!("b.ne {}", missing_label)); // non-numeric string keys never exist in indexed arrays
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+            ctx.emitter
+                .instruction(&format!("b {}", done_label)); // result already occupies x0
+
+            ctx.emitter.label(&hash_label);
+            materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+            ctx.emitter
+                .instruction(&format!("b {}", done_label)); // found flag already occupies x0
+
+            ctx.emitter.label(&missing_label);
+            ctx.emitter.instruction("mov x0, #0");                              // unsupported storage or key shape answers false
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rax")?;
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 identifies associative hash storage
+            ctx.emitter
+                .instruction(&format!("je {}", hash_label)); // route hashes through the associative lookup helper
+            ctx.emitter.instruction("cmp rax, 2");                              // heap kind 2 identifies indexed-array storage
+            ctx.emitter
+                .instruction(&format!("je {}", indexed_label)); // route indexed arrays through the bounds helper
+            ctx.emitter
+                .instruction(&format!("jmp {}", missing_label)); // invalid/null array storage contains no keys
+
+            ctx.emitter.label(&indexed_label);
+            materialize_hash_key_x86_64(ctx, key)?;
+            ctx.emitter.instruction("cmp rdx, -1");                             // normalized integer keys carry the -1 high-word sentinel
+            ctx.emitter
+                .instruction(&format!("jne {}", missing_label)); // non-numeric string keys never exist in indexed arrays
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+            ctx.emitter
+                .instruction(&format!("jmp {}", done_label)); // result already occupies rax
+
+            ctx.emitter.label(&hash_label);
+            materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+            ctx.emitter
+                .instruction(&format!("jmp {}", done_label)); // found flag already occupies rax
+
+            ctx.emitter.label(&missing_label);
+            ctx.emitter.instruction("xor eax, eax");                            // unsupported storage or key shape answers false
+            ctx.emitter.label(&done_label);
+        }
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `array_key_exists()` for a boxed Mixed container by dispatching on

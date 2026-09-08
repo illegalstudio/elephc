@@ -114,6 +114,24 @@ impl EvalEnum {
         self
     }
 
+    /// Attaches lexical strictness to methods declared directly by this enum.
+    ///
+    /// Imported trait methods retain their originating trait's compilation mode.
+    pub fn with_direct_method_strict_types(mut self, strict_types: bool) -> Self {
+        self.methods = self
+            .methods
+            .into_iter()
+            .map(|method| {
+                if method.trait_origin().is_none() {
+                    method.with_strict_types(strict_types)
+                } else {
+                    method
+                }
+            })
+            .collect();
+        self
+    }
+
     /// Returns the original source spelling of this eval-declared enum name.
     pub fn name(&self) -> &str {
         &self.name

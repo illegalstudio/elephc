@@ -23,26 +23,26 @@ pub(super) fn emit_property_store(
         return emit_reference_property_write(ctx, value, slot, base_reg);
     }
     let value_ty = ctx.value_php_type(value)?;
-    if is_pointer_sized_property_type(&slot.php_type)
+    if is_pointer_sized_property_type(&slot.storage_type)
         && is_pointer_slot_null_sentinel(ctx, value, &value_ty)?
     {
-        release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
+        release_previous_property_value(ctx, base_reg, &slot.storage_type, slot.offset, None);
         abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset);
         abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
         return Ok(());
     }
-    match slot.php_type.codegen_repr() {
+    match slot.storage_type.codegen_repr() {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             release_previous_property_value(
                 ctx,
                 base_reg,
-                &slot.php_type,
+                &slot.storage_type,
                 slot.offset,
-                Some(&slot.php_type),
+                Some(&slot.storage_type),
             );
             abi::emit_store_to_address(ctx.emitter, ptr_reg, base_reg, slot.offset);
             abi::emit_store_to_address(ctx.emitter, len_reg, base_reg, slot.offset + 8);
@@ -50,7 +50,7 @@ pub(super) fn emit_property_store(
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, float_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
@@ -58,7 +58,7 @@ pub(super) fn emit_property_store(
         PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Void | PhpType::Never => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
@@ -67,7 +67,7 @@ pub(super) fn emit_property_store(
             let int_reg = abi::int_result_reg(ctx.emitter);
             let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_to_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
@@ -75,14 +75,14 @@ pub(super) fn emit_property_store(
         ty if is_pointer_sized_property_type(&ty) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             release_previous_property_value(
                 ctx,
                 base_reg,
-                &slot.php_type,
+                &slot.storage_type,
                 slot.offset,
-                Some(&slot.php_type),
+                Some(&slot.storage_type),
             );
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
@@ -90,7 +90,7 @@ pub(super) fn emit_property_store(
         _ => {
             return Err(CodegenIrError::unsupported(format!(
                 "property store for PHP type {:?}",
-                slot.php_type
+                slot.storage_type
             )))
         }
     }
@@ -241,12 +241,17 @@ pub(super) fn emit_reference_property_write(
     base_reg: &str,
 ) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, base_reg);
-    load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+    load_property_store_value_to_result(ctx, value, slot)?;
     abi::emit_pop_reg(ctx.emitter, base_reg);
     let pointer_reg = reference_pointer_reg(ctx, base_reg);
     abi::emit_load_from_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
-    release_previous_referenced_value(ctx, pointer_reg, &slot.php_type, Some(&slot.php_type));
-    store_current_result_to_reference_cell(ctx, pointer_reg, &slot.php_type)
+    release_previous_referenced_value(
+        ctx,
+        pointer_reg,
+        &slot.storage_type,
+        Some(&slot.storage_type),
+    );
+    store_current_result_to_reference_cell(ctx, pointer_reg, &slot.storage_type)
 }
 
 /// Releases the old value held in a reference cell before overwriting it.

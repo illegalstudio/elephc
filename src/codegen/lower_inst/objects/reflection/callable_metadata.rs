@@ -18,12 +18,12 @@ pub(super) fn reflection_function_metadata(
         return Ok(empty_reflection_metadata());
     };
     let function_name = const_required_string_operand(ctx, function_operand, "ReflectionFunction")?;
+    if let Some((builtin_name, signature)) =
+        reflection_builtin_function_signature(&function_name)
+    {
+        return reflection_builtin_function_metadata(ctx, &builtin_name, &signature);
+    }
     let Some(function) = ctx.function_by_name(&function_name) else {
-        if let Some((builtin_name, signature)) =
-            reflection_builtin_function_signature(&function_name)
-        {
-            return reflection_builtin_function_metadata(ctx, &builtin_name, &signature);
-        }
         return Ok(empty_reflection_metadata());
     };
     let Some(signature) = function.signature.as_ref() else {
@@ -70,17 +70,22 @@ pub(super) fn reflection_builtin_function_metadata(
 ) -> Result<ReflectionOwnerMetadata> {
     let required_parameter_count = reflection_required_parameter_count(signature);
     let type_metadata = reflection_return_type_metadata(signature);
+    let (attr_names, attr_args) =
+        reflection_builtin_function_attributes(function_name, signature);
+    let is_deprecated = signature.deprecation.is_some();
     let declaring_function = ReflectionDeclaringFunctionMember::Function {
         name: function_name.to_string(),
-        attr_names: Vec::new(),
-        attr_args: Vec::new(),
+        attr_names: attr_names.clone(),
+        attr_args: attr_args.clone(),
         required_parameter_count,
         type_metadata: type_metadata.clone(),
-        is_deprecated: false,
+        is_deprecated,
         is_generator: false,
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(function_name.to_string());
+    metadata.attr_names = attr_names;
+    metadata.attr_args = attr_args;
     metadata.parameter_members = reflection_parameter_members_with_declaring_function(
         ctx,
         signature,
@@ -93,13 +98,43 @@ pub(super) fn reflection_builtin_function_metadata(
     )?;
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
+    metadata.is_deprecated = is_deprecated;
     Ok(metadata)
+}
+
+/// Builds Reflection attribute metadata for deprecated internal date functions.
+fn reflection_builtin_function_attributes(
+    function_name: &str,
+    signature: &FunctionSig,
+) -> (Vec<String>, Vec<Option<Vec<AttrArgEntry>>>) {
+    let Some(message) = signature.deprecation.as_ref() else {
+        return (Vec::new(), Vec::new());
+    };
+    let since = match function_name {
+        "strptime" => "8.2",
+        "strftime" | "gmstrftime" | "date_sunrise" | "date_sunset" => "8.1",
+        _ => "",
+    };
+    let mut args = Vec::new();
+    if !since.is_empty() {
+        args.push(AttrArgEntry {
+            key: Some(AttrKey::Str("since".to_string())),
+            value: AttrArgValue::Str(since.to_string()),
+        });
+    }
+    if !message.is_empty() {
+        args.push(AttrArgEntry {
+            key: Some(AttrKey::Str("message".to_string())),
+            value: AttrArgValue::Str(message.clone()),
+        });
+    }
+    (vec!["Deprecated".to_string()], vec![Some(args)])
 }
 
 /// Returns the canonical callable-builtin name and signature for ReflectionFunction.
 pub(super) fn reflection_builtin_function_signature(function_name: &str) -> Option<(String, FunctionSig)> {
     let builtin_key = php_symbol_key(function_name.trim_start_matches('\\'));
-    crate::types::first_class_callable_builtin_sig(&builtin_key)
+    crate::types::reflection_builtin_function_sig(&builtin_key)
         .map(|signature| (builtin_key, signature))
 }
 
@@ -119,6 +154,50 @@ pub(super) fn reflection_function_or_method_is_internal(
         .parent_class_name
         .as_deref()
         .is_some_and(reflection_class_like_is_internal)
+}
+
+/// Returns whether php-src exposes a date/time method's declared type as tentative.
+///
+/// PHP's ext/date stubs retain tentative return types on legacy methods for inheritance
+/// compatibility. Newer methods and serialization hooks use ordinary declared return types.
+pub(super) fn reflection_datetime_method_has_tentative_return_type(
+    declaring_class_name: Option<&str>,
+    method_name: Option<&str>,
+) -> bool {
+    let Some(class_name) = declaring_class_name else {
+        return false;
+    };
+    let Some(method_key) = method_name.map(php_symbol_key) else {
+        return false;
+    };
+    match class_name.trim_start_matches('\\') {
+        "DateTimeInterface" => !matches!(
+            method_key.as_str(),
+            "getmicrosecond" | "__serialize" | "__unserialize"
+        ),
+        "DateTime" | "DateTimeImmutable" => !matches!(
+            method_key.as_str(),
+            "__construct"
+                | "__serialize"
+                | "__unserialize"
+                | "createfrominterface"
+                | "getmicrosecond"
+                | "setmicrosecond"
+        ),
+        "DateTimeZone" | "DateInterval" => !matches!(
+            method_key.as_str(),
+            "__construct" | "__serialize" | "__unserialize"
+        ),
+        "DatePeriod" => !matches!(
+            method_key.as_str(),
+            "__construct"
+                | "createfromiso8601string"
+                | "__serialize"
+                | "__unserialize"
+                | "getiterator"
+        ),
+        _ => false,
+    }
 }
 
 /// Resolves `ReflectionMethod(class, method)` metadata.
@@ -168,8 +247,16 @@ pub(super) fn reflection_method_owner_metadata(
     method_name: &str,
     member: ReflectionListedMember,
 ) -> ReflectionOwnerMetadata {
+    let reflected_name = member
+        .declaring_class_name
+        .as_deref()
+        .and_then(|class_name| {
+            crate::types::php_src_date_method_canonical_name(class_name, method_name)
+        })
+        .unwrap_or(method_name)
+        .to_string();
     ReflectionOwnerMetadata {
-        reflected_name: Some(method_name.to_string()),
+        reflected_name: Some(reflected_name),
         attr_names: member.attr_names,
         attr_args: member.attr_args,
         interface_names: Vec::new(),
@@ -213,4 +300,3 @@ pub(super) fn reflection_method_owner_metadata(
         member_flags: member.flags,
     }
 }
-

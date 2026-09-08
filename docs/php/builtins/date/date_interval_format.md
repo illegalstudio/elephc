@@ -2,7 +2,7 @@
 title: "date_interval_format()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 201
+  order: 202
 ---
 
 ## date_interval_format()

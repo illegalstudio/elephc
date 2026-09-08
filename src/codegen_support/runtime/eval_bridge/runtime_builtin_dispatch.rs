@@ -58,6 +58,8 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush", "__elephc_eval_ob_flush", None);
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean", "__elephc_eval_ob_end", Some(0));
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush", "__elephc_eval_ob_end", Some(1));
+    emit_aarch64_date_default_timezone_get_case(emitter);
+    emit_aarch64_date_default_timezone_set_case(emitter);
 
     emitter.label("__elephc_runtime_builtin_v1_result");
     emitter.instruction("cbz x0, __elephc_runtime_builtin_v1_fatal");           // null helper results report runtime failure
@@ -86,6 +88,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.instruction("push r12");                                            // preserve the borrowed argument-pointer array
     emitter.instruction("push r13");                                            // preserve the boxed argument count
     emitter.instruction("push r14");                                            // preserve the caller-owned result-out slot and call alignment
+    emitter.instruction("sub rsp, 16");                                         // reserve pointer/length scratch for shared string builtins
     emitter.instruction("mov ebx, edi");                                        // retain the typed runtime builtin ID
     emitter.instruction("mov r12, rsi");                                        // retain the borrowed argument-pointer array
     emitter.instruction("mov r13, rdx");                                        // retain the boxed argument count
@@ -126,6 +129,8 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush", "__elephc_eval_ob_flush", None);
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean", "__elephc_eval_ob_end", Some(0));
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush", "__elephc_eval_ob_end", Some(1));
+    emit_x86_64_date_default_timezone_get_case(emitter);
+    emit_x86_64_date_default_timezone_set_case(emitter);
 
     emitter.label("__elephc_runtime_builtin_v1_result_x86");
     emitter.instruction("test rax, rax");                                       // null helper results report runtime failure
@@ -139,6 +144,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_unsupported_x86");
     emitter.instruction(&format!("mov eax, {}", RuntimeBuiltinStatus::Unsupported as i32)); // report Unsupported for unknown IDs and arities
     emitter.label("__elephc_runtime_builtin_v1_done_x86");
+    emitter.instruction("add rsp, 16");                                         // release shared string builtin scratch
     emitter.instruction("pop r14");                                             // restore the caller-owned result-out register
     emitter.instruction("pop r13");                                             // restore the boxed argument count register
     emitter.instruction("pop r12");                                             // restore the borrowed argument-array register
@@ -148,7 +154,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
 }
 
 /// Returns stable branch labels for every version-one runtime builtin ID.
-fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 21] {
+fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 23] {
     let labels = [
         (RuntimeBuiltinId::Boolval, "__elephc_runtime_builtin_v1_boolval"),
         (RuntimeBuiltinId::Floatval, "__elephc_runtime_builtin_v1_floatval"),
@@ -171,6 +177,8 @@ fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 21] {
         (RuntimeBuiltinId::ObFlush, "__elephc_runtime_builtin_v1_ob_flush"),
         (RuntimeBuiltinId::ObEndClean, "__elephc_runtime_builtin_v1_ob_end_clean"),
         (RuntimeBuiltinId::ObEndFlush, "__elephc_runtime_builtin_v1_ob_end_flush"),
+        (RuntimeBuiltinId::DateDefaultTimezoneGet, "__elephc_runtime_builtin_v1_date_default_timezone_get"),
+        (RuntimeBuiltinId::DateDefaultTimezoneSet, "__elephc_runtime_builtin_v1_date_default_timezone_set"),
     ];
     for (runtime_id, _) in labels {
         let binding = crate::builtins::registry::lookup_runtime_builtin(runtime_id);
@@ -181,6 +189,65 @@ fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 21] {
         );
     }
     labels
+}
+
+/// Emits the AArch64 zero-argument timezone getter and boxes its shared runtime string.
+fn emit_aarch64_date_default_timezone_get_case(emitter: &mut Emitter) {
+    emitter.label("__elephc_runtime_builtin_v1_date_default_timezone_get");
+    emitter.instruction("cbnz x21, __elephc_runtime_builtin_v1_unsupported");   // require zero PHP arguments
+    emitter.instruction("bl __rt_date_default_timezone_get");                   // read the authoritative AOT request timezone
+    emitter.instruction("mov x0, x1");                                         // pass the returned identifier pointer to the string boxer
+    emitter.instruction("mov x1, x2");                                         // pass the returned identifier length to the string boxer
+    emitter.bl_c("__elephc_eval_value_string");
+    emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed timezone string
+}
+
+/// Emits the AArch64 validated timezone setter over one borrowed boxed string.
+fn emit_aarch64_date_default_timezone_set_case(emitter: &mut Emitter) {
+    emitter.label("__elephc_runtime_builtin_v1_date_default_timezone_set");
+    emitter.instruction("cmp x21, #1");                                         // require one PHP argument
+    emitter.instruction("b.ne __elephc_runtime_builtin_v1_unsupported");        // reject unsupported arity
+    emitter.instruction("ldr x0, [x20]");                                      // load the borrowed boxed timezone string
+    emitter.instruction("add x1, sp, #32");                                    // pass the scratch identifier-pointer output slot
+    emitter.instruction("add x2, sp, #40");                                    // pass the scratch identifier-length output slot
+    emitter.bl_c("__elephc_eval_value_string_bytes");
+    emitter.instruction("cbz x0, __elephc_runtime_builtin_v1_fatal");           // reject a non-string value after shared binding
+    emitter.instruction("ldr x1, [sp, #32]");                                  // load the validated timezone identifier pointer
+    emitter.instruction("ldr x2, [sp, #40]");                                  // load the validated timezone identifier length
+    emitter.instruction("bl __rt_date_default_timezone_set");                   // update the authoritative AOT request timezone
+    emitter.bl_c("__elephc_eval_value_bool");
+    emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer boxed true from the setter
+}
+
+/// Emits the x86_64 zero-argument timezone getter and boxes its shared runtime string.
+fn emit_x86_64_date_default_timezone_get_case(emitter: &mut Emitter) {
+    emitter.label("__elephc_runtime_builtin_v1_date_default_timezone_get_x86");
+    emitter.instruction("test r13, r13");                                       // require zero PHP arguments
+    emitter.instruction("jnz __elephc_runtime_builtin_v1_unsupported_x86");     // reject unsupported arity
+    emitter.instruction("call __rt_date_default_timezone_get");                 // read the authoritative AOT request timezone
+    emitter.instruction("mov rdi, rax");                                       // pass the returned identifier pointer to the string boxer
+    emitter.instruction("mov rsi, rdx");                                       // pass the returned identifier length to the string boxer
+    emitter.bl_c("__elephc_eval_value_string");
+    emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed timezone string
+}
+
+/// Emits the x86_64 validated timezone setter over one borrowed boxed string.
+fn emit_x86_64_date_default_timezone_set_case(emitter: &mut Emitter) {
+    emitter.label("__elephc_runtime_builtin_v1_date_default_timezone_set_x86");
+    emitter.instruction("cmp r13, 1");                                          // require one PHP argument
+    emitter.instruction("jne __elephc_runtime_builtin_v1_unsupported_x86");     // reject unsupported arity
+    emitter.instruction("mov rdi, QWORD PTR [r12]");                            // load the borrowed boxed timezone string
+    emitter.instruction("lea rsi, [rbp - 40]");                                // pass the scratch identifier-pointer output slot
+    emitter.instruction("lea rdx, [rbp - 48]");                                // pass the scratch identifier-length output slot
+    emitter.bl_c("__elephc_eval_value_string_bytes");
+    emitter.instruction("test rax, rax");                                       // did boxed-string extraction succeed?
+    emitter.instruction("jz __elephc_runtime_builtin_v1_fatal_x86");            // reject a non-string value after shared binding
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // load the validated timezone identifier pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // load the validated timezone identifier length
+    emitter.instruction("call __rt_date_default_timezone_set");                 // update the authoritative AOT request timezone
+    emitter.instruction("mov rdi, rax");                                       // pass the raw setter result to the bool boxer
+    emitter.bl_c("__elephc_eval_value_bool");
+    emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer boxed true from the setter
 }
 
 /// Emits one AArch64 unary boxed-result dispatch arm.

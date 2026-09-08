@@ -2,7 +2,7 @@
 title: "pcntl_signal() — internals"
 description: "Compiler internals for pcntl_signal(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 635
+  order: 641
 ---
 
 ## `pcntl_signal()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_signal.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_signal.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

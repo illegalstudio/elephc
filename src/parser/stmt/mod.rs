@@ -19,6 +19,8 @@ mod oop;
 /// Parameter parsing helpers for function declarations, including typed parameters and return types.
 pub(crate) mod params;
 mod simple;
+
+pub(crate) use simple::parse_void_expr_inline;
 mod recovery;
 
 use crate::errors::CompileError;
@@ -110,11 +112,14 @@ fn parse_stmt_dispatch(
 ) -> Result<Stmt, CompileError> {
     match &tokens[*pos].0 {
         Token::Echo => simple::parse_echo(tokens, pos, span),
-        Token::Print => simple::parse_expr_stmt(tokens, pos, span),
+        Token::Print | Token::Clone => simple::parse_expr_stmt(tokens, pos, span),
         Token::At => simple::parse_error_suppressed_stmt(tokens, pos, span),
         Token::Variable(_) => assign::parse_variable_stmt(tokens, pos, span),
         Token::This => simple::parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => assign::parse_incdec_stmt(tokens, pos, span),
+        Token::LParen if crate::parser::expr::starts_void_statement_cast(tokens, *pos) => {
+            simple::parse_void_expr_stmt(tokens, pos, span)
+        }
         Token::Class => oop::parse_class_decl(tokens, pos, span, false, false, false),
         Token::Enum
             if tokens.get(*pos + 1).is_some_and(|(token, metadata)| {

@@ -41,7 +41,7 @@ pub(in crate::interpreter) fn eval_getdate_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let timestamp = eval_optional_timestamp(timestamp, values)?;
-    let tm = eval_context_localtime(timestamp, context)?;
+    let tm = eval_context_localtime(timestamp, context, values)?;
     let mut result = values.assoc_new(11)?;
     result = eval_array_set_string_int(result, "seconds", i64::from(tm.tm_sec), values)?;
     result = eval_array_set_string_int(result, "minutes", i64::from(tm.tm_min), values)?;

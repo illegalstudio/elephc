@@ -38,6 +38,10 @@ impl EvalStatus {
 /// Parse failures detected before lowering a runtime eval fragment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalParseError {
+    WithCompileWarnings {
+        error: Box<EvalParseError>,
+        warnings: Vec<crate::eval_ir::EvalCompileWarning>,
+    },
     PhpOpenTag,
     InvalidUtf8,
     UnsupportedConstruct,
@@ -52,8 +56,9 @@ pub enum EvalParseError {
 
 impl EvalParseError {
     /// Returns the ABI status that should be reported for this parse failure.
-    pub const fn status(self) -> EvalStatus {
+    pub fn status(self) -> EvalStatus {
         match self {
+            Self::WithCompileWarnings { error, .. } => error.status(),
             Self::UnsupportedConstruct => EvalStatus::UnsupportedConstruct,
             Self::PhpOpenTag
             | Self::InvalidUtf8
@@ -64,6 +69,28 @@ impl EvalParseError {
             | Self::UnterminatedComment
             | Self::ExpectedVariable
             | Self::ExpectedSemicolon => EvalStatus::ParseError,
+        }
+    }
+
+    /// Preserves preceding lexical warnings without changing the underlying failure status.
+    pub(crate) fn with_compile_warnings(self, mut warnings: Vec<crate::eval_ir::EvalCompileWarning>) -> Self {
+        if warnings.is_empty() {
+            return self;
+        }
+        match self {
+            Self::WithCompileWarnings { error, warnings: later } => {
+                warnings.extend(later);
+                Self::WithCompileWarnings { error, warnings }
+            }
+            error => Self::WithCompileWarnings { error: Box::new(error), warnings },
+        }
+    }
+
+    /// Returns warnings encountered before parsing failed, in source order.
+    pub fn compile_warnings(&self) -> &[crate::eval_ir::EvalCompileWarning] {
+        match self {
+            Self::WithCompileWarnings { warnings, .. } => warnings,
+            _ => &[],
         }
     }
 }

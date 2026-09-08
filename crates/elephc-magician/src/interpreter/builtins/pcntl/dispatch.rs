@@ -109,7 +109,7 @@ fn eval_pcntl_bind_args(
     evaluated_args: &[EvaluatedCallArg],
 ) -> Result<Vec<Option<EvaluatedCallArg>>, EvalStatus> {
     let params = eval_builtin_param_names(name).ok_or(EvalStatus::RuntimeFatal)?;
-    let (bound, variadic) = bind_evaluated_ref_builtin_args(params, evaluated_args, false)?;
+    let (bound, variadic) = bind_evaluated_ref_builtin_args(&params, evaluated_args, false)?;
     if !variadic.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }

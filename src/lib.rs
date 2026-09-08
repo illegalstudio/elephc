@@ -29,6 +29,9 @@ mod eval_aot;
 pub mod exports;
 /// PHP variadic-argument introspection (`func_num_args`/`func_get_args`/`func_get_arg`) desugaring.
 pub mod func_args;
+/// Pay-for-use direct-AST binder for `get_extension_funcs()` arguments.
+#[allow(dead_code)]
+pub(crate) mod get_extension_funcs_prelude;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 mod progress;

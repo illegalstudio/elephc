@@ -84,6 +84,16 @@ pub(crate) fn eval_php_minor_version() -> i64 {
     i64::from((eval_php_version_id() / 100) % 100)
 }
 
+/// Returns `PHP_RELEASE_VERSION` for the active profile.
+pub(crate) fn eval_php_release_version() -> i64 {
+    i64::from(eval_php_version_id() % 100)
+}
+
+/// Returns the empty prerelease suffix used by every supported minor profile.
+pub(crate) fn eval_php_extra_version() -> &'static str {
+    ""
+}
+
 /// RAII guard restoring the previous profile on drop.
 ///
 /// Test fixtures hold one of these instead of calling [`set_eval_php_version_id`]
@@ -149,8 +159,7 @@ mod tests {
     #[test]
     fn spellings_agree_with_their_ids() {
         for (id, spelling) in EVAL_PHP_PROFILES {
-            let expected = format!("{}.{}.0", id / 10000, (id / 100) % 100);
-            assert_eq!(*spelling, expected);
+            assert!(spelling.starts_with(&format!("{}.{}.", id / 10000, (id / 100) % 100)));
         }
     }
 }

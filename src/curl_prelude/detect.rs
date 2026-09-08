@@ -592,6 +592,11 @@ fn stmt_refs_curl(stmt: &Stmt) -> bool {
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_curl(object) || expr_refs_curl(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_refs_curl(object) || expr_refs_curl(property) || expr_refs_curl(value),
         StmtKind::PropertyArrayAssign {
             object,
             index,

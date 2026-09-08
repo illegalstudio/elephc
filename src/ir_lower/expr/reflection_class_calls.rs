@@ -59,12 +59,27 @@ pub(super) fn lower_reflection_class_new_instance_args(
 /// Lowers `ReflectionClass::newInstanceWithoutConstructor()` to constructorless allocation.
 pub(super) fn lower_reflection_class_new_instance_without_constructor(
     ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
     object: LoweredValue,
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
     if !args.is_empty() {
         return lower_reflection_class_new_instance_without_constructor_unsupported(ctx, expr);
+    }
+    if let Some(class_name) = object_expr
+        .and_then(|object_expr| reflection_class_reflected_class(ctx, object_expr))
+    {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        let class_data = ctx.intern_class_name(&class_name);
+        return ctx.emit_value(
+            Op::ObjectNewWithoutConstructor,
+            Vec::new(),
+            Some(Immediate::Data(class_data)),
+            PhpType::Object(class_name),
+            Op::ObjectNewWithoutConstructor.default_effects(),
+            Some(expr.span),
+        );
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
     ctx.emit_value(
@@ -108,9 +123,13 @@ pub(super) fn lower_reflection_class_member_list_call(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let class_name = reflection_class_reflected_class(ctx, object_expr?)?;
+    let object_expr = object_expr?;
+    let class_name = reflection_class_reflected_class(ctx, object_expr)?;
     let (member_class, items): (&str, Vec<Expr>) = match php_symbol_key(method).as_str() {
         "getproperties" => {
+            if reflection_owner_receiver_is_object(ctx, object_expr) {
+                return None;
+            }
             let filter = reflection_class_get_properties_filter_arg(ctx, args)?;
             (
                 "ReflectionProperty",
@@ -324,4 +343,3 @@ pub(super) fn lower_reflection_function_invoke_unsupported(
     ctx.builder.terminate(Terminator::Fatal { message });
     result
 }
-

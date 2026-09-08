@@ -2,7 +2,7 @@
 title: "mysqli_get_server_info() — internals"
 description: "Compiler internals for mysqli_get_server_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 133
+  order: 134
 ---
 
 ## `mysqli_get_server_info()` — internals

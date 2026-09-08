@@ -44,6 +44,25 @@ var_dump($c->pippo);
     assert_eq!(out, "NULL\nint(5)\n");
 }
 
+/// Verifies that a constructor read before its first assignment still observes the implicit null.
+#[test]
+fn test_untyped_property_constructor_read_before_assignment_defaults_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+class Car {
+    public $value;
+    public function __construct() {
+        var_dump($this->value);
+        $this->value = 5;
+        var_dump($this->value);
+    }
+}
+new Car();
+"#,
+    );
+    assert_eq!(out, "NULL\nint(5)\n");
+}
+
 /// Verifies that an untyped no-default property later assigned a string still defaults to null.
 #[test]
 fn test_untyped_property_without_default_assigned_string_later() {

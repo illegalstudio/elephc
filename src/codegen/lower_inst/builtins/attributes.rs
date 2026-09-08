@@ -317,7 +317,7 @@ fn emit_set_args_property(
         object_reg,
         layout.args_lo,
     );
-    abi::emit_load_int_immediate(ctx.emitter, tag_reg, 4);
+    abi::emit_load_int_immediate(ctx.emitter, tag_reg, 5);
     abi::emit_store_to_address(ctx.emitter, tag_reg, object_reg, layout.args_hi);
     Ok(())
 }
@@ -380,14 +380,20 @@ fn emit_append_reflection_attribute_object(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x1");
             abi::emit_pop_reg(ctx.emitter, "x0");
-            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            abi::emit_push_reg(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
         }
         Arch::X86_64 => {
             abi::emit_pop_reg(ctx.emitter, "rsi");
             abi::emit_pop_reg(ctx.emitter, "rdi");
-            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            abi::emit_push_reg(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
         }
     }
+    crate::codegen_support::emit_release_pushed_refcounted_temp_after_array_push(
+        ctx.emitter,
+        &PhpType::Object("ReflectionAttribute".to_string()),
+    );
 }
 
 /// Allocates and fills an indexed array of attribute-name strings.

@@ -2,7 +2,7 @@
 title: "filemtime()"
 description: "Gets file modification time."
 sidebar:
-  order: 268
+  order: 269
 ---
 
 ## filemtime()

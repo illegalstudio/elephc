@@ -17,6 +17,97 @@ fn test_addition() {
     assert_eq!(out, "42");
 }
 
+/// Verifies PHP unary plus accepts positive integers and positive infinity.
+#[test]
+fn test_unary_plus_numeric_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo +60, '|', is_infinite(+INF) ? 'inf' : 'finite', "\n";
+var_dump(+"12", +"1.5");
+$integer = json_decode("\"12\"");
+$float = json_decode("\"1.5\"");
+$null = json_decode("null");
+$bool = json_decode("true");
+var_dump(+$integer, +$float, +$null, +$bool);
+"#,
+    );
+    assert_eq!(
+        out,
+        "60|inf\nint(12)\nfloat(1.5)\nint(12)\nfloat(1.5)\nint(0)\nint(1)\n"
+    );
+}
+
+/// Verifies unary-plus failures retain php-src's multiplication-based TypeError wording.
+#[test]
+fn test_unary_plus_type_error_messages() {
+    for (source, expected) in [
+        (
+            r#"<?php try { $unused = +json_decode("[1,2]"); } catch (TypeError $e) { echo $e->getMessage(); }"#,
+            "Unsupported operand types: array * int",
+        ),
+        (
+            r#"<?php try { $unused = +"abc"; } catch (TypeError $e) { echo $e->getMessage(); }"#,
+            "Unsupported operand types: string * int",
+        ),
+        (
+            r#"<?php try { $unused = +json_decode("{}"); } catch (TypeError $e) { echo $e->getMessage(); }"#,
+            "Unsupported operand types: stdClass * int",
+        ),
+        (
+            r#"<?php class UnaryPlusFailure {} $object = new UnaryPlusFailure(); try { $unused = +$object; } catch (TypeError $e) { echo $e->getMessage(); }"#,
+            "Unsupported operand types: UnaryPlusFailure * int",
+        ),
+        (
+            r#"<?php $resource = tmpfile(); try { $unused = +$resource; } catch (TypeError $e) { echo $e->getMessage(); }"#,
+            "Unsupported operand types: resource * int",
+        ),
+    ] {
+        assert_eq!(compile_and_run(source), expected);
+    }
+}
+
+/// Verifies leading-numeric strings keep their value and emit a suppression-aware E_WARNING.
+#[test]
+fn test_unary_plus_leading_numeric_string_warning() {
+    let warned = compile_and_run_capture("<?php var_dump(+\"12abc\");");
+    assert!(warned.success, "unexpected failure: {}", warned.stderr);
+    assert_eq!(warned.stdout, "int(12)\n");
+    assert!(
+        warned.stderr.contains("Warning: A non-numeric value encountered"),
+        "missing unary-plus warning: {}",
+        warned.stderr
+    );
+
+    let suppressed = compile_and_run_capture("<?php echo @+\"12abc\", '|', @+\"1.5abc\";");
+    assert!(suppressed.success, "unexpected failure: {}", suppressed.stderr);
+    assert_eq!(suppressed.stdout, "12|1.5");
+    assert_eq!(suppressed.stderr, "");
+}
+
+/// Verifies runtime-tagged relational operands use PHP's loose ordering table without int truncation.
+#[test]
+fn test_mixed_relational_comparisons_preserve_php_ordering() {
+    let out = compile_and_run(
+        r#"<?php
+$a = json_decode("1.5"); $b = json_decode("1.6");
+echo $a < $b ? "1" : "0", $a <= $b ? "1" : "0", $a > $b ? "1" : "0", $a >= $b ? "1" : "0", "|";
+$a = json_decode("\"1.5\""); $b = json_decode("\"1.6\"");
+echo $a < $b ? "1" : "0", $a <= $b ? "1" : "0", $a > $b ? "1" : "0", $a >= $b ? "1" : "0", "|";
+$a = json_decode("true"); $b = json_decode("2");
+echo $a < $b ? "1" : "0", $a <= $b ? "1" : "0", $a > $b ? "1" : "0", $a >= $b ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "1100|1100|0101");
+}
+
+/// Verifies a Mixed-selected relational opcode remains valid after EIR refines both operands to int.
+#[test]
+fn test_relational_runtime_dispatch_accepts_refined_int_operands() {
+    let out = compile_and_run(
+        "<?php define('COUNT', 3); for ($i = 0; $i < COUNT * 2; $i++) { echo $i; }",
+    );
+    assert_eq!(out, "012345");
+}
 
 /// Verifies integer subtraction with literal operands: 100 - 58 = 42.
 #[test]
@@ -563,6 +654,36 @@ fn test_runtime_loose_eq_null_and_string_uses_empty_string_rule() {
     assert_eq!(out, "bool(true)\nbool(false)\n");
 }
 
+/// Verifies null loose comparison dispatches boxed Mixed payloads by PHP truthiness.
+#[test]
+fn test_runtime_loose_eq_null_and_mixed_uses_truthiness() {
+    let out = compile_and_run(
+        r#"<?php
+$values = [
+    "null" => null,
+    "empty" => "",
+    "zero_string" => "0",
+    "string" => "x",
+    "zero" => 0,
+    "one" => 1,
+    "zero_float" => 0.0,
+    "one_float" => 1.0,
+    "false" => false,
+    "true" => true,
+    "empty_array" => [],
+    "array" => [1],
+];
+foreach ($values as $value) {
+    echo null == $value ? "1" : "0";
+}
+echo "|";
+foreach ($values as $value) {
+    echo null != $value ? "1" : "0";
+}
+"#,
+    );
+    assert_eq!(out, "110010101010|001101010101");
+}
 
 /// Verifies integer less-than comparison: 1 < 2 outputs "1".
 #[test]

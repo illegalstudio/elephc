@@ -2,7 +2,7 @@
 title: "get_parent_class()"
 description: "Returns the name of the parent class of an object or class."
 sidebar:
-  order: 91
+  order: 92
 ---
 
 ## get_parent_class()

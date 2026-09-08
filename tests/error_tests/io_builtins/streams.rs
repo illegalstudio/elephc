@@ -196,16 +196,15 @@ fn test_error_tmpfile_rejects_nonempty_static_spread() {
     expect_error("<?php tmpfile(...[1]);", "tmpfile() takes no arguments");
 }
 
-/// Verifies a function with string return type annotation produces an error when returning fgetc() which can return false.
+/// Verifies `fgetc()`'s `string|false` result is accepted at a runtime string boundary.
 #[test]
-fn test_error_fgetc_false_return_rejects_string_return_type() {
-    expect_error(
+fn test_fgetc_false_return_is_runtime_coercible() {
+    expect_no_error(
         r#"<?php
 function read_char(): string {
     return fgetc(STDIN);
 }
 "#,
-        "Function 'read_char' return type expects Str, got Union([Str, False])",
     );
 }
 

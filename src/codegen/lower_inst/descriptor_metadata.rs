@@ -101,6 +101,10 @@ pub(super) fn emit_runtime_descriptor_with_called_class_capture(
 /// Descriptor metadata for a compile-time first-class callable target.
 pub(super) struct FirstClassCallableDescriptor {
     pub(super) entry_label: String,
+    /// Proven owned object return from the concrete EIR callee, not its signature alone.
+    pub(super) owned_object_return: bool,
+    /// The php-src-visible function field for a fake Closure, when resolution changed scope/case.
+    pub(super) display_name: Option<String>,
     pub(super) kind: u64,
     pub(super) sig: Option<FunctionSig>,
     pub(super) invocation: callable_descriptor::CallableDescriptorInvocation,
@@ -122,6 +126,8 @@ pub(super) fn first_class_callable_descriptor(
     if ctx.has_extern_function(target) {
         return Ok(Some(FirstClassCallableDescriptor {
             entry_label: ctx.emitter.target.extern_symbol(target),
+            owned_object_return: false,
+            display_name: None,
             kind: callable_descriptor::CALLABLE_DESC_KIND_EXTERN,
             sig: None,
             invocation: callable_descriptor::CallableDescriptorInvocation::named(
@@ -136,6 +142,9 @@ pub(super) fn first_class_callable_descriptor(
     if let Some(callee) = ctx.callable_function_by_name(target) {
         return Ok(Some(FirstClassCallableDescriptor {
             entry_label: function_symbol(&callee.name),
+            owned_object_return: super::object_return_ownership::object_return_ownership(callee)
+                == super::object_return_ownership::ObjectReturnOwnership::Owned,
+            display_name: None,
             kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
             sig: Some(function_signature_from_eir(callee)),
             invocation: callable_descriptor::CallableDescriptorInvocation::named(
@@ -168,7 +177,9 @@ pub(super) fn first_class_builtin_descriptor(
         emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig, strict_php)?;
     Ok(Some(FirstClassCallableDescriptor {
         entry_label,
+        display_name: None,
         kind: callable_descriptor::CALLABLE_DESC_KIND_BUILTIN,
+        owned_object_return: false,
         sig: Some(wrapper_sig),
         invocation: callable_descriptor::CallableDescriptorInvocation::named(
             callable_descriptor::CallableDescriptorShape::Builtin,
@@ -202,6 +213,20 @@ pub(super) fn first_class_static_method_descriptor(
         .get(&method_key)?
         .clone();
     let wrapper_sig = crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig(&sig);
+    let canonical_method_name =
+        super::callable_descriptors::canonical_first_class_callable_method_name(
+            ctx,
+            impl_class,
+            method_name,
+        );
+    let display_name = format!("{impl_class}::{canonical_method_name}");
+    let owned_object_return = ctx.module.class_methods.iter().find(|function| {
+        function.flags.is_static && function.name.rsplit_once("::")
+            .is_some_and(|(class, method)| class == impl_class && php_symbol_key(method) == method_key)
+    }).is_some_and(|function| {
+        super::object_return_ownership::object_return_ownership(function)
+            == super::object_return_ownership::ObjectReturnOwnership::Owned
+    });
     let entry_label = emit_static_method_descriptor_entry_wrapper(
         ctx,
         impl_class,
@@ -212,6 +237,8 @@ pub(super) fn first_class_static_method_descriptor(
     .ok()?;
     Some(FirstClassCallableDescriptor {
         entry_label,
+        display_name: Some(display_name),
+        owned_object_return,
         kind: callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
         sig: Some(wrapper_sig),
         invocation: callable_descriptor::CallableDescriptorInvocation::method(

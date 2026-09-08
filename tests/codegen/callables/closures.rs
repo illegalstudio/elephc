@@ -11,6 +11,50 @@ use crate::support::*;
 
 // --- Anonymous functions (closures) and arrow functions ---
 
+/// Verifies descriptor invocation releases boxed arguments materialized for declared parameters.
+#[test]
+fn test_descriptor_invoker_declared_arguments_leave_a_clean_heap() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+function map_values(): void {
+    $callback = function (string $value): int { return strlen($value); };
+    $mapped = array_map($callback, ["a", "b", "c"]);
+    unset($mapped);
+    unset($callback);
+}
+map_values();
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "descriptor argument materialization must be heap-balanced");
+}
+
+/// Verifies descriptor argument owners are released when the callback exits through an exception.
+#[test]
+fn test_descriptor_invoker_throwing_declared_arguments_leave_a_clean_heap() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+function map_throwing_values(): void {
+    $callback = function (string $value): int { throw new Exception("boom"); };
+    $values = ["boom"];
+    try {
+        array_map($callback, $values);
+    } catch (Exception $exception) {
+        echo $exception->getMessage();
+    }
+    unset($values);
+    unset($callback);
+}
+map_throwing_values();
+"#,
+    );
+    assert_eq!(out.stdout, "boom");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "throwing descriptor arguments must be heap-balanced");
+}
+
 /// Verifies basic anonymous function creation, assignment to variable, and invocation with one argument.
 #[test]
 fn test_closure_basic() {

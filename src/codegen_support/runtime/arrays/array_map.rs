@@ -10,6 +10,10 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
+use crate::codegen_support::abi;
 
 /// Emits the `__rt_array_map` runtime helper for ARM64 (macOS/Linux).
 ///
@@ -41,7 +45,9 @@ pub fn emit_array_map(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_map");
 
     // -- set up stack frame, save callee-saved registers --
-    emitter.instruction("sub sp, sp, #80");                                     // allocate stack space for scalar mapping metadata
+    let frame_bytes = 80 + TRY_HANDLER_SLOT_SIZE;
+    let handler = 80;
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_bytes));              // allocate mapping metadata plus a local exception handler
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // set up new frame pointer
     emitter.instruction("stp x19, x20, [sp, #48]");                             // save callee-saved x19, x20
@@ -58,6 +64,19 @@ pub fn emit_array_map(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #8");                                          // x1 = element size (8 bytes for int)
     emitter.instruction("bl __rt_array_new");                                   // allocate new array → x0=new array ptr
     emitter.instruction("str x0, [sp, #24]");                                   // save new array pointer to stack
+
+    // -- protect the partial destination across callback exceptions --
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler));               // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler + 8));           // preserve the activation frame surviving this boundary
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("add x10, sp, #{}", handler));                 // materialize this helper's exception handler record
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("add x0, sp, #{}", handler + TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch callback exceptions while the destination owner is live
+    emitter.instruction("cbnz x0, __rt_array_map_throw");                       // clean the destination before propagating the exception
 
     // -- set up loop counter --
     emitter.instruction("mov x20, #0");                                         // x20 = loop index i = 0
@@ -106,12 +125,28 @@ pub fn emit_array_map(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // x0 = new array pointer
     emitter.instruction("ldr x9, [sp, #16]");                                   // x9 = length
     emitter.instruction("str x9, [x0]");                                        // set new array length
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler));               // reload the preceding exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after success
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
 
     // -- tear down stack frame and return --
     emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore callee-saved x19, x20
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // deallocate stack frame and handler record
     emitter.instruction("ret");                                                 // return with x0 = new mapped array
+
+    emitter.label("__rt_array_map_throw");
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler));               // reload the preceding exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the partially built destination array
+    emitter.instruction("bl __rt_decref_array");                                // release the destination container after callback failure
+    emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore callee-saved mapping registers
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // discard the protected mapping frame
+    emitter.instruction("b __rt_throw_current");                                // resume exception propagation at the caller handler
 }
 
 /// Emits the `__rt_array_map` runtime helper for x86_64 Linux (System V ABI).
@@ -141,7 +176,9 @@ fn emit_array_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the callback, source array, and destination array slots
     emitter.instruction("push r12");                                            // preserve the callback scratch register because the runtime uses it across every callback invocation
     emitter.instruction("push r13");                                            // preserve the loop-index scratch register because the runtime keeps it live across callback calls
-    emitter.instruction("sub rsp, 48");                                         // reserve local slots for source metadata, destination array pointer, element width, and optional callback environment
+    let frame_bytes = 64 + TRY_HANDLER_SLOT_SIZE;
+    let local_bytes = frame_bytes - 16;
+    emitter.instruction(&format!("sub rsp, {}", local_bytes));                  // reserve mapping locals plus a native exception-handler record
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the mapping loop
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the source array pointer so the loop can reload it after callback calls
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save optional callback environment pointer for captured-closure wrappers
@@ -153,6 +190,18 @@ fn emit_array_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 8");                                          // request 8-byte element slots for the integer-returning array_map runtime
     emitter.instruction("call __rt_array_new");                                 // allocate the destination array with the same logical capacity as the source array
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the destination array pointer for the loop body and final return path
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes)); // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes - 8)); // preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("lea r10, [rbp - {}]", frame_bytes));          // materialize this helper's exception handler record
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("lea rdi, [rbp - {}]", frame_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch callback exceptions while the destination owner is live
+    emitter.instruction("test eax, eax");                                       // did control return through longjmp?
+    emitter.instruction("jnz __rt_array_map_throw_x");                          // clean the destination before propagating the exception
     emitter.instruction("xor r13d, r13d");                                      // start the mapping loop at logical index zero
 
     emitter.label("__rt_array_map_loop");
@@ -187,9 +236,26 @@ fn emit_array_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the destination array pointer for final length publication and return
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the saved source length so the destination logical length matches the mapped input size
     emitter.instruction("mov QWORD PTR [rax], r10");                            // publish the mapped destination length in the destination array header
-    emitter.instruction("add rsp, 48");                                         // release the local source/destination bookkeeping slots before restoring callee-saved registers
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes)); // reload the preceding exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after success
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("add rsp, {}", local_bytes));                  // release locals and the handler record
     emitter.instruction("pop r13");                                             // restore the caller's loop-index callee-saved register
     emitter.instruction("pop r12");                                             // restore the caller's callback scratch callee-saved register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the mapped array pointer
     emitter.instruction("ret");                                                 // return the mapped destination array pointer in rax
+
+    emitter.label("__rt_array_map_throw_x");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes)); // reload the preceding exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the partially built destination array
+    emitter.instruction("call __rt_decref_array");                              // release the destination container after callback failure
+    emitter.instruction(&format!("add rsp, {}", local_bytes));                  // discard locals and the handler record
+    emitter.instruction("pop r13");                                             // restore the loop-index register
+    emitter.instruction("pop r12");                                             // restore the callback register
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_throw_current");                              // resume exception propagation at the caller handler
 }

@@ -981,8 +981,7 @@ fn ir_backend_handles_scalar_builtins() {
         (
             // `phpversion()` reports the PHP LANGUAGE version of the compile target, not
             // elephc's own package version. This harness compiles with the default
-            // `--php-version` (8.5), and elephc reports the profile's `8.5.0` form —
-            // reference PHP 8.5.6 reports `8.5.6`. See
+            // `--php-version` (8.5), represented as the stable profile `8.5.0`. See
             // `web_prelude::PhpVersion::version_string`.
             "pi_and_phpversion",
             "<?php echo pi() > 3 ? \"pi\" : \"bad\"; echo \":\"; echo phpversion();",

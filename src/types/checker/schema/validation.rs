@@ -222,7 +222,7 @@ pub(crate) fn required_param_count(sig: &FunctionSig) -> usize {
 }
 
 /// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
-/// Checks parameter count, ref params, defaults layout, variadic flag, and required param count.
+/// Checks parameter count, ref params, variadic shape, and required parameter compatibility.
 /// Reports errors with `context` and `kind` (e.g., "overriding method") in the message.
 pub(crate) fn validate_signature_compatibility(
     span: crate::span::Span,
@@ -250,17 +250,17 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child_sig.params.len() != parent_sig.params.len() {
+    if child_sig.params.len() < parent_sig.params.len() {
         return Err(CompileError::new(
             span,
             &format!(
-                "Cannot change parameter count when {} {}: {}::{}",
+                "Cannot remove inherited parameters when {} {}: {}::{}",
                 context, kind, owner_name, method_name
             ),
         ));
     }
 
-    if child_sig.ref_params != parent_sig.ref_params {
+    if child_sig.ref_params[..parent_sig.ref_params.len()] != parent_sig.ref_params[..] {
         return Err(CompileError::new(
             span,
             &format!(
@@ -270,27 +270,7 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    let child_defaults: Vec<bool> = child_sig
-        .defaults
-        .iter()
-        .map(|default| default.is_some())
-        .collect();
-    let parent_defaults: Vec<bool> = parent_sig
-        .defaults
-        .iter()
-        .map(|default| default.is_some())
-        .collect();
-    if child_defaults != parent_defaults {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot change optional parameter layout when {} {}: {}::{}",
-                context, kind, owner_name, method_name
-            ),
-        ));
-    }
-
-    if child_sig.variadic != parent_sig.variadic {
+    if parent_sig.variadic.is_some() && child_sig.variadic.is_none() {
         return Err(CompileError::new(
             span,
             &format!(
@@ -300,11 +280,11 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if required_param_count(child_sig) != required_param_count(parent_sig) {
+    if required_param_count(child_sig) > required_param_count(parent_sig) {
         return Err(CompileError::new(
             span,
             &format!(
-                "Cannot change required parameter count when {} {}: {}::{}",
+                "Cannot increase required parameter count when {} {}: {}::{}",
                 context, kind, owner_name, method_name
             ),
         ));
@@ -385,7 +365,16 @@ pub(crate) fn validate_override_signature(
     let kind = if is_static { "static method" } else { "method" };
     let class_name = class.name.as_str();
     let child_sig = build_method_sig(checker, method, class_name)?;
-    if php_symbol_key(&method.name) == "__construct" {
+    let method_key = php_symbol_key(&method.name);
+    if method_key == "__construct" {
+        return Ok(());
+    }
+    if method_key == "__set_state"
+        && crate::types::checker::set_state_contract_violation(method).is_some()
+    {
+        // PHP accepts the source far enough to emit its declaration-time fatal
+        // with the source filename and line. Let EIR lowering preserve that
+        // observable diagnostic instead of replacing it with a checker error.
         return Ok(());
     }
     validate_signature_compatibility(
@@ -457,7 +446,45 @@ fn covariant_self_return_compatible(
     parent_sig: &FunctionSig,
     child_sig: &FunctionSig,
 ) -> bool {
-    match (&parent_sig.return_type, &child_sig.return_type) {
+    if let PhpType::Union(actual_members) = &child_sig.return_type {
+        let expected_members = match &parent_sig.return_type {
+            PhpType::Union(members) => members.as_slice(),
+            other => std::slice::from_ref(other),
+        };
+        return actual_members.iter().all(|actual| {
+            expected_members.iter().any(|expected| {
+                checker.type_accepts(expected, actual)
+                    || covariant_self_object_member_compatible(
+                        checker,
+                        class_name,
+                        extends,
+                        implements,
+                        expected,
+                        actual,
+                    )
+            })
+        });
+    }
+    covariant_self_object_member_compatible(
+        checker,
+        class_name,
+        extends,
+        implements,
+        &parent_sig.return_type,
+        &child_sig.return_type,
+    )
+}
+
+/// Checks one covariant self object member while the child class is still being registered.
+fn covariant_self_object_member_compatible(
+    checker: &Checker,
+    class_name: &str,
+    extends: Option<&str>,
+    implements: &[String],
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    match (expected, actual) {
         (PhpType::Object(expected_name), PhpType::Object(actual_name))
             if actual_name == class_name =>
         {

@@ -2,7 +2,7 @@
 title: "pcntl_getcpuaffinity() — internals"
 description: "Compiler internals for pcntl_getcpuaffinity(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 628
+  order: 634
 ---
 
 ## `pcntl_getcpuaffinity()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_getcpuaffinity.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_getcpuaffinity.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -80,10 +80,17 @@ pub(super) fn builtin_reflection_owner_class(
             "__toString",
             "__string",
         ));
-        methods.push(builtin_reflection_constant_false_bool_method(
-            "isDeprecated",
-        ));
         if name == "ReflectionClassConstant" {
+            properties.push(builtin_property(
+                "__is_deprecated",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ));
+            methods.push(builtin_reflection_class_bool_method(
+                "isDeprecated",
+                "__is_deprecated",
+            ));
             properties.push(builtin_property(
                 "__has_type",
                 Visibility::Private,
@@ -107,6 +114,9 @@ pub(super) fn builtin_reflection_owner_class(
                 mixed_type(),
             ));
         } else {
+            methods.push(builtin_reflection_constant_false_bool_method(
+                "isDeprecated",
+            ));
             methods.push(builtin_reflection_constant_false_bool_method("hasType"));
             methods.push(builtin_reflection_constant_null_mixed_method("getType"));
         }
@@ -149,6 +159,18 @@ pub(super) fn builtin_reflection_owner_class(
             false_bool(),
         ));
         properties.push(builtin_property(
+            "__tentative_type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        properties.push(builtin_property(
+            "__has_tentative_return_type",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
             "__required_parameter_count",
             Visibility::Private,
             Some(TypeExpr::Int),
@@ -181,11 +203,13 @@ pub(super) fn builtin_reflection_owner_class(
             "isGenerator",
             "__is_generator",
         ));
-        methods.push(builtin_reflection_constant_false_bool_method(
+        methods.push(builtin_reflection_class_bool_method(
             "hasTentativeReturnType",
+            "__has_tentative_return_type",
         ));
-        methods.push(builtin_reflection_constant_null_mixed_method(
+        methods.push(builtin_reflection_class_mixed_method(
             "getTentativeReturnType",
+            "__tentative_type",
         ));
         methods.push(builtin_reflection_function_method_is_variadic_method());
         methods.push(builtin_reflection_class_string_method(
@@ -232,7 +256,7 @@ pub(super) fn builtin_reflection_owner_class(
     properties.push(builtin_property(
         "__attrs",
         Visibility::Private,
-        Some(array_type()),
+        Some(object_array_type("ReflectionAttribute")),
         empty_array(),
     ));
     methods.push(builtin_reflection_owner_get_attributes_method());

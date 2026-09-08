@@ -6,17 +6,18 @@
 //! - `crate::interpreter` execution, builtin, and call-dispatch helpers.
 //!
 //! Key details:
-//! - Runtime cells are opaque handles; only foreign PCNTL callables own a
-//!   temporary lease that keeps their eval context alive through dispatch.
+//! - Runtime cells are opaque handles; return controls carry explicit cleanup obligations.
+//! - Foreign PCNTL callables hold a lease that keeps their eval context alive during dispatch.
 
 use crate::context::{pcntl_runtime::EvalPcntlContextLease, EvalReferenceTarget};
 use crate::value::RuntimeCellHandle;
+use super::expressions::EvalExprResult;
 
 /// Internal statement-control result used to propagate eval returns and loops.
 pub(super) enum EvalControl {
     None,
     ReturnVoid,
-    Return(RuntimeCellHandle),
+    Return(EvalExprResult),
     Throw(RuntimeCellHandle),
     Break,
     Continue,
@@ -104,6 +105,8 @@ pub(super) enum EvaluatedCallable {
     },
     ObjectMethod {
         object: RuntimeCellHandle,
+        /// True only for the reference acquired while normalizing an object array callback.
+        owns_receiver: bool,
         method: String,
         called_class: Option<String>,
         native_class: Option<String>,

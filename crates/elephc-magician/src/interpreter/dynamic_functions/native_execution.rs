@@ -17,9 +17,15 @@ pub(in crate::interpreter) fn eval_native_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args =
-        eval_native_function_call_args(&function, args, context, caller_scope, values)?;
-    eval_native_function_with_values(function, evaluated_args, context, values)
+    let callable_name = function.name().to_string();
+    context.push_function(callable_name);
+    let result = (|| {
+        let evaluated_args =
+            eval_native_function_call_args(&function, args, context, caller_scope, values)?;
+        eval_native_function_with_values(function, evaluated_args, context, values)
+    })();
+    context.pop_function();
+    result
 }
 
 /// Invokes a registered AOT function after its arguments have been bound and staged.
@@ -58,31 +64,17 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
     match (result, writeback) {
         (Err(status), _) | (_, Err(status)) => Err(status),
         (Ok(result), Ok(())) => {
-            eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
+            eval_declared_native_return_value(function.return_type(), Some(function.name()), None, result, context, values)
         }
     }
 }
 
 /// Builds the positional runtime array passed to descriptor-compatible native invokers.
-fn build_native_function_arg_array(
+pub(in crate::interpreter) fn build_native_function_arg_array(
     bound_args: &BoundNativeFunctionArgs,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let arg_array = values.array_new(bound_args.values.len())?;
-    for (index, value) in bound_args.values.iter().copied().enumerate() {
-        let index = match values.int(index as i64) {
-            Ok(index) => index,
-            Err(status) => {
-                values.release(arg_array)?;
-                return Err(status);
-            }
-        };
-        if let Err(status) = values.array_set(arg_array, index, value) {
-            values.release(arg_array)?;
-            return Err(status);
-        }
-    }
-    Ok(arg_array)
+    values.argument_array(&bound_args.values)
 }
 
 /// Releases retained raw native-function by-reference staging slots without writeback.

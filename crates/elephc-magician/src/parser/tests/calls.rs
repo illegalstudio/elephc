@@ -51,6 +51,18 @@ fn parse_fragment_accepts_call_expression_source() {
         }))]
     );
 }
+
+/// Verifies a leading strict-types declaration is retained as eval-file metadata.
+#[test]
+fn parse_fragment_records_strict_types_declaration() {
+    let program = parse_fragment(b"declare(strict_types=1); return 1;")
+        .expect("fragment should parse");
+    assert!(program.strict_types());
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1)) ))]
+    );
+}
 /// Verifies include and require constructs parse as expressions with path metadata.
 #[test]
 fn parse_fragment_accepts_include_require_expression_source() {

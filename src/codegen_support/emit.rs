@@ -47,6 +47,8 @@ pub struct Emitter {
     /// Only ELF splits text per symbol; Mach-O keeps one flat `__text`, so this
     /// stays `None` there and reopening is a no-op.
     current_text_section: Option<String>,
+    /// Monotonic id used to make inline/composable control-flow labels unique.
+    next_local_label_id: u64,
 }
 
 impl Emitter {
@@ -61,7 +63,15 @@ impl Emitter {
             dead_strip: false,
             internal_labels: HashSet::new(),
             current_text_section: None,
+            next_local_label_id: 0,
         }
+    }
+
+    /// Allocates one label name that cannot collide with another emitted fragment.
+    pub fn unique_local_label(&mut self, prefix: &str) -> String {
+        let id = self.next_local_label_id;
+        self.next_local_label_id = self.next_local_label_id.wrapping_add(1);
+        format!("__elephc_{prefix}_{id}")
     }
 
     /// Returns a new emitter configured for position-independent data

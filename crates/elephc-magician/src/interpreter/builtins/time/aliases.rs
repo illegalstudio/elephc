@@ -36,11 +36,32 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if eval_date_alias_key(name).is_none() {
+    let Some(alias) = eval_date_alias_key(name) else {
+        return Ok(None);
+    };
+    // Named mktime/gmmktime calls belong to the shared builtin binder. Decide that before
+    // evaluating any expression so side effects are never repeated by the fallback path.
+    if matches!(alias.as_str(), "mktime" | "gmmktime")
+        && args.iter().any(|arg| arg.name().is_some())
+    {
         return Ok(None);
     }
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    eval_date_procedural_alias_with_evaluated_args(name, evaluated_args, context, values)
+    let mut owners = Vec::new();
+    let mut result = (|| {
+        let evaluated_args = eval_call_arg_values_with_temporaries(
+            args, context, scope, values, Some(&mut owners),
+        )?;
+        eval_date_procedural_alias_with_evaluated_args(name, evaluated_args, context, values)
+    })();
+    let returned = result.as_ref().ok().copied().flatten();
+    for owner in owners {
+        if returned == Some(owner) { continue; }
+        let cleanup = eval_release_value(context, values, owner);
+        if result.is_ok() {
+            if let Err(status) = cleanup { result = Err(status); }
+        }
+    }
+    result
 }
 
 /// Attempts to execute one procedural date/time alias from positional runtime values.
@@ -75,10 +96,11 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_with_evaluated_args(
     if eval_date_alias_should_fall_back_to_builtin(&name, &evaluated_args) {
         return Ok(None);
     }
-    let args = positional_evaluated_arg_values(evaluated_args)?;
+    let args = bind_evaluated_builtin_args(&name, evaluated_args, context, values)?;
     let result = eval_date_alias_result(&name, args, context, values)?;
     Ok(Some(result))
 }
+
 
 /// Dispatches a normalized alias name to the equivalent runtime operation.
 fn eval_date_alias_result(
@@ -90,9 +112,17 @@ fn eval_date_alias_result(
     match name {
         "idate" => eval_idate_alias(args, context, values),
         "mktime" | "gmmktime" => eval_mktime_alias(name, args, context, values),
-        "date_create" => eval_new_datetime_alias("DateTime", args, context, values),
+        "date_create" => {
+            eval_static_alias("DateTime", "__elephc_date_create", args, context, values)
+        }
         "date_create_immutable" => {
-            eval_new_datetime_alias("DateTimeImmutable", args, context, values)
+            eval_static_alias(
+                "DateTimeImmutable",
+                "__elephc_date_create",
+                args,
+                context,
+                values,
+            )
         }
         "date_create_from_format" => {
             eval_static_alias("DateTime", "createFromFormat", args, context, values)
@@ -165,7 +195,9 @@ fn eval_date_alias_result(
         }
         "strftime" => eval_strftime_alias(false, args, context, values),
         "gmstrftime" => eval_strftime_alias(true, args, context, values),
-        "timezone_open" => eval_new_datetime_alias("DateTimeZone", args, context, values),
+        "timezone_open" => eval_procedural_static_alias(
+            "DateTimeZone", "__elephc_timezone_open", args, context, values,
+        ),
         "timezone_identifiers_list" => eval_timezone_identifiers_alias(args, context, values),
         "timezone_location_get" => eval_method_alias(args, 0, "getLocation", &[], context, values),
         "timezone_transitions_get" => {
@@ -176,25 +208,31 @@ fn eval_date_alias_result(
         }
         "timezone_version_get" => eval_timezone_version_alias(args, values),
         "date_interval_create_from_date_string" => {
-            eval_static_alias("DateInterval", "createFromDateString", args, context, values)
+            eval_procedural_static_alias("DateInterval", "__elephc_create_from_date_string", args, context, values)
         }
-        "date_diff" => eval_method_alias_tail(args, 0, "diff", context, values),
-        "date_format" => eval_method_alias(args, 0, "format", &[1], context, values),
+        "date_diff" => eval_static_alias("DateTime", "__elephc_date_diff", args, context, values),
+        "date_format" => eval_static_alias("DateTime", "__elephc_date_format", args, context, values),
         "date_add" => eval_method_alias(args, 0, "add", &[1], context, values),
         "date_sub" => eval_method_alias(args, 0, "sub", &[1], context, values),
-        "date_modify" => eval_method_alias(args, 0, "modify", &[1], context, values),
-        "date_timestamp_get" => eval_method_alias(args, 0, "getTimestamp", &[], context, values),
+        "date_modify" => eval_procedural_static_alias(
+            "DateTime", "__elephc_date_modify", args, context, values,
+        ),
+        "date_timestamp_get" => eval_static_alias("DateTime", "__elephc_date_timestamp_get", args, context, values),
         "date_timestamp_set" => {
-            eval_method_alias(args, 0, "setTimestamp", &[1], context, values)
+            let line = values.int(context.call_site().2)?;
+            let mut args = args;
+            args.push(line);
+            let result = eval_static_alias("DateTime", "__elephc_date_timestamp_set", args, context, values);
+            finish_evaluated_result(EvalExprResult { value: line, owned: true }, result, context, values)
         }
-        "date_timezone_get" => eval_method_alias(args, 0, "getTimezone", &[], context, values),
+        "date_timezone_get" => eval_static_alias("DateTime", "__elephc_date_timezone_get", args, context, values),
         "date_timezone_set" => {
-            eval_method_alias(args, 0, "setTimezone", &[1], context, values)
+            eval_static_alias("DateTime", "__elephc_date_timezone_set", args, context, values)
         }
-        "date_offset_get" => eval_method_alias(args, 0, "getOffset", &[], context, values),
-        "date_date_set" => eval_method_alias(args, 0, "setDate", &[1, 2, 3], context, values),
-        "date_isodate_set" => eval_method_alias_tail(args, 0, "setISODate", context, values),
-        "date_time_set" => eval_method_alias_tail(args, 0, "setTime", context, values),
+        "date_offset_get" => eval_static_alias("DateTime", "__elephc_date_offset_get", args, context, values),
+        "date_date_set" => eval_static_alias("DateTime", "__elephc_date_date_set", args, context, values),
+        "date_isodate_set" => eval_static_alias("DateTime", "__elephc_date_isodate_set", args, context, values),
+        "date_time_set" => eval_static_alias("DateTime", "__elephc_date_time_set", args, context, values),
         "date_interval_format" => eval_method_alias(args, 0, "format", &[1], context, values),
         "timezone_name_get" => eval_method_alias(args, 0, "getName", &[], context, values),
         "timezone_offset_get" => eval_method_alias(args, 0, "getOffset", &[1], context, values),
@@ -202,20 +240,37 @@ fn eval_date_alias_result(
     }
 }
 
-/// Implements `idate()` as `intval(date(...))`.
+/// Implements idate's byte-token validation, signed year remainder and C-int result.
 fn eval_idate_alias(
     args: Vec<RuntimeCellHandle>,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = match args.as_slice() {
-        [format] => eval_date_result("date", *format, None, context, values),
-        [format, timestamp] => eval_date_result("date", *format, Some(*timestamp), context, values),
-        _ => return Err(EvalStatus::RuntimeFatal),
-    }?;
-    let cast = values.cast_int(result);
-    values.release(result)?;
-    cast
+    if !(1..=2).contains(&args.len()) { return Err(EvalStatus::RuntimeFatal); }
+    let format = values.string_bytes(args[0])?;
+    if format.len() != 1 {
+        values.warning("\nWarning: idate(): idate format is one char\n")?;
+        return values.bool_value(false);
+    }
+    let token = format[0];
+    if !b"BdjNGHghIiLmntosUWwYyzZ".contains(&token) {
+        values.warning("\nWarning: idate(): Unrecognized date format token\n")?;
+        return values.bool_value(false);
+    }
+    let timestamp = eval_optional_timestamp(args.get(1).copied(), values)?;
+    let timezone = eval_request_timezone(context, values)?;
+    let numeric_token = if token == b'y' { b'Y' } else { token };
+    let formatted = elephc_tz::format_timestamp_php(timestamp, &timezone, &[numeric_token], true)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let mut value = std::str::from_utf8(&formatted).map_err(|_| EvalStatus::RuntimeFatal)?
+        .parse::<i64>().map_err(|_| EvalStatus::RuntimeFatal)?;
+    if token == b'y' { value %= 100; }
+    let value = i64::from(value as i32);
+    if value == -1 {
+        values.warning("\nWarning: idate(): Unrecognized date format token\n")?;
+        return values.bool_value(false);
+    }
+    values.int(value)
 }
 
 /// Implements `mktime()` and `gmmktime()` optional argument filling.
@@ -225,45 +280,7 @@ fn eval_mktime_alias(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if args.len() > 6 {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let mut full = Vec::with_capacity(6);
-    let mut temps = Vec::new();
-    let date_name = if name == "gmmktime" { "gmdate" } else { "date" };
-    for (index, spec) in ["G", "i", "s", "n", "j", "Y"].into_iter().enumerate() {
-        if let Some(arg) = args.get(index) {
-            full.push(*arg);
-        } else {
-            let default = eval_current_date_part_int(date_name, spec, context, values)?;
-            temps.push(default);
-            full.push(default);
-        }
-    }
-    let result = eval_mktime_result(
-        name, full[0], full[1], full[2], full[3], full[4], full[5], context, values,
-    );
-    for temp in temps {
-        values.release(temp)?;
-    }
-    result
-}
-
-/// Constructs one native DateTime-family object and runs its constructor.
-fn eval_new_datetime_alias(
-    class_name: &str,
-    args: Vec<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let object = values.new_object(class_name)?;
-    if let Err(status) =
-        eval_native_constructor_with_evaluated_args(class_name, object, positional_args(args), context, values)
-    {
-        let _ = values.release(object);
-        return Err(status);
-    }
-    Ok(object)
+    eval_mktime_result_with_defaults(name, &args, context, values)
 }
 
 /// Calls one native/static method alias with positional arguments.
@@ -274,7 +291,33 @@ fn eval_static_alias(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_static_method_call_result(class_name, method_name, positional_args(args), context, values)
+    eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
+        class_name,
+        method_name,
+        positional_args(args),
+        Some(class_name),
+        Some(class_name),
+        context,
+        values,
+    )
+}
+
+/// Calls the native procedural wrapper with its hidden source-location argument.
+fn eval_procedural_static_alias(
+    class_name: &str,
+    method_name: &str,
+    mut args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let line = values.int(0)?;
+    args.push(line);
+    let result = eval_static_alias(class_name, method_name, args, context, values);
+    let released = values.release(line);
+    match result {
+        Ok(value) => { released?; Ok(value) }
+        Err(error) => Err(error),
+    }
 }
 
 /// Calls the injected list-identifiers prelude function, falling back to the
@@ -471,11 +514,14 @@ fn eval_date_sunfunc_alias(
         return Err(EvalStatus::RuntimeFatal);
     }
     let which = values.int(if sunset { 1 } else { 0 })?;
-    let mut call_args = Vec::with_capacity(args.len() + 1);
+    let line = values.int(0)?;
+    let mut call_args = Vec::with_capacity(args.len() + 2);
     call_args.push(which);
+    call_args.push(line);
     call_args.extend(args);
     let result = eval_static_alias("DateTime", "__elephc_date_sunfunc", call_args, context, values);
     values.release(which)?;
+    values.release(line)?;
     result
 }
 
@@ -521,7 +567,7 @@ fn eval_timezone_version_alias(
 }
 
 /// Evaluates one current date part as an integer runtime cell.
-fn eval_current_date_part_int(
+pub(in crate::interpreter) fn eval_current_date_part_int(
     date_name: &str,
     spec: &str,
     context: &ElephcEvalContext,

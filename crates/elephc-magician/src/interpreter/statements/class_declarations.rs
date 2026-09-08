@@ -28,7 +28,9 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let class = expand_eval_class_traits(class, context)?.with_readonly_properties();
+    let class = expand_eval_class_traits(class, context)?
+        .with_readonly_properties()
+        .with_direct_method_strict_types(context.strict_types());
     let class = &class;
     validate_eval_class_modifiers(class, context, values)?;
     let native_parent = validate_eval_class_parent(class, context, values)?;

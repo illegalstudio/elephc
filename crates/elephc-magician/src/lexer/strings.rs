@@ -8,8 +8,8 @@
 //! - `super::scan::Lexer::next_tokens()` for every `"` encountered in a fragment.
 //!
 //! Key details:
-//! - Escape handling covers PHP's simple, hexadecimal, and octal forms; `\$` still
-//!   yields a literal `$` and never interpolates.
+//! - Simple, hexadecimal and octal escapes retain PHP bytes, including non-UTF-8 values.
+//! - Escaped dollars remain literal; compile warnings keep their source ordering.
 //! - Every synthetic token carries the line of the opening quote, keeping `__LINE__`
 //!   stable across multi-line literals.
 //! - PHP simple syntax allows exactly one `[offset]` or `->prop` after `$name`; anything
@@ -29,89 +29,123 @@ impl Lexer<'_> {
     pub(super) fn lex_double_quoted(&mut self, line: i64) -> Result<Vec<Token>, EvalParseError> {
         self.bump_char();
         let mut tokens: Vec<Token> = Vec::new();
-        let mut current = String::new();
+        let mut warnings = Vec::new();
+        let mut current = Vec::new();
         let mut has_interpolation = false;
         let mut terminated = false;
 
-        while let Some(ch) = self.peek_char() {
-            if ch == '"' {
-                self.bump_char();
-                terminated = true;
-                break;
-            }
-            match ch {
-                '\\' => {
+        let scanned = (|| {
+            while let Some(ch) = self.peek_char() {
+                if ch == '"' {
                     self.bump_char();
-                    let Some(escaped) = self.peek_char() else {
-                        return Err(EvalParseError::UnterminatedString);
-                    };
-                    self.bump_char();
-                    self.push_double_quoted_escape(escaped, &mut current);
+                    terminated = true;
+                    break;
                 }
-                // Complex interpolation: `{` is only special when a `$` follows it.
-                '{' if self.peek_next_char() == Some('$') => {
-                    self.bump_char();
-                    let inner = self.capture_braced_expr()?;
-                    let part = tokenize_interpolated_fragment(&inner, line)?;
-                    has_interpolation = true;
-                    push_interp_part(&mut tokens, &mut current, part, line);
-                }
-                '$' => {
-                    // Legacy `${expr}` form: PHP 8.2 deprecates it but still evaluates it.
-                    if self.peek_next_char() == Some('{') {
+                match ch {
+                    '\\' => {
                         self.bump_char();
+                        let Some(escaped) = self.peek_char() else {
+                            return Err(EvalParseError::UnterminatedString);
+                        };
                         self.bump_char();
-                        let inner_raw = self.capture_braced_expr()?;
-                        // Re-prepend the `$` so the captured text is a valid expression.
-                        let inner = format!("${inner_raw}");
-                        let part = tokenize_interpolated_fragment(&inner, line)?;
+                        if ('0'..='7').contains(&escaped) {
+                            let mut byte = escaped as u16 - '0' as u16;
+                            let mut digits = escaped.to_string();
+                            for _ in 0..2 {
+                                let Some(next @ '0'..='7') = self.peek_char() else { break; };
+                                byte = byte * 8 + next as u16 - '0' as u16;
+                                digits.push(next);
+                                self.bump_char();
+                            }
+                            if byte > 255 {
+                                warnings.push(Token::new(TokenKind::CompileWarning(crate::eval_ir::EvalCompileWarning {
+                                    message: format!("Octal escape sequence overflow \\{digits} is greater than \\377"),
+                                    line: self.line,
+                                }), self.line));
+                            }
+                            current.push(byte as u8);
+                        } else {
+                            self.push_double_quoted_escape(escaped, &mut current);
+                        }
+                    }
+                    // Complex interpolation: `{` is only special when a `$` follows it.
+                    '{' if self.peek_next_char() == Some('$') => {
+                        self.bump_char();
+                        let warning_line = self.line;
+                        let inner = self.capture_braced_expr()?;
+                        let part = tokenize_interpolated_fragment(&inner, line, warning_line)?;
                         has_interpolation = true;
-                        push_interp_part(&mut tokens, &mut current, part, line);
-                        continue;
+                        push_interp_part(&mut tokens, &mut current, part, line, &mut warnings);
                     }
-                    self.bump_char();
-                    // A PHP variable name may not start with a digit, so `"$2-$1"` is
-                    // literal text — measured against PHP 8.5.6, which prints `$2-$1`.
-                    // This matters well beyond cosmetics: `preg_replace()` back-references
-                    // are written exactly that way inside double-quoted replacements.
-                    let name = if self.peek_char().is_some_and(is_ident_start) {
-                        self.lex_ident()
-                    } else {
-                        String::new()
-                    };
-                    if name.is_empty() {
-                        current.push('$');
-                        continue;
+                    '$' => {
+                        // Legacy `${expr}` form: PHP 8.2 deprecates it but still evaluates it.
+                        if self.peek_next_char() == Some('{') {
+                            self.bump_char();
+                            self.bump_char();
+                            let warning_line = self.line;
+                            let inner_raw = self.capture_braced_expr()?;
+                            // Re-prepend the `$` so the captured text is a valid expression.
+                            let inner = format!("${inner_raw}");
+                            let part = tokenize_interpolated_fragment(&inner, line, warning_line)?;
+                            has_interpolation = true;
+                            push_interp_part(&mut tokens, &mut current, part, line, &mut warnings);
+                            continue;
+                        }
+                        self.bump_char();
+                        // A PHP variable name may not start with a digit, so `"$2-$1"` is
+                        // literal text — measured against PHP 8.5.6, which prints `$2-$1`.
+                        // This matters well beyond cosmetics: `preg_replace()` back-references
+                        // are written exactly that way inside double-quoted replacements.
+                        let name = if self.peek_char().is_some_and(is_ident_start) {
+                            self.lex_ident()
+                        } else {
+                            String::new()
+                        };
+                        if name.is_empty() {
+                            current.push(b'$');
+                            continue;
+                        }
+                        has_interpolation = true;
+                        let mut part = vec![Token::new(TokenKind::DollarIdent(name), line)];
+                        self.append_simple_access(&mut part, line)?;
+                        push_interp_part(&mut tokens, &mut current, part, line, &mut warnings);
                     }
-                    has_interpolation = true;
-                    let mut part = vec![Token::new(TokenKind::DollarIdent(name), line)];
-                    self.append_simple_access(&mut part, line)?;
-                    push_interp_part(&mut tokens, &mut current, part, line);
-                }
-                _ => {
-                    current.push(ch);
-                    self.bump_char();
+                    _ => {
+                        let mut bytes = [0; 4];
+                        current.extend_from_slice(ch.encode_utf8(&mut bytes).as_bytes());
+                        self.bump_char();
+                    }
                 }
             }
-        }
 
-        if !terminated {
-            return Err(EvalParseError::UnterminatedString);
-        }
+            if !terminated {
+                return Err(EvalParseError::UnterminatedString);
+            }
+            Ok(())
+        })();
+
+        scanned.map_err(|error: EvalParseError| {
+            error.with_compile_warnings(warnings.iter().filter_map(|token| match token.kind() {
+                TokenKind::CompileWarning(warning) => Some(warning.clone()),
+                _ => None,
+            }).collect())
+        })?;
 
         if !has_interpolation {
-            return Ok(vec![Token::new(TokenKind::String(current), line)]);
+            warnings.push(Token::new(literal_token(current), line));
+            return Ok(warnings);
         }
 
         if !current.is_empty() {
             tokens.push(Token::new(TokenKind::Dot, line));
-            tokens.push(Token::new(TokenKind::String(current), line));
+            tokens.push(Token::new(literal_token(current), line));
         }
 
         let mut result = vec![Token::new(TokenKind::LParen, line)];
         result.extend(tokens);
         result.push(Token::new(TokenKind::RParen, line));
-        Ok(result)
+        warnings.extend(result);
+        Ok(warnings)
     }
 
     /// Appends the single `[offset]` or `->prop` access PHP's simple interpolation
@@ -257,52 +291,47 @@ impl Lexer<'_> {
         }
     }
 
-    /// Appends one PHP double-quoted escape, consuming any hexadecimal or octal tail.
-    fn push_double_quoted_escape(&mut self, escaped: char, out: &mut String) {
+    /// Appends simple and hexadecimal PHP escapes as bytes; octal warnings are handled by the scanner.
+    fn push_double_quoted_escape(&mut self, escaped: char, out: &mut Vec<u8>) {
         match escaped {
-            'n' => out.push('\n'),
-            'r' => out.push('\r'),
-            't' => out.push('\t'),
-            'v' => out.push('\x0b'),
-            'e' => out.push('\x1b'),
-            'f' => out.push('\x0c'),
-            '\\' => out.push('\\'),
-            '"' => out.push('"'),
-            '$' => out.push('$'),
+            'n' => out.push(b'\n'),
+            'r' => out.push(b'\r'),
+            't' => out.push(b'\t'),
+            'v' => out.push(0x0b),
+            'e' => out.push(0x1b),
+            'f' => out.push(0x0c),
+            '\\' => out.push(b'\\'),
+            '"' => out.push(b'"'),
+            '$' => out.push(b'$'),
             'x' | 'X' => {
-                let mut digits = String::new();
-                while digits.len() < 2
-                    && self.peek_char().is_some_and(|ch| ch.is_ascii_hexdigit())
-                {
-                    digits.push(self.peek_char().expect("hex digit was checked"));
+                let mut byte = 0_u8;
+                let mut count = 0;
+                while count < 2 {
+                    let Some(digit) = self.peek_char().and_then(|ch| ch.to_digit(16)) else { break; };
+                    byte = byte * 16 + digit as u8;
+                    count += 1;
                     self.bump_char();
                 }
-                if digits.is_empty() {
-                    out.push('\\');
-                    out.push(escaped);
+                if count == 0 {
+                    out.extend_from_slice(&[b'\\', escaped as u8]);
                 } else {
-                    let byte = u8::from_str_radix(&digits, 16)
-                        .expect("one or two checked hexadecimal digits must parse");
-                    out.push(char::from(byte));
+                    out.push(byte);
                 }
-            }
-            first @ '0'..='7' => {
-                let mut digits = String::from(first);
-                while digits.len() < 3
-                    && self.peek_char().is_some_and(|ch| matches!(ch, '0'..='7'))
-                {
-                    digits.push(self.peek_char().expect("octal digit was checked"));
-                    self.bump_char();
-                }
-                let byte = u16::from_str_radix(&digits, 8)
-                    .expect("checked octal digits must parse") as u8;
-                out.push(char::from(byte));
             }
             other => {
-                out.push('\\');
-                out.push(other);
+                out.push(b'\\');
+                let mut bytes = [0; 4];
+                out.extend_from_slice(other.encode_utf8(&mut bytes).as_bytes());
             }
         }
+    }
+}
+
+/// Preserves binary literals while keeping the existing UTF-8 token shape where possible.
+fn literal_token(bytes: Vec<u8>) -> TokenKind {
+    match String::from_utf8(bytes) {
+        Ok(text) => TokenKind::String(text),
+        Err(error) => TokenKind::ByteString(error.into_bytes()),
     }
 }
 
@@ -313,19 +342,26 @@ impl Lexer<'_> {
 /// chain is string-typed exactly like PHP's rule that a double-quoted literal is a string.
 fn push_interp_part(
     tokens: &mut Vec<Token>,
-    current: &mut String,
-    part: Vec<Token>,
+    current: &mut Vec<u8>,
+    mut part: Vec<Token>,
     line: i64,
+    warnings: &mut Vec<Token>,
 ) {
+    part.retain(|token| {
+        if matches!(token.kind(), TokenKind::CompileWarning(_)) {
+            warnings.push(token.clone());
+            false
+        } else { true }
+    });
     if tokens.is_empty() {
         tokens.push(Token::new(
-            TokenKind::String(std::mem::take(current)),
+            literal_token(std::mem::take(current)),
             line,
         ));
     } else if !current.is_empty() {
         tokens.push(Token::new(TokenKind::Dot, line));
         tokens.push(Token::new(
-            TokenKind::String(std::mem::take(current)),
+            literal_token(std::mem::take(current)),
             line,
         ));
     }
@@ -341,14 +377,28 @@ fn push_interp_part(
 fn tokenize_interpolated_fragment(
     inner: &str,
     line: i64,
+    warning_line: i64,
 ) -> Result<Vec<Token>, EvalParseError> {
-    let fragment = tokenize(inner)?;
+    let fragment = tokenize(inner).map_err(|mut error| {
+        if let EvalParseError::WithCompileWarnings { warnings, .. } = &mut error {
+            for warning in warnings {
+                warning.line += warning_line - 1;
+            }
+        }
+        error
+    })?;
     let mut part = vec![Token::new(TokenKind::LParen, line)];
     part.extend(
         fragment
             .into_iter()
             .filter(|token| *token.kind() != TokenKind::Eof)
-            .map(|token| Token::new(token.into_kind(), line)),
+            .map(|token| {
+                let mut kind = token.into_kind();
+                if let TokenKind::CompileWarning(warning) = &mut kind {
+                    warning.line += warning_line - 1;
+                }
+                Token::new(kind, line)
+            }),
     );
     part.push(Token::new(TokenKind::RParen, line));
     Ok(part)

@@ -2,7 +2,7 @@
 title: "exif_thumbnail() — internals"
 description: "Compiler internals for exif_thumbnail(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 449
+  order: 450
 ---
 
 ## `exif_thumbnail()` — internals

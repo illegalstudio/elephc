@@ -9,10 +9,8 @@
 //! - Frame offsets and stack alignment are shared contracts with local collection and call materialization.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-#[cfg(test)]
 use crate::types::PhpType;
 
-#[cfg(test)]
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 use super::registers::{frame_pointer_reg, is_float_register};
 
@@ -389,7 +387,6 @@ pub fn emit_store_zero_to_local_slot(emitter: &mut Emitter, offset: usize) {
 /// Float values use the float result register; strings use string_result_regs (pointer + length);
 /// scalars use the integer result register. `return_offset` is the slot for the primary value; string
 /// length is stored 8 bytes before it.
-#[cfg(test)]
 pub fn emit_preserve_return_value(
     emitter: &mut Emitter,
     return_ty: &PhpType,
@@ -413,7 +410,6 @@ pub fn emit_preserve_return_value(
 /// Restores the return value from a hidden frame slot after a tail-call or callback frame switch.
 /// Reverse of `emit_preserve_return_value`: loads based on `return_ty` codegen repr into the
 /// appropriate result registers.
-#[cfg(test)]
 pub fn emit_restore_return_value(emitter: &mut Emitter, return_ty: &PhpType, return_offset: usize) {
     match return_ty.codegen_repr() {
         PhpType::Float => {

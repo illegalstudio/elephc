@@ -340,10 +340,26 @@ impl Checker {
                             // rest of the program reaching storage the environment no longer knows.
                             // Lowering refuses to abandon the same slots, from the same collected
                             // set — see `Checker::top_level_binding_is_program_global`.
-                            if env.contains_key(var)
+                            let kills_binding = env.contains_key(var)
                                 && self.local_binding_is_killable(var)
+                                && !self.top_level_binding_is_program_global(var);
+                            // A null-storing unset makes the final slot Mixed. Record that
+                            // before EIR lowering so earlier string reads stay boxed instead
+                            // of silently allocating untracked detached string copies.
+                            if env.get(var).is_some_and(|ty| ty.codegen_repr() == PhpType::Str)
+                                && (!kills_binding || !arg.span.identifies_a_node())
+                                && !self.active_ref_params.contains(var)
+                                && !self.ref_aliased_locals.contains(var)
+                                && !self.active_globals.contains(var)
+                                && !self.static_local_names.contains(var)
+                                && !self.extern_globals.contains_key(var)
                                 && !self.top_level_binding_is_program_global(var)
                             {
+                                self.boxed_string_locals.insert((
+                                    self.current_loop_storage_scope.clone(), var.clone(),
+                                ));
+                            }
+                            if kills_binding {
                                 env.remove(var);
                                 self.local_binding_depth.remove(var);
                                 self.clear_local_binding_metadata(var);
@@ -588,6 +604,23 @@ impl Checker {
     /// Marks the active statement stream as having crossed eval and widens local facts.
     fn mark_eval_barrier(&mut self, env: &mut TypeEnv) {
         self.eval_barrier_active = true;
+        // Eval widens visible slots for the whole frame, including reads before
+        // the call. Declare string boxing now, before EIR ownership is lowered,
+        // rather than introducing allocating string conversions in codegen.
+        for (name, ty) in env.iter() {
+            if ty.codegen_repr() == PhpType::Str
+                && !self.active_ref_params.contains(name)
+                && !self.ref_aliased_locals.contains(name)
+                && !self.active_globals.contains(name)
+                && !self.static_local_names.contains(name)
+                && !self.extern_globals.contains_key(name)
+                && !self.top_level_binding_is_program_global(name)
+            {
+                self.boxed_string_locals.insert((
+                    self.current_loop_storage_scope.clone(), name.clone(),
+                ));
+            }
+        }
         let local_names = env.keys().cloned().collect::<Vec<_>>();
         for ty in env.values_mut() {
             *ty = PhpType::Mixed;

@@ -314,6 +314,11 @@ pub enum StmtKind {
         property: String,
         value: Expr,
     },
+    DynamicPropertyArrayPush {
+        object: Box<Expr>,
+        property: Box<Expr>,
+        value: Expr,
+    },
     PropertyArrayAssign {
         object: Box<Expr>,
         property: String,

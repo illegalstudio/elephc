@@ -1245,6 +1245,12 @@ pub(super) fn emit_interface_dispatch_call(
     external_done: Option<&str>,
 ) -> Result<PhpType> {
     let normalized = interface_name.trim_start_matches('\\');
+    if let Some(signature) = crate::types::date_method_dispatch::concrete_date_interface_method(
+        &ctx.module.class_infos, normalized, method_key,
+    ).filter(|_| ctx.module.interface_infos.get(normalized)
+        .is_some_and(|info| !info.methods.contains_key(method_key))) {
+        return super::emit_concrete_date_interface_dispatch(ctx, method_key, signature, external_done);
+    }
     let interface_info = ctx
         .module
         .interface_infos

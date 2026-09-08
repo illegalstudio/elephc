@@ -19,6 +19,7 @@ mod corpus;
 mod effects;
 mod exhaustive;
 mod ownership;
+mod try_handler_cleanup;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
 fn lower_source(source: &str) -> crate::ir::Module {

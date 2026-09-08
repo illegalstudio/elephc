@@ -18,9 +18,16 @@
 //!   written, and return the slice pointer/length in the string result registers
 //!   (`x1`/`x2` on AArch64, `rax`/`rdx` on x86_64).
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::data::{
+    SERIALIZE_CLOSURE_ERROR, SERIALIZE_MAGIC_RETURN_TYPE_ERROR,
+};
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
 
 /// Emits `__rt_serialize_value`, the tag-dispatching serializer, and the
 /// `__rt_serialize_mixed` wrapper that unpacks a boxed Mixed cell first.
@@ -33,9 +40,11 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 pub(crate) fn emit_serialize(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_serialize_x86_64(emitter);
-        return;
+    } else {
+        emit_serialize_aarch64(emitter);
     }
-    emit_serialize_aarch64(emitter);
+    emit_serialize_closure_error(emitter);
+    emit_serialize_magic_return_type_error(emitter);
 }
 
 /// AArch64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
@@ -81,6 +90,11 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #0");                                          // canonical null has no low payload word
     emitter.instruction("mov x2, #0");                                          // canonical null has no high payload word
     emitter.label("__rt_serialize_value_input_ready");
+    emitter.instruction("cmp x0, #11");                                         // inline TaggedScalar descriptor?
+    emitter.instruction("b.ne __rt_serialize_value_normalized");                // ordinary tags already have canonical payload words
+    emitter.instruction("mov x0, x2");                                          // use the slot's per-value int/null runtime tag
+    emitter.instruction("mov x2, xzr");                                         // tagged scalar payloads have no third word
+    emitter.label("__rt_serialize_value_normalized");
 
     // -- set up stack frame --
     // [sp+0]=output start, [sp+8]=write pos, [sp+16]=tag, [sp+24]=lo, [sp+32]=hi
@@ -133,9 +147,11 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_serialize_arr_object");                      // serialize objects as O:len:"Class":n:{...}
     emitter.instruction("cmp x0, #7");                                          // is the value a boxed nested Mixed?
     emitter.instruction("b.eq __rt_serialize_nested_mixed");                    // unbox and re-dispatch
+    emitter.instruction("cmp x0, #10");                                         // is the value a non-serializable Closure descriptor?
+    emitter.instruction("b.eq __rt_serialize_closure_error_branch");           // branch locally before the external-style runtime entry point
     emitter.instruction("cmp x0, #8");                                          // is the value null?
     emitter.instruction("b.eq __rt_serialize_null");                            // serialize null as N;
-    // Tag 10 (callables) is not serializable here and degrades to null.
+    // Tag 10 already branched to the Closure serialization exception above.
     emitter.instruction("b __rt_serialize_null");                               // unsupported tags serialize as null
 
     // -- indexed array / hash / nested mixed: delegate, then resume finalize --
@@ -164,6 +180,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, x10");                                   // recompute the running write pointer
     emitter.instruction("str x11, [sp, #8]");                                   // persist the write pointer for the finalizer
     emitter.instruction("b __rt_serialize_done");                               // finish the serialized value
+
+    emitter.label("__rt_serialize_closure_error_branch");
+    emitter.instruction("b __rt_serialize_closure_error");                      // unconditional branches may target the global runtime helper
 
     // -- null: "N;" --
     emitter.label("__rt_serialize_null");
@@ -562,7 +581,10 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save the class id
     emitter.instruction("mov x10, #-2");                                        // synthetic __PHP_Incomplete_Class id
     emitter.instruction("cmp x1, x10");                                         // is this a semantic __PHP_Incomplete_Class payload?
-    emitter.instruction("b.eq __rt_serialize_object_incomplete");               // serialize its retained class name and property hash
+    let complete_object = emitter.unique_local_label("serialize_object_complete");
+    emitter.instruction(&format!("b.ne {complete_object}"));                    // keep ordinary objects on the local serialization path
+    emitter.instruction("b __rt_serialize_object_incomplete");                  // serialize the incomplete object through the shared continuation
+    emitter.label(&complete_object);
     emit_symbol_address(emitter, "x9", "_class_name_entries");
     emitter.instruction("add x10, x9, x1, lsl #4");                             // entry = base + class_id*16
     emitter.instruction("ldr x11, [x10]");                                      // class name pointer
@@ -582,7 +604,10 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the class id
     emit_symbol_address(emitter, "x9", "_class_serialize_ptrs");
     emitter.instruction("ldr x10, [x9, x1, lsl #3]");                           // __serialize method symbol (0 if none)
-    emitter.instruction("cbz x10, __rt_serialize_object_sleep");                // no __serialize → try __sleep, else property walk
+    let has_serialize = emitter.unique_local_label("serialize_object_has_serialize");
+    emitter.instruction(&format!("cbnz x10, {has_serialize}"));                 // keep __serialize dispatch on the local object path
+    emitter.instruction("b __rt_serialize_object_sleep");                       // try __sleep or the property walk through the shared continuation
+    emitter.label(&has_serialize);
     emitter.instruction("str x10, [sp, #16]");                                  // park the __serialize target across the call
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // capture the write offset just after the O:...:\"name\": prefix
@@ -595,22 +620,165 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved post-prefix offset
     emitter.instruction("str x10, [x9]");                                       // rewind, discarding any concat scratch the method left
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the returned array pointer
-    emitter.instruction("ldur x9, [x0, #-8]");                                  // load its heap kind word
-    emitter.instruction("and x9, x9, #0xff");                                   // isolate the heap kind (2=indexed, 3=hash)
-    emitter.instruction("cmp x9, #3");                                          // is the returned array a hash?
-    emitter.instruction("b.eq __rt_serialize_object_ser_hash");                 // hashes use the hash body emitter
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the indexed array pointer
-    emitter.instruction("bl __rt_serialize_indexed_body");                      // append <count>:{ i:K;<v>... }
-    emitter.instruction("b __rt_serialize_object_magic_done");                  // finish the object
-    emitter.label("__rt_serialize_object_ser_hash");
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the hash pointer
-    emitter.instruction("bl __rt_serialize_hash_body");                         // append <count>:{ <key><val>... }
-    emitter.label("__rt_serialize_object_magic_done");
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the concrete object receiver
+    emitter.instruction("bl __rt_serialize_magic_result_body");                 // append and release the returned __serialize array under its cleanup boundary
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // deallocate the object frame
     emitter.instruction("ret");                                                 // return with the object appended
 
-    emitter.label("__rt_serialize_object_incomplete");
+    // -- __rt_serialize_magic_result_body: append and release a returned __serialize array --
+    // x0=raw array/hash owner, x1=concrete object receiver
+    let magic_boundary_bytes = TRY_HANDLER_SLOT_SIZE + 32;
+    let magic_frame_link_offset = magic_boundary_bytes - 16;
+    let magic_result_offset = TRY_HANDLER_SLOT_SIZE;
+    let magic_receiver_offset = magic_result_offset + 8;
+    emitter.label_global("__rt_serialize_magic_result_body");
+    emitter.instruction(&format!("sub sp, sp, #{}", magic_boundary_bytes));     // reserve a complete handler record and stable raw-owner spills
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", magic_frame_link_offset)); // preserve the caller frame across the cleanup boundary
+    emitter.instruction(&format!("add x29, sp, #{}", magic_frame_link_offset)); // establish the magic-result cleanup frame
+    emitter.instruction(&format!("str x0, [sp, #{}]", magic_result_offset));    // publish the returned array owner before any throwing operation
+    emitter.instruction(&format!("str x1, [sp, #{}]", magic_receiver_offset));  // preserve the concrete receiver across the boundary
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction("str x10, [sp]");                                       // handler.next = prior native exception-handler head
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction("str x10, [sp, #8]");                                   // preserve the activation frame that survives this boundary
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+    emitter.instruction("mov x10, sp");                                         // materialize this helper's exception-handler record
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                      // catch Throwable control flow while the raw array owner is live
+    emitter.instruction("cbnz x0, __rt_serialize_magic_result_body_throw");     // clean the raw owner after a throwing append or body walk
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", magic_result_offset));    // reload the current raw array/hash owner
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", magic_receiver_offset));  // reload the concrete receiver for DateTime property merging
+    emitter.instruction("mov x2, xzr");                                         // ordinary serializer calls never force a parent-handler merge
+    emitter.instruction("bl __rt_date_magic_append_props");                     // append DateTime dynamic properties or pass through user overrides
+    emitter.instruction(&format!("str x0, [sp, #{}]", magic_result_offset));    // replace the owner after a possibly reallocating hash projection
+    emitter.instruction("ldur x9, [x0, #-8]");                                  // load the returned container's runtime kind
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate kind 2=indexed or kind 3=hash
+    emitter.instruction("cmp x9, #3");                                          // does the returned container use hash storage?
+    emitter.instruction("b.eq __rt_serialize_magic_result_body_hash");          // hashes need string/integer-key serialization
+    emitter.instruction("cmp x9, #2");                                          // is the returned container ordinary indexed array storage?
+    emitter.instruction("b.ne __rt_serialize_magic_result_body_invalid");       // reject every non-array heap kind before its layout is dereferenced
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", magic_result_offset));    // reload the indexed array owner
+    emitter.instruction("bl __rt_serialize_indexed_body");                      // append the indexed array body while the owner is protected
+    emitter.instruction("b __rt_serialize_magic_result_body_done");             // share release and boundary teardown after serialization
+    emitter.label("__rt_serialize_magic_result_body_hash");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", magic_result_offset));    // reload the hash owner
+    emitter.instruction("bl __rt_serialize_hash_body");                         // append the associative array body while the owner is protected
+    emitter.instruction("b __rt_serialize_magic_result_body_done");             // skip the invalid return-kind cleanup after a valid hash body
+    emitter.label("__rt_serialize_magic_result_body_invalid");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", magic_result_offset));    // reload the invalid raw return owner for deterministic release
+    emitter.instruction(&format!("str xzr, [sp, #{}]", magic_result_offset));   // clear ownership before decref so destructor control flow cannot retry it
+    emitter.instruction("bl __rt_decref_any");                                  // release the invalid published heap owner without assuming an array layout
+    emitter.instruction("ldr x10, [sp]");                                       // reload the previous native exception-handler head before the TypeError helper
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression before raising TypeError
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", magic_frame_link_offset)); // restore the caller frame before throwing the return-contract error
+    emitter.instruction(&format!("add sp, sp, #{}", magic_boundary_bytes));     // discard the helper boundary before TypeError propagation
+    emitter.instruction("b __rt_serialize_magic_return_type_error");            // raise PHP's __serialize array-return TypeError
+    emitter.label("__rt_serialize_magic_result_body_done");
+    emitter.instruction("ldr x10, [sp]");                                       // reload the previous native exception-handler head
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after normal serialization
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", magic_result_offset));    // reload the sole returned array/hash owner for normal release
+    emitter.instruction(&format!("str xzr, [sp, #{}]", magic_result_offset));   // clear ownership before decref so a throwing destructor cannot retry this release
+    emitter.instruction("bl __rt_decref_array");                                // release either indexed or hash storage through the shared kind-aware helper
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", magic_frame_link_offset)); // restore the caller frame after normal cleanup
+    emitter.instruction(&format!("add sp, sp, #{}", magic_boundary_bytes));     // discard the helper frame and handler record
+    emitter.instruction("ret");                                                 // return after appending and releasing the magic result
+    emitter.label("__rt_serialize_magic_result_body_throw");
+    emitter.instruction("ldr x10, [sp]");                                       // reload the handler that preceded this cleanup boundary
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", magic_result_offset));    // reload the published raw array/hash owner after longjmp
+    emitter.instruction("bl __rt_decref_array");                                // release the owner before resuming Throwable propagation
+    emitter.instruction(&format!("str xzr, [sp, #{}]", magic_result_offset));   // clear the released owner before tearing down the frame
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", magic_frame_link_offset)); // restore the caller frame before rethrowing
+    emitter.instruction(&format!("add sp, sp, #{}", magic_boundary_bytes));     // discard the protected helper frame through the restored stack pointer
+    emitter.instruction("b __rt_throw_current");                                // resume Throwable propagation at the previous exception handler
+
+    // -- __rt_date_serialize_finalize_mixed: own, merge, and runtime-kind box a DateTime result --
+    // x0=raw array/hash owner, x1=concrete object receiver, returns x0=owned Mixed cell
+    let date_finalize_boundary_bytes = TRY_HANDLER_SLOT_SIZE + 32;
+    let date_finalize_frame_link_offset = date_finalize_boundary_bytes - 16;
+    let date_finalize_result_offset = TRY_HANDLER_SLOT_SIZE;
+    let date_finalize_receiver_offset = date_finalize_result_offset + 8;
+    emitter.label_global("__rt_date_serialize_finalize_mixed");
+    emitter.instruction(&format!("sub sp, sp, #{}", date_finalize_boundary_bytes)); // reserve a complete handler record and stable raw-owner spills
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", date_finalize_frame_link_offset)); // preserve the caller frame across the cleanup boundary
+    emitter.instruction(&format!("add x29, sp, #{}", date_finalize_frame_link_offset)); // establish the DateTime finalizer cleanup frame
+    emitter.instruction(&format!("str x0, [sp, #{}]", date_finalize_result_offset)); // publish the raw returned array owner before any throwing operation
+    emitter.instruction(&format!("str x1, [sp, #{}]", date_finalize_receiver_offset)); // preserve the concrete receiver across the boundary
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction("str x10, [sp]");                                       // handler.next = prior native exception-handler head
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction("str x10, [sp, #8]");                                   // preserve the activation frame that survives this boundary
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+    emitter.instruction("mov x10, sp");                                         // materialize this helper's exception-handler record
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                      // catch Throwable control flow while the raw DateTime result is owned here
+    emitter.instruction("cbnz x0, __rt_date_serialize_finalize_mixed_throw");   // release the raw owner before propagating a Throwable
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", date_finalize_result_offset)); // reload the current raw array/hash owner
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", date_finalize_receiver_offset)); // reload the concrete receiver for DateTime property merging
+    emitter.instruction("mov x2, xzr");                                         // direct and descriptor calls never force a parent-handler merge
+    emitter.instruction("bl __rt_date_magic_append_props");                     // append DateTime dynamic properties or pass user overrides through unchanged
+    emitter.instruction(&format!("str x0, [sp, #{}]", date_finalize_result_offset)); // replace the owner after a possibly reallocating hash projection
+    emitter.instruction("ldur x9, [x0, #-8]");                                  // inspect the finalized container's actual heap kind
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate kind 2=indexed or kind 3=hash
+    emitter.instruction("mov x1, x0");                                          // pass the raw container pointer as the mixed payload low word
+    emitter.instruction("mov x2, xzr");                                         // array and hash payloads have no high word
+    emitter.instruction("cmp x9, #3");                                          // did DateTime property projection leave hash storage?
+    emitter.instruction("b.eq __rt_date_serialize_finalize_mixed_hash");        // select mixed tag 5 for associative storage
+    emitter.instruction("cmp x9, #2");                                          // is the finalized value ordinary indexed array storage?
+    emitter.instruction("b.ne __rt_date_serialize_finalize_mixed_invalid");     // reject every non-array heap kind before it can be boxed as an array
+    emitter.instruction("mov x0, #4");                                          // all remaining typed-array returns use mixed tag 4 for indexed storage
+    emitter.instruction("b __rt_date_serialize_finalize_mixed_box");            // share retaining box construction
+    emitter.label("__rt_date_serialize_finalize_mixed_hash");
+    emitter.instruction("mov x0, #5");                                          // runtime mixed tag 5 denotes associative hash storage
+    emitter.label("__rt_date_serialize_finalize_mixed_box");
+    emitter.instruction("bl __rt_mixed_from_value");                            // retain the concrete container into its new boxed Mixed owner
+    emitter.instruction(&format!("str x0, [sp, #{}]", date_finalize_receiver_offset)); // preserve the new Mixed result while releasing the raw owner
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", date_finalize_result_offset)); // reload the superseded raw array/hash owner
+    emitter.instruction(&format!("str xzr, [sp, #{}]", date_finalize_result_offset)); // clear ownership before decref so a throwing destructor cannot retry this release
+    emitter.instruction("bl __rt_decref_any");                                  // balance boxing's retain so exactly the Mixed cell owns the container
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", date_finalize_receiver_offset)); // recover the owned Mixed result for the caller
+    emitter.instruction("ldr x10, [sp]");                                       // reload the previous native exception-handler head
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after normal finalization
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", date_finalize_frame_link_offset)); // restore the caller frame after normal cleanup
+    emitter.instruction(&format!("add sp, sp, #{}", date_finalize_boundary_bytes)); // discard the DateTime finalizer frame and handler record
+    emitter.instruction("ret");                                                 // return the owned boxed Mixed result
+    emitter.label("__rt_date_serialize_finalize_mixed_invalid");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", date_finalize_result_offset)); // reload the invalid raw return owner for deterministic release
+    emitter.instruction(&format!("str xzr, [sp, #{}]", date_finalize_result_offset)); // clear ownership before decref so destructor control flow cannot retry it
+    emitter.instruction("bl __rt_decref_any");                                  // release the invalid published heap owner without assuming an array layout
+    emitter.instruction("ldr x10, [sp]");                                       // reload the previous native exception-handler head before the TypeError helper
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression before raising TypeError
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", date_finalize_frame_link_offset)); // restore the caller frame before throwing the return-contract error
+    emitter.instruction(&format!("add sp, sp, #{}", date_finalize_boundary_bytes)); // discard the finalizer boundary before TypeError propagation
+    emitter.instruction("b __rt_serialize_magic_return_type_error");            // raise PHP's __serialize array-return TypeError
+    emitter.label("__rt_date_serialize_finalize_mixed_throw");
+    emitter.instruction("ldr x10, [sp]");                                       // reload the handler that preceded this DateTime finalizer boundary
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", date_finalize_result_offset)); // reload the raw owner that survived until the throwing operation
+    emitter.instruction("bl __rt_decref_any");                                  // release it before resuming Throwable propagation
+    emitter.instruction(&format!("str xzr, [sp, #{}]", date_finalize_result_offset)); // clear the released raw owner before tearing down the frame
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", date_finalize_frame_link_offset)); // restore the caller frame before rethrowing
+    emitter.instruction(&format!("add sp, sp, #{}", date_finalize_boundary_bytes)); // discard the protected helper frame through its restored stack pointer
+    emitter.instruction("b __rt_throw_current");                                // resume Throwable propagation at the previous exception handler
+
+    emitter.label_shared("__rt_serialize_object_incomplete");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload incomplete-object payload
     emit_append_literal_aarch64(emitter, &[b'O', b':'], "the incomplete-object prefix");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload incomplete-object payload after literal append
@@ -630,7 +798,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with the preserved object representation appended
     // -- __sleep magic: when the class defines __sleep(), serialize only the
     //    named properties (in __sleep's order) using their mangled keys --
-    emitter.label("__rt_serialize_object_sleep");
+    emitter.label_shared("__rt_serialize_object_sleep");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the class id
     emit_symbol_address(emitter, "x9", "_class_sleep_ptrs");
     emitter.instruction("ldr x10, [x9, x1, lsl #3]");                           // __sleep method symbol (0 if none)
@@ -676,6 +844,18 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with the object appended
 
     emitter.label("__rt_serialize_object_default");
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the concrete class id
+    emit_symbol_address(emitter, "x10", "_stdclass_class_id");
+    emitter.instruction("ldr x10, [x10]");                                     // load stdClass's generated class id
+    emitter.instruction("cmp x9, x10");                                        // does this object store every property in its dynamic hash?
+    emitter.instruction("b.ne __rt_serialize_object_default_declared");         // ordinary classes use the fixed property-info table
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the stdClass object pointer
+    emitter.instruction("ldr x0, [x0, #8]");                                   // stdClass layout stores its property hash after the class id
+    emitter.instruction("bl __rt_serialize_hash_body");                        // append the dynamic property count and key/value body
+    emitter.instruction("ldp x29, x30, [sp, #80]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                    // deallocate the object frame
+    emitter.instruction("ret");                                                // return with the stdClass body appended
+    emitter.label("__rt_serialize_object_default_declared");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the class id
     emit_symbol_address(emitter, "x9", "_class_serprop_ptrs");
     emitter.instruction("ldr x13, [x9, x1, lsl #3]");                           // property-info table pointer
@@ -805,6 +985,112 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate the named-property frame
     emitter.instruction("ret");                                                 // return with the named property appended
+
+    // -- __rt_date_magic_append_props(x0=hash, x1=obj): merge user properties
+    //    declared by a DateTime-family subclass into the internal magic array. --
+    emitter.blank();
+    emitter.comment("--- runtime: date_magic_append_props ---");
+    emitter.label_global("__rt_date_magic_append_props");
+    emitter.instruction("sub sp, sp, #96");                                     // allocate the date-property merge frame
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // establish the merge frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the magic serialization hash
+    emitter.instruction("str x1, [sp, #8]");                                    // save the concrete object pointer
+    emitter.instruction("str x2, [sp, #56]");                                   // preserve the lexical-parent force flag
+    emitter.instruction("cbz x1, __rt_date_magic_append_props_done");          // non-object dynamic receivers leave the completed PHP call result untouched
+    emitter.instruction("ldr x9, [x1]");                                        // load the concrete runtime class id
+    emit_symbol_address(emitter, "x10", "_class_date_serialize_handler_flags");
+    emitter.instruction("ldr x10, [x10, x9, lsl #3]");                         // is this an inherited ext/date magic handler?
+    emitter.instruction("cbnz x10, __rt_date_magic_append_props_enabled");      // inherited handler needs the ordinary merge
+    emitter.instruction("ldr x10, [sp, #56]");                                  // did a user override explicitly call its native parent?
+    emitter.instruction("cbz x10, __rt_date_magic_append_props_done");         // ordinary user __serialize() arrays are never augmented
+    emitter.label("__rt_date_magic_append_props_enabled");
+    emit_symbol_address(emitter, "x10", "_class_date_serialize_prop_ptrs");
+    emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // filtered user-property descriptor
+    emitter.instruction("str x10, [sp, #16]");                                  // save the descriptor pointer
+    emitter.instruction("ldr x11, [x10]");                                      // load the custom property count
+    emitter.instruction("str x11, [sp, #24]");                                  // save the custom property count
+    emitter.instruction("str xzr, [sp, #32]");                                  // property cursor = 0
+    emitter.label("__rt_date_magic_append_props_loop");
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the property cursor
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the property count
+    emitter.instruction("cmp x9, x10");                                         // merged every custom property?
+    emitter.instruction("b.ge __rt_date_magic_append_props_dynamic");           // merge the dynamic tail after declared slots
+    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the descriptor base
+    emitter.instruction("add x11, x10, #8");                                    // skip the descriptor count
+    emitter.instruction("add x11, x11, x9, lsl #5");                            // address the current 32-byte row
+    emitter.instruction("str x11, [sp, #40]");                                  // save the current row pointer
+    emitter.instruction("ldr x0, [sp, #0]");                                    // destination magic hash for add-if-absent probe
+    emitter.instruction("ldr x1, [x11]");                                       // PHP-mangled property key pointer
+    emitter.instruction("ldr x2, [x11, #8]");                                   // PHP-mangled property key length
+    emitter.instruction("bl __rt_hash_get");                                    // native/common property keys must win
+    emitter.instruction("cbnz x0, __rt_date_magic_append_props_next");          // skip a colliding custom property without retaining it
+    emitter.instruction("ldr x11, [sp, #40]");                                  // reload the row after the hash probe call
+    emitter.instruction("ldr x12, [x11, #16]");                                 // load the property byte offset
+    emitter.instruction("ldr x13, [x11, #24]");                                 // load the property runtime tag
+    emitter.instruction("ldr x14, [sp, #8]");                                   // reload the concrete object pointer
+    emitter.instruction("add x14, x14, x12");                                   // address the concrete property slot
+    emitter.instruction("tst x13, #0x100");                                     // does this row describe a typed PHP property?
+    emitter.instruction("b.eq __rt_date_magic_append_props_initialized");        // untyped slots have no uninitialized marker
+    emitter.instruction("ldr x15, [x14, #8]");                                  // typed-slot high word carries the sentinel when uninitialized
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x12",
+        crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    emitter.instruction("cmp x15, x12");                                        // omit php-src's IS_UNDEF typed property
+    emitter.instruction("b.eq __rt_date_magic_append_props_next");              // no serialized key for an uninitialized slot
+    emitter.label("__rt_date_magic_append_props_initialized");
+    emitter.instruction("and x13, x13, #0xff");                                 // strip the descriptor's declared-slot flag before value boxing
+    emitter.instruction("ldr x1, [x14]");                                       // load the property low payload word
+    emitter.instruction("ldr x2, [x14, #8]");                                   // load the property high payload word
+    emitter.instruction("cmp x13, #7");                                         // is the slot already a boxed Mixed value?
+    emitter.instruction("b.eq __rt_date_magic_append_props_mixed");             // retain the existing cell instead of nesting it
+    emitter.instruction("mov x0, x13");                                         // pass the concrete runtime tag
+    emitter.instruction("bl __rt_mixed_from_value");                            // box and retain the property value for the hash
+    emitter.instruction("b __rt_date_magic_append_props_boxed");                // continue with the owned Mixed cell
+    emitter.label("__rt_date_magic_append_props_mixed");
+    emitter.instruction("mov x0, x1");                                          // move the existing Mixed cell into the retain ABI
+    emitter.instruction("bl __rt_incref");                                      // retain the cell for the serialization hash
+    emitter.label("__rt_date_magic_append_props_boxed");
+    emitter.instruction("str x0, [sp, #48]");                                   // save the owned Mixed cell
+    emitter.instruction("ldr x11, [sp, #40]");                                  // reload the current descriptor row
+    emitter.instruction("ldr x1, [x11]");                                       // key pointer = PHP-mangled property name
+    emitter.instruction("ldr x2, [x11, #8]");                                   // key length
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the possibly grown hash
+    emitter.instruction("ldr x3, [sp, #48]");                                   // value low word = owned Mixed cell
+    emitter.instruction("mov x4, #0");                                          // value high word is unused
+    emitter.instruction("mov x5, #7");                                          // hash value tag = boxed Mixed
+    emitter.instruction("bl __rt_hash_set");                                    // insert or replace the custom property
+    emitter.instruction("str x0, [sp, #0]");                                    // save the possibly grown hash
+    emitter.label("__rt_date_magic_append_props_next");
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the property cursor
+    emitter.instruction("add x9, x9, #1");                                      // advance to the next custom property
+    emitter.instruction("str x9, [sp, #32]");                                   // persist the advanced cursor
+    emitter.instruction("b __rt_date_magic_append_props_loop");                 // continue merging properties
+    // Dynamic properties live in the final optional object payload word rather
+    // than in the generated descriptor table. php-src's add_common_properties()
+    // includes them too, so project that tail after the declared subclass slots.
+    emitter.label("__rt_date_magic_append_props_dynamic");
+    emitter.instruction("ldr x9, [sp, #8]");                                  // reload the concrete object pointer
+    emitter.instruction("ldr x9, [x9]");                                      // class id selects dynamic-tail metadata
+    emit_symbol_address(emitter, "x10", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x10, [x10, x9, lsl #3]");                        // does this layout carry a dynamic-property hash?
+    emitter.instruction("cbz x10, __rt_date_magic_append_props_done");        // no tail means no dynamic common properties
+    emit_symbol_address(emitter, "x10", "_class_object_payload_sizes");
+    emitter.instruction("ldr x10, [x10, x9, lsl #3]");                        // payload bytes including the final tail word
+    emitter.instruction("sub x10, x10, #8");                                  // tail hash lives in the final payload word
+    emitter.instruction("ldr x9, [sp, #8]");                                  // reload object after metadata loads
+    emitter.instruction("ldr x1, [x9, x10]");                                 // dynamic-property hash pointer
+    emitter.instruction("cbz x1, __rt_date_magic_append_props_done");         // no dynamic properties were assigned
+    emitter.instruction("ldr x0, [sp, #0]");                                  // merge into the magic serialization hash
+    emitter.instruction("bl __rt_hash_project_add");                          // copy only dynamic keys absent from native/common output
+    emitter.instruction("str x0, [sp, #0]");                                  // retain a grown destination hash
+    emitter.label("__rt_date_magic_append_props_done");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // return the final serialization hash
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the merge frame
+    emitter.instruction("ret");                                                 // return to the object serializer
 
     // -- __rt_serialize_begin: reset the reference state for a new top-level
     //    serialize() call (value counter and the seen-objects map) --
@@ -967,6 +1253,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // canonical null has no low payload word
     emitter.instruction("xor edx, edx");                                        // canonical null has no high payload word
     emitter.label("__rt_serialize_value_input_ready");
+    emitter.instruction("cmp rdi, 11");                                         // inline TaggedScalar descriptor?
+    emitter.instruction("jne __rt_serialize_value_normalized");                 // ordinary tags already have canonical payload words
+    emitter.instruction("mov rdi, rdx");                                        // use the slot's per-value int/null runtime tag
+    emitter.instruction("xor edx, edx");                                        // tagged scalar payloads have no third word
+    emitter.label("__rt_serialize_value_normalized");
 
     // -- set up stack frame --
     // [rbp-8]=output start, [rbp-16]=write pos, [rbp-24]=tag, [rbp-32]=lo, [rbp-40]=hi
@@ -1017,9 +1308,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_serialize_arr_object");                        // serialize objects as O:len:"Class":n:{...}
     emitter.instruction("cmp rdi, 7");                                          // is the value a boxed nested Mixed?
     emitter.instruction("je __rt_serialize_nested_mixed");                      // unbox and re-dispatch
+    emitter.instruction("cmp rdi, 10");                                         // is the value a non-serializable Closure descriptor?
+    emitter.instruction("je __rt_serialize_closure_error");                     // PHP raises Exception instead of producing a wire value
     emitter.instruction("cmp rdi, 8");                                          // is the value null?
     emitter.instruction("je __rt_serialize_null");                              // serialize null as N;
-    // Tag 10 (callables) is not serializable here and degrades to null.
+    // Tag 10 already branched to the Closure serialization exception above.
     emitter.instruction("jmp __rt_serialize_null");                             // unsupported tags serialize as null
 
     // -- indexed array / hash / nested mixed: delegate, then resume finalize --
@@ -1464,23 +1757,162 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
     emitter.instruction("mov QWORD PTR [r10], rax");                            // rewind, discarding any concat scratch the method left
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the returned array pointer
-    emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load its heap kind word
-    emitter.instruction("and rcx, 0xff");                                       // isolate the heap kind (2=indexed, 3=hash)
-    emitter.instruction("cmp rcx, 3");                                          // is the returned array a hash?
-    emitter.instruction("je __rt_serialize_object_ser_hash");                   // hashes use the hash body emitter
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the indexed array pointer
-    emitter.instruction("call __rt_serialize_indexed_body");                    // append <count>:{ i:K;<v>... }
-    emitter.instruction("jmp __rt_serialize_object_magic_done");                // finish the object
-    emitter.label("__rt_serialize_object_ser_hash");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the hash pointer
-    emitter.instruction("call __rt_serialize_hash_body");                       // append <count>:{ <key><val>... }
-    emitter.label("__rt_serialize_object_magic_done");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the returned array/hash owner to its cleanup boundary
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // pass the concrete object receiver for DateTime property merging
+    emitter.instruction("call __rt_serialize_magic_result_body");               // append and release the returned __serialize array under its cleanup boundary
     emitter.instruction("add rsp, 64");                                         // deallocate the object frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with the object appended
 
-    emitter.label("__rt_serialize_object_incomplete_x");
+    // -- __rt_serialize_magic_result_body: append and release a returned __serialize array --
+    // rdi=raw array/hash owner, rsi=concrete object receiver
+    let magic_boundary_bytes_x86 = TRY_HANDLER_SLOT_SIZE + 32;
+    let magic_previous_handler_offset_x86 = magic_boundary_bytes_x86;
+    let magic_result_offset_x86 = 8;
+    let magic_receiver_offset_x86 = 16;
+    emitter.label_global("__rt_serialize_magic_result_body");
+    emitter.instruction("push rbp");                                            // preserve the caller frame across the cleanup boundary
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for longjmp recovery
+    emitter.instruction(&format!("sub rsp, {}", magic_boundary_bytes_x86));     // reserve a complete handler record and stable raw-owner spills
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rdi", magic_result_offset_x86)); // publish the returned array owner before any throwing operation
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rsi", magic_receiver_offset_x86)); // preserve the concrete receiver across the boundary
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", magic_previous_handler_offset_x86)); // handler.next = prior native exception-handler head
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", magic_previous_handler_offset_x86 - 8)); // preserve the activation frame that survives this boundary
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", magic_boundary_bytes_x86 - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+    emitter.instruction(&format!("lea r10, [rbp - {}]", magic_previous_handler_offset_x86)); // materialize this helper's exception-handler record
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("lea rdi, [rbp - {}]", magic_boundary_bytes_x86 - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                      // catch Throwable control flow while the raw array owner is live
+    emitter.instruction("test eax, eax");                                       // did control return through longjmp?
+    emitter.instruction("jnz __rt_serialize_magic_result_body_throw_x");       // clean the raw owner after a throwing append or body walk
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", magic_result_offset_x86)); // reload the current raw array/hash owner
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", magic_receiver_offset_x86)); // reload the concrete receiver for DateTime property merging
+    emitter.instruction("xor edx, edx");                                        // ordinary serializer calls never force a parent-handler merge
+    emitter.instruction("call __rt_date_magic_append_props");                   // append DateTime dynamic properties or pass through user overrides
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", magic_result_offset_x86)); // replace the owner after a possibly reallocating hash projection
+    emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load the returned container's runtime kind
+    emitter.instruction("and rcx, 0xff");                                       // isolate kind 2=indexed or kind 3=hash
+    emitter.instruction("cmp rcx, 3");                                          // does the returned container use hash storage?
+    emitter.instruction("je __rt_serialize_magic_result_body_hash_x");         // hashes need string/integer-key serialization
+    emitter.instruction("cmp rcx, 2");                                          // is the returned container ordinary indexed array storage?
+    emitter.instruction("jne __rt_serialize_magic_result_body_invalid_x");     // reject every non-array heap kind before its layout is dereferenced
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", magic_result_offset_x86)); // reload the indexed array owner
+    emitter.instruction("call __rt_serialize_indexed_body");                    // append the indexed array body while the owner is protected
+    emitter.instruction("jmp __rt_serialize_magic_result_body_done_x");         // share release and boundary teardown after serialization
+    emitter.label("__rt_serialize_magic_result_body_hash_x");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", magic_result_offset_x86)); // reload the hash owner
+    emitter.instruction("call __rt_serialize_hash_body");                       // append the associative array body while the owner is protected
+    emitter.instruction("jmp __rt_serialize_magic_result_body_done_x");         // skip the invalid return-kind cleanup after a valid hash body
+    emitter.label("__rt_serialize_magic_result_body_invalid_x");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", magic_result_offset_x86)); // reload the invalid raw return owner for deterministic release
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", magic_result_offset_x86)); // clear ownership before decref so destructor control flow cannot retry it
+    emitter.instruction("call __rt_decref_any");                                // release the invalid published heap owner without assuming an array layout
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", magic_previous_handler_offset_x86)); // reload the previous native exception-handler head before the TypeError helper
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", magic_boundary_bytes_x86 - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression before raising TypeError
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction("leave");                                               // discard the helper boundary before TypeError propagation
+    emitter.instruction("jmp __rt_serialize_magic_return_type_error");          // raise PHP's __serialize array-return TypeError
+    emitter.label("__rt_serialize_magic_result_body_done_x");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", magic_previous_handler_offset_x86)); // reload the previous native exception-handler head
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", magic_boundary_bytes_x86 - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after normal serialization
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", magic_result_offset_x86)); // reload the sole returned array/hash owner for normal release
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", magic_result_offset_x86)); // clear ownership before decref so a throwing destructor cannot retry this release
+    emitter.instruction("call __rt_decref_array");                               // release either indexed or hash storage through the shared kind-aware helper
+    emitter.instruction("leave");                                               // release the helper frame and restore the caller base pointer
+    emitter.instruction("ret");                                                 // return after appending and releasing the magic result
+    emitter.label("__rt_serialize_magic_result_body_throw_x");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", magic_previous_handler_offset_x86)); // reload the handler that preceded this cleanup boundary
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", magic_boundary_bytes_x86 - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", magic_result_offset_x86)); // reload the published raw array/hash owner after longjmp
+    emitter.instruction("call __rt_decref_array");                               // release the owner before resuming Throwable propagation
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", magic_result_offset_x86)); // clear the released owner before tearing down the frame
+    emitter.instruction("leave");                                               // discard the protected helper frame through its restored stack pointer
+    emitter.instruction("jmp __rt_throw_current");                              // resume Throwable propagation at the previous exception handler
+
+    // -- __rt_date_serialize_finalize_mixed: own, merge, and runtime-kind box a DateTime result --
+    // rdi=raw array/hash owner, rsi=concrete object receiver, returns rax=owned Mixed cell
+    let date_finalize_boundary_bytes_x86 = TRY_HANDLER_SLOT_SIZE + 32;
+    let date_finalize_previous_handler_offset_x86 = date_finalize_boundary_bytes_x86;
+    let date_finalize_result_offset_x86 = 8;
+    let date_finalize_receiver_offset_x86 = 16;
+    emitter.label_global("__rt_date_serialize_finalize_mixed");
+    emitter.instruction("push rbp");                                            // preserve the caller frame across the cleanup boundary
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for longjmp recovery
+    emitter.instruction(&format!("sub rsp, {}", date_finalize_boundary_bytes_x86)); // reserve a complete handler record and stable raw-owner spills
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rdi", date_finalize_result_offset_x86)); // publish the raw returned array owner before any throwing operation
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rsi", date_finalize_receiver_offset_x86)); // preserve the concrete receiver across the boundary
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", date_finalize_previous_handler_offset_x86)); // handler.next = prior native exception-handler head
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", date_finalize_previous_handler_offset_x86 - 8)); // preserve the activation frame that survives this boundary
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", date_finalize_boundary_bytes_x86 - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+    emitter.instruction(&format!("lea r10, [rbp - {}]", date_finalize_previous_handler_offset_x86)); // materialize this helper's exception-handler record
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("lea rdi, [rbp - {}]", date_finalize_boundary_bytes_x86 - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                      // catch Throwable control flow while the raw DateTime result is owned here
+    emitter.instruction("test eax, eax");                                       // did control return through longjmp?
+    emitter.instruction("jnz __rt_date_serialize_finalize_mixed_throw_x");     // release the raw owner before propagating a Throwable
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", date_finalize_result_offset_x86)); // reload the current raw array/hash owner
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", date_finalize_receiver_offset_x86)); // reload the concrete receiver for DateTime property merging
+    emitter.instruction("xor edx, edx");                                        // direct and descriptor calls never force a parent-handler merge
+    emitter.instruction("call __rt_date_magic_append_props");                   // append DateTime dynamic properties or pass user overrides through unchanged
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", date_finalize_result_offset_x86)); // replace the owner after a possibly reallocating hash projection
+    emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // inspect the finalized container's actual heap kind
+    emitter.instruction("and rcx, 0xff");                                       // isolate kind 2=indexed or kind 3=hash
+    emitter.instruction("mov rdi, rax");                                        // pass the raw container pointer as the mixed payload low word
+    emitter.instruction("xor esi, esi");                                        // array and hash payloads have no high word
+    emitter.instruction("cmp rcx, 3");                                          // did DateTime property projection leave hash storage?
+    emitter.instruction("je __rt_date_serialize_finalize_mixed_hash_x");        // select mixed tag 5 for associative storage
+    emitter.instruction("cmp rcx, 2");                                          // is the finalized value ordinary indexed array storage?
+    emitter.instruction("jne __rt_date_serialize_finalize_mixed_invalid_x");   // reject every non-array heap kind before it can be boxed as an array
+    emitter.instruction("mov rax, 4");                                          // all remaining typed-array returns use mixed tag 4 for indexed storage
+    emitter.instruction("jmp __rt_date_serialize_finalize_mixed_box_x");        // share retaining box construction
+    emitter.label("__rt_date_serialize_finalize_mixed_hash_x");
+    emitter.instruction("mov rax, 5");                                          // runtime mixed tag 5 denotes associative hash storage
+    emitter.label("__rt_date_serialize_finalize_mixed_box_x");
+    emitter.instruction("call __rt_mixed_from_value");                          // retain the concrete container into its new boxed Mixed owner
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", date_finalize_receiver_offset_x86)); // preserve the new Mixed result while releasing the raw owner
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", date_finalize_result_offset_x86)); // reload the superseded raw array/hash owner
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", date_finalize_result_offset_x86)); // clear ownership before decref so a throwing destructor cannot retry this release
+    emitter.instruction("call __rt_decref_any");                                // balance boxing's retain so exactly the Mixed cell owns the container
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", date_finalize_receiver_offset_x86)); // recover the owned Mixed result for the caller
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", date_finalize_previous_handler_offset_x86)); // reload the previous native exception-handler head
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", date_finalize_boundary_bytes_x86 - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after normal finalization
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction("leave");                                               // release the DateTime finalizer frame and restore the caller base pointer
+    emitter.instruction("ret");                                                 // return the owned boxed Mixed result
+    emitter.label("__rt_date_serialize_finalize_mixed_invalid_x");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", date_finalize_result_offset_x86)); // reload the invalid raw return owner for deterministic release
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", date_finalize_result_offset_x86)); // clear ownership before decref so destructor control flow cannot retry it
+    emitter.instruction("call __rt_decref_any");                                // release the invalid published heap owner without assuming an array layout
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", date_finalize_previous_handler_offset_x86)); // reload the previous native exception-handler head before the TypeError helper
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", date_finalize_boundary_bytes_x86 - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression before raising TypeError
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction("leave");                                               // discard the finalizer boundary before TypeError propagation
+    emitter.instruction("jmp __rt_serialize_magic_return_type_error");          // raise PHP's __serialize array-return TypeError
+    emitter.label("__rt_date_serialize_finalize_mixed_throw_x");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", date_finalize_previous_handler_offset_x86)); // reload the handler that preceded this DateTime finalizer boundary
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", date_finalize_boundary_bytes_x86 - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", date_finalize_result_offset_x86)); // reload the raw owner that survived until the throwing operation
+    emitter.instruction("call __rt_decref_any");                                // release it before resuming Throwable propagation
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", date_finalize_result_offset_x86)); // clear the released raw owner before tearing down the frame
+    emitter.instruction("leave");                                               // discard the protected helper frame through its restored stack pointer
+    emitter.instruction("jmp __rt_throw_current");                              // resume Throwable propagation at the previous exception handler
+
+    emitter.label_shared("__rt_serialize_object_incomplete_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload
     emit_append_literal_x86_64(emitter, &[b'O', b':'], "the incomplete-object prefix");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload after literal append
@@ -1499,7 +1931,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with the preserved object representation appended
     // -- __sleep magic: serialize only the named properties using mangled keys --
-    emitter.label("__rt_serialize_object_sleep");
+    emitter.label_shared("__rt_serialize_object_sleep");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the class id
     emit_symbol_address(emitter, "r10", "_class_sleep_ptrs");
     emitter.instruction("mov r10, QWORD PTR [r10 + rax*8]");                    // __sleep method symbol (0 if none)
@@ -1547,6 +1979,18 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with the object appended
 
     emitter.label("__rt_serialize_object_default");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                      // reload the concrete class id
+    emit_symbol_address(emitter, "r10", "_stdclass_class_id");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                           // load stdClass's generated class id
+    emitter.instruction("cmp rax, r10");                                       // does this object store every property in its dynamic hash?
+    emitter.instruction("jne __rt_serialize_object_default_declared");         // ordinary classes use the fixed property-info table
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                       // reload the stdClass object pointer
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                       // stdClass layout stores its property hash after the class id
+    emitter.instruction("call __rt_serialize_hash_body");                      // append the dynamic property count and key/value body
+    emitter.instruction("add rsp, 64");                                        // deallocate the object frame
+    emitter.instruction("pop rbp");                                            // restore the caller frame pointer
+    emitter.instruction("ret");                                                // return with the stdClass body appended
+    emitter.label("__rt_serialize_object_default_declared");
     emit_symbol_address(emitter, "r10", "_class_serprop_ptrs");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // class id
     emitter.instruction("shl rcx, 3");                                          // class_id * 8 (pointer stride)
@@ -1684,6 +2128,115 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with the named property appended
 
+    // -- __rt_date_magic_append_props(rdi=hash, rsi=obj): merge user properties
+    //    declared by a DateTime-family subclass into the internal magic array. --
+    emitter.blank();
+    emitter.comment("--- runtime: date_magic_append_props ---");
+    emitter.label_global("__rt_date_magic_append_props");
+    emitter.instruction("push rbp");                                            // save the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the merge frame
+    emitter.instruction("sub rsp, 80");                                         // reserve merge state slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the magic serialization hash
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the concrete object pointer
+    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // preserve the lexical-parent force flag
+    emitter.instruction("test rsi, rsi");                                       // can a dynamic receiver provide an ordinary object pointer?
+    emitter.instruction("jz __rt_date_magic_append_props_done");                // non-object dynamic receivers leave the completed PHP call result untouched
+    emitter.instruction("mov rax, QWORD PTR [rsi]");                            // load the concrete runtime class id
+    emit_symbol_address(emitter, "r10", "_class_date_serialize_handler_flags");
+    emitter.instruction("mov r10, QWORD PTR [r10 + rax*8]");                   // is this an inherited ext/date magic handler?
+    emitter.instruction("test r10, r10");                                      // inherited handler needs the ordinary merge
+    emitter.instruction("jnz __rt_date_magic_append_props_enabled");
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // did a user override explicitly call its native parent?
+    emitter.instruction("je __rt_date_magic_append_props_done");                // preserve ordinary user __serialize() arrays
+    emitter.label("__rt_date_magic_append_props_enabled");
+    emit_symbol_address(emitter, "r10", "_class_date_serialize_prop_ptrs");
+    emitter.instruction("mov r10, QWORD PTR [r10 + rax*8]");                    // filtered user-property descriptor
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the descriptor pointer
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the custom property count
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the custom property count
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // property cursor = 0
+    emitter.label("__rt_date_magic_append_props_loop");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the property cursor
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 32]");                       // merged every custom property?
+    emitter.instruction("jge __rt_date_magic_append_props_dynamic");            // merge the dynamic tail after declared slots
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the descriptor base
+    emitter.instruction("shl rax, 5");                                          // convert the cursor to a 32-byte row offset
+    emitter.instruction("add r10, rax");                                        // advance to the current descriptor row
+    emitter.instruction("add r10, 8");                                          // skip the descriptor count word
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the current row pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // destination magic hash for add-if-absent probe
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // PHP-mangled property key pointer
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // PHP-mangled property key length
+    emitter.instruction("call __rt_hash_get");                                  // native/common property keys must win
+    emitter.instruction("test rax, rax");                                       // did a native/common key already exist?
+    emitter.instruction("jnz __rt_date_magic_append_props_next");               // skip a colliding custom property without retaining it
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the row after the hash probe call
+    emitter.instruction("mov r8, QWORD PTR [r10 + 16]");                        // load the property byte offset
+    emitter.instruction("mov r9, QWORD PTR [r10 + 24]");                        // load the property runtime tag
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the concrete object pointer
+    emitter.instruction("add r11, r8");                                         // address the concrete property slot
+    emitter.instruction("test r9, 0x100");                                      // does this row describe a typed PHP property?
+    emitter.instruction("jz __rt_date_magic_append_props_initialized");         // untyped slots have no uninitialized marker
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r8",
+        crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    emitter.instruction("cmp QWORD PTR [r11 + 8], r8");                         // omit php-src's IS_UNDEF typed property
+    emitter.instruction("je __rt_date_magic_append_props_next");                // no serialized key for an uninitialized slot
+    emitter.label("__rt_date_magic_append_props_initialized");
+    emitter.instruction("and r9, 0xff");                                        // strip the descriptor's declared-slot flag before value boxing
+    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the property low payload word
+    emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");                        // load the property high payload word
+    emitter.instruction("cmp r9, 7");                                           // is the slot already a boxed Mixed value?
+    emitter.instruction("je __rt_date_magic_append_props_mixed");               // retain the existing cell instead of nesting it
+    emitter.instruction("mov rax, r9");                                         // pass the concrete runtime tag
+    emitter.instruction("call __rt_mixed_from_value");                          // box and retain the property value for the hash
+    emitter.instruction("jmp __rt_date_magic_append_props_boxed");              // continue with the owned Mixed cell
+    emitter.label("__rt_date_magic_append_props_mixed");
+    emitter.instruction("mov rax, rdi");                                        // move the existing Mixed cell into the retain ABI
+    emitter.instruction("call __rt_incref");                                    // retain the cell for the serialization hash
+    emitter.label("__rt_date_magic_append_props_boxed");
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the owned Mixed cell
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current descriptor row
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // key pointer = PHP-mangled property name
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // key length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the possibly grown hash
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // value low word = owned Mixed cell
+    emitter.instruction("xor r8, r8");                                          // value high word is unused
+    emitter.instruction("mov r9, 7");                                           // hash value tag = boxed Mixed
+    emitter.instruction("call __rt_hash_set");                                  // insert or replace the custom property
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the possibly grown hash
+    emitter.label("__rt_date_magic_append_props_next");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the property cursor
+    emitter.instruction("add rax, 1");                                          // advance to the next custom property
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // persist the advanced cursor
+    emitter.instruction("jmp __rt_date_magic_append_props_loop");               // continue merging properties
+    // Mirror the AArch64 dynamic-tail merge: generated descriptors cover only
+    // declared slots, while php-src also serializes the object's dynamic hash.
+    emitter.label("__rt_date_magic_append_props_dynamic");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                       // reload concrete object pointer
+    emitter.instruction("mov r9, QWORD PTR [r9]");                             // class id selects dynamic-tail metadata
+    emit_symbol_address(emitter, "r10", "_class_object_dynamic_prop_flags");
+    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                  // does this layout carry a dynamic-property hash?
+    emitter.instruction("test r10, r10");                                     // inspect the layout flag before reading the tail
+    emitter.instruction("jz __rt_date_magic_append_props_done");               // no tail means no dynamic common properties
+    emit_symbol_address(emitter, "r10", "_class_object_payload_sizes");
+    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                  // payload bytes including the final tail word
+    emitter.instruction("sub r10, 8");                                        // tail hash lives in the final payload word
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                       // reload object after metadata loads
+    emitter.instruction("mov rsi, QWORD PTR [r9 + r10]");                     // dynamic-property hash pointer
+    emitter.instruction("test rsi, rsi");                                     // null tail means no dynamic properties
+    emitter.instruction("jz __rt_date_magic_append_props_done");               // preserve the existing magic hash
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                      // merge into the magic serialization hash
+    emitter.instruction("call __rt_hash_project_add");                        // copy only dynamic keys absent from native/common output
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                      // retain a grown destination hash
+    emitter.label("__rt_date_magic_append_props_done");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the final serialization hash
+    emitter.instruction("add rsp, 80");                                         // deallocate the merge frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the object serializer
+
     // -- __rt_serialize_begin: reset the reference state for a new top-level
     //    serialize() call (value counter and the seen-objects map) --
     emitter.blank();
@@ -1804,4 +2357,115 @@ fn emit_serialize_copy_run_x86_64(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction(&format!("jmp {}", loop_label));                        // continue copying digit bytes
     emitter.label(&done_label);
     emitter.instruction("add r11, r8");                                         // advance the write pointer past the digits
+}
+
+/// Emits the non-returning TypeError for an invalid `__serialize()` return kind on every target.
+fn emit_serialize_magic_return_type_error(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: serialize magic return TypeError ---");
+    emitter.label_global("__rt_serialize_magic_return_type_error");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(emitter, "x0", 56);
+            abi::emit_call_label(emitter, "__rt_heap_alloc");
+            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies the TypeError object payload
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation as an object for lifecycle helpers
+            abi::emit_call_label(emitter, "__rt_object_handle_acquire");
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_type_error_class_id", 0);
+            emitter.instruction("str x9, [x0]");                                // store the built-in TypeError class id
+            abi::emit_symbol_address(emitter, "x9", "_serialize_magic_return_type_error");
+            emitter.instruction("str x9, [x0, #8]");                            // attach the static __serialize return-contract message
+            abi::emit_load_int_immediate(
+                emitter,
+                "x9",
+                SERIALIZE_MAGIC_RETURN_TYPE_ERROR.len() as i64,
+            );
+            emitter.instruction("str x9, [x0, #16]");                           // store the static message byte length
+            emitter.instruction("str xzr, [x0, #24]");                          // TypeError code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
+            emitter.instruction("str xzr, [x0, #40]");                          // TypeError previous defaults to null
+            abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
+            abi::emit_jump(emitter, "__rt_throw_current");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame while constructing the TypeError
+            emitter.instruction("mov rbp, rsp");                                // establish an aligned helper frame
+            emitter.instruction("sub rsp, 16");                                 // align nested allocation and handle calls
+            abi::emit_load_int_immediate(emitter, "rax", 56);
+            abi::emit_call_label(emitter, "__rt_heap_alloc");
+            emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 TypeError heap kind
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // publish object ownership metadata before acquiring a handle
+            abi::emit_call_label(emitter, "__rt_object_handle_acquire");
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_type_error_class_id", 0);
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the built-in TypeError class id
+            abi::emit_symbol_address(emitter, "r10", "_serialize_magic_return_type_error");
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // attach the static __serialize return-contract message
+            abi::emit_load_int_immediate(
+                emitter,
+                "r10",
+                SERIALIZE_MAGIC_RETURN_TYPE_ERROR.len() as i64,
+            );
+            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the static message byte length
+            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // TypeError code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
+            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // TypeError previous defaults to null
+            abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
+            emitter.instruction("leave");                                       // release the TypeError helper frame before unwinding
+            abi::emit_jump(emitter, "__rt_throw_current");
+        }
+    }
+}
+
+/// Emits the non-returning php-src `serialize(Closure)` exception on every target.
+///
+/// The serializer can encounter a Closure from a direct value, a boxed Mixed property, or an
+/// array element. It must throw before producing a partial wire value; `__rt_throw_current`
+/// owns handler transfer and uncaught reporting after this helper publishes the Exception.
+fn emit_serialize_closure_error(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: serialize Closure exception ---");
+    emitter.label_global("__rt_serialize_closure_error");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(emitter, "x0", 56);
+            abi::emit_call_label(emitter, "__rt_heap_alloc");
+            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies the Exception object payload
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation as an object for lifecycle helpers
+            abi::emit_call_label(emitter, "__rt_object_handle_acquire");
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_exception_class_id", 0);
+            emitter.instruction("str x9, [x0]");                                // store the built-in Exception class id
+            abi::emit_symbol_address(emitter, "x9", "_serialize_closure_error");
+            emitter.instruction("str x9, [x0, #8]");                            // attach php-src's static Closure serialization message
+            abi::emit_load_int_immediate(emitter, "x9", SERIALIZE_CLOSURE_ERROR.len() as i64);
+            emitter.instruction("str x9, [x0, #16]");                           // store the static message byte length
+            emitter.instruction("str xzr, [x0, #24]");                          // Exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
+            emitter.instruction("str xzr, [x0, #40]");                          // Exception previous defaults to null
+            abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
+            abi::emit_jump(emitter, "__rt_throw_current");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame while constructing the Exception
+            emitter.instruction("mov rbp, rsp");                                // establish an aligned helper frame
+            emitter.instruction("sub rsp, 16");                                 // align nested allocation and handle calls
+            abi::emit_load_int_immediate(emitter, "rax", 56);
+            abi::emit_call_label(emitter, "__rt_heap_alloc");
+            emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 Exception heap kind
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // publish object ownership metadata before acquiring a handle
+            abi::emit_call_label(emitter, "__rt_object_handle_acquire");
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_exception_class_id", 0);
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the built-in Exception class id
+            abi::emit_symbol_address(emitter, "r10", "_serialize_closure_error");
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // attach php-src's static Closure serialization message
+            abi::emit_load_int_immediate(emitter, "r10", SERIALIZE_CLOSURE_ERROR.len() as i64);
+            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the static message byte length
+            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // Exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
+            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // Exception previous defaults to null
+            abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
+            emitter.instruction("mov rsp, rbp");                                // release the helper frame before unwinding
+            emitter.instruction("pop rbp");                                     // restore the serializer caller frame pointer
+            abi::emit_jump(emitter, "__rt_throw_current");
+        }
+    }
 }

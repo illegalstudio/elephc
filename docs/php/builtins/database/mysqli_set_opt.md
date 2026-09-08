@@ -2,7 +2,7 @@
 title: "mysqli_set_opt()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 156
+  order: 157
 ---
 
 ## mysqli_set_opt()

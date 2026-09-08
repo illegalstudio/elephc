@@ -58,9 +58,23 @@ pub(super) fn eval_closure_from_callable(
         }
         Err(status) => return Err(status),
     };
-    eval_validate_closure_from_callable_callback(&callable, context, values)?;
+    if let Err(status) = eval_validate_closure_from_callable_callback(&callable, context, values) {
+        let _ = release_evaluated_callable(callable, None, values);
+        return Err(status);
+    }
+    // The closure target takes over any receiver acquired by normalization.
+    let acquired_receiver = match &callable {
+        EvaluatedCallable::ObjectMethod { object, owns_receiver: true, .. } => Some(*object),
+        _ => None,
+    };
     let target = eval_closure_object_target_from_callable(callable);
-    eval_closure_object_from_target(target, context, values)
+    let result = eval_closure_object_from_target(target, context, values);
+    if result.is_err() {
+        if let Some(receiver) = acquired_receiver {
+            let _ = values.release(receiver);
+        }
+    }
+    result
 }
 
 /// Converts a normalized callable target into the storage used by eval Closure objects.
@@ -93,6 +107,7 @@ pub(super) fn eval_closure_object_target_from_callable(
             called_class,
             native_class,
             bridge_scope,
+            ..
         } => EvalClosureObjectTarget::ObjectMethod {
             object,
             method,

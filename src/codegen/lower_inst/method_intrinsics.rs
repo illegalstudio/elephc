@@ -45,7 +45,7 @@ pub(super) fn lower_interface_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    super::emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
@@ -63,13 +63,16 @@ pub(super) fn resolve_interface_call_signature(
         .interface_infos
         .get(normalized)
         .and_then(|interface_info| interface_info.methods.get(&method_key))
+        .cloned()
+        .or_else(|| crate::types::date_method_dispatch::concrete_date_interface_method(
+            &ctx.module.class_infos, normalized, &method_key,
+        ))
         .ok_or_else(|| {
             CodegenIrError::unsupported(format!(
                 "interface method call to unknown method {}::{}",
                 normalized, method_name
             ))
-        })?
-        .clone();
+        })?;
     let expected_args = callee_sig.params.len() + 1;
     if operand_count != expected_args {
         return Err(CodegenIrError::unsupported(format!(
@@ -135,6 +138,7 @@ pub(super) fn lower_nullable_receiver_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
+    super::emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -169,30 +173,9 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
         ctx.emitter.label(&done_label);
         return Ok(());
     }
-    let normalized = interface_name.trim_start_matches('\\');
-    let method_key = php_symbol_key(method_name);
-    let callee_sig = ctx
-        .module
-        .interface_infos
-        .get(normalized)
-        .and_then(|interface_info| interface_info.methods.get(&method_key))
-        .ok_or_else(|| {
-            CodegenIrError::unsupported(format!(
-                "interface method call to unknown method {}::{}",
-                normalized, method_name
-            ))
-        })?
-        .clone();
-    let expected_args = callee_sig.params.len() + 1;
-    if inst.operands.len() != expected_args {
-        return Err(CodegenIrError::unsupported(format!(
-            "interface method call to {}::{} with {} operands for {} ABI params",
-            normalized,
-            method_name,
-            inst.operands.len(),
-            expected_args
-        )));
-    }
+    let (normalized, method_key, callee_sig) = resolve_interface_call_signature(
+        ctx, interface_name, method_name, inst.operands.len(),
+    )?;
     let receiver_ty = PhpType::Object(normalized.to_string());
     let mut param_types = Vec::with_capacity(callee_sig.params.len() + 1);
     param_types.push(receiver_ty.clone());
@@ -215,10 +198,11 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    let return_ty = iterators::emit_interface_dispatch_call(ctx, normalized, &method_key, None)?;
+    let return_ty = iterators::emit_interface_dispatch_call(ctx, &normalized, &method_key, None)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -436,4 +420,3 @@ pub(super) fn lower_callback_filter_accept_intrinsic(
         "callback_filter_accept",
     )
 }
-

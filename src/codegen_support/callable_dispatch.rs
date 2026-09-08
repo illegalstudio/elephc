@@ -37,6 +37,16 @@ pub(crate) struct RuntimeStaticMethodCallableCase {
     pub(crate) case: RuntimeCallableCase,
 }
 
+/// Returns whether a method name belongs to PHP's runtime-callable surface.
+///
+/// Compiler implementation helpers use the reserved `__elephc_` prefix and must
+/// never become reachable through dynamic callable arrays or eval dispatch.
+pub(crate) fn runtime_method_callable_visible(method_name: &str) -> bool {
+    !method_name
+        .get(.."__elephc_".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("__elephc_"))
+}
+
 /// Returns true for builtins supported by generic runtime string-callable dispatch.
 ///
 /// These names have stable fixed-arity EIR wrapper signatures and do not require literal,

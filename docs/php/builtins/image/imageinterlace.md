@@ -2,7 +2,7 @@
 title: "imageinterlace()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 512
+  order: 513
 ---
 
 ## imageinterlace()

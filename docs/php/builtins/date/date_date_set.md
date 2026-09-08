@@ -2,7 +2,7 @@
 title: "date_date_set()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 194
+  order: 195
 ---
 
 ## date_date_set()

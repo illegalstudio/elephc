@@ -38,6 +38,7 @@ pub(super) fn reflection_member_flags(
         is_readonly,
         is_promoted,
         is_virtual: false,
+        is_dynamic: false,
     }
 }
 
@@ -49,6 +50,12 @@ pub(super) fn reflection_interface_method_names(
     let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
         return Vec::new();
     };
+    if let Some(method_names) = crate::types::php_src_date_method_names(interface_name) {
+        return method_names
+            .iter()
+            .map(|method_name| (*method_name).to_string())
+            .collect();
+    }
     let Some(info) = ctx.module.interface_infos.get(interface_name) else {
         return Vec::new();
     };
@@ -489,4 +496,3 @@ pub(super) fn reflection_enum_case_backing_value(case: &EnumCaseInfo) -> Option<
         EnumCaseValue::Str(value) => Some(ReflectionConstantValue::Str(value.clone())),
     }
 }
-

@@ -2,7 +2,7 @@
 title: "mysqli_fetch_array()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 115
+  order: 116
 ---
 
 ## mysqli_fetch_array()

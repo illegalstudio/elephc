@@ -35,7 +35,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
             builtin_property(
                 "__attrs",
                 Visibility::Private,
-                Some(array_type()),
+                Some(object_array_type("ReflectionAttribute")),
                 empty_array(),
             ),
             builtin_property(

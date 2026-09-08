@@ -15,10 +15,15 @@ mod calls;
 
 pub(in crate::interpreter) use calls::*;
 mod evaluation;
+mod temporaries;
+pub(in crate::interpreter) use temporaries::{
+    eval_condition, record_scalar_argument_temporary,
+    EvalExprResult, finish_evaluated_result,
+};
 
 pub(in crate::interpreter) use evaluation::{
     eval_array_access_object_matches, eval_array_get_result, eval_binary_result,
-    eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
+    eval_closure_object_expr, eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
 };
 use evaluation::*;
 
@@ -28,6 +33,29 @@ pub(in crate::interpreter) fn eval_expr(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_expr_result(expr, context, scope, values).map(|result| result.value)
+}
+
+/// Evaluates once while retaining the result's proven ownership for borrowing consumers.
+pub(in crate::interpreter) fn eval_expr_result(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalExprResult, EvalStatus> {
+    let mut owned = temporaries::expression_owns_temporary(expr);
+    let value = eval_expr_with_ownership(expr, context, scope, values, &mut owned)?;
+    Ok(EvalExprResult { value, owned })
+}
+
+/// Dispatches an expression and updates ownership when the selected call supplies stronger evidence.
+fn eval_expr_with_ownership(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+    owned: &mut bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match expr {
         EvalExpr::Array(elements) => {
@@ -51,7 +79,13 @@ pub(in crate::interpreter) fn eval_expr(
             let index = eval_expr(index, context, scope, values)?;
             eval_array_get_result(array, index, context, values)
         }
-        EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
+        EvalExpr::Call { name, args } => {
+            let result = eval_call(name, args, context, scope, values)?;
+            if name.eq_ignore_ascii_case("eval") {
+                *owned = true;
+            }
+            Ok(result)
+        }
         EvalExpr::Cast { target, expr } => eval_cast_expr(target, expr, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::ConstFetch(name) => eval_const_fetch(name, context, values),
@@ -86,20 +120,16 @@ pub(in crate::interpreter) fn eval_expr(
         } => {
             let object = eval_expr(object, context, scope, values)?;
             let method = eval_dynamic_member_name(method, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_method_call_result_with_evaluated_args(
-                object,
-                &method,
-                evaluated_args,
-                context,
-                values,
-            )
+            let result = eval_method_expression_result(object, &method, args, context, scope, values)?;
+            *owned = result.owned;
+            Ok(result.value)
         }
         EvalExpr::DynamicNewObject { class_name, args } => {
             let class_name = eval_expr(class_name, context, scope, values)?;
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
-            let args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_new_object_result(&class_name, args, context, scope, values)
+            eval_with_method_call_args(args, context, scope, values, |evaluated, context, scope, values| {
+                eval_new_object_result(&class_name, evaluated, context, scope, values)
+            })
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
@@ -114,15 +144,11 @@ pub(in crate::interpreter) fn eval_expr(
             let class_name = eval_expr(class_name, context, scope, values)?;
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
             let method = eval_dynamic_member_name(method, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_static_method_call_result_from_scope(
-                &class_name,
-                &method,
-                evaluated_args,
-                scope,
-                context,
-                values,
-            )
+            eval_with_method_call_args(args, context, scope, values, |evaluated, context, scope, values| {
+                eval_static_method_call_result_from_scope(
+                    &class_name, &method, evaluated, scope, context, values,
+                )
+            })
         }
         EvalExpr::DynamicStaticPropertyGet {
             class_name,
@@ -198,33 +224,28 @@ pub(in crate::interpreter) fn eval_expr(
             fallback_name,
         } => eval_namespaced_const_fetch(name, fallback_name, context, values),
         EvalExpr::NewObject { class_name, args } => {
-            let args = eval_method_call_arg_values(args, context, scope, values)?;
-            let class_name = eval_new_object_class_name(class_name, context)?;
-            eval_new_object_result(&class_name, args, context, scope, values)
+            eval_with_method_call_args(args, context, scope, values, |evaluated, context, scope, values| {
+                let class_name = eval_new_object_class_name(class_name, context)?;
+                eval_new_object_result(&class_name, evaluated, context, scope, values)
+            })
         }
         EvalExpr::NewAnonymousClass { class, args } => {
             ensure_eval_anonymous_class_decl(class, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            let class = context
-                .class(class.name())
-                .cloned()
-                .ok_or(EvalStatus::RuntimeFatal)?;
-            eval_dynamic_class_new_object(&class, evaluated_args, context, scope, values)
+            eval_with_method_call_args(args, context, scope, values, |evaluated, context, scope, values| {
+                let class = context.class(class.name()).cloned().ok_or(EvalStatus::RuntimeFatal)?;
+                eval_dynamic_class_new_object(&class, evaluated, context, scope, values)
+            })
         }
         EvalExpr::StaticMethodCall {
             class_name,
             method,
             args,
         } => {
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_static_method_call_result_from_scope(
-                class_name,
-                method,
-                evaluated_args,
-                scope,
-                context,
-                values,
-            )
+            eval_with_method_call_args(args, context, scope, values, |evaluated, context, scope, values| {
+                eval_static_method_call_result_from_scope(
+                    class_name, method, evaluated, scope, context, values,
+                )
+            })
         }
         EvalExpr::StaticPropertyGet {
             class_name,
@@ -243,14 +264,9 @@ pub(in crate::interpreter) fn eval_expr(
             args,
         } => {
             let object = eval_expr(object, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_method_call_result_with_evaluated_args(
-                object,
-                method,
-                evaluated_args,
-                context,
-                values,
-            )
+            let result = eval_method_expression_result(object, method, args, context, scope, values)?;
+            *owned = result.owned;
+            Ok(result.value)
         }
         EvalExpr::NullsafeMethodCall {
             object,
@@ -261,14 +277,9 @@ pub(in crate::interpreter) fn eval_expr(
             if values.is_null(object)? {
                 return values.null();
             }
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_method_call_result_with_evaluated_args(
-                object,
-                method,
-                evaluated_args,
-                context,
-                values,
-            )
+            let result = eval_method_expression_result(object, method, args, context, scope, values)?;
+            *owned = result.owned;
+            Ok(result.value)
         }
         EvalExpr::NullsafeDynamicMethodCall {
             object,
@@ -280,29 +291,31 @@ pub(in crate::interpreter) fn eval_expr(
                 return values.null();
             }
             let method = eval_dynamic_member_name(method, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_method_call_result_with_evaluated_args(
-                object,
-                &method,
-                evaluated_args,
-                context,
-                values,
-            )
+            let result = eval_method_expression_result(object, &method, args, context, scope, values)?;
+            *owned = result.owned;
+            Ok(result.value)
         }
         EvalExpr::NullCoalesce { value, default } => {
             let value = if let EvalExpr::LoadVar(name) = value.as_ref() {
                 match visible_scope_cell(context, scope, name) {
-                    Some(value) => value,
-                    None => values.null()?,
+                    Some(value) => EvalExprResult::unclassified(value),
+                    None => EvalExprResult { value: values.null()?, owned: true },
                 }
             } else {
-                eval_expr(value, context, scope, values)?
+                eval_expr_result(value, context, scope, values)?
             };
-            if values.is_null(value)? {
-                eval_expr(default, context, scope, values)
-            } else {
-                Ok(value)
+            let is_null = match values.is_null(value.value) {
+                Ok(is_null) => is_null,
+                Err(status) => return finish_evaluated_result(value, Err(status), context, values),
+            };
+            if !is_null {
+                *owned = value.owned;
+                return Ok(value.value);
             }
+            finish_evaluated_result(value, Ok(()), context, values)?;
+            let result = eval_expr_result(default, context, scope, values)?;
+            *owned = result.owned;
+            Ok(result.value)
         }
         EvalExpr::NullsafePropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
@@ -334,57 +347,76 @@ pub(in crate::interpreter) fn eval_expr(
             then_branch,
             else_branch,
         } => {
-            let condition = eval_expr(condition, context, scope, values)?;
-            if values.truthy(condition)? {
-                if let Some(then_branch) = then_branch {
-                    eval_expr(then_branch, context, scope, values)
-                } else {
-                    Ok(condition)
-                }
-            } else {
-                eval_expr(else_branch, context, scope, values)
+            let condition = eval_expr_result(condition, context, scope, values)?;
+            let truthy = match values.truthy(condition.value) {
+                Ok(truthy) => truthy,
+                Err(status) => return finish_evaluated_result(condition, Err(status), context, values),
+            };
+            if truthy && then_branch.is_none() {
+                *owned = condition.owned;
+                return Ok(condition.value);
             }
+            finish_evaluated_result(condition, Ok(()), context, values)?;
+            let selected = if truthy { then_branch.as_ref().expect("full ternary branch") } else { else_branch };
+            let result = eval_expr_result(selected, context, scope, values)?;
+            *owned = result.owned;
+            Ok(result.value)
         }
         EvalExpr::Unary { op, expr } => {
-            let value = eval_expr(expr, context, scope, values)?;
-            match op {
+            if *op == EvalUnaryOp::Suppress {
+                let previous = values.begin_error_suppression()?;
+                let result = eval_expr_result(expr, context, scope, values);
+                values.end_error_suppression(previous)?;
+                let result = result?;
+                *owned = result.owned;
+                return Ok(result.value);
+            }
+            let operand = eval_expr_result(expr, context, scope, values)?;
+            let value = operand.value;
+            let result = (|| { match op {
+                EvalUnaryOp::Suppress => unreachable!("silence is evaluated before its operand"),
                 EvalUnaryOp::Plus => {
                     let zero = values.int(0)?;
-                    values.add(zero, value)
+                    let result = values.add(zero, value);
+                    let cleanup = values.release(zero);
+                    result.and_then(|value| cleanup.map(|()| value))
                 }
                 EvalUnaryOp::Negate => {
                     let zero = values.int(0)?;
-                    values.sub(zero, value)
+                    let result = values.sub(zero, value);
+                    let cleanup = values.release(zero);
+                    result.and_then(|value| cleanup.map(|()| value))
                 }
                 EvalUnaryOp::LogicalNot => {
                     let truthy = values.truthy(value)?;
                     values.bool_value(!truthy)
                 }
                 EvalUnaryOp::BitNot => values.bit_not(value),
-            }
+            } })();
+            finish_evaluated_result(operand, result, context, values)
         }
         EvalExpr::Binary { op, left, right } => {
             if *op == EvalBinOp::LogicalAnd {
-                let left = eval_expr(left, context, scope, values)?;
-                if !values.truthy(left)? {
+                if !eval_condition(left, context, scope, values)? {
                     return values.bool_value(false);
                 }
-                let right = eval_expr(right, context, scope, values)?;
-                let truthy = values.truthy(right)?;
+                let truthy = eval_condition(right, context, scope, values)?;
                 return values.bool_value(truthy);
             }
             if *op == EvalBinOp::LogicalOr {
-                let left = eval_expr(left, context, scope, values)?;
-                if values.truthy(left)? {
+                if eval_condition(left, context, scope, values)? {
                     return values.bool_value(true);
                 }
-                let right = eval_expr(right, context, scope, values)?;
-                let truthy = values.truthy(right)?;
+                let truthy = eval_condition(right, context, scope, values)?;
                 return values.bool_value(truthy);
             }
-            let left = eval_expr(left, context, scope, values)?;
-            let right = eval_expr(right, context, scope, values)?;
-            eval_binary_result(*op, left, right, context, values)
+            let left_value = eval_expr_result(left, context, scope, values)?;
+            let result = (|| {
+                let right_value = eval_expr_result(right, context, scope, values)?;
+                let result = eval_binary_result(*op, left_value.value, right_value.value, context, values);
+                finish_evaluated_result(right_value, result, context, values)
+            })();
+            finish_evaluated_result(left_value, result, context, values)
         }
     }
 }

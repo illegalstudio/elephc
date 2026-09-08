@@ -91,6 +91,8 @@ pub(crate) fn inject_builtin_throwables(
         "Throwable",
         "Error",
         "TypeError",
+        "CompileError",
+        "ParseError",
         "ArgumentCountError",
         "ValueError",
         "ArithmeticError",
@@ -274,7 +276,13 @@ pub(crate) fn inject_builtin_throwables(
             trait_aliases: Vec::new(),
         },
     );
-    // ArgumentCountError is the ONLY builtin Error subclass that is not a direct
+    for (name, parent) in [("CompileError", "Error"), ("ParseError", "CompileError")] {
+        let mut declaration = class_map["TypeError"].clone();
+        declaration.name = name.to_string();
+        declaration.extends = Some(parent.to_string());
+        class_map.insert(name.to_string(), declaration);
+    }
+    // ArgumentCountError is not a direct
     // child of Error: reference PHP nests it under TypeError, so
     // `catch (TypeError $e)` must catch it. Declaring it lets `catch`, `throw`,
     // `new`, and `instanceof` resolve the name; it inherits the whole Throwable

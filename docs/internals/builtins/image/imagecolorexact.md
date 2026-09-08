@@ -2,7 +2,7 @@
 title: "imagecolorexact() — internals"
 description: "Compiler internals for imagecolorexact(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 470
+  order: 471
 ---
 
 ## `imagecolorexact()` — internals

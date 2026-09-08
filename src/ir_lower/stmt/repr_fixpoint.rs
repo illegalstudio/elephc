@@ -433,6 +433,16 @@ impl<'a> ConversionScan<'a> {
                 self.expr(object);
                 self.expr(value);
             }
+            StmtKind::DynamicPropertyArrayPush {
+                object,
+                property,
+                value,
+            } => {
+                self.mutation();
+                self.expr(object);
+                self.expr(property);
+                self.expr(value);
+            }
             StmtKind::PropertyArrayAssign { object, property: _, index, value } => {
                 self.mutation();
                 self.expr(object);

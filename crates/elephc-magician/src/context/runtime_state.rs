@@ -362,6 +362,11 @@ impl ElephcEvalContext {
         self.pending_throw.take()
     }
 
+    /// Borrows the pending throwable handle without clearing or retaining its runtime owner.
+    pub(crate) fn pending_throw(&self) -> Option<RuntimeCellHandle> {
+        self.pending_throw
+    }
+
     /// Returns the eval-local SPL autoload extension list.
     pub fn spl_autoload_extensions(&self) -> &str {
         &self.spl_autoload_extensions

@@ -366,6 +366,21 @@ impl Checker {
             ));
         }
 
+        // PHP validates declared object returns when the function actually returns. Keep
+        // statically precise values fast, but allow every source shape to reach the runtime
+        // class/interface boundary where null, scalars, and incompatible objects raise the
+        // catchable `TypeError` PHP emits.
+        if matches!(expected, PhpType::Object(_)) {
+            return Ok(());
+        }
+
+        // A runtime-opaque Mixed value is legal source for any declared value return. PHP
+        // validates its concrete tag at the return boundary and raises a catchable TypeError;
+        // rejecting it statically would erase that observable control flow.
+        if matches!(actual, PhpType::Mixed) {
+            return Ok(());
+        }
+
         if matches!(actual, PhpType::Void) && !Self::return_type_accepts_null(expected) {
             return Err(CompileError::new(
                 span,

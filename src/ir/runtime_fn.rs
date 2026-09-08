@@ -165,6 +165,7 @@ pub enum RuntimeFnId {
     GetDeclaredClasses,
     GetDeclaredInterfaces,
     GetDeclaredTraits,
+    GetExtensionFuncs,
     GetLoadedExtensions,
     GetParentClass,
     InterfaceExists,
@@ -402,6 +403,14 @@ pub enum RuntimeFnId {
     ElephcObjectPropCount,
     ElephcObjectPropName,
     ElephcObjectPropValue,
+    /// Merges declared DateTime-subclass properties into an internal magic serialization hash.
+    DateMagicAppendProperties,
+    /// Merges properties after an explicit lexical call to an ext/date parent `__serialize()`.
+    DateMagicAppendPropertiesForced,
+    /// Runs typed DateTime-subclass property hydrators selected by the concrete runtime class.
+    DateMagicRestoreProperties,
+    /// Removes serialized-reference cells before ext/date hydrates native fields.
+    DateMagicFilterReferences,
     ElephcPtrIsNull,
     ElephcPtrReadString,
     ElephcPtrWriteString,
@@ -623,6 +632,11 @@ pub enum RuntimeFnId {
     Vprintf,
     Vsprintf,
     Wordwrap,
+    ElephcDiagWarning,
+    ElephcPrintRObjectProperties,
+    ElephcVarDumpIndent,
+    ElephcVarDumpObjectProperties,
+    ElephcVarDumpObjectPropertyCount,
     ElephcGmmktimeRaw,
     ElephcMktimeRaw,
     ElephcStrtotimeRaw,
@@ -635,6 +649,7 @@ pub enum RuntimeFnId {
     DateDefaultTimezoneSet,
     Define,
     Defined,
+    ErrorReporting,
     Exec,
     ExtensionLoaded,
     Getdate,
@@ -661,6 +676,7 @@ pub enum RuntimeFnId {
     PregSplit,
     Putenv,
     Serialize,
+    Setlocale,
     ShellExec,
     Sleep,
     Strtotime,
@@ -718,6 +734,12 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
+            RuntimeFnId::DateMagicAppendProperties
+            | RuntimeFnId::DateMagicAppendPropertiesForced
+            | RuntimeFnId::DateMagicRestoreProperties
+            | RuntimeFnId::DateMagicFilterReferences => {
+                Some((2, Some(2)))
+            }
             _ => None,
         }
     }
@@ -855,6 +877,12 @@ impl RuntimeFnId {
                 if let Some((_, name_ty)) = sig.params.get_mut(0) {
                     *name_ty = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
                 }
+            }
+            RuntimeFnId::GetExtensionFuncs => {
+                sig.return_type = PhpType::Union(vec![
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                    PhpType::False,
+                ]);
             }
             RuntimeFnId::PregReplaceCallback => {
                 if let Some((_, callback_ty)) = sig.params.get_mut(1) {
@@ -1140,6 +1168,10 @@ impl RuntimeFnId {
             | RuntimeFnId::JsonLastErrorMsg
             | RuntimeFnId::DateDefaultTimezoneGet
             | RuntimeFnId::ObGetLevel => crate::ir::Effects::READS_GLOBAL,
+            RuntimeFnId::ErrorReporting => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
             RuntimeFnId::SplAutoloadExtensions => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits()
                     | crate::ir::Effects::WRITES_GLOBAL.bits(),
@@ -1154,6 +1186,31 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            RuntimeFnId::DateMagicAppendProperties => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits(),
+            ),
+            RuntimeFnId::DateMagicAppendPropertiesForced => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits(),
+            ),
+            RuntimeFnId::DateMagicRestoreProperties => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            RuntimeFnId::DateMagicFilterReferences => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits(),
+            ),
             // Re-boxing a property slot allocates the Mixed cell it hands back.
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
@@ -1208,6 +1265,11 @@ impl RuntimeFnId {
                 )
             }
             RuntimeFnId::Sleep | RuntimeFnId::Usleep => crate::ir::Effects::WRITES_PROCESS,
+            RuntimeFnId::Setlocale => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
             // `intval($value, $base)` only inspects the subject's bytes: the string parser
             // allocates nothing, and the boxed-`Mixed` entry point reads the cell before
             // handing a non-string payload to the ordinary integer cast.
@@ -1549,6 +1611,15 @@ impl RuntimeFnId {
             RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
+            RuntimeFnId::Date
+            | RuntimeFnId::DateDefaultTimezoneSet
+            | RuntimeFnId::Mktime
+            | RuntimeFnId::Gmmktime
+            | RuntimeFnId::ElephcMktimeRaw
+            | RuntimeFnId::ElephcGmmktimeRaw
+            | RuntimeFnId::ElephcStrtotimeRaw
+            | RuntimeFnId::Gmdate
+            | RuntimeFnId::Strtotime => &[BuiltinRequirement::Bridge("elephc_tz")],
             RuntimeFnId::StreamSocketEnableCrypto => &[BuiltinRequirement::Bridge("elephc_tls")],
             _ => &[],
         }
@@ -1559,6 +1630,10 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::Mktime
+                | RuntimeFnId::Gmmktime
+                | RuntimeFnId::ElephcGmmktimeRaw
+                | RuntimeFnId::ElephcMktimeRaw
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::Trim
         )
@@ -1569,6 +1644,8 @@ impl RuntimeFnId {
         use crate::types::PhpType;
         let source = source.map(PhpType::codegen_repr);
         match self {
+            RuntimeFnId::Mktime | RuntimeFnId::Gmmktime
+            | RuntimeFnId::ElephcGmmktimeRaw | RuntimeFnId::ElephcMktimeRaw => true,
             RuntimeFnId::Abs => source.is_none_or(|ty| {
                 matches!(
                     ty,
@@ -1695,6 +1772,9 @@ impl RuntimeFnId {
         self,
     ) -> crate::builtins::semantics::BuiltinResultOwnership {
         use crate::builtins::semantics::BuiltinResultOwnership;
+        if matches!(self, RuntimeFnId::Mktime | RuntimeFnId::Gmmktime) {
+            return BuiltinResultOwnership::Fresh;
+        }
         // `intval($value, $base)` hands back a raw machine integer, never storage. Leaving it
         // in the default `MayAliasArguments` bucket would keep an owned subject temporary
         // alive for the integer's whole lifetime, which is the leak shape already documented
@@ -1906,6 +1986,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
+                // `date()` / `gmdate()` render new bytes and therefore cannot alias the format
+                // argument. Leaving them in the default `MayAliasArguments` bucket made their
+                // `Release` a backend no-op, leaking one 48-byte block per call (and two per
+                // `DateTime::format()` call because its synthetic body owns a rewritten format).
+                | RuntimeFnId::Date
+                | RuntimeFnId::Gmdate
                 // `getcwd()` takes NO arguments, so its result cannot alias one by
                 // construction; `__rt_getcwd` copies the kernel's buffer out through
                 // `__rt_str_persist`. The default `MayAliasArguments` bucket made
@@ -1958,7 +2044,9 @@ impl RuntimeFnId {
                 // skip its release, leaking one block per `print_r($v, true)` call.
                 | RuntimeFnId::PrintR
                 | RuntimeFnId::PtrReadString
+                | RuntimeFnId::ElephcPtrReadString
                 | RuntimeFnId::Range
+                | RuntimeFnId::Setlocale
                 | RuntimeFnId::StrSplit
                 // Every `str_word_count()` shape allocates its own result: format 0 is a plain
                 // integer, format 1 pushes persisted copies into a brand-new indexed array, and
@@ -2101,6 +2189,7 @@ impl RuntimeFnId {
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
             RuntimeFnId::GetDeclaredTraits => "get_declared_traits",
+            RuntimeFnId::GetExtensionFuncs => "get_extension_funcs",
             RuntimeFnId::GetLoadedExtensions => "get_loaded_extensions",
             RuntimeFnId::GetParentClass => "get_parent_class",
             RuntimeFnId::InterfaceExists => "interface_exists",
@@ -2337,6 +2426,10 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",
             RuntimeFnId::ElephcObjectPropValue => "__elephc_object_prop_value",
+            RuntimeFnId::DateMagicAppendProperties => "date_magic_append_properties",
+            RuntimeFnId::DateMagicAppendPropertiesForced => "date_magic_append_properties_forced",
+            RuntimeFnId::DateMagicRestoreProperties => "date_magic_restore_properties",
+            RuntimeFnId::DateMagicFilterReferences => "date_magic_filter_references",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",
@@ -2507,6 +2600,17 @@ impl RuntimeFnId {
             RuntimeFnId::Vprintf => "vprintf",
             RuntimeFnId::Vsprintf => "vsprintf",
             RuntimeFnId::Wordwrap => "wordwrap",
+            RuntimeFnId::ElephcDiagWarning => "__elephc_diag_warning",
+            RuntimeFnId::ElephcPrintRObjectProperties => {
+                "__elephc_print_r_object_properties"
+            }
+            RuntimeFnId::ElephcVarDumpIndent => "__elephc_var_dump_indent",
+            RuntimeFnId::ElephcVarDumpObjectProperties => {
+                "__elephc_var_dump_object_properties"
+            }
+            RuntimeFnId::ElephcVarDumpObjectPropertyCount => {
+                "__elephc_var_dump_object_property_count"
+            }
             RuntimeFnId::ElephcGmmktimeRaw => "__elephc_gmmktime_raw",
             RuntimeFnId::ElephcMktimeRaw => "__elephc_mktime_raw",
             RuntimeFnId::ElephcStrtotimeRaw => "__elephc_strtotime_raw",
@@ -2519,6 +2623,7 @@ impl RuntimeFnId {
             RuntimeFnId::DateDefaultTimezoneSet => "date_default_timezone_set",
             RuntimeFnId::Define => "define",
             RuntimeFnId::Defined => "defined",
+            RuntimeFnId::ErrorReporting => "error_reporting",
             RuntimeFnId::Exec => "exec",
             RuntimeFnId::ExtensionLoaded => "extension_loaded",
             RuntimeFnId::Getdate => "getdate",
@@ -2545,6 +2650,7 @@ impl RuntimeFnId {
             RuntimeFnId::PregSplit => "preg_split",
             RuntimeFnId::Putenv => "putenv",
             RuntimeFnId::Serialize => "serialize",
+            RuntimeFnId::Setlocale => "setlocale",
             RuntimeFnId::ShellExec => "shell_exec",
             RuntimeFnId::Sleep => "sleep",
             RuntimeFnId::Strtotime => "strtotime",

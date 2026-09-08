@@ -29,19 +29,38 @@ pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let visible_param_count = closure.params.len() - inst.operands.len();
     let signature = function_signature_from_eir_with_param_count(closure, visible_param_count);
     let captures = closure_capture_params_from_eir(closure, inst.operands.len());
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &signature, &captures);
-    let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+    let static_bindings = static_debug_bindings(closure);
+    let owned_object_return = super::object_return_ownership::object_return_ownership(closure)
+        == super::object_return_ownership::ObjectReturnOwnership::Owned;
+    let invoker_label = super::runtime_wrappers::emit_runtime_callable_invoker_with_ownership(
+        ctx, &signature, &captures, owned_object_return,
+    );
+    let debug_source_path = ctx.module.source_path.clone();
+    let debug_source_line = inst.span.map_or(0, |span| span.line);
+    let debug_primary_name = format!(
+        "{{closure:{}:{}}}",
+        debug_source_path.as_deref().unwrap_or("<unknown>"),
+        debug_source_line
+    );
+    let descriptor_label = callable_descriptor::static_closure_descriptor_with_debug_meta(
         ctx.data,
         &function_symbol(&closure.name),
-        Some(&closure.name),
-        callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
-        Some(&signature),
+        &closure.name,
+        &signature,
         &captures,
         &captures,
         callable_descriptor::CallableDescriptorInvocation::new(
             callable_descriptor::CallableDescriptorShape::Closure,
         ),
         Some(&invoker_label),
+        callable_descriptor::CallableDebugMetadata {
+            flags: callable_descriptor::CALLABLE_DEBUG_FLAG_CLOSURE,
+            primary_name: &debug_primary_name,
+            source_path: debug_source_path.as_deref(),
+            source_line: debug_source_line,
+            bindings: &captures,
+            static_bindings: &static_bindings,
+        },
     );
     // Every closure gets HEAP storage, capture-free ones included. In PHP a Closure
     // is an object and consumes an object handle from the same pool `new` draws
@@ -62,6 +81,25 @@ pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
+/// Collects symbol-backed function `static $local` slots for php-src Closure debug metadata.
+pub(super) fn static_debug_bindings(
+    function: &crate::ir::Function,
+) -> Vec<callable_descriptor::CallableDebugStaticBinding> {
+    function
+        .locals
+        .iter()
+        .filter(|local| local.kind == crate::ir::LocalKind::StaticLocal)
+        .filter_map(|local| {
+            let name = local.name.clone()?;
+            Some(callable_descriptor::CallableDebugStaticBinding {
+                value_symbol: crate::names::static_local_symbol(&function.name, &name),
+                name,
+                php_type: local.php_type.codegen_repr(),
+            })
+        })
+        .collect()
+}
+
 /// Returns the hidden closure capture params from the tail of the EIR closure ABI.
 pub(super) fn closure_capture_params_from_eir(
     closure: &crate::ir::Function,
@@ -79,7 +117,7 @@ pub(super) fn closure_capture_params_from_eir(
         .collect()
 }
 
-/// Allocates a runtime closure descriptor and stores capture operands into its environment.
+/// Allocates a runtime Closure descriptor, assigns its object handle, and stores captures.
 pub(super) fn emit_runtime_closure_descriptor_with_captures(
     ctx: &mut FunctionContext<'_>,
     descriptor_label: &str,
@@ -92,7 +130,7 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
         callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + captures.len() * 16;
     abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
+    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // every runtime Closure draws one handle that descriptor release returns exactly once
     ctx.emitter
         .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime closure descriptor while storing captures
     callable_descriptor::emit_copy_static_descriptor_to_runtime(
@@ -472,4 +510,3 @@ pub(super) fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     signature.declared_params.push(variadic_declared);
     signature.param_type_exprs.push(variadic_type_expr);
 }
-

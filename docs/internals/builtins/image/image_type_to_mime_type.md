@@ -2,7 +2,7 @@
 title: "image_type_to_mime_type() — internals"
 description: "Compiler internals for image_type_to_mime_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 454
+  order: 455
 ---
 
 ## `image_type_to_mime_type()` — internals

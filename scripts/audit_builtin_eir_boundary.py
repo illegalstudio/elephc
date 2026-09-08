@@ -472,8 +472,24 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
     referenced_runtime_variants = set(
         re.findall(r"RuntimeFnId::([A-Za-z0-9_]+)", builtin_semantics_source)
     )
-    for variant in sorted(set(builtin_target_variants) - referenced_runtime_variants):
+    # Compiler-injected class/magic-method operations share the typed RuntimeFnId backend
+    # machinery but do not correspond to PHP function contracts in src/builtins. Keep this
+    # inventory closed so a new unowned target still fails the boundary audit.
+    internal_runtime_variants = {
+        "DateMagicAppendProperties",
+        "DateMagicAppendPropertiesForced",
+        "DateMagicFilterReferences",
+        "DateMagicRestoreProperties",
+    }
+    for variant in sorted(
+        set(builtin_target_variants) - referenced_runtime_variants - internal_runtime_variants
+    ):
         errors.append(f"RuntimeFnId::{variant}: runtime function is not referenced by builtin semantics")
+    for variant in sorted(internal_runtime_variants - set(builtin_target_variants)):
+        errors.append(f"RuntimeFnId::{variant}: internal runtime function has no typed target")
+    for variant in sorted(internal_runtime_variants):
+        if f"RuntimeFnId::{variant}" not in builtin_backend_source:
+            errors.append(f"RuntimeFnId::{variant}: internal runtime function has no backend implementation arm")
     for variant in sorted(referenced_runtime_variants - set(builtin_target_variants)):
         errors.append(f"RuntimeFnId::{variant}: builtin semantics reference an unknown runtime function")
     for variant in sorted(referenced_runtime_variants):

@@ -228,18 +228,15 @@ fn test_error_quoted_printable_encode_too_many_args() {
     );
 }
 
-/// Verifies that a function returning `int` that returns `strpos()` directly is rejected,
-/// because `strpos()` returns `Int|Bool` (false on miss), not `int`. This is a type
-/// incompatibility regression test.
+/// Verifies `strpos()`'s `int|false` result is accepted at a runtime int boundary.
 #[test]
-fn test_error_strpos_false_return_rejects_int_return_type() {
-    expect_error(
+fn test_strpos_false_return_is_runtime_coercible() {
+    expect_no_error(
         r#"<?php
 function pos(): int {
     return strpos("abc", "z");
 }
 "#,
-        "Function 'pos' return type expects Int, got Union([Int, False])",
     );
 }
 

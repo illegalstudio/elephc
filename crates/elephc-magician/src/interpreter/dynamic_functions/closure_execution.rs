@@ -71,8 +71,9 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let static_names = static_var_names(function.body());
-    context.push_function(function.name());
+    context.push_function(function.display_name());
     let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+        function.display_name(),
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -98,7 +99,9 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
-    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    let result = with_lexical_strict_types(context, function.strict_types(), |context| {
+        execute_statements_with_return_ownership(function.body(), context, &mut function_scope, values, false)
+    });
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -116,9 +119,11 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            function.display_name(),
             function.return_type(),
             None,
             None,
+            function.strict_types(),
             control,
             context,
             values,
@@ -361,12 +366,13 @@ fn eval_closure_with_optional_binding(
     let function = closure.function();
     let static_names = static_var_names(function.body());
     let bound_class_pushed = binding.is_some();
-    context.push_function(function.name());
+    context.push_function(function.display_name());
     if let Some(binding) = &binding {
         context.push_class_scope(binding.class_scope.clone());
         context.push_called_class_scope(binding.called_class.clone());
     }
     let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+        function.display_name(),
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -400,7 +406,9 @@ fn eval_closure_with_optional_binding(
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
-    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    let result = with_lexical_strict_types(context, function.strict_types(), |context| {
+        execute_statements_with_return_ownership(function.body(), context, &mut function_scope, values, false)
+    });
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -428,9 +436,11 @@ fn eval_closure_with_optional_binding(
         | (_, _, Err(status), _)
         | (_, _, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            function.display_name(),
             function.return_type(),
             None,
             None,
+            function.strict_types(),
             control,
             context,
             values,

@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
@@ -146,6 +146,38 @@ pub(super) fn parse_expr_stmt(
     let expr = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+}
+
+/// Parses PHP 8.5's statement-only `(void) expression;` discard form.
+pub(super) fn parse_void_expr_stmt(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let stmt = parse_void_expr_inline(tokens, pos, span)?;
+    expect_semicolon(tokens, pos)?;
+    Ok(stmt)
+}
+
+/// Parses PHP 8.5's delimiter-free `(void) expression` discard form for `for` clauses.
+pub(crate) fn parse_void_expr_inline(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 3;
+    let inner = parse_expr(tokens, pos)?;
+    let cast_span = span.merge(inner.span);
+    Ok(Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::Cast {
+                target: CastType::Void,
+                expr: Box::new(inner),
+            },
+            cast_span,
+        )),
+        span,
+    ))
 }
 
 /// Parses a statement prefixed with `@` error suppression.

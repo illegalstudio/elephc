@@ -55,7 +55,7 @@ pub(in crate::interpreter) fn eval_localtime_result(
         .map(|value| values.truthy(value))
         .transpose()?
         .unwrap_or(false);
-    let tm = eval_context_localtime(timestamp, context)?;
+    let tm = eval_context_localtime(timestamp, context, values)?;
     let fields = [
         tm.tm_sec,
         tm.tm_min,

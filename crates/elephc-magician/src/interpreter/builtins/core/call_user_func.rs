@@ -65,5 +65,12 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values(
 pub(in crate::interpreter) fn eval_call_user_func_callback_expr_is_temporary(
     callback: &EvalExpr,
 ) -> bool {
-    matches!(callback, EvalExpr::Const(_))
+    matches!(callback, EvalExpr::Const(_) | EvalExpr::Array(_))
+}
+
+/// Literal callback arrays own their container; reading a callback variable only borrows it.
+#[test]
+fn callback_array_expression_owns_temporary_container() {
+    assert!(eval_call_user_func_callback_expr_is_temporary(&EvalExpr::Array(Vec::new())));
+    assert!(!eval_call_user_func_callback_expr_is_temporary(&EvalExpr::LoadVar("callback".into())));
 }

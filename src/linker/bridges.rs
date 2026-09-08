@@ -338,6 +338,16 @@ fn resolve_with<F>(
 where
     F: FnMut(&BridgeStaticlib) -> Result<PathBuf, LinkError>,
 {
+    let forced_bridges: HashSet<&str> = forced_whole_archive.iter().map(String::as_str)
+        .chain(plan.items().iter().filter_map(|item| match item {
+            LinkItem::StaticArchive {
+                whole_archive: true, origin: LinkOrigin::Bridge { name }, ..
+            } => Some(name.as_str()),
+            _ => None,
+        })).collect();
+    let requires_whole_archive = |name: &str| forced_bridges.iter().any(|forced| {
+        *forced == name || LinkPlan::bridge_embeds(name, forced)
+    });
     let plan = plan.without_redundant_embedded_bridges();
     let mut located: HashMap<&'static str, PathBuf> = HashMap::new();
     let mut bridge_paths = Vec::new();
@@ -351,7 +361,7 @@ where
         if let LinkItem::StaticArchive {
             path,
             origin: LinkOrigin::Bridge { name },
-            ..
+            whole_archive,
         } = item
         {
             if let Some(bridge) = bridge_for_library(name) {
@@ -365,7 +375,9 @@ where
             } else {
                 validate_archive_path(name, path.clone())?;
             }
-            ordered.push(item.clone());
+            ordered.push(LinkItem::bridge_archive(
+                path.clone(), name.clone(), *whole_archive || requires_whole_archive(name),
+            ));
             continue;
         }
         let LinkItem::NamedLibrary { name, .. } = item else {
@@ -398,9 +410,7 @@ where
                 bridge_paths.push(LinkItem::SearchPath(parent));
             }
         }
-        let forced = forced_whole_archive
-            .iter()
-            .any(|forced| forced == bridge.lib_name);
+        let forced = requires_whole_archive(bridge.lib_name);
         ordered.push(LinkItem::bridge_archive(
             archive,
             bridge.lib_name,
@@ -1403,6 +1413,7 @@ mod tests {
         let plan = LinkPlan::from_items(vec![
             LinkItem::named_runtime("elephc_crypto"),
             LinkItem::named_runtime("elephc_phar"),
+            LinkItem::named_runtime("elephc_tz"),
             LinkItem::named_runtime("elephc_magician"),
         ]);
         let executable = std::env::current_exe().expect("test executable path");
@@ -1425,6 +1436,42 @@ mod tests {
             .collect();
 
         assert_eq!(bridge_names, vec!["elephc_magician"]);
+    }
+
+    /// Forcing TZ loads its containing Magician archive without adding duplicate TZ inputs.
+    #[test]
+    fn forced_embedded_timezone_bridge_loads_its_provider() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::named_runtime("elephc_tz"),
+            LinkItem::named_runtime("elephc_magician"),
+        ]);
+        let executable = std::env::current_exe().expect("test executable path");
+        let resolution = resolve_with(&plan, &["elephc_tz".to_string()], |bridge| {
+            assert_eq!(bridge.lib_name, "elephc_magician");
+            Ok(executable.clone())
+        }).expect("embedded timezone provider must resolve");
+        assert!(resolution.plan.items().iter().any(|item| matches!(item,
+            LinkItem::StaticArchive { origin: LinkOrigin::Bridge { name }, whole_archive: true, .. }
+                if name == "elephc_magician"
+        )));
+    }
+
+    /// An exact archive's force flag survives replacement by an exact provider archive.
+    #[test]
+    fn forced_embedded_timezone_exact_archive_loads_its_provider() {
+        let executable = std::env::current_exe().expect("test executable path");
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::bridge_archive(executable.clone(), "elephc_tz", true),
+            LinkItem::bridge_archive(executable.clone(), "elephc_magician", false),
+        ]);
+        let resolution = resolve_with(&plan, &[], |_| panic!("exact archives need no locator"))
+            .expect("exact embedded provider must resolve");
+        let archives: Vec<_> = resolution.plan.items().iter().filter_map(|item| match item {
+            LinkItem::StaticArchive { origin: LinkOrigin::Bridge { name }, whole_archive, .. }
+                => Some((name.as_str(), *whole_archive)),
+            _ => None,
+        }).collect();
+        assert_eq!(archives, vec![("elephc_magician", true)]);
     }
 
     /// Verifies a missing named bridge returns a structured error instead of a `-l` fallback.

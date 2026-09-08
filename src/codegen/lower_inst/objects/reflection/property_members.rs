@@ -43,13 +43,20 @@ pub(super) fn reflection_class_property_member(
             (is_reflection_enum(ctx, class_name) && property_name == "name")
                 .then(|| class_name.to_string())
         });
-    let property_hook_members = reflection_property_hook_members(
-        info,
-        property_name,
-        declaring_class_name.as_deref(),
-        flags,
-        type_metadata.as_ref(),
-    );
+    let property_hook_members = if class_name == "DatePeriod" {
+        // php-src implements DatePeriod's seven public virtual properties through
+        // object handlers rather than PHP property hooks. Elephc uses hidden
+        // synthetic getters for code generation, but Reflection must expose no hooks.
+        Vec::new()
+    } else {
+        reflection_property_hook_members(
+            info,
+            property_name,
+            declaring_class_name.as_deref(),
+            flags,
+            type_metadata.as_ref(),
+        )
+    };
     Some(ReflectionListedMember {
         name: property_name.to_string(),
         declaring_class_name,
@@ -374,4 +381,3 @@ pub(super) fn reflection_default_value_to_string(
         | ReflectionParameterDefaultValue::AssocArray(_) => None,
     }
 }
-

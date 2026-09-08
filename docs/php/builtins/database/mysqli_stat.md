@@ -2,7 +2,7 @@
 title: "mysqli_stat()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 158
+  order: 159
 ---
 
 ## mysqli_stat()

@@ -62,6 +62,41 @@ pub(crate) fn is_class_like_in_modules(name: &str, modules: &[PhpModule]) -> boo
     lookup_class(name).is_some_and(|class| !class.internal && modules.contains(&class.module))
 }
 
+/// Identifies builtin classes whose runtime payload uses compact Throwable fields.
+/// Generic property-default initialization must not write boxed defaults into this layout.
+pub(crate) fn is_compact_throwable_class(class_name: &str) -> bool {
+    matches!(
+        class_name,
+        "Error"
+            | "TypeError"
+            | "CompileError"
+            | "ParseError"
+            | "ArgumentCountError"
+            | "ValueError"
+            | "ArithmeticError"
+            | "DivisionByZeroError"
+            | "AssertionError"
+            | "UnhandledMatchError"
+            | "Exception"
+            | "RuntimeException"
+            | "ReflectionException"
+            | "JsonException"
+            | "FiberError"
+            | "LogicException"
+            | "BadFunctionCallException"
+            | "BadMethodCallException"
+            | "DomainException"
+            | "InvalidArgumentException"
+            | "LengthException"
+            | "OutOfRangeException"
+            | "OutOfBoundsException"
+            | "OverflowException"
+            | "RangeException"
+            | "UnderflowException"
+            | "UnexpectedValueException"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

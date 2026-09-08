@@ -209,6 +209,15 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
             visit_expr(object, st);
             visit_expr(value, st);
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            visit_expr(object, st);
+            visit_expr(property, st);
+            visit_expr(value, st);
+        }
         StmtKind::PropertyArrayAssign { object, index, value, .. } => {
             visit_expr(object, st);
             visit_expr(index, st);

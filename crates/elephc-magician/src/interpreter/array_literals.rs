@@ -20,21 +20,37 @@ pub(super) fn eval_indexed_array(
     let mut array = values.array_new(elements.len())?;
     for (index, element) in elements.iter().enumerate() {
         let index = values.int(index as i64)?;
-        let (value, target) = match element {
-            EvalArrayElement::Value(element) => (eval_expr(element, context, scope, values)?, None),
-            EvalArrayElement::Reference(element) => {
-                let (value, target) =
-                    eval_reference_array_element_value(element, context, scope, values)?;
-                (value, Some(target))
+        let inserted = (|| {
+            let (value, target, temporary) = match element {
+                EvalArrayElement::Value(element) => (
+                    eval_expr(element, context, scope, values)?, None,
+                    matches!(element, EvalExpr::Const(_) | EvalExpr::Array(_)),
+                ),
+                EvalArrayElement::Reference(element) => {
+                    let (value, target) =
+                        eval_reference_array_element_value(element, context, scope, values)?;
+                    (value, Some(target), false)
+                }
+                EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
+                    return Err(EvalStatus::UnsupportedConstruct);
+                }
+            };
+            // array_set retains its element; a newly evaluated literal keeps no
+            // additional owner once it has been inserted (or insertion failed).
+            let inserted = values.array_set(array, index, value);
+            let cleanup = if temporary { values.release(value) } else { Ok(()) };
+            let updated = inserted?;
+            cleanup?;
+            if let Some(target) = target {
+                bind_array_element_reference(context, updated, index, target, values)?;
             }
-            EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
-                return Err(EvalStatus::UnsupportedConstruct);
-            }
-        };
-        array = values.array_set(array, index, value)?;
-        if let Some(target) = target {
-            bind_array_element_reference(context, array, index, target, values)?;
-        }
+            Ok(updated)
+        })();
+        // The generated numeric key is always owned, including when evaluation
+        // or insertion fails. No native setter retains the boxed key itself.
+        let cleanup_index = values.release(index);
+        array = inserted?;
+        cleanup_index?;
     }
     Ok(array)
 }

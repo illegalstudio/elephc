@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use crate::ir::RuntimeFnId;
 
 /// Emits the PHP fatal terminator for an ordinary method call on null.
 pub(super) fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
@@ -46,13 +47,26 @@ pub(super) fn lower_nullsafe_method_call(
             expr,
         );
     };
-    let result_type = method_call_result_type(
+    // The non-null arm is the only arm that executes the method. Its result must retain the
+    // concrete DateTime hash layout until finalization; null is merged afterwards as a boxed
+    // value instead of widening the call itself to `AssocArray|null`.
+    let raw_result_type = method_call_result_type(
         ctx,
         object.value,
         method,
-        Op::NullsafeMethodCall,
+        Op::MethodCall,
         expr,
     );
+    let result_type = if method_call_uses_date_serialize_finalizer(
+        ctx,
+        object.value,
+        method,
+        &raw_result_type,
+    ) {
+        PhpType::Mixed
+    } else {
+        nullable_result_type(raw_result_type)
+    };
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
     let null_block = ctx.builder.create_named_block("nullsafe.method.null", Vec::new());
     let call_block = ctx.builder.create_named_block("nullsafe.method.call", Vec::new());
@@ -118,7 +132,14 @@ pub(super) fn lower_method_call_with_receiver(
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+        return lower_reflection_class_new_instance_without_constructor(
+            ctx, None, object, args, expr,
+        );
+    }
+    if let Some(call) = super::date_interface_calls::lower_date_interface_call(
+        ctx, object, method, args, op, expr,
+    ) {
+        return call;
     }
     let magic_args;
     let (dispatch_method, args) =
@@ -128,21 +149,63 @@ pub(super) fn lower_method_call_with_receiver(
         } else {
             (method, args)
         };
-    let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
+    // A nullsafe call has already branched on the receiver before reaching this helper. Keep the
+    // executed arm's storage type concrete; `lower_nullsafe_method_call` performs the nullable
+    // merge and boxes the selected value afterwards.
+    let result_type_op = if op == Op::NullsafeMethodCall {
+        Op::MethodCall
+    } else {
+        op
+    };
+    let raw_result_type =
+        method_call_result_type(ctx, object.value, dispatch_method, result_type_op, expr);
+    let finalize_date_serialize = method_call_uses_date_serialize_finalizer(
+        ctx,
+        object.value,
+        dispatch_method,
+        &raw_result_type,
+    );
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let mut arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    coerce_datetime_method_arguments(ctx, object.value, dispatch_method, &mut arg_values, expr.span);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
-    let call = ctx.emit_value(
+    let raw_call = ctx.emit_value(
         op,
         operands,
         Some(Immediate::Data(data)),
-        result_type,
+        raw_result_type.clone(),
         op.default_effects(),
         Some(expr.span),
     );
+    let call = if finalize_date_serialize {
+        ctx.emit_value(
+            Op::RuntimeCall,
+            vec![raw_call.value, object.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::DateSerializeFinalize)),
+            PhpType::Mixed,
+            effects_lookup::runtime_effects(),
+            Some(expr.span),
+        )
+    } else if op == Op::NullsafeMethodCall
+        && date_magic_uses_builtin_handler(ctx, object.value, dispatch_method)
+        && php_symbol_key(dispatch_method) == "__serialize"
+    {
+        ctx.emit_value(
+            Op::RuntimeCall,
+            vec![raw_call.value, object.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::DateMagicAppendProperties,
+            ))),
+            raw_result_type,
+            RuntimeFnId::DateMagicAppendProperties.effects(),
+            Some(expr.span),
+        )
+    } else {
+        raw_call
+    };
     let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
     release_owned_call_arg_temporaries_with_signature(
         ctx,
@@ -254,8 +317,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
             let conditionally_releasable = result.is_some_and(|result| {
                 let arg_repr = ctx.builder.value_php_type(*value).codegen_repr();
                 let result_repr = ctx.builder.value_php_type(result).codegen_repr();
-                matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
-                    && matches!(result_repr, PhpType::Mixed | PhpType::Union(_))
+                call_alias_cleanup_is_supported(arg_repr, result_repr)
             });
             let result_reuses_arg = result.is_some_and(|result| {
                 (return_alias.may_alias_parameter(parameter_index)
@@ -291,8 +353,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
                 if let Some(result) = result {
                     let arg_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
                     let result_repr = ctx.builder.value_php_type(result).codegen_repr();
-                    let comparable = matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
-                        && matches!(result_repr, PhpType::Mixed | PhpType::Union(_));
+                    let comparable = call_alias_cleanup_is_supported(arg_repr, result_repr);
                     if comparable {
                         ctx.emit_void(
                             Op::ReleaseUnlessAliases,
@@ -308,6 +369,18 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
         }
     }
+    ctx.clear_call_arg_temp_cleanups(args, Some(span));
+}
+
+/// Selects shapes handled by runtime identity checks or a proven callee ownership contract.
+fn call_alias_cleanup_is_supported(argument: PhpType, result: PhpType) -> bool {
+    matches!(
+        (argument, result),
+        (PhpType::Mixed | PhpType::Union(_), PhpType::Mixed | PhpType::Union(_))
+            | (PhpType::Object(_), PhpType::Object(_))
+            | (PhpType::Mixed | PhpType::Union(_), PhpType::Object(_))
+            | (PhpType::Object(_), PhpType::Mixed)
+    )
 }
 
 /// Returns true when ABI materialization wraps a concrete argument in fresh Mixed storage.

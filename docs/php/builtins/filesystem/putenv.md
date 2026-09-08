@@ -2,7 +2,7 @@
 title: "putenv()"
 description: "Sets an environment variable, or removes it when the argument has no equals sign."
 sidebar:
-  order: 291
+  order: 292
 ---
 
 ## putenv()

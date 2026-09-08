@@ -136,6 +136,9 @@ fn eval_method_exists_on_class(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     if context.has_class(class_name) || context.has_enum(class_name) {
+        if eval_hidden_datetime_implementation_method(class_name, method_name, context) {
+            return Ok(false);
+        }
         if target_is_object {
             if context
                 .class_method_names(class_name)
@@ -246,12 +249,49 @@ fn eval_native_method_exists_on_class(
     else {
         return Ok(false);
     };
+    if is_datetime_implementation_helper(&declaring_class, method_name) {
+        return Ok(false);
+    }
     if target_is_object || visibility != EvalVisibility::Private {
         return Ok(true);
     }
     Ok(declaring_class
         .trim_start_matches('\\')
         .eq_ignore_ascii_case(reflected_class_name.trim_start_matches('\\')))
+}
+
+/// Returns whether eval metadata resolves a compiler-only ext/date helper declaration.
+///
+/// A user subclass may define its own similarly prefixed method, so this consults the
+/// resolved declaring class instead of filtering solely by the requested method name.
+fn eval_hidden_datetime_implementation_method(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    context
+        .class_method(class_name, method_name)
+        .is_some_and(|(declaring_class, _)| {
+            is_datetime_implementation_helper(&declaring_class, method_name)
+        })
+}
+
+/// Returns whether a declaring class owns one synthetic ext/date helper method.
+fn is_datetime_implementation_helper(declaring_class: &str, method_name: &str) -> bool {
+    method_name
+        .trim_start_matches('\\')
+        .starts_with("__elephc_date_magic_restore$")
+        || (method_name
+            .trim_start_matches('\\')
+            .to_ascii_lowercase()
+            .starts_with("__elephc_")
+            && matches!(
+                declaring_class
+                    .trim_start_matches('\\')
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "datetime" | "datetimeimmutable" | "datetimezone" | "dateinterval" | "dateperiod"
+            ))
 }
 
 /// Checks property metadata for one resolved class-like name.

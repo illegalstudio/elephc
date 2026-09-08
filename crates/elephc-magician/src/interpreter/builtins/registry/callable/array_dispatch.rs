@@ -61,6 +61,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
             called_class,
             native_class,
             bridge_scope,
+            ..
         } => {
             eval_reject_fiber_object_switch_during_pcntl_dispatch(
                 *object,
@@ -188,7 +189,7 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
         return Ok(result);
     }
     if eval_php_visible_builtin_exists(name) {
-        let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, values)?;
+        let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, context, values)?;
         let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
             return Err(EvalStatus::UnsupportedConstruct);
         };

@@ -144,6 +144,16 @@ pub(super) fn check_assign(
         }
     }
 
+    if let ExprKind::Variable(source) = &value.kind {
+        if !env.contains_key(source) {
+            env.insert(source.clone(), PhpType::Void);
+            checker.warnings.push(CompileWarning {
+                span: value.span,
+                message: format!("Undefined variable: ${} (treated as null)", source),
+            });
+        }
+    }
+
     let null_coalesce_default = null_coalesce_assignment_default(name, value);
     let saved_self_ref_ty = if closure_captures_name_by_ref(value, name) {
         if let Some(previous_ty) = env.insert(name.to_string(), PhpType::Callable) {
@@ -892,6 +902,33 @@ fn merge_local_assignment_type(
                 env.insert(name.to_string(), ty.clone());
                 return Ok(());
             }
+            let can_use_boxed_mixed = !checker.strict_locals
+                && span.identifies_a_node()
+                && !checker.body_contains_eval
+                && !checker.typed_local_names.contains(name)
+                && !checker.active_ref_params.contains(name)
+                && !checker.ref_aliased_locals.contains(name)
+                && !checker.static_local_names.contains(name)
+                && !checker.unset_mentioned_locals.contains(name)
+                && (checker.local_conditional_depth > 0
+                    || (!stmt_form && checker.local_conditional_depth == 0));
+            if can_use_boxed_mixed {
+                // PHP locals may change representation inside a branch or an assignment
+                // expression. These shapes cannot abandon the existing slot, so retain one
+                // boxed-Mixed binding instead. EIR's representation fixpoint observes both
+                // stores; recording this site also blocks post-check constant propagation from
+                // replacing later boxed reads with a stale concrete value.
+                if span.identifies_a_node() {
+                    checker
+                        .mixed_storage_store_sites
+                        .entry(span)
+                        .or_default()
+                        .insert(name.to_string());
+                }
+                checker.mixed_storage_locals.insert(name.to_string());
+                env.insert(name.to_string(), PhpType::Mixed);
+                return Ok(());
+            }
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -1115,7 +1152,7 @@ fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
 ///
 /// For each variable name, marks it as a global in `checker.active_globals` and
 /// populates the local type environment with the variable's type from
-/// `checker.top_level_env` if available, otherwise defaults to `Int`.
+/// `checker.top_level_env` if available, otherwise defaults to boxed `Mixed`.
 pub(super) fn check_global(
     checker: &mut Checker,
     vars: &[String],
@@ -1127,7 +1164,9 @@ pub(super) fn check_global(
             if let Some(global_ty) = checker.top_level_env.get(var) {
                 env.insert(var.clone(), global_ty.clone());
             } else {
-                env.insert(var.clone(), PhpType::Int);
+                // Ordinary PHP globals may change type from any function scope. This matches
+                // EIR's `global_alias_type()`, which already stores them as boxed Mixed.
+                env.insert(var.clone(), PhpType::Mixed);
             }
         }
     }

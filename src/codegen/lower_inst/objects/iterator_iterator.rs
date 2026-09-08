@@ -56,8 +56,10 @@ pub(super) fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &
     let uninitialized_marker_offsets = uninitialized_property_marker_offsets(class_info);
     let slot = PropertySlot {
         class_name: "IteratorIterator".to_string(),
+        declaring_class_name: "IteratorIterator".to_string(),
         property: "inner".to_string(),
-        php_type: inner_ty,
+        php_type: inner_ty.clone(),
+        storage_type: inner_ty,
         offset: inner_offset,
         is_declared: true,
         is_packed: false,

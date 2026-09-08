@@ -228,6 +228,18 @@ var_dump(is_object(42));
     assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\n");
 }
 
+/// Verifies a statically Callable closure remains an object for is_object().
+#[test]
+fn test_is_object_static_callable_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$closure = fn (): int => 1;
+echo is_object($closure) ? "object" : "not-object";
+"#,
+    );
+    assert_eq!(out, "object");
+}
+
 /// Verifies `is_scalar` is true for int/float/string/bool and false for null/array/object,
 /// matching PHP's classification (resources and null are not scalars).
 #[test]

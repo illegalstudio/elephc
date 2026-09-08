@@ -111,11 +111,20 @@ pub(super) fn resolve_property_slot_for_class(
     let php_type = runtime_property_type_override(ctx, normalized, property)
         .unwrap_or_else(|| php_type.clone());
     ensure_property_type_supported(&php_type, inst)?;
+    let storage_type = crate::types::property_runtime_storage_type(&php_type);
     let offset = 8 + index * 16;
+    let declaring_class_name = class_info
+        .property_slot_declaring_classes
+        .get(index)
+        .cloned()
+        .or_else(|| class_info.property_declaring_classes.get(property).cloned())
+        .unwrap_or_else(|| normalized.to_string());
     Ok(PropertySlot {
         class_name: normalized.to_string(),
+        declaring_class_name,
         property: property.to_string(),
         php_type,
+        storage_type,
         offset,
         is_declared: class_info.property_slot_is_declared(index, property),
         is_packed: false,
@@ -299,8 +308,10 @@ pub(super) fn resolve_packed_field_slot(
     ensure_property_type_supported(&field.php_type, inst)?;
     Ok(PropertySlot {
         class_name: normalized.to_string(),
+        declaring_class_name: normalized.to_string(),
         property: property.to_string(),
         php_type: field.php_type.clone(),
+        storage_type: field.php_type.clone(),
         offset: field.offset,
         is_declared: false,
         is_packed: true,

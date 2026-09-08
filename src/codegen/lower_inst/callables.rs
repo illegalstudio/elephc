@@ -28,9 +28,11 @@ use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
     emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
     emit_runtime_builtin_wrapper_inline, emit_runtime_callable_invoker_inline,
+    emit_runtime_date_serialize_invoker_inline,
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
-    materialize_direct_call_args, materialize_method_call_args_with_receiver_reg_and_refs,
+    load_value_to_first_int_arg, materialize_direct_call_args,
+    materialize_method_call_args_with_receiver_reg_and_refs,
     runtime_builtin_wrapper_sig, store_call_result,
 };
 use crate::codegen::{CodegenIrError, Result};
@@ -451,7 +453,11 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         for target in &instance_targets {
             let next_label = ctx.next_label("mixed_callable_value_array_instance_next");
             emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-            emit_runtime_array_instance_descriptor_value(ctx, target)?;
+            emit_runtime_array_instance_descriptor_value(
+                ctx,
+                target,
+                MIXED_RECEIVER_PAYLOAD_OFFSET,
+            )?;
             abi::emit_jump(ctx.emitter, &selected_label);
             ctx.emitter.label(&next_label);
         }
@@ -829,7 +835,11 @@ fn runtime_user_function_descriptor_cases(
         let wrapper_sig =
             crate::types::callable_wrapper_sig(&function_signature_from_eir(function));
         let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
-        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &case_sig, &[]);
+        let owned_object_return = super::object_return_ownership::object_return_ownership(function)
+            == super::object_return_ownership::ObjectReturnOwnership::Owned;
+        let invoker_label = super::runtime_wrappers::emit_runtime_callable_invoker_with_ownership(
+            ctx, &case_sig, &[], owned_object_return,
+        );
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &function_symbol(&function.name),
@@ -1102,15 +1112,31 @@ fn runtime_instance_method_descriptor_template(
         return Ok(template);
     }
     let receiver_ty = PhpType::Object(class_name.to_string());
-    let captures = vec![("receiver".to_string(), receiver_ty, false)];
+    let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
+    let debug_bindings = vec![("this".to_string(), receiver_ty, false)];
     let entry_label =
         emit_instance_method_descriptor_entry_wrapper(ctx, impl_class, method_key, sig)?;
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, sig, &captures);
-    let php_name = format!("{}::{}", class_name, method_name);
-    let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+    let invoker_label = if is_date_serialize_descriptor(ctx, class_name, method_key) {
+        emit_runtime_date_serialize_invoker_inline(ctx, sig, &captures)
+    } else {
+        super::runtime_wrappers::emit_method_callable_invoker_inline(
+            ctx, sig, &captures, impl_class, method_key,
+        )
+    };
+    let canonical_method_name = super::callable_descriptors::canonical_first_class_callable_method_name(
+        ctx,
+        impl_class,
+        method_name,
+    );
+    let debug_primary_name = format!("{impl_class}::{canonical_method_name}");
+    let static_bindings = super::callable_descriptors::fake_callable_static_debug_bindings(
+        ctx,
+        &debug_primary_name,
+    );
+    let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_debug_meta(
         ctx.data,
         &entry_label,
-        Some(&php_name),
+        Some(&debug_primary_name),
         callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
         Some(sig),
         &captures,
@@ -1121,6 +1147,14 @@ fn runtime_instance_method_descriptor_template(
             method_name,
         ),
         Some(&invoker_label),
+        Some(callable_descriptor::CallableDebugMetadata {
+            flags: callable_descriptor::CALLABLE_DEBUG_FLAG_FAKE_CLOSURE,
+            primary_name: &debug_primary_name,
+            source_path: None,
+            source_line: 0,
+            bindings: &debug_bindings,
+            static_bindings: &static_bindings,
+        }),
     );
     let template = RuntimeInstanceMethodDescriptorTemplate { descriptor_label };
     ctx.shared.cache_runtime_instance_method_descriptor(
@@ -1131,6 +1165,33 @@ fn runtime_instance_method_descriptor_template(
         template.clone(),
     );
     Ok(template)
+}
+
+/// Returns whether a runtime instance descriptor captures a DateTime-family serializer.
+fn is_date_serialize_descriptor(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_key: &str,
+) -> bool {
+    if method_key != "__serialize" {
+        return false;
+    }
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(candidate) = current {
+        if matches!(
+            candidate,
+            "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+        ) {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(candidate)
+            .and_then(|class_info| class_info.parent.as_deref())
+            .map(|parent| parent.trim_start_matches('\\'));
+    }
+    false
 }
 
 /// Verifies that a descriptor-invoker argument operand is a supported container shape.
@@ -1356,7 +1417,11 @@ pub(super) fn emit_runtime_mixed_instance_callable_array_descriptor_value(
     for target in &targets {
         let next_label = ctx.next_label("callable_array_instance_next");
         emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-        emit_runtime_array_instance_descriptor_value(ctx, target)?;
+        emit_runtime_array_instance_descriptor_value(
+            ctx,
+            target,
+            MIXED_RECEIVER_PAYLOAD_OFFSET,
+        )?;
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&next_label);
     }
@@ -1391,7 +1456,11 @@ fn emit_mixed_callable_array_descriptor_value(
     for target in &instance_targets {
         let next_label = ctx.next_label("callable_array_instance_next");
         emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-        emit_runtime_array_instance_descriptor_value(ctx, target)?;
+        emit_runtime_array_instance_descriptor_value(
+            ctx,
+            target,
+            MIXED_RECEIVER_PAYLOAD_OFFSET,
+        )?;
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&next_label);
     }
@@ -1465,6 +1534,9 @@ fn runtime_array_instance_method_targets_for_descriptor(
         let mut methods = class_info.methods.iter().collect::<Vec<_>>();
         methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in methods {
+            if !callable_dispatch::runtime_method_callable_visible(method_name) {
+                continue;
+            }
             if !class_info
                 .method_visibilities
                 .get(method_name)
@@ -1494,6 +1566,91 @@ fn runtime_array_instance_method_targets_for_descriptor(
     targets
 }
 
+/// Materializes a receiver-bound first-class callable through runtime class-id selection.
+///
+/// Concrete class receivers use the smaller static descriptor path. Interfaces, unions, and
+/// Mixed values retain only a runtime object payload, so this path selects the descriptor for the
+/// actual class at creation time. Each selected descriptor retains its own receiver and carries
+/// the DateTime serializer invoker when the implementation belongs to that family.
+pub(super) fn emit_runtime_instance_method_first_class_callable(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: &str,
+) -> Result<bool> {
+    let Some((receiver_label, method_name)) = target.rsplit_once("::") else {
+        return Ok(false);
+    };
+    if receiver_label.trim_start_matches('\\') != "object" {
+        return Ok(false);
+    }
+    let receiver = inst.operands.first().copied().ok_or_else(|| {
+        CodegenIrError::invalid_module(format!(
+            "instance first-class callable '{}' has no receiver operand",
+            target
+        ))
+    })?;
+    let receiver_ty = ctx.value_php_type(receiver)?.codegen_repr();
+    if matches!(&receiver_ty, PhpType::Object(class_name) if ctx.module.class_infos.contains_key(class_name.trim_start_matches('\\'))) {
+        return Ok(false);
+    }
+    if !matches!(receiver_ty, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(false);
+    }
+    let method_key = php_symbol_key(method_name);
+    let targets = runtime_array_instance_method_targets_for_descriptor(ctx)
+        .into_iter()
+        .filter(|candidate| candidate.method_key == method_key)
+        .collect::<Vec<_>>();
+    if targets.is_empty() {
+        return Ok(false);
+    }
+
+    let no_match = ctx.next_label("first_class_callable_instance_receiver_missing");
+    match receiver_ty {
+        PhpType::Object(_) => {
+            load_value_to_first_int_arg(ctx, receiver)?;
+            let first_arg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x0",
+                Arch::X86_64 => "rdi",
+            };
+            abi::emit_push_reg(ctx.emitter, first_arg);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, receiver)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #6");                      // require an object payload before selecting an instance-method descriptor
+                    ctx.emitter.instruction(&format!("b.ne {}", no_match));     // reject scalar Mixed receivers without dereferencing their payload
+                    abi::emit_push_reg(ctx.emitter, "x1");
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 6");                      // require an object payload before selecting an instance-method descriptor
+                    ctx.emitter.instruction(&format!("jne {}", no_match));      // reject scalar Mixed receivers without dereferencing their payload
+                    abi::emit_push_reg(ctx.emitter, "rdi");
+                }
+            }
+        }
+        _ => return Ok(false),
+    }
+
+    let done = ctx.next_label("first_class_callable_instance_descriptor_done");
+    for candidate in &targets {
+        let next = ctx.next_label("first_class_callable_instance_descriptor_next");
+        emit_branch_if_saved_receiver_class_id_mismatch(ctx, candidate.class_id, 0, &next);
+        emit_runtime_array_instance_descriptor_value(ctx, candidate, 0)?;
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&next);
+    }
+    abi::emit_jump(ctx.emitter, &no_match);
+    ctx.emitter.label(&no_match);
+    emit_runtime_callable_array_no_match_abort(ctx);
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter);
+    Ok(true)
+}
+
 /// Builds public static-method descriptor cases directly from EIR class metadata.
 fn runtime_static_method_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
@@ -1512,6 +1669,9 @@ fn runtime_static_method_descriptor_cases(
         let mut static_methods = class_info.static_methods.iter().collect::<Vec<_>>();
         static_methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in static_methods {
+            if !callable_dispatch::runtime_method_callable_visible(method_name) {
+                continue;
+            }
             if !class_info
                 .static_method_visibilities
                 .get(method_name)
@@ -1563,7 +1723,9 @@ fn runtime_static_method_descriptor_cases(
         ) else {
             continue;
         };
-        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &wrapper_sig, &[]);
+        let invoker_label = super::runtime_wrappers::emit_method_callable_invoker_inline(
+            ctx, &wrapper_sig, &[], &impl_class, &method_key,
+        );
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &entry_label,
@@ -1610,6 +1772,9 @@ fn runtime_array_instance_method_targets(
         let mut methods = class_info.methods.iter().collect::<Vec<_>>();
         methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in methods {
+            if !callable_dispatch::runtime_method_callable_visible(method_name) {
+                continue;
+            }
             if sig.params.len() != arg_count || sig.variadic.is_some() {
                 continue;
             }
@@ -2138,7 +2303,39 @@ fn emit_runtime_array_instance_method_call(
     );
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &target.sig.return_type)?;
+    if is_date_serialize_descriptor(ctx, &target.class_name, &target.method_key)
+        && inst.result.map_or(true, |result| {
+            ctx.value_php_type(result)
+                .is_ok_and(|result_ty| matches!(result_ty.codegen_repr(), PhpType::Mixed))
+        })
+    {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_load_temporary_stack_slot(
+                    ctx.emitter,
+                    "x1",
+                    MIXED_RECEIVER_PAYLOAD_OFFSET,
+                );
+            }
+            Arch::X86_64 => {
+                abi::emit_load_temporary_stack_slot(
+                    ctx.emitter,
+                    "rsi",
+                    MIXED_RECEIVER_PAYLOAD_OFFSET,
+                );
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the raw DateTime array/hash owner in the SysV first-argument register
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_date_serialize_finalize_mixed");
+        if let Some(result) = inst.result {
+            ctx.store_result_value(result)?;
+        } else {
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+        }
+    } else {
+        store_call_result(ctx, inst, &target.sig.return_type)?;
+    }
+    super::emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
@@ -2179,6 +2376,7 @@ fn emit_runtime_array_instance_descriptor_invoke(
 fn emit_runtime_array_instance_descriptor_value(
     ctx: &mut FunctionContext<'_>,
     target: &RuntimeArrayInstanceMethodTarget,
+    receiver_payload_offset: usize,
 ) -> Result<()> {
     let receiver_ty = PhpType::Object(target.class_name.clone());
     let template = runtime_instance_method_descriptor_template(
@@ -2193,7 +2391,7 @@ fn emit_runtime_array_instance_descriptor_value(
         ctx,
         &template.descriptor_label,
         &receiver_ty,
-        MIXED_RECEIVER_PAYLOAD_OFFSET,
+        receiver_payload_offset,
     );
     Ok(())
 }
@@ -2854,6 +3052,16 @@ fn store_descriptor_invoker_result(
             ctx.store_result_value(result)
         }
         PhpType::TaggedScalar => store_descriptor_invoker_tagged_scalar_result(ctx, result),
+        result_ty @ (PhpType::Object(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Callable
+        | PhpType::Iterable) => {
+            abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
+            super::emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+            release_invoker_arg_preserving_result(ctx);
+            ctx.store_result_value(result)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "descriptor invoker result for PHP type {:?}",
             other

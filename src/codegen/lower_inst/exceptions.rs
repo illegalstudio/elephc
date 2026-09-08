@@ -240,6 +240,11 @@ pub(super) fn emit_division_by_zero_error(ctx: &mut FunctionContext<'_>, message
     );
 }
 
+/// Throws a catchable ParseError through the shared target-aware Throwable unwinder.
+pub(super) fn emit_parse_error(ctx: &mut FunctionContext<'_>, message: &str) {
+    emit_static_exception(ctx, "ParseError", "_spl_parse_error_class_id", message);
+}
+
 /// Throws a catchable PHP `ArithmeticError` carrying a static message.
 ///
 /// Reference PHP raises this for arithmetic that has no representable result but is not a

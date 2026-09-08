@@ -368,7 +368,7 @@ if ($hasU) {
     $ts = __elephc_mktime_raw($H, $mi, $se, $mo, $da, $Y);
 } else {
     $saved = date_default_timezone_get();
-    date_default_timezone_set($timezone->getName());
+    date_default_timezone_set(DateTimeZone::__elephc_export_name($timezone));
     $ts = __elephc_mktime_raw($H, $mi, $se, $mo, $da, $Y);
     date_default_timezone_set($saved);
 }
@@ -378,7 +378,7 @@ if ($hasU) {
 if ($parsedO !== "" || $parsedP !== "" || $parsedZ !== "" || $parsedT !== "" || $parsedE !== "") {
     $__saved = date_default_timezone_get();
     if ($timezone !== null) {
-        date_default_timezone_set($timezone->getName());
+        date_default_timezone_set(DateTimeZone::__elephc_export_name($timezone));
     }
     $__ok = true;
     if ($__ok && $parsedO !== "" && date("O", $ts) !== $parsedO) { $__ok = false; }
@@ -396,7 +396,7 @@ if ($timezone !== null) {
     // `?DateTimeZone`, whose value reaches here boxed as Mixed, and setTimezone reads the
     // `name` property directly (which mis-reads a boxed receiver). getName() dispatches by
     // runtime class id, so it resolves correctly, mirroring the two-argument constructor.
-    $o->timezone_name = $timezone->getName();
+    $o->timezone_name = DateTimeZone::__elephc_export_name($timezone);
 }
 __CFF_CLASS__::$lastErrorCount = 0;
 return $o->setMicrosecond($umicro);

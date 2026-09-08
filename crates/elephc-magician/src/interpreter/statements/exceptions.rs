@@ -53,7 +53,9 @@ pub(in crate::interpreter) fn release_overridden_control(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match control {
-        EvalControl::Return(value) | EvalControl::Throw(value) => values.release(value),
+        EvalControl::Return(value) if value.owned => values.release(value.value),
+        EvalControl::Return(_) => Ok(()),
+        EvalControl::Throw(value) => values.release(value),
         EvalControl::None
         | EvalControl::ReturnVoid
         | EvalControl::Break

@@ -2,7 +2,7 @@
 title: "mysqli_stmt_sqlstate() — internals"
 description: "Compiler internals for mysqli_stmt_sqlstate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 175
+  order: 176
 ---
 
 ## `mysqli_stmt_sqlstate()` — internals

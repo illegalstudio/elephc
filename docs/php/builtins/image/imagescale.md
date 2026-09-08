@@ -2,7 +2,7 @@
 title: "imagescale()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 526
+  order: 527
 ---
 
 ## imagescale()

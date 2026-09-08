@@ -338,6 +338,9 @@ fn emit_json_encode_loaded_value(ctx: &mut FunctionContext<'_>, value_ty: &PhpTy
         PhpType::Object(class_name) => {
             emit_json_encode_object(ctx, class_name);
         }
+        PhpType::Callable => {
+            abi::emit_call_label(ctx.emitter, "__rt_json_encode_closure");
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_call_label(ctx.emitter, "__rt_json_encode_mixed");
         }

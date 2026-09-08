@@ -393,6 +393,11 @@ fn stmt_refs_ve(stmt: &Stmt) -> bool {
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_ve(object) || expr_refs_ve(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_refs_ve(object) || expr_refs_ve(property) || expr_refs_ve(value),
         StmtKind::PropertyArrayAssign {
             object,
             index,

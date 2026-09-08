@@ -16,6 +16,7 @@ pub(super) fn bind_native_callable_bound_args_with_mode(
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
+    default_owners: &mut Vec<RuntimeCellHandle>,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let Some(signature) = signature else {
         return positional_evaluated_bound_args(None, args, by_ref_mode, context, values);
@@ -24,7 +25,7 @@ pub(super) fn bind_native_callable_bound_args_with_mode(
         return Err(EvalStatus::RuntimeFatal);
     }
     if signature.param_names().len() == signature.param_count() {
-        bind_native_signature_args(&signature, args, by_ref_mode, context, values)
+        bind_native_signature_args(&signature, args, by_ref_mode, context, values, default_owners)
     } else {
         positional_evaluated_bound_args(Some(&signature), args, by_ref_mode, context, values)
     }
@@ -106,6 +107,7 @@ pub(super) fn bind_native_signature_args(
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
+    default_owners: &mut Vec<RuntimeCellHandle>,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let mut bound_args = vec![None; signature.param_count()];
     let variadic_index = native_callable_variadic_index(signature);
@@ -114,6 +116,7 @@ pub(super) fn bind_native_signature_args(
 
     if let Some(index) = variadic_index {
         let array = values.array_new(args.len())?;
+        default_owners.push(array);
         bound_args[index] = Some(BoundMethodArg {
             value: array,
             ref_target: None,
@@ -161,8 +164,10 @@ pub(super) fn bind_native_signature_args(
         let Some(default) = signature.param_default(position) else {
             return Err(EvalStatus::RuntimeFatal);
         };
+        let default_value = materialize_native_callable_default(default, context, values)?;
+        default_owners.push(default_value);
         *value = Some(BoundMethodArg {
-            value: materialize_native_callable_default(default, context, values)?,
+            value: default_value,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
         });
@@ -182,6 +187,26 @@ pub(super) fn bind_native_signature_args(
     Ok(bound_args)
 }
 
+/// Releases binder-created owners after invocation, preserving returned aliases and pending throws.
+pub(in crate::interpreter) fn finish_native_default_owners<T>(
+    mut result: Result<T, EvalStatus>,
+    owners: Vec<RuntimeCellHandle>,
+    returned: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    for owner in owners {
+        if returned == Some(owner) || context.pending_throw() == Some(owner) {
+            continue;
+        }
+        let cleanup = eval_release_value(context, values, owner);
+        if result.is_ok() {
+            if let Err(status) = cleanup { result = Err(status); }
+        }
+    }
+    result
+}
+
 /// Applies registered native AOT parameter types after argument binding and default filling.
 pub(super) fn apply_native_callable_bound_arg_types(
     signature: &NativeCallableSignature,
@@ -197,7 +222,18 @@ pub(super) fn apply_native_callable_bound_arg_types(
             apply_native_callable_variadic_arg_type(param_type, bound_arg, context, values)?;
         } else {
             bound_arg.value =
-                eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
+                {
+                    let callable_name = context.current_function().unwrap_or("{callable}").to_string();
+                    eval_method_parameter_value(
+                    param_type,
+                    bound_arg.value,
+                    &callable_name,
+                    position + 1,
+                    signature.param_names().get(position).map(String::as_str),
+                    context,
+                    values,
+                    )?
+                };
         }
     }
     Ok(())
@@ -214,7 +250,16 @@ pub(super) fn apply_native_callable_variadic_arg_type(
     for position in 0..len {
         let key = values.array_iter_key(bound_arg.value, position)?;
         let value = values.array_get(bound_arg.value, key)?;
-        let value = eval_method_parameter_value(param_type, value, context, values)?;
+        let callable_name = context.current_function().unwrap_or("{callable}").to_string();
+        let value = eval_method_parameter_value(
+            param_type,
+            value,
+            &callable_name,
+            position + 1,
+            None,
+            context,
+            values,
+        )?;
         bound_arg.value = values.array_set(bound_arg.value, key, value)?;
     }
     Ok(())

@@ -107,7 +107,12 @@ return function_exists("array_reduce");"#,
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    let mut context = ElephcEvalContext::new();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .unwrap_or_else(|status| {
+            let thrown = context.take_pending_throw().map(|value| values.get(value));
+            panic!("execute eval ir: {status:?}, output={}, throwable={thrown:?}", values.output);
+        });
 
     assert_eq!(values.output, "16:9:ab:13:9:9:");
     assert_eq!(values.get(result), FakeValue::Bool(true));

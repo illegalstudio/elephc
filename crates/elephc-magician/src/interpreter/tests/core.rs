@@ -10,6 +10,87 @@
 use super::super::*;
 use super::support::*;
 
+/// Native default cleanup releases owners even when binding or invocation failed.
+#[test]
+fn native_default_owners_release_after_failure() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let first = values.int(1).unwrap();
+    let second = values.int(2).unwrap();
+    let result: Result<(), EvalStatus> = super::super::statements::finish_native_default_owners(
+        Err(EvalStatus::RuntimeFatal), vec![first, second], None, &mut context, &mut values);
+    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert_eq!(values.releases, vec![first, second]);
+}
+
+/// Native default cleanup transfers a returned cell and preserves a pending exception owner.
+#[test]
+fn native_default_owners_preserve_result_and_throwable() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let returned = values.int(1).unwrap();
+    let thrown = values.new_object("Exception").unwrap();
+    context.set_pending_throw(thrown);
+    let result = super::super::statements::finish_native_default_owners(
+        Ok(returned), vec![returned, thrown], Some(returned), &mut context, &mut values);
+    assert_eq!(result, Ok(returned));
+    assert!(values.releases.is_empty());
+    assert_eq!(context.pending_throw(), Some(thrown));
+}
+
+/// ParseError construction releases argument cells but transfers the exception owner.
+#[test]
+fn parse_error_construction_releases_only_argument_temporaries() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let result: Result<RuntimeCellHandle, EvalStatus> =
+        super::super::throwables::eval_throw_parse_failure(
+            EvalStatus::ParseError, &mut context, &mut values);
+    assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+    let exception = context.take_pending_throw().unwrap();
+    assert_eq!(values.releases.len(), 2);
+    assert!(!values.releases.contains(&exception));
+}
+
+/// Nested eval replays cached warnings before returning its unchanged parse failure.
+#[test]
+fn nested_eval_failed_parse_replays_compile_warnings() {
+    let program = parse_fragment(br#"eval('"\400"; return );');"#).unwrap();
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site("caller.php", "", 7);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    for _ in 0..2 {
+        assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values),
+            Err(EvalStatus::UncaughtThrowable));
+    }
+    assert_eq!(values.warnings.len(), 2);
+    for warning in &values.warnings {
+        assert_eq!(warning, "\nWarning: Octal escape sequence overflow \\400 is greater than \\377 in caller.php(7) : eval()'d code on line 1\n");
+    }
+    assert!(values.output.is_empty());
+}
+
+/// Included parse failures emit file-labelled warnings and restore the caller context.
+#[test]
+fn include_failed_parse_replays_compile_warnings() {
+    let path = std::env::temp_dir().join(format!("elephc-include-parse-warning-{}.php", std::process::id()));
+    std::fs::write(&path, br#"<?php "\400"; return );"#).unwrap();
+    let source = format!("include '{}';", path.display());
+    let program = parse_fragment(source.as_bytes()).unwrap();
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site("caller.php", "", 7);
+    let previous = context.call_site();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+    assert_eq!(context.call_site(), previous);
+    assert_eq!(values.warnings, vec![format!(
+        "\nWarning: Octal escape sequence overflow \\400 is greater than \\377 in {} on line 1\n", path.display())]);
+}
+
 /// Verifies assignment writes a named scope entry and return reads it back.
 #[test]
 fn execute_program_stores_and_returns_scope_value() {
@@ -98,14 +179,14 @@ fn execute_program_catches_throwable_without_variable_inside_eval() {
     let mut values = FakeOps::default();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-    let released = values
+    let released_objects = values
         .releases
-        .first()
-        .copied()
-        .expect("unbound catch should release the thrown object");
+        .iter()
+        .filter(|value| matches!(values.get(**value), FakeValue::Object(_)))
+        .count();
 
     assert_eq!(scope.visible_cell("caught"), None);
-    assert_eq!(values.type_tag(released), Ok(EVAL_TAG_OBJECT));
+    assert_eq!(released_objects, 1, "unbound catch releases its exception exactly once");
     assert_eq!(values.get(result), FakeValue::Int(9));
 }
 /// Verifies eval `catch (Exception)` matches thrown exception objects.
@@ -254,14 +335,14 @@ fn execute_program_finally_return_overrides_uncaught_throw() {
     let mut values = FakeOps::default();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-    let released = values
+    let released_objects = values
         .releases
-        .first()
-        .copied()
-        .expect("overridden throw should be released");
+        .iter()
+        .filter(|value| matches!(values.get(**value), FakeValue::Object(_)))
+        .count();
 
     assert_eq!(values.get(result), FakeValue::Int(2));
-    assert_eq!(values.type_tag(released), Ok(EVAL_TAG_OBJECT));
+    assert_eq!(released_objects, 1, "finally releases the overridden exception exactly once");
 }
 /// Verifies eval `finally` runs before an uncaught throw leaves the fragment.
 #[test]

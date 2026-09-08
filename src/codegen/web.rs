@@ -214,7 +214,7 @@ fn emit_ordinary_global_reset(emitter: &mut Emitter, symbol: &str, labels: &mut 
 /// the validating heap-free helper, callables release their descriptor, and
 /// other refcounted kinds decref through the type-specific helper. Non-refcounted
 /// types (int/bool/float/tagged scalar) own no heap value and are a no-op here.
-fn emit_release_symbol_value(emitter: &mut Emitter, symbol: &str, ty: &PhpType) {
+pub(super) fn emit_release_symbol_value(emitter: &mut Emitter, symbol: &str, ty: &PhpType) {
     match ty {
         PhpType::Str => {
             // Load the string pointer into the result register and free it. The
@@ -236,7 +236,7 @@ fn emit_release_symbol_value(emitter: &mut Emitter, symbol: &str, ty: &PhpType) 
 
 /// Branches to `label` when the integer result register equals the uninitialized
 /// typed-property sentinel, so an unwritten typed property is skipped.
-fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
+pub(super) fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
     let scratch = abi::temp_int_reg(emitter.target);
     abi::emit_load_int_immediate(emitter, scratch, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     match emitter.target.arch {
@@ -269,7 +269,7 @@ fn emit_concat_offset_reset(emitter: &mut Emitter) {
 /// `emit_static_property_initializers` so the reset stays in lockstep with what
 /// gets re-initialized each request. Non-refcounted properties are excluded:
 /// their re-run initializer simply overwrites the scalar, with nothing to free.
-fn refcounted_static_properties(module: &Module) -> Vec<(String, PhpType)> {
+pub(super) fn refcounted_static_properties(module: &Module) -> Vec<(String, PhpType)> {
     let mut class_names = super::runtime_referenced_class_names(module)
         .into_iter()
         .collect::<Vec<_>>();
@@ -295,5 +295,6 @@ fn refcounted_static_properties(module: &Module) -> Vec<(String, PhpType)> {
             props.push((static_property_symbol(&class_name, property), php_type.clone()));
         }
     }
+    props.sort_by(|(left, _), (right, _)| left.cmp(right));
     props
 }

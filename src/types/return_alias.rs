@@ -89,6 +89,41 @@ pub(crate) fn collect_return_alias_summaries(program: &Program) -> ReturnAliasSu
     summaries
 }
 
+/// Adds bodies injected by the checker after the source program was parsed.
+///
+/// Source declarations are kept authoritative. Missing class/method pairs come from final
+/// `ClassInfo::method_decls`, which includes compiler-provided DateTime, DatePeriod, Reflection,
+/// SPL, and throwable bodies that EIR lowers like ordinary PHP methods. Without these entries,
+/// every injected method falls back to `Unknown`, suppressing cleanup of owning call arguments
+/// whenever the argument and result share a refcounted representation.
+pub(crate) fn extend_return_alias_summaries_with_classes(
+    summaries: &mut ReturnAliasSummaries,
+    classes: &HashMap<String, crate::types::ClassInfo>,
+) {
+    for (class_name, class_info) in classes {
+        for method in &class_info.method_decls {
+            let key = (
+                class_name.trim_start_matches('\\').to_string(),
+                php_symbol_key(&method.name),
+            );
+            if summaries.methods.contains_key(&key) {
+                continue;
+            }
+            let summary = if method.has_body {
+                summarize_callable(
+                    method.params.iter().map(|(name, _, _, _)| name.as_str()),
+                    method.variadic.as_deref(),
+                    method.by_ref_return,
+                    &method.body,
+                )
+            } else {
+                ReturnArgAlias::Unknown
+            };
+            summaries.methods.insert(key, summary);
+        }
+    }
+}
+
 /// Recursively records summaries for declarations nested in namespace blocks.
 fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAliasSummaries) {
     for stmt in statements {
@@ -368,6 +403,15 @@ fn analyze_stmt(
             apply_expr_effects(object, state);
             apply_expr_effects(value, state);
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            apply_expr_effects(object, state);
+            apply_expr_effects(property, state);
+            apply_expr_effects(value, state);
+        }
         StmtKind::PropertyArrayAssign {
             object,
             index,
@@ -532,6 +576,11 @@ fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArg
         {
             ReturnArgAlias::None
         }
+        // Concatenation always materializes new bytes. Even when one operand is a parameter,
+        // the returned string cannot reuse that parameter's storage. Keeping this in `Unknown`
+        // suppresses cleanup of owning string temporaries passed to static methods whose final
+        // fallback is `return "" . $parameter`, leaking once per non-aliasing call.
+        ExprKind::BinaryOp { op: crate::parser::ast::BinOp::Concat, .. } => ReturnArgAlias::None,
         ExprKind::FunctionCall { .. }
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }
@@ -615,7 +664,10 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             apply_expr_effects(object, state);
             visit_expr_effects(args, state);
-            invalidate_all_aliases(state);
+            // A method can mutate the receiver's object storage, but cannot rebind the caller's
+            // receiver local. Only direct variable arguments may be accepted by reference and
+            // have their local storage identity changed by the call.
+            invalidate_call_variables(args, state);
         }
         ExprKind::NullsafeDynamicMethodCall {
             object,
@@ -625,13 +677,13 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
             apply_expr_effects(object, state);
             apply_expr_effects(method, state);
             visit_expr_effects(args, state);
-            invalidate_all_aliases(state);
+            invalidate_call_variables(args, state);
         }
         ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
             visit_expr_effects(args, state);
-            invalidate_all_aliases(state);
+            invalidate_call_variables(args, state);
         }
         ExprKind::NewDynamic { name_expr, args } => {
             apply_expr_effects(name_expr, state);
@@ -839,6 +891,29 @@ mod tests {
         );
         let summaries = collect_return_alias_summaries(&program);
         assert_eq!(summaries.method("E", "escape"), Some(&ReturnArgAlias::None));
+    }
+
+    /// Verifies concatenation creates storage independent of a string parameter.
+    #[test]
+    fn concat_return_is_independent_of_callable_parameters() {
+        let program = parse(
+            "<?php class N { static function normalize(string $value): string { if ($value === 'x') { return 'fixed'; } return '' . $value; } }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(
+            summaries.method("N", "normalize"),
+            Some(&ReturnArgAlias::None)
+        );
+    }
+
+    /// Verifies a receiver-only method call cannot rebind an independent local result.
+    #[test]
+    fn receiver_method_call_preserves_fresh_local_provenance() {
+        let program = parse(
+            "<?php class F { function touch(): void {} function build(string $input): string { $out = 'fresh'; $this->touch(); return $out; } }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.method("F", "build"), Some(&ReturnArgAlias::None));
     }
 
     /// Verifies direct parameter passthrough records only the returned parameter.

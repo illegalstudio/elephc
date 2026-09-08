@@ -2,7 +2,7 @@
 title: "mysqli_character_set_name()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 101
+  order: 102
 ---
 
 ## mysqli_character_set_name()

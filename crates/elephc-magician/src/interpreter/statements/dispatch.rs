@@ -12,6 +12,20 @@
 
 use super::*;
 
+/// Executes a lexical body under its return-owner contract and restores the caller on every Result path.
+pub(in crate::interpreter) fn execute_statements_with_return_ownership(
+    statements: &[EvalStmt],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+    owned_returns: bool,
+) -> Result<EvalControl, EvalStatus> {
+    let previous = context.replace_owned_program_returns(owned_returns);
+    let result = execute_statements(statements, context, scope, values);
+    context.replace_owned_program_returns(previous);
+    result
+}
+
 /// Executes statements in source order and propagates the first eval `return`.
 pub(in crate::interpreter) fn execute_statements(
     statements: &[EvalStmt],
@@ -51,9 +65,12 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_do_while_stmt(body, condition, context, scope, values)
         }
         EvalStmt::Echo(expr) => {
-            let value = eval_expr(expr, context, scope, values)?;
-            let value = eval_string_context_value(value, context, values)?;
-            values.echo(value)?;
+            let value = eval_expr_result(expr, context, scope, values)?;
+            let result = (|| {
+                let printable = eval_string_context_value(value.value, context, values)?;
+                values.echo(printable)
+            })();
+            finish_evaluated_result(value, result, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::For {
@@ -115,6 +132,7 @@ pub(in crate::interpreter) fn execute_stmt(
         } => {
             let key = name.to_ascii_lowercase();
             let mut function = EvalFunction::new(name.clone(), params.clone(), body.clone())
+                .with_strict_types(context.strict_types())
                 .with_attributes(attributes.clone())
                 .with_parameter_attributes(parameter_attributes.clone())
                 .with_parameter_types(parameter_types.clone())
@@ -139,16 +157,20 @@ pub(in crate::interpreter) fn execute_stmt(
             then_branch,
             else_branch,
         } => {
-            let condition = eval_expr(condition, context, scope, values)?;
-            if values.truthy(condition)? {
+            if eval_condition(condition, context, scope, values)? {
                 execute_statements(then_branch, context, scope, values)
             } else {
                 execute_statements(else_branch, context, scope, values)
             }
         }
-        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(eval_expr(
-            expr, context, scope, values,
-        )?)),
+        EvalStmt::Return(Some(expr)) => {
+            let mut result = eval_expr_result(expr, context, scope, values)?;
+            if context.owned_program_returns() && !result.owned {
+                result.value = values.retain(result.value)?;
+                result.owned = true;
+            }
+            Ok(EvalControl::Return(result))
+        }
         EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
         EvalStmt::ReferenceAssign { target, source } => {
             for replaced in set_reference_alias(context, scope, target, source, values)? {
@@ -233,10 +255,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::While { condition, body } => {
-            while {
-                let condition = eval_expr(condition, context, scope, values)?;
-                values.truthy(condition)?
-            } {
+            while eval_condition(condition, context, scope, values)? {
                 match execute_statements(body, context, scope, values)? {
                     EvalControl::None | EvalControl::Continue => {}
                     EvalControl::Break => break,

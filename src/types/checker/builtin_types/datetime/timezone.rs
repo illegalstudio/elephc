@@ -78,19 +78,9 @@ pub(super) fn datetime_zone_get_offset() -> ClassMethod {
 }
 
 /// `DateTimeZone::listIdentifiers(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array`
-/// — returns the embedded IANA timezone identifier list. The body is a parsed `return [ ... ];`
-/// over the identifiers in `timezone_ids::TIMEZONE_IDENTIFIERS_ARRAY` (captured from PHP).
-///
-/// The `$timezoneGroup`/`$countryCode` filter parameters are declared for signature parity (so
-/// reflection reports PHP's real signature), but the body returns the full unfiltered list: real
-/// calls are desugared by the name resolver to the injected `__elephc_list_identifiers()` free
-/// function (which performs the group/country filter), so this body only runs via reflection
-/// invocation, where filtering is best-effort.
+/// — applies the same direct-AST group/country filter as the resolver prelude.
 pub(super) fn datetime_zone_list_identifiers() -> ClassMethod {
-    // Built straight from the identifier slice. This body used to be assembled as PHP text and
-    // handed back to the tokenizer and parser — 419 string literals formatted into a `return [];`
-    // only to be read back into the same array literal this builds directly.
-    let body = super::bodies::list_identifiers(super::timezone_ids::TIMEZONE_IDENTIFIERS);
+    let body = super::bodies::list_identifiers();
     ClassMethod {
         name: "listIdentifiers".to_string(),
         visibility: Visibility::Public,
@@ -118,7 +108,7 @@ pub(super) fn datetime_zone_list_identifiers() -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("array"))),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -150,71 +140,26 @@ return [
 /// Test-only: the compilation path builds this body; the oracle checks the two agree.
 #[cfg(test)]
 pub(super) const GET_TRANSITIONS_SRC: &str = r#"<?php
-$raw = elephc_tz_transitions($this->name);
+$raw = elephc_tz_transitions_range($this->name, $timestampBegin, $timestampEnd);
 if ($raw === "") {
     return false;
 }
 $lines = explode("\n", $raw);
-$all = [];
+$result = [];
 foreach ($lines as $line) {
     $g = explode("\t", $line);
-    $all[] = [
+    $result[] = [
         "ts" => (int) $g[0],
+        "time" => $g[4],
         "offset" => (int) $g[1],
         "isdst" => $g[2] === "1",
         "abbr" => $g[3],
-        "time" => $g[4],
     ];
-}
-$n = count($all);
-$result = [];
-$active = -1;
-for ($i = 0; $i < $n; $i++) {
-    if ($all[$i]["ts"] <= $timestampBegin) {
-        $active = $i;
-    }
-}
-if ($active >= 0) {
-    $a = $all[$active];
-    // (int) unboxes the boxed array element to a plain int so the comparison with
-    // the int param is reliable (a boxed element compared directly mis-evaluates).
-    // $ats <= $timestampBegin by construction; when they are equal (the
-    // PHP_INT_MIN default lands on row 0, or begin hits a transition exactly),
-    // reuse the bridge's ts/time rather than formatting an extreme begin with
-    // gmdate — gmdate(PHP_INT_MIN) exhausts the heap.
-    $ats = (int) $a["ts"];
-    if ($timestampBegin <= $ats) {
-        // begin coincides with this transition (the PHP_INT_MIN default lands on
-        // row 0): the synthetic row IS this row, so reuse it verbatim. This also
-        // avoids rebuilding an array literal carrying a PHP_INT_MIN value, which the
-        // array machinery mishandles.
-        $result[] = $a;
-    } else {
-        $result[] = [
-            "ts" => $timestampBegin,
-            "time" => gmdate("Y-m-d\TH:i:sP", $timestampBegin),
-            "offset" => $a["offset"],
-            "isdst" => $a["isdst"],
-            "abbr" => $a["abbr"],
-        ];
-    }
-}
-for ($i = 0; $i < $n; $i++) {
-    if ($all[$i]["ts"] > $timestampBegin && $all[$i]["ts"] <= $timestampEnd) {
-        $r = $all[$i];
-        $result[] = [
-            "ts" => $r["ts"],
-            "time" => $r["time"],
-            "offset" => $r["offset"],
-            "isdst" => $r["isdst"],
-            "abbr" => $r["abbr"],
-        ];
-    }
 }
 return $result;
 "#;
 
-/// Test-only: the compilation path builds this body; the oracle checks the two agree.
+/// Test-only PHP oracle for the direct AST abbreviation-list body.
 #[cfg(test)]
 pub(super) const LIST_ABBREVIATIONS_SRC: &str = r#"<?php
 $raw = elephc_tz_abbreviations();
@@ -254,17 +199,16 @@ pub(super) fn datetime_zone_get_location() -> ClassMethod {
     )
 }
 
-/// `DateTimeZone::getTransitions(int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): array|false`
+/// `DateTimeZone::getTransitions(int $timestampBegin = PHP_INT_MIN, int $timestampEnd = 2147483647): array|false`
 /// — returns the DST transition rows in the window. The defaults reproduce PHP's
 /// full no-arg list: the synthetic first row coincides with the bridge's row 0, so
 /// its precomputed `time` is reused rather than asking `gmdate` to format
 /// `PHP_INT_MIN`.
 pub(super) fn datetime_zone_get_transitions() -> ClassMethod {
-    // PHP's defaults are PHP_INT_MIN/PHP_INT_MAX. They are materialized as integer
-    // literals (a `ConstRef` default is not evaluated when the method is called
-    // with no args), and `i64::MIN` is exactly the bridge's row-0 timestamp, so the
-    // no-arg call reproduces the full transition list.
+    // php-src's frozen DateTime stub uses a finite 32-bit end default. A `ConstRef`
+    // default is not evaluated at a synthetic call site, so retain concrete literals.
     let int_literal = |v: i64| Expr::new(ExprKind::IntLiteral(v), dummy());
+    let body = super::bodies::tz_get_transitions();
     method(
         "getTransitions",
         vec![
@@ -277,12 +221,12 @@ pub(super) fn datetime_zone_get_transitions() -> ClassMethod {
             (
                 "timestampEnd".to_string(),
                 Some(TypeExpr::Int),
-                Some(int_literal(i64::MAX)),
+                Some(int_literal(2_147_483_647)),
                 false,
             ),
         ],
         Some(TypeExpr::Named(Name::unqualified("mixed"))),
-        super::bodies::tz_get_transitions(),
+        body,
     )
 }
 

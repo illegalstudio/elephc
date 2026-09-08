@@ -189,6 +189,7 @@ pub enum MixedNumericOp {
     Sub,
     Mul,
     Pow,
+    UnaryPlus,
 }
 
 /// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
@@ -230,6 +231,7 @@ impl MixedNumericOp {
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
             MixedNumericOp::Pow => "pow",
+            MixedNumericOp::UnaryPlus => "unary_plus",
         }
     }
 }
@@ -362,6 +364,11 @@ pub enum Op {
     MixedTagOf,
     ArrayToMixed,
     HashToMixed,
+    /// Reinterprets an associative hash as PHP's generic array return without changing ownership.
+    HashToArrayReturn,
+    /// Reinterprets a DateTime-family `__serialize()` hash as its declared `array` return without
+    /// touching the pointer, its header, or its reference count; includes user overrides.
+    DateSerializeHashReturn,
     MixedCastBool,
     MixedCastInt,
     MixedCastFloat,
@@ -434,8 +441,11 @@ pub enum Op {
     IteratorMethodCall,
     SplRuntimeCall,
     ObjectNew,
+    ObjectNewWithoutConstructor,
     EvalObjectNew,
     ObjectCloneShallow,
+    /// Clones compiler-private object storage without reserving a PHP-visible object handle.
+    ObjectCloneInternal,
     DynamicObjectNew,
     DynamicObjectNewMixed,
     DynamicObjectNewWithoutConstructorMixed,
@@ -483,6 +493,8 @@ pub enum Op {
     NullsafeMethodCall,
     MethodLookup,
     MethodCall,
+    /// Calls one reflected declaring-class instance method without virtual override dispatch.
+    MethodCallExact,
     StaticMethodCall,
     EvalStaticMethodCall,
     /// Coerces a PHP numeric string operand to its integer value for an int-backed enum
@@ -515,6 +527,11 @@ pub enum Op {
     /// (`"f(): Return value must be of type int, "`), to which codegen appends the runtime
     /// type word and `" returned"`. Result: `I64`.
     ReturnBoundaryMixedToInt,
+    /// Consumes one owned boxed value at a DECLARED object return boundary, verifies that the
+    /// runtime object implements the declared class/interface, and returns an owned raw object.
+    /// Non-objects and incompatible objects throw a catchable `TypeError` with php-src wording.
+    /// Immediate: data string encoded as `<target-class>\0<message-prefix>`.
+    ReturnBoundaryMixedToObject,
     ClassConstant,
     ScopedConstantGet,
     ClassAttrNames,
@@ -648,6 +665,8 @@ impl Op {
             | DynamicClassHasConstructor
             | DynamicPdoStatementClassStatus
             | DynamicPdoCalledClassStatus
+            | HashToArrayReturn
+            | DateSerializeHashReturn
             | Move
             | Borrow
             | Nop => E::PURE,
@@ -700,6 +719,7 @@ impl Op {
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
+            | ObjectNewWithoutConstructor
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
@@ -719,7 +739,7 @@ impl Op {
                     | E::REFCOUNT_OP | E::MAY_WARN | E::MAY_FATAL
             }
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
-            | HashCloneShallow | ObjectCloneShallow => {
+            | HashCloneShallow | ObjectCloneShallow | ObjectCloneInternal => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             ArrayLen | HashLen => E::READS_HEAP,
@@ -758,15 +778,23 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
-            MethodCall | NullsafeMethodCall => {
+            MethodCall | MethodCallExact | NullsafeMethodCall => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT
             }
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
-            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp
+            | InstanceOfDynamic | LooseEq | LooseNotEq | PhpRelCmp
             | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
+            }
+            MixedNumericBinop => {
+                E::READS_HEAP
+                    | E::ALLOC_HEAP
+                    | E::ALLOC_CONCAT
+                    | E::MAY_THROW
+                    | E::MAY_WARN
+                    | E::MAY_DEOPT
             }
             // `++`/`--` on a string reads the operand's payload, may write the shared
             // concat scratch while building the carried result, and always allocates the
@@ -777,7 +805,8 @@ impl Op {
             }
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
             EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
-            | ReturnBoundaryMixedToInt => {
+            | ReturnBoundaryMixedToInt
+            | ReturnBoundaryMixedToObject => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
@@ -964,6 +993,8 @@ impl Op {
             MixedTagOf => "mixed_tag_of",
             ArrayToMixed => "array_to_mixed",
             HashToMixed => "hash_to_mixed",
+            HashToArrayReturn => "hash_to_array_return",
+            DateSerializeHashReturn => "date_serialize_hash_return",
             MixedCastBool => "mixed_cast_bool",
             MixedCastInt => "mixed_cast_int",
             MixedCastFloat => "mixed_cast_float",
@@ -1021,8 +1052,10 @@ impl Op {
             IteratorMethodCall => "iterator_method_call",
             SplRuntimeCall => "spl_runtime_call",
             ObjectNew => "object_new",
+            ObjectNewWithoutConstructor => "object_new_without_constructor",
             EvalObjectNew => "eval_object_new",
             ObjectCloneShallow => "object_clone_shallow",
+            ObjectCloneInternal => "object_clone_internal",
             DynamicObjectNew => "dynamic_object_new",
             DynamicObjectNewMixed => "dynamic_object_new_mixed",
             DynamicObjectNewWithoutConstructorMixed => {
@@ -1050,12 +1083,14 @@ impl Op {
             NullsafeMethodCall => "nullsafe_method_call",
             MethodLookup => "method_lookup",
             MethodCall => "method_call",
+            MethodCallExact => "method_call_exact",
             StaticMethodCall => "static_method_call",
             EvalStaticMethodCall => "eval_static_method_call",
             EnumBackingStringToInt => "enum_backing_string_to_int",
             EnumBackingMixedToInt => "enum_backing_mixed_to_int",
             PackedFieldMixedToInt => "packed_field_mixed_to_int",
             ReturnBoundaryMixedToInt => "return_boundary_mixed_to_int",
+            ReturnBoundaryMixedToObject => "return_boundary_mixed_to_object",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
             ClassAttrNames => "class_attr_names",

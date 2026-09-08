@@ -160,7 +160,9 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "x10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x2, x10");                                         // evaluate `cmp x2, x10` before selecting the projection branch
     emitter.instruction("b.eq __rt_object_to_hash_next");                       // skip or advance the current property via `__rt_object_to_hash_next`
-    emitter.instruction("mov x0, x16");                                         // prepare the projection argument or result with `mov x0, x16`
+    emitter.instruction("cmp x16, #11");                                        // does the descriptor describe an inline nullable scalar?
+    emitter.instruction("csel x0, x2, x16, eq");                                // box tagged scalars using their stored int-or-null tag
+    emitter.instruction("csel x2, xzr, x2, eq");                                // tagged scalar payloads have no third value word
     emitter.instruction("bl __rt_mixed_from_value");                            // call `__rt_mixed_from_value` with the prepared projection arguments
     emitter.instruction("mov x3, x0");                                          // prepare the projection argument or result with `mov x3, x0`
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the result-hash slot for `ldr x0, [sp, #16]`
@@ -356,7 +358,14 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rsi, r11");                                        // evaluate `cmp rsi, r11` before selecting the projection branch
     emitter.instruction("je __rt_object_to_hash_next_x");                       // skip or advance the current property via `__rt_object_to_hash_next_x`
-    emitter.instruction("mov rax, r15");                                        // prepare the projection argument or result with `mov rax, r15`
+    emitter.instruction("cmp r15, 11");                                         // does the descriptor describe an inline nullable scalar?
+    emitter.instruction("jne __rt_object_to_hash_value_ready_x");               // ordinary property tags already use canonical value words
+    emitter.instruction("mov rax, rsi");                                        // dispatch tagged scalars using their stored int-or-null tag
+    emitter.instruction("xor esi, esi");                                        // tagged scalar payloads have no third value word
+    emitter.instruction("jmp __rt_object_to_hash_value_box_x");                 // skip ordinary descriptor-tag materialization
+    emitter.label("__rt_object_to_hash_value_ready_x");
+    emitter.instruction("mov rax, r15");                                        // use the ordinary property descriptor tag
+    emitter.label("__rt_object_to_hash_value_box_x");
     emitter.instruction("call __rt_mixed_from_value");                          // call `__rt_mixed_from_value` with the prepared projection arguments
     emitter.instruction("mov rcx, rax");                                        // prepare the projection argument or result with `mov rcx, rax`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the result-hash slot for `mov rdi, QWORD PTR [rbp - 24]`

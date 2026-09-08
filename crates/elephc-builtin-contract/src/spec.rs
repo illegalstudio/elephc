@@ -81,6 +81,10 @@ pub enum TypeSpec {
     Str,
     /// PHP `bool`.
     Bool,
+    /// PHP's literal false type.
+    False,
+    /// A PHP union of the listed member types.
+    Union(&'static [TypeSpec]),
     /// PHP `mixed` or a shape refined by a backend-specific checker.
     Mixed,
     /// PHP `array` (element shape left to the backend checker).

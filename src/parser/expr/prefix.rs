@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
+use crate::parser::ast::{BinOp, Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
 use super::calls::{parse_scoped_static_call, peek_cast};
@@ -41,6 +41,7 @@ pub(super) fn parse_prefix(
     let span = tokens[*pos].1.span;
 
     match &tokens[*pos].0 {
+        Token::Plus => parse_unary_plus(tokens, pos, span),
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
         Token::Tilde => parse_unary(tokens, pos, span, ExprKind::BitNot, 35),
@@ -129,6 +130,15 @@ pub(super) fn parse_prefix(
             ExprKind::ConstRef(Name::unqualified("STDERR")),
         ),
         Token::PhpEol => parse_simple(tokens, pos, span, ExprKind::StringLiteral("\n".to_string())),
+        Token::Backslash
+            if matches!(
+                tokens.get(*pos + 1).map(|(token, _)| token),
+                Some(Token::PhpEol)
+            ) =>
+        {
+            *pos += 1;
+            parse_simple(tokens, pos, span, ExprKind::StringLiteral("\n".to_string()))
+        }
         Token::PhpOs => parse_simple(
             tokens,
             pos,
@@ -325,6 +335,24 @@ fn parse_simple(
 ) -> Result<Expr, CompileError> {
     *pos += 1;
     Ok(Expr::new(kind, span))
+}
+
+/// Parses PHP's unary plus as `operand * 1`, matching Zend's coercion and TypeError wording.
+fn parse_unary_plus(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 1;
+    let inner = parse_expr_bp(tokens, pos, 35)?;
+    Ok(Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(inner),
+            op: BinOp::Mul,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(1), Span::synthetic())),
+        },
+        span,
+    ))
 }
 
 /// Parses a unary operator expression. Consumes the operator token, advances `pos`,

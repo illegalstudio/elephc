@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use crate::ir::{RuntimeCallTarget, RuntimeFnId};
 
 /// Lowers a static method call.
 pub(super) fn lower_static_method_call(
@@ -17,6 +18,16 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if static_syntax_uses_late_bound_instance_receiver(ctx, receiver, method) {
+        return super::method_calls::lower_method_call(
+            ctx,
+            &Expr::new(ExprKind::This, expr.span),
+            method,
+            args,
+            Op::MethodCall,
+            expr,
+        );
+    }
     // `Closure::bind($closure, $newThis [, $scope])` — static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
         if name.trim_start_matches('\\') == "Closure"
@@ -64,14 +75,39 @@ pub(super) fn lower_static_method_call(
     let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let coerce_date_interval_null =
+        static_call_is_date_interval_procedural_from_string(receiver, dispatch_method)
+            && call_args
+                .first()
+                .is_some_and(|argument| matches!(argument.kind, ExprKind::Null));
+    if coerce_date_interval_null {
+        emit_date_interval_procedural_null_deprecation(ctx, expr.span);
+    }
+    let coerced_call_args;
+    let lowered_call_args = if coerce_date_interval_null {
+        coerced_call_args = call_args
+            .iter()
+            .enumerate()
+            .map(|(index, argument)| {
+                if index == 0 {
+                    Expr::new(ExprKind::StringLiteral(String::new()), argument.span)
+                } else {
+                    argument.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        coerced_call_args.as_slice()
+    } else {
+        call_args
+    };
+    let operands = lower_args_with_signature(ctx, sig.as_ref(), lowered_call_args);
     let operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
     let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
     let data = ctx.intern_string(&name);
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(signature.return_type.clone()))
         .unwrap_or_else(|| {
             if ctx.has_eval_barrier() && matches!(receiver, StaticReceiver::Named(_)) {
                 PhpType::Mixed
@@ -89,14 +125,40 @@ pub(super) fn lower_static_method_call(
         }
         _ => result_type,
     };
-    let call = ctx.emit_value(
+    // The ext/date magic bodies physically return a string-keyed hash even though PHP exposes
+    // `array`. Keep that concrete representation until the caller's declared return boundary
+    // performs the ownership-preserving Hash -> Array reinterpretation.
+    let native_date_serialize =
+        is_native_date_static_syntax_serialize_call(ctx, receiver, dispatch_method);
+    let result_type = if native_date_serialize {
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        }
+    } else {
+        result_type
+    };
+    let mut call = ctx.emit_value(
         Op::StaticMethodCall,
         operands.clone(),
         Some(Immediate::Data(data)),
-        result_type,
+        result_type.clone(),
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     );
+    if native_date_serialize {
+        let receiver = lower_expr(ctx, &Expr::new(ExprKind::This, expr.span));
+        call = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![call.value, receiver.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::DateMagicAppendPropertiesForced,
+            ))),
+            result_type.clone(),
+            RuntimeFnId::DateMagicAppendPropertiesForced.effects(),
+            Some(expr.span),
+        );
+    }
     let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
     release_owned_call_arg_temporaries_with_signature(
         ctx,
@@ -107,6 +169,73 @@ pub(super) fn lower_static_method_call(
         expr.span,
     );
     call
+}
+
+/// Returns whether compatible static syntax executes one ext/date `__serialize()` body.
+///
+/// A child override may deliberately delegate through `parent::`, `self::`, or a compatible
+/// named receiver. php-src still calls `add_common_properties()` for the concrete object even
+/// though the child's effective magic implementation is user code.
+fn is_native_date_static_syntax_serialize_call(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> bool {
+    if php_symbol_key(method) != "__serialize" {
+        return false;
+    }
+    let Some(target_class) = crate::types::static_syntax_instance_receiver_class(
+        &ctx.classes,
+        ctx.current_class.as_deref(),
+        receiver,
+    ) else {
+        return false;
+    };
+    ctx.classes
+        .get(&target_class)
+        .and_then(|info| info.method_impl_classes.get("__serialize"))
+        .is_some_and(|owner| {
+            matches!(
+                owner.trim_start_matches('\\'),
+                "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+            )
+        })
+}
+
+/// Returns whether name resolution rewrote the procedural DateInterval parser call.
+fn static_call_is_date_interval_procedural_from_string(
+    receiver: &StaticReceiver,
+    method: &str,
+) -> bool {
+    matches!(
+        receiver,
+        StaticReceiver::Named(name)
+            if name.as_str().trim_start_matches('\\') == "DateInterval"
+    ) && php_symbol_key(method) == "__elephc_create_from_date_string"
+}
+
+/// Emits php-src's weak-null deprecation for date_interval_create_from_date_string().
+fn emit_date_interval_procedural_null_deprecation(
+    ctx: &mut LoweringContext<'_, '_>,
+    span: Span,
+) {
+    let message_text = "\nDeprecated: date_interval_create_from_date_string(): Passing null to parameter #1 ($datetime) of type string is deprecated";
+    let message_expr = Expr::new(
+        ExprKind::StringLiteral(message_text.to_string()),
+        span,
+    );
+    let message = lower_string_literal(ctx, message_text, &message_expr);
+    let line = emit_i64_at_span(ctx, span.line as i64, span);
+    let level = emit_i64_at_span(ctx, 8192, span);
+    let warning = emit_builtin_call_value(
+        ctx,
+        "__elephc_diag_warning",
+        vec![message.value, line.value, level.value],
+        PhpType::Void,
+        span,
+        None,
+    );
+    let _ = warning;
 }
 
 /// Returns preserved late-static return syntax for EIR static dispatch.
@@ -304,6 +433,16 @@ pub(super) fn static_method_return_arg_alias(
     let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
         return ReturnArgAlias::Unknown;
     };
+    if crate::types::date_method_dispatch::native_procedural_mutator_method(
+        &format!("{class_name}::{method}"),
+    ).is_some() {
+        return ReturnArgAlias::Parameters([0].into_iter().collect());
+    }
+    if crate::types::date_method_dispatch::native_procedural_read_method(
+        &format!("{class_name}::{method}"),
+    ).is_some() {
+        return ReturnArgAlias::None;
+    }
     let method_key = php_symbol_key(method);
     let Some(class_info) = ctx.classes.get(&class_name) else {
         return ReturnArgAlias::Unknown;
@@ -380,7 +519,7 @@ pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
 ) -> Option<PhpType> {
     let nominal = static_method_implementation_signature(ctx, receiver, method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))?;
+        .map(|signature| normalize_value_php_type(signature.return_type.clone()))?;
     match (
         static_method_late_static_return_for_ir(ctx, receiver, method),
         static_late_binding_receiver_type_for_ir(ctx, receiver),
@@ -394,18 +533,49 @@ pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
     }
 }
 
-/// Returns the instance-method signature used by `self::method()` or `parent::method()`.
+/// Returns the instance-method signature used by compatible static-call syntax.
 pub(super) fn lexical_instance_static_call_signature<'a>(
     ctx: &'a LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     method: &str,
 ) -> Option<&'a FunctionSig> {
-    if !matches!(receiver, StaticReceiver::Self_ | StaticReceiver::Parent) {
-        return None;
-    }
-    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let class_name = if crate::types::static_syntax_uses_late_bound_instance_receiver(
+        ctx.current_class.as_deref(),
+        receiver,
+    ) {
+        ctx.current_class.clone()?
+    } else {
+        crate::types::static_syntax_instance_receiver_class(
+            &ctx.classes,
+            ctx.current_class.as_deref(),
+            receiver,
+        )?
+    };
     let key = php_symbol_key(method);
     class_method_signature(ctx, &class_name, &key)
+}
+
+/// Returns whether `static::method()` must route through normal late-bound instance dispatch.
+fn static_syntax_uses_late_bound_instance_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> bool {
+    if !crate::types::static_syntax_uses_late_bound_instance_receiver(
+        ctx.current_class.as_deref(),
+        receiver,
+    ) {
+        return false;
+    }
+    let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
+        return false;
+    };
+    let method_key = php_symbol_key(method);
+    let Some(class_info) = ctx.classes.get(&class_name) else {
+        return false;
+    };
+    !class_info.static_methods.contains_key(&method_key)
+        && class_info.methods.contains_key(&method_key)
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
@@ -422,4 +592,3 @@ pub(super) fn static_receiver_class_name(
         }
     }
 }
-

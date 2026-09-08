@@ -337,7 +337,10 @@ mod tests {
     /// `!=` excludes a profile without excluding the rest.
     #[test]
     fn not_equal_excludes_one_profile() {
-        assert_eq!(newest_admitted(">=8.2 !=8.5"), Some(PhpVersion::Php84));
+        assert_eq!(
+            newest_admitted(">=8.2 !=8.5.10"),
+            Some(PhpVersion::Php84)
+        );
     }
 
     /// A constraint admitting no maintained profile yields `None`, so the caller falls back

@@ -30,6 +30,7 @@ struct InstanceMethodExprCallTarget {
     param_types: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
+    date_serialize_finalize: bool,
 }
 
 /// Lowers `($fn)(...)` when `$fn` is a stored instance-method first-class callable.
@@ -88,7 +89,31 @@ fn lower_instance_method_callable_call(
     abi::emit_call_label(ctx.emitter, &target.entry_label);
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &target.return_ty)?;
+    if target.date_serialize_finalize
+        && inst.result.map_or(true, |result| {
+            ctx.value_php_type(result)
+                .is_ok_and(|result_ty| matches!(result_ty.codegen_repr(), PhpType::Mixed))
+        })
+    {
+        match ctx.emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                ctx.load_value_to_reg(target.receiver, "x1")?;
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                ctx.load_value_to_reg(target.receiver, "rsi")?;
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the raw DateTime array/hash owner in the SysV first-argument register
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_date_serialize_finalize_mixed");
+        if let Some(result) = inst.result {
+            ctx.store_result_value(result)?;
+        } else {
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+        }
+    } else {
+        store_call_result(ctx, inst, &target.return_ty)?;
+    }
+    super::super::emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
@@ -189,7 +214,29 @@ fn instance_method_expr_call_target(
         param_types,
         ref_params,
         return_ty: sig.return_type.clone(),
+        date_serialize_finalize: class_is_datetime_family(ctx, normalized_class)
+            && method_key == "__serialize",
     })
+}
+
+/// Returns whether a receiver class belongs to PHP's built-in DateTime object family.
+fn class_is_datetime_family(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(candidate) = current {
+        if matches!(
+            candidate,
+            "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+        ) {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(candidate)
+            .and_then(|class_info| class_info.parent.as_deref())
+            .map(|parent| parent.trim_start_matches('\\'));
+    }
+    false
 }
 
 /// Returns the first-class callable producer for an expr-call operand.

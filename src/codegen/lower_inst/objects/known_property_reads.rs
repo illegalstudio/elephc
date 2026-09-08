@@ -83,6 +83,9 @@ pub(super) fn lower_prop_get_nonnull(
     if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, property)? {
         return lower_allow_dynamic_prop_get(ctx, inst, object, property, offset);
     }
+    if object_property_is_missing(ctx, object, property)? {
+        return lower_undefined_property_get(ctx, inst, object, property);
+    }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
@@ -90,7 +93,7 @@ pub(super) fn lower_prop_get_nonnull(
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
-    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    materialize_loaded_property_result(ctx, inst, &slot.storage_type)?;
     store_if_result(ctx, inst)
 }
 

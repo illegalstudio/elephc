@@ -47,6 +47,7 @@ from registry import (  # noqa: E402  (sys.path tweak above)
     BuiltinSig,
     DESCRIPTION_OVERRIDES,
     INTERNAL_NOTES,
+    LOWERING_NOTES_OVERRIDES,
     LoweringInfo,
     PARAM_TYPES,
     Parameter,
@@ -481,6 +482,7 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
         "PARAM_TYPES": PARAM_TYPES,
         "RETURN_TYPE_OVERRIDES": RETURN_TYPE_OVERRIDES,
         "RUNTIME_HELPER_OVERRIDES": RUNTIME_HELPER_OVERRIDES,
+        "LOWERING_NOTES_OVERRIDES": LOWERING_NOTES_OVERRIDES,
         "DESCRIPTION_OVERRIDES": DESCRIPTION_OVERRIDES,
         "INTERNAL_NOTES": INTERNAL_NOTES,
     }
@@ -759,6 +761,8 @@ def build_registry(repo: Path) -> list[Builtin]:
             )
         if canonical in RUNTIME_HELPER_OVERRIDES:
             lowering.runtime_helpers = RUNTIME_HELPER_OVERRIDES[canonical]
+        if canonical in LOWERING_NOTES_OVERRIDES:
+            lowering.notes = [*LOWERING_NOTES_OVERRIDES[canonical], *lowering.notes]
 
         description = DESCRIPTION_OVERRIDES.get(canonical, "")
         if not description:

@@ -21,7 +21,7 @@ mod function;
 /// The padding-thunk symbol codegen calls for a dynamic `new` that omits defaulted arguments.
 pub(crate) use function::dynamic_constructor_thunk_name;
 mod ownership;
-mod program;
+pub(crate) mod program;
 mod reflection;
 mod stmt;
 

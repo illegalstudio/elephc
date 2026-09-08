@@ -69,12 +69,15 @@ pub(in crate::interpreter) fn eval_user_sort_replacement_from_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
-    let mut entries = eval_user_sort_entries(array, values)?;
-    eval_user_sort_entries_in_place(name, &callback, &mut entries, context, values)?;
-    if name == "usort" {
-        return eval_user_sort_reindex_result(entries, values);
-    }
-    eval_user_sort_preserve_key_result(entries, values)
+    let result = (|| {
+        let mut entries = eval_user_sort_entries(array, values)?;
+        eval_user_sort_entries_in_place(name, &callback, &mut entries, context, values)?;
+        if name == "usort" {
+            return eval_user_sort_reindex_result(entries, values);
+        }
+        eval_user_sort_preserve_key_result(entries, values)
+    })();
+    finish_evaluated_callable(callback, result, context, values)
 }
 
 /// Collects source keys and values from one eval array for user sorting.

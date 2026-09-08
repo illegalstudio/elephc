@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **819 / 2169** (38%), classes **140 / 329** (43%), constants **1066 / 3180** (34%).
+Overall coverage: functions **826 / 2169** (38%), classes **142 / 329** (43%), constants **1087 / 3180** (34%).
 
 ## Coverage by PHP module
 
@@ -21,10 +21,10 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | — |
 | `bz2` | 0 / 10 · 0% | — | — |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | — | 21 / 21 · 100% |
-| `core` | 29 / 62 · 47% | 21 / 40 · 52% | 34 / 89 · 38% |
+| `core` | 33 / 62 · 53% | 23 / 40 · 58% | 34 / 89 · 38% |
 | `ctype` | 4 / 11 · 36% | — | — |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
-| [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
+| [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 17 / 17 · 100% |
 | `dba` | 0 / 15 · 0% | 0 / 1 · 0% | — |
 | `dom` | 0 / 2 · 0% | 0 / 50 · 0% | 0 / 61 · 0% |
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
@@ -58,7 +58,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `pgsql` | 0 / 123 · 0% | 0 / 3 · 0% | 0 / 76 · 0% |
 | `phar` | — | 3 / 4 · 75% | — |
 | [`posix`](./pcntl.md#functions) | 2 / 41 · 5% | — | 0 / 43 · 0% |
-| `random` | 3 / 9 · 33% | 0 / 11 · 0% | 0 / 2 · 0% |
+| `random` | 4 / 9 · 44% | 0 / 11 · 0% | 0 / 2 · 0% |
 | `readline` | 1 / 13 · 8% | — | 0 / 1 · 0% |
 | `reflection` | — | 16 / 26 · 62% | — |
 | [`session`](./sessions.md#functions) | 23 / 23 · 100% | 4 / 4 · 100% | 3 / 3 · 100% |
@@ -70,7 +70,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | — |
 | `sqlite3` | — | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 381 / 545 · 70% | 2 / 6 · 33% | 155 / 400 · 39% |
+| `standard` | 383 / 545 · 70% | 2 / 6 · 33% | 162 / 400 · 40% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | — |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | — |
@@ -87,7 +87,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 
 The counts above are what a compiled program has. Code run through `eval()` sees a different set in these modules (compiled / eval()):
 
-- `core` functions: 29 / 28
+- `core` functions: 33 / 30
 - `core` constants: 34 / 31
 - `exif` functions: 4 / 0
 - `exif` constants: 1 / 0
@@ -96,9 +96,10 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `mysqli` functions: 84 / 0
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
+- `random` functions: 4 / 3
 - `session` functions: 23 / 0
-- `standard` functions: 381 / 341
-- `standard` constants: 155 / 134
+- `standard` functions: 383 / 342
+- `standard` constants: 162 / 141
 - `zend opcache` functions: 8 / 0
 
 3 symbol(s) exist only inside `eval()` and are not counted in the table: `get_called_class()`, `get_class_methods()`, `get_class_vars()`.

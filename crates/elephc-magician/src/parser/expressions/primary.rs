@@ -30,6 +30,11 @@ impl Parser {
                 self.advance();
                 Ok(EvalExpr::Const(EvalConst::String(value)))
             }
+            TokenKind::ByteString(value) => {
+                let value = value.clone();
+                self.advance();
+                Ok(EvalExpr::Const(EvalConst::ByteString(value)))
+            }
             TokenKind::DollarIdent(name) => {
                 let name = name.clone();
                 self.advance();

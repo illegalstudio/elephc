@@ -12,6 +12,7 @@ use super::*;
 
 /// Binds evaluated method arguments using a selected by-reference target policy.
 pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
+    callable_name: &str,
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_defaults: &[Option<EvalExpr>],
@@ -52,10 +53,12 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
     for arg in evaluated_args {
         if let Some(name) = arg.name {
             bind_dynamic_named_method_arg(
+                callable_name,
                 params,
                 parameter_types,
                 parameter_is_by_ref,
                 variadic_index,
+                &mut next_variadic_index,
                 &mut bound_args,
                 &name,
                 arg.value,
@@ -67,6 +70,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             )?;
         } else {
             bind_dynamic_positional_method_arg(
+                callable_name,
                 params,
                 &mut bound_args,
                 parameter_types,
@@ -102,7 +106,15 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         }
         if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
             let bound = value.as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-            bound.value = eval_method_parameter_value(param_type, bound.value, context, values)?;
+            bound.value = eval_method_parameter_value(
+                param_type,
+                bound.value,
+                callable_name,
+                position + 1,
+                params.get(position).map(String::as_str),
+                context,
+                values,
+            )?;
         }
     }
 
@@ -145,6 +157,7 @@ fn evaluated_args_contain_named_variadic_values(
 
 /// Binds one positional method argument to a fixed parameter or variadic array.
 fn bind_dynamic_positional_method_arg(
+    callable_name: &str,
     params: &[String],
     bound_args: &mut [Option<BoundMethodArg>],
     parameter_types: &[Option<EvalParameterType>],
@@ -175,6 +188,8 @@ fn bind_dynamic_positional_method_arg(
             parameter_types,
             variadic_index,
             value,
+            callable_name,
+            argument_number,
             context,
             values,
         )?;
@@ -226,10 +241,12 @@ fn bind_dynamic_positional_method_arg(
 
 /// Binds one named method argument to a fixed parameter or variadic array.
 fn bind_dynamic_named_method_arg(
+    callable_name: &str,
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_is_by_ref: &[bool],
     variadic_index: Option<usize>,
+    next_variadic_index: &mut i64,
     bound_args: &mut [Option<BoundMethodArg>],
     name: &str,
     value: RuntimeCellHandle,
@@ -263,16 +280,23 @@ fn bind_dynamic_named_method_arg(
         return Err(EvalStatus::RuntimeFatal);
     }
     let key = values.string(name)?;
+    let argument_number = variadic_index
+        .and_then(|index| {
+            usize::try_from(*next_variadic_index)
+                .ok()
+                .and_then(|offset| index.checked_add(offset))
+        })
+        .and_then(|index| index.checked_add(1))
+        .ok_or(EvalStatus::RuntimeFatal)?;
     let value = eval_variadic_method_parameter_value(
         parameter_types,
         variadic_index,
         value,
+        callable_name,
+        argument_number,
         context,
         values,
     )?;
-    let argument_number = variadic_index
-        .and_then(|index| index.checked_add(1))
-        .ok_or(EvalStatus::RuntimeFatal)?;
     let ref_target = method_parameter_ref_target(
         params,
         parameter_is_by_ref,
@@ -350,6 +374,8 @@ fn eval_variadic_method_parameter_value(
     parameter_types: &[Option<EvalParameterType>],
     variadic_index: Option<usize>,
     value: RuntimeCellHandle,
+    callable_name: &str,
+    argument_number: usize,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -358,7 +384,15 @@ fn eval_variadic_method_parameter_value(
     else {
         return Ok(value);
     };
-    eval_method_parameter_value(param_type, value, context, values)
+    eval_method_parameter_value(
+        param_type,
+        value,
+        callable_name,
+        argument_number,
+        None,
+        context,
+        values,
+    )
 }
 
 /// Returns the matching non-variadic parameter index for one PHP named argument.
@@ -395,14 +429,23 @@ fn bind_dynamic_variadic_arg(
 pub(in crate::interpreter) fn eval_method_parameter_value(
     param_type: &EvalParameterType,
     value: RuntimeCellHandle,
+    callable_name: &str,
+    argument_number: usize,
+    parameter_name: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if eval_method_parameter_type_accepts_exact(param_type, value, context, values)? {
         return Ok(value);
     }
+    if eval_method_parameter_accepts_int_to_float(param_type, value, values)? {
+        return values.cast_float(value);
+    }
     if param_type.is_intersection() {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_parameter_type_error(param_type, value, callable_name, argument_number, parameter_name, context, values);
+    }
+    if context.strict_types() {
+        return eval_throw_parameter_type_error(param_type, value, callable_name, argument_number, parameter_name, context, values);
     }
     for variant in param_type.variants() {
         if let Some(coerced) =
@@ -411,7 +454,82 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
             return Ok(coerced);
         }
     }
-    Err(EvalStatus::RuntimeFatal)
+    eval_throw_parameter_type_error(param_type, value, callable_name, argument_number, parameter_name, context, values)
+}
+
+/// Schedules PHP's catchable TypeError for one rejected declared parameter value.
+fn eval_throw_parameter_type_error<T>(
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    callable_name: &str,
+    argument_number: usize,
+    parameter_name: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let expected = eval_parameter_type_name(param_type);
+    let actual = eval_runtime_type_name(value, values)?;
+    let parameter = parameter_name.map_or_else(
+        || format!("Argument #{argument_number}"),
+        |name| format!("Argument #{argument_number} (${name})"),
+    );
+    eval_throw_type_error(
+        &format!("{callable_name}(): {parameter} must be of type {expected}, {actual} given"),
+        context,
+        values,
+    )
+}
+
+/// Renders one declared eval parameter type for a PHP TypeError message.
+pub(in crate::interpreter) fn eval_parameter_type_name(param_type: &EvalParameterType) -> String {
+    let separator = if param_type.is_intersection() { "&" } else { "|" };
+    let atoms = param_type
+        .variants()
+        .iter()
+        .map(eval_parameter_type_variant_name)
+        .collect::<Vec<_>>();
+    if param_type.allows_null() {
+        if atoms.len() == 1 {
+            return format!("?{}", atoms[0]);
+        }
+        return format!("{}|null", atoms.join(separator));
+    }
+    atoms.join(separator)
+}
+
+/// Renders one non-null eval parameter type atom for a PHP TypeError message.
+fn eval_parameter_type_variant_name(variant: &EvalParameterTypeVariant) -> String {
+    match variant {
+        EvalParameterTypeVariant::Array => String::from("array"),
+        EvalParameterTypeVariant::Bool => String::from("bool"),
+        EvalParameterTypeVariant::Callable => String::from("callable"),
+        EvalParameterTypeVariant::Class(name) => name.trim_start_matches('\\').to_string(),
+        EvalParameterTypeVariant::Float => String::from("float"),
+        EvalParameterTypeVariant::Int => String::from("int"),
+        EvalParameterTypeVariant::Iterable => String::from("iterable"),
+        EvalParameterTypeVariant::Mixed => String::from("mixed"),
+        EvalParameterTypeVariant::Never => String::from("never"),
+        EvalParameterTypeVariant::Object => String::from("object"),
+        EvalParameterTypeVariant::String => String::from("string"),
+        EvalParameterTypeVariant::Void => String::from("void"),
+    }
+}
+
+/// Renders one runtime cell category for a PHP TypeError message.
+pub(in crate::interpreter) fn eval_runtime_type_name(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<&'static str, EvalStatus> {
+    Ok(match values.type_tag(value)? {
+        EVAL_TAG_NULL => "null",
+        EVAL_TAG_BOOL => "bool",
+        EVAL_TAG_INT => "int",
+        EVAL_TAG_FLOAT => "float",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+        EVAL_TAG_OBJECT => "object",
+        _ => "resource",
+    })
 }
 
 /// Returns whether a value satisfies one eval parameter type without scalar coercion.
@@ -475,6 +593,21 @@ fn eval_method_parameter_variant_accepts_exact(
         EvalParameterTypeVariant::Object => Ok(tag == EVAL_TAG_OBJECT),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
     }
+}
+
+/// Returns whether PHP's strict-safe `int` to `float` widening applies to this parameter.
+fn eval_method_parameter_accepts_int_to_float(
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_INT || param_type.is_intersection() {
+        return Ok(false);
+    }
+    Ok(param_type
+        .variants()
+        .iter()
+        .any(|variant| matches!(variant, EvalParameterTypeVariant::Float)))
 }
 
 /// Returns whether an object value satisfies one class/interface parameter target.

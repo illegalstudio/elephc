@@ -381,6 +381,32 @@ mod tests {
         }
     }
 
+    /// Byte-view wrappers borrow string payloads and reserve casting for non-string scalars.
+    #[test]
+    fn eval_string_bytes_borrows_existing_payloads_on_both_targets() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            let body = body_of(&asm, &target.extern_symbol("__elephc_eval_value_string_bytes"));
+            assert!(body.contains("__rt_mixed_unbox"), "{body}");
+            assert!(!body.contains("__rt_str_persist"), "{body}");
+            assert!(!body.contains("__rt_heap_alloc"), "{body}");
+            if target.arch == Arch::AArch64 {
+                assert!(body.contains("b.eq __elephc_eval_value_string_bytes_store"), "{body}");
+                assert!(body.contains("str x0, [sp, #16]"), "{body}");
+                assert!(body.contains("ldr x0, [sp, #16]"), "{body}");
+            } else {
+                assert!(body.contains("jne __elephc_eval_value_string_bytes_cast"), "{body}");
+                assert!(body.contains("jmp __elephc_eval_value_string_bytes_store"), "{body}");
+                assert!(body.contains("sub rsp, 32"), "{body}");
+                assert!(body.contains("add rsp, 32"), "{body}");
+            }
+        }
+    }
+
     /// Returns the instruction lines following `label` up to the next exported helper.
     ///
     /// `label_c_global` emits `.globl <sym>` immediately before each wrapper's label, so

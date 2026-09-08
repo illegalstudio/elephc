@@ -2,7 +2,7 @@
 title: "var_export() — internals"
 description: "Compiler internals for var_export(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 880
+  order: 887
 ---
 
 ## `var_export()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/var_export_prelude.rs`:330](https://github.com/illegalstudio/elephc/blob/main/src/var_export_prelude.rs#L330) (`var_export`)
+- **Lowering**: [`src/var_export_prelude.rs`:471](https://github.com/illegalstudio/elephc/blob/main/src/var_export_prelude.rs#L471) (`var_export`)
 - **Function symbol**: `var_export()`
 
 

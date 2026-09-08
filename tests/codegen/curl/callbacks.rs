@@ -704,20 +704,8 @@ fn curl_multi_exec_re_raises_a_callback_exception() {
 /// same handles three times instead of once must therefore leak no more than running
 /// them once.
 ///
-/// TWO PRE-EXISTING LEAKS ARE DELIBERATELY NOT ASSERTED AWAY HERE, because neither is
-/// reachable only through curl and neither is this task's to fix — both reproduce with
-/// no curl call in the program (measured with `--gc-stats`):
-///   * `__elephc_normalize_callable($closure)` leaks one block per call: the retain it
-///     takes on an already-owned descriptor is never released. `Pdo\Sqlite`'s
-///     `createFunction`/`createCollation`/`createAggregate`/`setAuthorizer` decompose
-///     callables through the identical two-line sequence and leak the same block. That
-///     is the "one block per installed callable" this test tolerates.
-///   * The descriptor invoker leaks the boxed arguments it materializes into DECLARED
-///     parameters. `ob_start(function (string $b, int $p): string {{ … }})` leaks four
-///     blocks per flush and `array_map(function (string $s): string {{ … }}, $xs)` leaks
-///     per element, both with no curl involved. A callback declaring no parameters is
-///     balanced, which is why this fixture uses one: it isolates what the curl adapter
-///     itself owns.
+/// The fixture declares no callback parameters so this assertion remains specifically about
+/// installation, rooting, repeated invocation, and handle teardown rather than argument binding.
 #[test]
 fn curl_callbacks_do_not_leak_per_transfer() {
     if skip_without_curl_native("curl_callbacks_do_not_leak_per_transfer") {
@@ -760,9 +748,9 @@ fn curl_callbacks_do_not_leak_per_transfer() {
          3 transfers leaked {thrice_leaked})"
     );
     assert_eq!(
-        once_leaked, 3,
-        "expected exactly one leaked block per installed callable (the pre-existing \
-         __elephc_normalize_callable retain), got {once_leaked} for three handles"
+        once_leaked, 0,
+        "callback installation and handle teardown must be heap-balanced, got {once_leaked} \
+         live blocks for three handles"
     );
 }
 

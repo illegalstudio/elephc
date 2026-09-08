@@ -74,6 +74,15 @@ pub(super) fn lower_builtin_call_args(
     if canonical == "eval" {
         return lower_eval_args(ctx, sig, args);
     }
+    if canonical == "get_extension_funcs" {
+        return lower_get_extension_funcs_args(ctx, sig, args);
+    }
+    if canonical == "json_encode"
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+    {
+        return lower_json_encode_args(ctx, sig, args);
+    }
     let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
@@ -84,6 +93,9 @@ pub(super) fn lower_builtin_call_args(
         }
         crate::builtins::semantics::BuiltinArgumentLowering::Date => {
             lower_date_args(ctx, sig, args)
+        }
+        crate::builtins::semantics::BuiltinArgumentLowering::Mktime { utc } => {
+            lower_mktime_args(ctx, name, sig, args, utc)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
             lower_json_decode_args(ctx, sig, args)
@@ -135,7 +147,9 @@ pub(super) fn lower_builtin_call_args(
         {
             lower_positional_builtin_args_with_signature(ctx, sig, args)
         }
-        _ => lower_args_with_signature(ctx, sig, args),
+        _ => lower_args_with_signature_and_spread_bounds(
+            ctx, sig, args, Some(SpreadOverflowError::Builtin(name)),
+        ),
     };
     for (name, ty) in pcntl_outputs {
         ctx.set_local_logical_type(&name, ty);
@@ -224,6 +238,100 @@ fn prepare_pcntl_output_local(
         ctx.set_local_type(name, PhpType::Mixed);
     }
     Some((name.clone(), ty))
+}
+
+/// Preserves the raw extension operand until php-src weak string binding can run.
+///
+/// Registry builtin signatures intentionally do not apply ordinary declared-parameter
+/// coercion. This path therefore lowers against a temporary `mixed` signature, then calls
+/// the pay-for-use direct-AST helper that emits null deprecations and catchable type errors
+/// before returning the string storage consumed by the builtin backend.
+fn lower_get_extension_funcs_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<ValueId> {
+    let Some(sig) = sig else {
+        return lower_args(ctx, args);
+    };
+    let mut runtime_sig = sig.clone();
+    if let Some((_, param_type)) = runtime_sig.params.first_mut() {
+        *param_type = PhpType::Mixed;
+    }
+    let mut operands = lower_args_with_signature(ctx, Some(&runtime_sig), args);
+    let Some(value) = operands.first().copied() else {
+        return operands;
+    };
+    if ctx.builder.value_php_type(value).codegen_repr() == PhpType::Str {
+        return operands;
+    }
+
+    let span = args
+        .first()
+        .map_or_else(crate::span::Span::dummy, |arg| arg.span);
+    let lowered = LoweredValue {
+        value,
+        ir_type: ctx.builder.value_type(value),
+    };
+    let boxed = ensure_boxed_mixed(ctx, lowered, span);
+    let line = emit_i64_at_span(ctx, span.line as i64, span);
+    let strict = ctx.emit_value(
+        Op::ConstBool,
+        Vec::new(),
+        Some(Immediate::Bool(crate::source::current_strict_types())),
+        PhpType::Bool,
+        Op::ConstBool.default_effects(),
+        Some(span),
+    );
+    let helper = ctx.intern_function_name(crate::get_extension_funcs_prelude::HELPER_NAME);
+    let coerced = ctx.emit_value(
+        Op::Call,
+        vec![boxed.value, line.value, strict.value],
+        Some(Immediate::Data(helper)),
+        PhpType::Str,
+        effects_lookup::user_call_effects(crate::get_extension_funcs_prelude::HELPER_NAME),
+        Some(span),
+    );
+    ctx.transfer_call_arg_temp_cleanup(boxed.value, coerced.value);
+    operands[0] = coerced.value;
+    operands
+}
+
+/// Projects DatePeriod's php-src virtual property shape before JSON object encoding.
+fn lower_json_encode_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<ValueId> {
+    args.iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            let value = if let Some(sig) = sig {
+                let value = lower_arg_with_signature(ctx, sig, index, arg);
+                LoweredValue {
+                    value,
+                    ir_type: ctx.builder.value_type(value),
+                }
+            } else {
+                lower_expr(ctx, arg)
+            };
+            if index != 0
+                || singular_object_class(&ctx.builder.value_php_type(value.value)).is_none_or(
+                    |(class_name, _)| !class_extends_class(ctx, class_name, "DatePeriod"),
+                )
+            {
+                return value.value;
+            }
+            let release_source = ctx.value_is_owning_temporary(value)
+                && !ctx.value_is_owned_unboxed_local_load(value.value);
+            let properties = lower_json_date_object_from_value(ctx, value.value, arg.span)
+                .unwrap_or_else(|error| panic!("checked DatePeriod JSON projection failed: {error}"));
+            if release_source {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(arg.span));
+            }
+            properties.value
+        })
+        .collect()
 }
 
 /// Promotes the OpenSSL encrypt tag target to string-capable storage before lowering its load.

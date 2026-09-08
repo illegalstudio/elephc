@@ -2,7 +2,7 @@
 title: "mysqli_fetch_array() — internals"
 description: "Compiler internals for mysqli_fetch_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 115
+  order: 116
 ---
 
 ## `mysqli_fetch_array()` — internals

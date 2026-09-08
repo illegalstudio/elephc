@@ -2,7 +2,7 @@
 title: "opcache_reset()"
 description: "Implemented by the compiler-injected OPcache prelude."
 sidebar:
-  order: 619
+  order: 625
 ---
 
 ## opcache_reset()

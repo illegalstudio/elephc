@@ -428,7 +428,11 @@ pub(super) fn array_access_result_type(
 
 /// Returns the materialized result type for a PHP array read, including miss-capable int reads.
 pub(crate) fn array_access_element_result_type(element_ty: PhpType) -> PhpType {
-    if crate::codegen::sentinels::null_repr_is_tagged() && matches!(element_ty, PhpType::Int) {
+    if matches!(element_ty, PhpType::Void | PhpType::Never) {
+        // Empty arrays have no inhabited element type, but a PHP read still yields
+        // a materializable null on a miss. Never emit a Void SSA argument for it.
+        PhpType::Mixed
+    } else if crate::codegen::sentinels::null_repr_is_tagged() && matches!(element_ty, PhpType::Int) {
         PhpType::TaggedScalar
     } else {
         element_ty

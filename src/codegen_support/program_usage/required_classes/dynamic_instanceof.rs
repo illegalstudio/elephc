@@ -75,6 +75,15 @@ fn stmt_has_dynamic_instanceof(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyArrayPush { value: expr, .. } => {
             expr_has_dynamic_instanceof(expr)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_has_dynamic_instanceof(object)
+                || expr_has_dynamic_instanceof(property)
+                || expr_has_dynamic_instanceof(value)
+        }
         StmtKind::If {
             condition,
             then_body,

@@ -112,6 +112,10 @@ serde_json = "1"
 # success coverage does not depend on outbound network access.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
+# Parses the DateTime production-module closure in the AST-boundary regression gate.
+syn = { version = "2", features = ["full", "visit"] }
+# Traverses macro token trees so parser paths cannot be hidden by groups or doc attributes.
+proc-macro2 = "1"
 
 [features]
 # Keeps the codegen test package and its PDO dev-dependency on the same libpq

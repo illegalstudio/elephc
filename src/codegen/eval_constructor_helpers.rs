@@ -39,6 +39,8 @@ use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
+    "CompileError",
+    "ParseError",
     "ArgumentCountError",
     "ValueError",
     "ArithmeticError",
@@ -333,9 +335,9 @@ fn emit_constructor_aarch64(
     let success_label = "__elephc_eval_value_construct_success";
     let fail_label = "__elephc_eval_value_construct_fail";
     let done_label = "__elephc_eval_value_construct_done";
-    emitter.instruction(
+    emitter.instruction(                                                        // reserve helper frame plus a boundary exception handler
         &format!("sub sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
-    );                                                                          //reserve helper frame plus a boundary exception handler
+    );
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
     emitter.instruction("str x2, [sp, #0]");                                    // save the active eval class-scope pointer
@@ -373,9 +375,9 @@ fn emit_constructor_aarch64(
     emitter.instruction("mov x0, #1");                                          // report successful construction or no-op
     emitter.label(done_label);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
-    emitter.instruction(
+    emitter.instruction(                                                        // release the constructor helper frame and boundary handler
         &format!("add sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
-    );                                                                          //release the constructor helper frame and boundary handler
+    );
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
 }
 
@@ -444,16 +446,16 @@ fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escap
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
     emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));   // preserve the caller activation frame across constructor unwinding
     abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
         "str x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // save diagnostic suppression depth for restoration
+    ));
     emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
-    ));                                                                         // pass the boundary jmp_buf to setjmp
+    ));
     emitter.bl_c("setjmp");                                                     // snapshot the bridge stack before entering native constructors
     emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a constructor Throwable escaped
 }
@@ -464,10 +466,10 @@ fn emit_aarch64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     emitter.comment("pop eval constructor exception boundary");
     emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));       // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // reload the saved diagnostic suppression depth
         "ldr x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // reload the saved diagnostic suppression depth
+    ));
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
 }
 
@@ -476,24 +478,24 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
     let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
     emitter.comment("push eval constructor exception boundary");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(
+    emitter.instruction(                                                        // save the previous native exception-handler head
         &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
-    );                                                                          //save the previous native exception-handler head
+    );
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(
+    emitter.instruction(                                                        // preserve the caller activation frame across constructor unwinding
         &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-    );                                                                          //preserve the caller activation frame across constructor unwinding
+    );
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
         "mov QWORD PTR [rbp - {}], r10",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // save diagnostic suppression depth for restoration
+    ));
     emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
-    ));                                                                         // pass the boundary jmp_buf to setjmp
+    ));
     emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native constructors
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a constructor Throwable escaped
@@ -503,14 +505,14 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
 fn emit_x86_64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
     emitter.comment("pop eval constructor exception boundary");
-    emitter.instruction(
+    emitter.instruction(                                                        // reload the previous native exception-handler head
         &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
-    );                                                                          //reload the previous native exception-handler head
+    );
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // reload the saved diagnostic suppression depth
         "mov r10, QWORD PTR [rbp - {}]",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // reload the saved diagnostic suppression depth
+    ));
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
 }
 
@@ -618,6 +620,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
     emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
     emitter.instruction("str x2, [x9, #16]");                                   // store the message length in the compact Throwable payload
+    super::eval_arg_ownership::release_staged_scalar_box(emitter, &PhpType::Str, &PhpType::Void);
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the code argument
     emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep code zero when only the message was supplied
@@ -633,6 +636,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for code initialization
     emitter.instruction("str x0, [x9, #24]");                                   // store the integer exception code
+    super::eval_arg_ownership::release_staged_scalar_box(emitter, &PhpType::Int, &PhpType::Void);
     emit_aarch64_builtin_throwable_previous_arg(
         module,
         emitter,
@@ -668,6 +672,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
     emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the message pointer in the compact Throwable payload
     emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                       // store the message length in the compact Throwable payload
+    super::eval_arg_ownership::release_staged_scalar_box(emitter, &PhpType::Str, &PhpType::Void);
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the code argument
     emitter.instruction("cmp r11, 1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep code zero when only the message was supplied
@@ -683,6 +688,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for code initialization
     emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // store the integer exception code
+    super::eval_arg_ownership::release_staged_scalar_box(emitter, &PhpType::Int, &PhpType::Void);
     emit_x86_64_builtin_throwable_previous_arg(
         module,
         emitter,
@@ -1122,16 +1128,19 @@ fn emit_aarch64_prepare_constructor_args(
             emitter.instruction(&format!("cbz x9, {}", default_label));         // omitted SplFixedArray size uses PHP's zero default
             emit_aarch64_load_eval_arg(module, emitter, index);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_aarch64_cast_eval_arg(
-                module,
-                emitter,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                data,
-                callable_support,
-            );
+            if !super::eval_arg_ownership::borrow_string_argument(emitter, param_ty) {
+                emit_aarch64_cast_eval_arg(
+                    module,
+                    emitter,
+                    param_ty,
+                    &label_prefix,
+                    fail_label,
+                    data,
+                    callable_support,
+                );
+            }
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
+            super::eval_arg_ownership::release_staged_scalar_box(emitter, param_ty, &PhpType::Void);
             emitter.instruction(&format!("b {}", done_label));                  // skip default materialization after an explicit argument
             emitter.label(&default_label);
             abi::emit_load_int_immediate(emitter, "x0", 0);
@@ -1147,16 +1156,19 @@ fn emit_aarch64_prepare_constructor_args(
         } else {
             emit_aarch64_load_eval_arg(module, emitter, index);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_aarch64_cast_eval_arg(
-                module,
-                emitter,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                data,
-                callable_support,
-            );
+            if !super::eval_arg_ownership::borrow_string_argument(emitter, param_ty) {
+                emit_aarch64_cast_eval_arg(
+                    module,
+                    emitter,
+                    param_ty,
+                    &label_prefix,
+                    fail_label,
+                    data,
+                    callable_support,
+                );
+            }
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
+            super::eval_arg_ownership::release_staged_scalar_box(emitter, param_ty, &PhpType::Void);
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
     }
@@ -1197,16 +1209,19 @@ fn emit_x86_64_prepare_constructor_args(
             emitter.instruction(&format!("jz {}", default_label));              // omitted SplFixedArray size uses PHP's zero default
             emit_x86_64_load_eval_arg(module, emitter, index);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_x86_64_cast_eval_arg(
-                module,
-                emitter,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                data,
-                callable_support,
-            );
+            if !super::eval_arg_ownership::borrow_string_argument(emitter, param_ty) {
+                emit_x86_64_cast_eval_arg(
+                    module,
+                    emitter,
+                    param_ty,
+                    &label_prefix,
+                    fail_label,
+                    data,
+                    callable_support,
+                );
+            }
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
+            super::eval_arg_ownership::release_staged_scalar_box(emitter, param_ty, &PhpType::Void);
             emitter.instruction(&format!("jmp {}", done_label));                // skip default materialization after an explicit argument
             emitter.label(&default_label);
             abi::emit_load_int_immediate(emitter, "rax", 0);
@@ -1222,16 +1237,19 @@ fn emit_x86_64_prepare_constructor_args(
         } else {
             emit_x86_64_load_eval_arg(module, emitter, index);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_x86_64_cast_eval_arg(
-                module,
-                emitter,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                data,
-                callable_support,
-            );
+            if !super::eval_arg_ownership::borrow_string_argument(emitter, param_ty) {
+                emit_x86_64_cast_eval_arg(
+                    module,
+                    emitter,
+                    param_ty,
+                    &label_prefix,
+                    fail_label,
+                    data,
+                    callable_support,
+                );
+            }
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
+            super::eval_arg_ownership::release_staged_scalar_box(emitter, param_ty, &PhpType::Void);
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
     }
@@ -1335,6 +1353,7 @@ fn emit_aarch64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usi
     emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the boxed index to the eval array reader
     emitter.instruction("ldr x0, [x29, #-24]");                                 // pass the eval argument array to the reader
     abi::emit_call_label(emitter, &array_get_symbol);
+    super::eval_arg_ownership::release_argument_index(emitter);
     emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed eval argument for coercion
 }
 
@@ -1348,6 +1367,7 @@ fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usiz
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the boxed index to the eval array reader
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the eval argument array to the reader
     abi::emit_call_label(emitter, &array_get_symbol);
+    super::eval_arg_ownership::release_argument_index(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed eval argument for coercion
 }
 

@@ -9,9 +9,13 @@
 //! - Descriptor callback wrappers return owned boxed Mixed cells, so array slots take ownership.
 //! - Source arrays may contain scalar or string-width elements; the helper preserves that callback ABI.
 
-use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::arrays::emit_array_value_type_stamp;
+use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
+use crate::codegen_support::abi;
 use crate::types::PhpType;
 
 /// Emits the `__rt_array_map_mixed` runtime helper for the active target.
@@ -26,38 +30,53 @@ pub fn emit_array_map_mixed(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_map_mixed");
 
     // -- set up stack frame, save callee-saved registers --
-    emitter.instruction("sub sp, sp, #80");                                     // allocate mixed-result map loop metadata
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish the helper frame pointer
-    emitter.instruction("stp x19, x20, [sp, #48]");                             // save callback and destination callee-saved registers
-    emitter.instruction("str x21, [sp, #40]");                                  // save descriptor callback environment register
-    emitter.instruction("str x1, [sp, #8]");                                    // save source array pointer for each loop iteration
+    let frame_bytes = TRY_HANDLER_SLOT_SIZE + 80;
+    let locals = TRY_HANDLER_SLOT_SIZE;
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_bytes));              // reserve a handler record plus mixed-result map metadata
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", locals + 64));      // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", locals + 64));             // establish the helper frame pointer
+    emitter.instruction(&format!("stp x19, x20, [sp, #{}]", locals + 48));      // save callback and destination callee-saved registers
+    emitter.instruction(&format!("str x21, [sp, #{}]", locals + 40));           // save descriptor callback environment register
+    emitter.instruction(&format!("str x1, [sp, #{}]", locals + 8));             // save source array pointer for each loop iteration
     emitter.instruction("mov x19, x0");                                         // keep callback address across every loop callback
     emitter.instruction("mov x21, x2");                                         // keep descriptor callback environment pointer across the loop
 
     // -- read source metadata and allocate a mixed-slot destination array --
     emitter.instruction("ldr x9, [x1]");                                        // read source array length
-    emitter.instruction("str x9, [sp, #16]");                                   // save source length across callback calls
+    emitter.instruction(&format!("str x9, [sp, #{}]", locals + 16));            // save source length across callback calls
     emitter.instruction("ldr x10, [x1, #16]");                                  // read source element width for callback ABI dispatch
-    emitter.instruction("str x10, [sp, #24]");                                  // save source element width across callback calls
+    emitter.instruction(&format!("str x10, [sp, #{}]", locals + 24));           // save source element width across callback calls
     emitter.instruction("mov x0, x9");                                          // pass source length as destination capacity
     emitter.instruction("mov x1, #8");                                          // request boxed Mixed pointer slots for destination values
     emitter.instruction("bl __rt_array_new");                                   // allocate destination array storage
     emit_array_value_type_stamp(emitter, "x0", &PhpType::Mixed);
     emitter.instruction("mov x20, x0");                                         // keep destination array pointer across callback calls
 
+    // -- protect the partially built destination from callback exceptions --
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction("str x10, [sp]");                                       // handler.next = previous native exception-handler head
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction("str x10, [sp, #8]");                                   // preserve the activation frame that survives this boundary
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+    emitter.instruction("mov x10, sp");                                         // materialize this helper's exception-handler record
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                      // catch Throwable control flow while the result owner is live
+    emitter.instruction("cbnz x0, __rt_array_map_mixed_throw");                 // release the partial result before propagating the callback exception
+
     // -- set up loop counter --
     emitter.instruction("mov x0, #0");                                          // initialize logical loop index to zero
-    emitter.instruction("str x0, [sp, #0]");                                    // save loop index in the local frame
+    emitter.instruction(&format!("str x0, [sp, #{}]", locals));                 // save loop index in the local frame
 
     // -- loop: apply callback to each source element --
     emitter.label("__rt_array_map_mixed_loop");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // load current logical loop index
-    emitter.instruction("ldr x9, [sp, #16]");                                   // load saved source array length
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", locals));                 // load current logical loop index
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", locals + 16));            // load saved source array length
     emitter.instruction("cmp x0, x9");                                          // check whether every source element has been mapped
     emitter.instruction("b.ge __rt_array_map_mixed_done");                      // exit once the loop index reaches the source length
-    emitter.instruction("ldr x1, [sp, #8]");                                    // reload source array pointer
-    emitter.instruction("ldr x10, [sp, #24]");                                  // reload source element width
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", locals + 8));             // reload source array pointer
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", locals + 24));           // reload source element width
     emitter.instruction("add x1, x1, #24");                                     // advance to the source payload region
     emitter.instruction("mul x11, x0, x10");                                    // compute current source element byte offset
     emitter.instruction("add x11, x1, x11");                                    // compute current source element address
@@ -78,23 +97,41 @@ pub fn emit_array_map_mixed(emitter: &mut Emitter) {
     // -- call callback and store its owned boxed Mixed result directly --
     emitter.label("__rt_array_map_mixed_call");
     emitter.instruction("blr x19");                                             // call callback and receive owned boxed Mixed in x0
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload loop index after callback clobbers caller-saved registers
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", locals));                 // reload loop index after callback clobbers caller-saved registers
     emitter.instruction("add x10, x20, #24");                                   // compute destination payload base
     emitter.instruction("str x0, [x10, x9, lsl #3]");                           // transfer owned boxed Mixed pointer into destination slot
     emitter.instruction("add x9, x9, #1");                                      // advance to the next source element
-    emitter.instruction("str x9, [sp, #0]");                                    // save updated loop index
+    emitter.instruction("str x9, [x20]");                                       // publish owned slots so exceptional cleanup can release them
+    emitter.instruction(&format!("str x9, [sp, #{}]", locals));                 // save updated loop index
     emitter.instruction("b __rt_array_map_mixed_loop");                         // continue mapping boxed Mixed results
 
     // -- publish destination length and return --
     emitter.label("__rt_array_map_mixed_done");
     emitter.instruction("mov x0, x20");                                         // return destination array pointer
-    emitter.instruction("ldr x9, [sp, #16]");                                   // load source length for destination length publication
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", locals + 16));            // load source length for destination length publication
     emitter.instruction("str x9, [x0]");                                        // publish mapped destination length
-    emitter.instruction("ldr x21, [sp, #40]");                                  // restore descriptor callback environment register
-    emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore callback and destination callee-saved registers
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release mixed-result map frame storage
+    emitter.instruction("ldr x10, [sp]");                                       // reload the previous native exception-handler head
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after successful mapping
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("ldr x21, [sp, #{}]", locals + 40));           // restore descriptor callback environment register
+    emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", locals + 48));      // restore callback and destination callee-saved registers
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", locals + 64));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // release mixed-result map frame storage
     emitter.instruction("ret");                                                 // return mapped Mixed array pointer in x0
+
+    emitter.label("__rt_array_map_mixed_throw");
+    emitter.instruction("ldr x10, [sp]");                                       // reload the handler that preceded this cleanup boundary
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction("mov x0, x20");                                         // pass the partially built result owner for deep release
+    emitter.instruction("bl __rt_decref_array");                                // release every published boxed result and the destination storage
+    emitter.instruction(&format!("ldr x21, [sp, #{}]", locals + 40));           // restore descriptor callback environment register
+    emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", locals + 48));      // restore callback and destination callee-saved registers
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", locals + 64));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // discard the protected helper frame
+    emitter.instruction("b __rt_throw_current");                                // resume Throwable propagation at the caller's handler
 }
 
 /// Emits the x86_64 Linux implementation of `__rt_array_map_mixed`.
@@ -107,7 +144,9 @@ fn emit_array_map_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for loop metadata
     emitter.instruction("push r12");                                            // preserve callback address across descriptor callback calls
     emitter.instruction("push r13");                                            // preserve loop index across descriptor callback calls
-    emitter.instruction("sub rsp, 48");                                         // reserve source, destination, width, and environment slots
+    let frame_bytes = TRY_HANDLER_SLOT_SIZE + 64;
+    let local_bytes = frame_bytes - 16;
+    emitter.instruction(&format!("sub rsp, {}", local_bytes));                  // reserve a handler record plus stable map locals
     emitter.instruction("mov r12, rdi");                                        // keep callback address in a callee-saved register
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save source array pointer for every loop iteration
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save descriptor callback environment pointer
@@ -120,6 +159,19 @@ fn emit_array_map_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate destination array storage
     emit_array_value_type_stamp(emitter, "rax", &PhpType::Mixed);
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save destination array pointer for direct slot stores
+
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes)); // handler.next = previous native exception-handler head
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes - 8)); // preserve the activation frame that survives this boundary
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+    emitter.instruction(&format!("lea r10, [rbp - {}]", frame_bytes));          // materialize this helper's exception-handler record
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("lea rdi, [rbp - {}]", frame_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                      // catch Throwable control flow while the result owner is live
+    emitter.instruction("test eax, eax");                                       // did control return through longjmp?
+    emitter.instruction("jnz __rt_array_map_mixed_throw_x");                   // release the partial result before propagating the callback exception
     emitter.instruction("xor r13d, r13d");                                      // initialize loop index to zero
 
     emitter.label("__rt_array_map_mixed_loop");
@@ -146,15 +198,33 @@ fn emit_array_map_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload destination array pointer after callback clobbers caller-saved regs
     emitter.instruction("mov QWORD PTR [r10 + r13 * 8 + 24], rax");             // transfer owned boxed Mixed pointer into destination slot
     emitter.instruction("add r13, 1");                                          // advance loop index after storing the mapped Mixed value
+    emitter.instruction("mov QWORD PTR [r10], r13");                            // publish owned slots so exceptional cleanup can release them
     emitter.instruction("jmp __rt_array_map_mixed_loop");                       // continue mapping boxed Mixed results
 
     emitter.label("__rt_array_map_mixed_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload destination array pointer for return
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload source length for destination length publication
     emitter.instruction("mov QWORD PTR [rax], r10");                            // publish destination array length
-    emitter.instruction("add rsp, 48");                                         // release mixed-result map local slots
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes)); // reload the previous native exception-handler head
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after successful mapping
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("add rsp, {}", local_bytes));                  // release mixed-result map local slots
     emitter.instruction("pop r13");                                             // restore loop-index callee-saved register
     emitter.instruction("pop r12");                                             // restore callback-address callee-saved register
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return mapped Mixed array pointer in rax
+
+    emitter.label("__rt_array_map_mixed_throw_x");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes)); // reload the handler that preceded this cleanup boundary
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // pass the partially built result owner for deep release
+    emitter.instruction("call __rt_decref_array");                              // release every published boxed result and the destination storage
+    emitter.instruction(&format!("add rsp, {}", local_bytes));                  // discard the protected helper frame
+    emitter.instruction("pop r13");                                             // restore loop-index callee-saved register
+    emitter.instruction("pop r12");                                             // restore callback-address callee-saved register
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("jmp __rt_throw_current");                              // resume Throwable propagation at the caller's handler
 }

@@ -2,7 +2,7 @@
 title: "timezone_location_get() — internals"
 description: "Compiler internals for timezone_location_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 245
+  order: 246
 ---
 
 ## `timezone_location_get()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/tz_prelude.rs`:59](https://github.com/illegalstudio/elephc/blob/main/src/tz_prelude.rs#L59) (`timezone_location_get`)
+- **Lowering**: [`src/tz_prelude.rs`:527](https://github.com/illegalstudio/elephc/blob/main/src/tz_prelude.rs#L527) (`timezone_location_get`)
 - **Function symbol**: `timezone_location_get()`
 
 

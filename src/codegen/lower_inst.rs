@@ -49,6 +49,7 @@ mod hashes;
 mod iterators;
 mod objects;
 mod ownership;
+pub(super) mod object_return_ownership;
 mod pointers;
 mod predicates;
 mod property_values;
@@ -138,7 +139,8 @@ pub(super) use direct_calls::{
 pub(super) use instruction_helpers::instruction_strict_php_profile;
 pub(super) use local_loads::coerce_loaded_local_to_result_type;
 pub(super) use runtime_wrappers::{
-    emit_runtime_builtin_wrapper_inline, emit_runtime_extern_wrapper_inline,
+    emit_runtime_builtin_wrapper_inline, emit_runtime_date_serialize_invoker_inline,
+    emit_runtime_extern_wrapper_inline,
     runtime_builtin_wrapper_sig,
 };
 
@@ -244,6 +246,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
         Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
+        Op::HashToArrayReturn => array_access_runtime::lower_hash_to_array_return(ctx, &inst),
+        Op::DateSerializeHashReturn => {
+            array_access_runtime::lower_date_serialize_hash_return(ctx, &inst)
+        }
         Op::StrConcat => strings::lower_str_concat(ctx, &inst),
         Op::StrLen => strings::lower_str_len(ctx, &inst),
         Op::StrCharAt => strings::lower_str_char_at(ctx, &inst),
@@ -287,7 +293,11 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::BufferGet => buffers::lower_buffer_get(ctx, &inst),
         Op::BufferSet => buffers::lower_buffer_set(ctx, &inst),
         Op::ObjectNew => objects::lower_object_new(ctx, &inst),
+        Op::ObjectNewWithoutConstructor => {
+            objects::lower_object_new_without_constructor(ctx, &inst)
+        }
         Op::ObjectCloneShallow => objects::lower_object_clone_shallow(ctx, &inst),
+        Op::ObjectCloneInternal => objects::lower_object_clone_shallow(ctx, &inst),
         Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, &inst),
         Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),
         Op::DynamicObjectNewWithoutConstructorMixed => {
@@ -349,6 +359,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, &inst),
         Op::PipeCall => callables::lower_pipe_call(ctx, &inst),
         Op::MethodCall => lower_method_call(ctx, &inst),
+        Op::MethodCallExact => lower_exact_method_call(ctx, &inst),
         Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
         Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, &inst),
@@ -357,6 +368,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PackedFieldMixedToInt => objects::lower_packed_field_mixed_to_int(ctx, &inst),
         Op::ReturnBoundaryMixedToInt => {
             mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
+        }
+        Op::ReturnBoundaryMixedToObject => {
+            mixed_narrowing::lower_return_boundary_mixed_to_object(ctx, &inst)
         }
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
@@ -376,7 +390,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
         Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, &inst),
-        Op::GcCollect => lower_gc_collect(ctx),
+        Op::GcCollect => lower_gc_collect(ctx, &inst),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),

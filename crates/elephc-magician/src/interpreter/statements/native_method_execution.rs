@@ -9,27 +9,6 @@
 
 use super::*;
 
-/// Calls one generated/AOT instance method after native signature binding.
-pub(in crate::interpreter) fn eval_native_method_with_evaluated_args(
-    object: RuntimeCellHandle,
-    class_name: &str,
-    method_name: &str,
-    evaluated_args: Vec<EvaluatedCallArg>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_native_method_with_evaluated_args_bridge_scope(
-        object,
-        class_name,
-        method_name,
-        evaluated_args,
-        None,
-        None,
-        context,
-        values,
-    )
-}
-
 /// Calls one generated/AOT instance method after validation with an optional bridge scope.
 pub(super) fn eval_native_method_with_evaluated_args_bridge_scope(
     object: RuntimeCellHandle,
@@ -41,6 +20,21 @@ pub(super) fn eval_native_method_with_evaluated_args_bridge_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_method_result_bridge_scope(object, class_name, method_name, evaluated_args,
+        bridge_scope, called_class_scope, context, values).map(|result| result.value)
+}
+
+/// Preserves result ownership through native visibility and private-shadow resolution.
+pub(in crate::interpreter) fn eval_native_method_result_bridge_scope(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalExprResult, EvalStatus> {
     let mut resolved_bridge_scope = bridge_scope.map(str::to_string);
     if resolved_bridge_scope.is_none() {
         if let Some(shadow_scope) =
@@ -49,7 +43,7 @@ pub(super) fn eval_native_method_with_evaluated_args_bridge_scope(
             // The calling scope's own private method shadows any override on
             // the receiver's class; access is inherently allowed, so skip the
             // hierarchy resolution (it would find the override instead).
-            return eval_native_method_with_evaluated_args_unchecked_bridge_scope(
+            return eval_native_method_result_unchecked_bridge_scope(
                 object,
                 class_name,
                 method_name,
@@ -78,7 +72,7 @@ pub(super) fn eval_native_method_with_evaluated_args_bridge_scope(
                     evaluated_args,
                     context,
                     values,
-                );
+                ).map(EvalExprResult::unclassified);
             }
             return eval_throw_method_access_error(
                 &declaring_class,
@@ -96,9 +90,9 @@ pub(super) fn eval_native_method_with_evaluated_args_bridge_scope(
             evaluated_args,
             context,
             values,
-        );
+        ).map(EvalExprResult::unclassified);
     }
-    eval_native_method_with_evaluated_args_unchecked_bridge_scope(
+    eval_native_method_result_unchecked_bridge_scope(
         object,
         class_name,
         method_name,
@@ -108,6 +102,21 @@ pub(super) fn eval_native_method_with_evaluated_args_bridge_scope(
         context,
         values,
     )
+}
+
+/// Reaches the ownership-aware native terminal after method access has been resolved.
+pub(in crate::interpreter) fn eval_native_method_result_unchecked_bridge_scope(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalExprResult, EvalStatus> {
+    eval_native_method_result_with_ref_mode(object, class_name, method_name, evaluated_args,
+        bridge_scope, called_class_scope, EvalByRefBindingMode::RequireTarget, context, values)
 }
 
 /// Calls one generated/AOT instance method without enforcing member visibility.
@@ -195,11 +204,31 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_method_result_with_ref_mode(object, class_name, method_name, evaluated_args,
+        bridge_scope, called_class_scope, by_ref_mode, context, values).map(|result| result.value)
+}
+
+/// Associates a native result with the selected implementation's registered return storage.
+fn eval_native_method_result_with_ref_mode(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalExprResult, EvalStatus> {
     let signature_owner = bridge_scope.unwrap_or(class_name);
+    let callable_name = format!("{}::{}", signature_owner.trim_start_matches('\\'), method_name);
+    context.push_function(callable_name);
+    let mut default_owners = Vec::new();
+    let mut outcome = (|| {
     let signature = context.native_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
     let bound_args =
-        bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
+        bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values, &mut default_owners)?;
     let result = if let Some(scope) = bridge_scope {
         eval_native_method_call_with_scope(
             scope,
@@ -223,8 +252,26 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
             result,
             context,
             values,
-        ),
+        ).map(|value| EvalExprResult { value, owned: native_result_box_is_owned(return_type.as_ref()) }),
     }
+    })();
+    let returned = outcome.as_ref().ok().map(|result| result.value);
+    if let Ok(result) = &mut outcome {
+        if default_owners.contains(&result.value) { result.owned = true; }
+    }
+    let outcome = finish_native_default_owners(outcome, default_owners, returned, context, values);
+    context.pop_function();
+    outcome
+}
+
+/// Proves fresh native result boxes for non-null concrete scalar, object and array ABIs.
+fn native_result_box_is_owned(return_type: Option<&EvalParameterType>) -> bool {
+    return_type.is_some_and(|ty| !ty.allows_null() && !ty.is_intersection()
+        && matches!(ty.variants(), [EvalParameterTypeVariant::Bool
+            | EvalParameterTypeVariant::Int | EvalParameterTypeVariant::Float
+            | EvalParameterTypeVariant::String | EvalParameterTypeVariant::Object
+            | EvalParameterTypeVariant::Class(_) | EvalParameterTypeVariant::Callable
+            | EvalParameterTypeVariant::Void | EvalParameterTypeVariant::Array]))
 }
 
 /// Calls one generated/AOT static method after native signature binding.
@@ -383,10 +430,14 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature_owner = bridge_scope.unwrap_or(class_name);
+    let callable_name = format!("{}::{}", signature_owner.trim_start_matches('\\'), method_name);
+    context.push_function(callable_name);
+    let mut default_owners = Vec::new();
+    let outcome = (|| {
     let signature = context.native_static_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
     let bound_args =
-        bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
+        bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values, &mut default_owners)?;
     let result = if let Some(scope) = bridge_scope {
         eval_native_static_method_call_with_scope(
             scope,
@@ -412,6 +463,11 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
             values,
         ),
     }
+    })();
+    let returned = outcome.as_ref().ok().copied();
+    let outcome = finish_native_default_owners(outcome, default_owners, returned, context, values);
+    context.pop_function();
+    outcome
 }
 
 /// Returns whether a generated/AOT class has an instance `__call()` fallback.

@@ -43,6 +43,7 @@ pub use eval_profile::{
 };
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
+pub use catalog_constants::locale_category_value;
 pub use id::BuiltinId;
 pub use module::PhpModule;
 pub use php_version::PhpVersion;

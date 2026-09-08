@@ -221,4 +221,7 @@ pub struct FunctionFlags {
     /// property-default init thunks and builtin class methods (Reflection, SPL,
     /// DateTime) lowered into the module. Consumed by source-map emission.
     pub is_synthetic: bool,
+    /// `true` only for an instance `__serialize()` body declared on the DateTime family.
+    /// It authorizes the ownership-preserving `DateSerializeHashReturn` boundary.
+    pub is_date_serialize_method: bool,
 }

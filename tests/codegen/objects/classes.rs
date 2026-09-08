@@ -140,6 +140,188 @@ echo $o->x;
     assert_eq!(out, "7");
 }
 
+/// Verifies PHP userland constructors accept surplus positional arguments while still evaluating
+/// them in source order before entering the constructor body.
+#[test]
+fn test_userland_constructor_accepts_extra_positional_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+function extra_constructor_argument(): int {
+    echo "argument;";
+    return 7;
+}
+class ExtraArgumentConstructor {
+    public function __construct() {
+        echo "constructor;";
+    }
+}
+new ExtraArgumentConstructor(extra_constructor_argument());
+echo "done";
+"#,
+    );
+    assert_eq!(out, "argument;constructor;done");
+}
+
+/// Verifies a userland class without a declared constructor also accepts surplus positional
+/// arguments and evaluates them even though there is no constructor body to receive them.
+#[test]
+fn test_constructorless_userland_class_accepts_extra_positional_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+function unused_constructor_argument(): int {
+    echo "argument;";
+    return 7;
+}
+class ConstructorlessExtraArgument {}
+new ConstructorlessExtraArgument(unused_constructor_argument());
+echo "done";
+"#,
+    );
+    assert_eq!(out, "argument;done");
+}
+
+/// Verifies an override may make an inherited required parameter optional, as PHP's method
+/// compatibility rules permit callers to use the child method with fewer arguments.
+#[test]
+fn test_method_override_may_make_parent_parameter_optional() {
+    let out = compile_and_run(
+        r#"<?php
+class RequiredParentParameter {
+    public function render(string $value): string { return $value; }
+}
+class OptionalChildParameter extends RequiredParentParameter {
+    public function render(string $value = "default"): string { return $value; }
+}
+echo (new OptionalChildParameter())->render();
+"#,
+    );
+    assert_eq!(out, "default");
+}
+
+/// Verifies an override may append optional and variadic parameters without changing the
+/// inherited callable prefix, matching PHP's contravariant parameter-count rules.
+#[test]
+fn test_method_override_may_append_optional_and_variadic_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class ShortParentSignature {
+    public function render(string $value): string { return $value; }
+}
+class WiderChildSignature extends ShortParentSignature {
+    public function render(string $value, string $suffix = "!", mixed ...$rest): string {
+        return $value . $suffix . count($rest);
+    }
+}
+echo (new WiderChildSignature())->render("ok", "?", 1, 2);
+"#,
+    );
+    assert_eq!(out, "ok?2");
+}
+
+/// Verifies a child class can narrow one object member inside a declared return union.
+#[test]
+fn test_method_override_covariant_self_member_inside_union() {
+    let out = compile_and_run(
+        r#"<?php
+class UnionReturnBase {
+    public static function make(bool $ok): UnionReturnBase|false {
+        return $ok ? new UnionReturnBase() : false;
+    }
+}
+class UnionReturnChild extends UnionReturnBase {
+    public static function make(bool $ok): UnionReturnChild|false {
+        return $ok ? new UnionReturnChild() : false;
+    }
+}
+echo UnionReturnChild::make(true) instanceof UnionReturnChild ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies weak PHP scalar coercion stores booleans as `0`/`1` in an int-typed property,
+/// covering DateInterval's public integer fields such as `$invert`.
+#[test]
+fn test_bool_assignment_coerces_to_int_property_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class IntegerProperty {
+    public int $value = 0;
+}
+$box = new IntegerProperty();
+$box->value = true;
+echo $box->value, "|";
+$box->value = false;
+echo $box->value;
+"#,
+    );
+    assert_eq!(out, "1|0");
+}
+
+/// Verifies DateTimeInterface operands and `DateTime|false` factory results use php-src's
+/// instant comparison for equality and ordering across mutable and immutable instances.
+#[test]
+fn test_datetime_interface_and_factory_union_comparisons() {
+    let out = compile_and_run(
+        r#"<?php
+function compare_dates(DateTimeInterface $left, DateTimeInterface $right): void {
+    echo $left == $right ? "E" : "N";
+    echo $left < $right ? "L" : "G";
+    echo $right > $left ? "R" : "X";
+}
+$left = new DateTime("@1448889063.3531");
+$right = new DateTimeImmutable("@1448889063.5216");
+compare_dates($left, $right);
+$factoryLeft = DateTime::createFromFormat("U.u", "1448889063.3531");
+$factoryRight = DateTimeImmutable::createFromFormat("U.u", "1448889063.5216");
+echo "|", ($factoryLeft <=> $factoryRight);
+"#,
+    );
+    assert_eq!(out, "NLR|-1");
+}
+
+/// Verifies ext/date bases and subclasses store dynamic properties, deprecate only first
+/// creation, honor `@`, and let an explicit `AllowDynamicProperties` attribute silence it.
+#[test]
+fn test_datetime_internal_classes_store_and_clone_dynamic_properties() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class DateChild extends DateTime {}
+#[AllowDynamicProperties]
+class QuietDateChild extends DateTime {}
+function set_suppressed_date_property(DateTime $date): void {
+    $date->suppressed = 1;
+}
+$base = new DateTime("@0");
+$base->label = "epoch";
+$base->label = "updated";
+@set_suppressed_date_property($base);
+$child = new DateChild("@0");
+$child->count = 2;
+$clone = clone $child;
+$quiet = new QuietDateChild("@0");
+$quiet->silent = 3;
+echo $base->label, "|", $base->suppressed, "|", $clone->count, "|", $quiet->silent;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "updated|1|2|3");
+    assert_eq!(
+        out.stderr
+            .matches("Creation of dynamic property DateTime::$label is deprecated")
+            .count(),
+        1
+    );
+    assert_eq!(
+        out.stderr
+            .matches("Creation of dynamic property DateChild::$count is deprecated")
+            .count(),
+        1
+    );
+    assert!(!out.stderr.contains("$suppressed"));
+    assert!(!out.stderr.contains("QuietDateChild::$silent"));
+}
+
 /// Verifies that dynamic instantiation uses SPL-specific runtime storage initialization.
 #[test]
 fn test_class_dynamic_instantiation_uses_spl_storage() {

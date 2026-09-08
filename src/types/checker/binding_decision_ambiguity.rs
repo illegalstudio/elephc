@@ -217,6 +217,15 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
             count_expr(object, tally);
             count_expr(value, tally);
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            count_expr(object, tally);
+            count_expr(property, tally);
+            count_expr(value, tally);
+        }
         StmtKind::PropertyArrayAssign { object, property: _, index, value } => {
             count_expr(object, tally);
             count_expr(index, tally);

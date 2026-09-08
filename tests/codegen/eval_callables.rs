@@ -2545,3 +2545,246 @@ aot-invoke:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:EvalReflect
 eval-static:null:EvalReflectClosureMetaEvalBox:EvalReflectClosureMetaEvalBox:S"
     );
 }
+/// Verifies an eval descendant uses its effective metadata for inherited late-static callables.
+#[test]
+fn test_eval_descendant_late_static_callable_uses_runtime_override_metadata() {
+    let output = compile_and_run_capture(
+        r#"<?php
+class EvalLateStaticCallableFactory {
+    public static function factory() {
+        return static::build(...);
+    }
+
+    public static function build($timestamp): string {
+        return "base:" . $timestamp;
+    }
+}
+
+eval('class EvalLateStaticCallableOverride extends EvalLateStaticCallableFactory {
+    public static function build($value): string {
+        return "child:" . $value;
+    }
+}
+$factory = EvalLateStaticCallableOverride::factory();
+var_dump($factory);
+echo call_user_func_array($factory, ["value" => 7]);');
+"#,
+    );
+    assert!(
+        output.success,
+        "eval late-static callable fixture failed: stdout={:?} stderr={}",
+        output.stdout,
+        output.stderr
+    );
+    assert!(
+        output
+            .stdout
+            .contains("EvalLateStaticCallableOverride::build"),
+        "eval late-static callable kept the lexical implementation name: {}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("[\"$value\"]")
+            && !output.stdout.contains("[\"$timestamp\"]"),
+        "eval late-static callable kept the lexical parameter metadata: {}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.ends_with("child:7"),
+        "eval late-static named invocation did not reach the override: {}",
+        output.stdout
+    );
+}
+
+/// Verifies an eval-enabled module falls back to compiled late-static metadata on a true miss.
+#[test]
+fn test_eval_enabled_late_static_callable_without_override_uses_compiled_fallback() {
+    let output = compile_and_run_capture(
+        r#"<?php
+class EvalCompiledLateStaticFallback {
+    public static function factory() {
+        return static::build(...);
+    }
+
+    public static function build($value): string {
+        return "compiled:" . $value;
+    }
+}
+
+eval('$unrelated = 1;');
+$callable = EvalCompiledLateStaticFallback::factory();
+echo call_user_func($callable, 11);
+"#,
+    );
+    assert!(
+        output.success,
+        "compiled late-static fallback failed: stdout={:?} stderr={}",
+        output.stdout,
+        output.stderr
+    );
+    assert_eq!(output.stdout, "compiled:11");
+}
+
+/// Verifies an eval late-static Closure keeps its originating context alive after return.
+#[test]
+fn test_eval_descendant_late_static_callable_survives_originating_frame() {
+    let output = compile_and_run_capture(
+        r#"<?php
+class EvalEscapedLateStaticFactory {
+    public static function factory() {
+        return static::build(...);
+    }
+
+    public static function build($value): string {
+        return "base:" . $value;
+    }
+}
+
+function make_eval_escaped_late_static_callable() {
+    return eval('class EvalEscapedLateStaticChild extends EvalEscapedLateStaticFactory {
+        public static function build($value): string {
+            return "child:" . $value;
+        }
+    }
+    return EvalEscapedLateStaticChild::factory();');
+}
+
+$callable = make_eval_escaped_late_static_callable();
+echo call_user_func($callable, 9);
+unset($callable);
+echo "|released";
+"#,
+    );
+    assert!(
+        output.success,
+        "escaped eval late-static callable failed: stdout={:?} stderr={}",
+        output.stdout,
+        output.stderr
+    );
+    assert_eq!(output.stdout, "child:9|released");
+}
+
+/// Verifies final descriptor release cannot make a reused object inherit stale callability.
+#[test]
+fn test_eval_callable_release_removes_source_identity_before_heap_reuse() {
+    let output = compile_and_run_capture(
+        r#"<?php
+class EvalReleasedCallableFactory {
+    public static function factory() {
+        return static::build(...);
+    }
+
+    public static function build($value): string {
+        return "base:" . $value;
+    }
+}
+
+function probe_released_eval_callable_identity() {
+    $callable = eval('class EvalReleasedCallableChild extends EvalReleasedCallableFactory {
+        public static function build($value): string {
+            return "child:" . $value;
+        }
+    }
+    return EvalReleasedCallableChild::factory();');
+    echo call_user_func($callable, 5);
+    unset($callable);
+    $replacement = new stdClass();
+    echo is_callable($replacement) ? "|stale" : "|clean";
+}
+
+probe_released_eval_callable_identity();
+"#,
+    );
+    assert!(
+        output.success,
+        "eval callable release fixture failed: stdout={:?} stderr={}",
+        output.stdout,
+        output.stderr
+    );
+    assert_eq!(output.stdout, "child:5|clean");
+}
+
+/// Verifies an invalid late-static handler never falls back to compiled metadata.
+#[test]
+fn test_eval_descendant_late_static_callable_does_not_fallback_on_invalid_handler() {
+    let output = compile_and_run_capture(
+        r#"<?php
+class EvalInvalidLateStaticFactory {
+    public static function factory() {
+        return static::build(...);
+    }
+
+    public static function build($value): string {
+        return "base:" . $value;
+    }
+}
+
+function make_eval_invalid_late_static_callable() {
+    return eval('abstract class EvalInvalidLateStaticChild extends EvalInvalidLateStaticFactory {
+        abstract public static function build($value): string;
+    }
+    return EvalInvalidLateStaticChild::factory();');
+}
+
+try {
+    make_eval_invalid_late_static_callable();
+    echo "bad";
+} catch (Error $error) {
+    echo get_class($error) . ":" . $error->getMessage();
+}
+"#,
+    );
+    assert!(
+        !output.success
+            && output.stdout.is_empty()
+            && output.stderr.contains("Fatal error: eval() runtime failed"),
+        "invalid eval late-static handler fell back or lost its fatal status: stdout={:?} stderr={}",
+        output.stdout,
+        output.stderr
+    );
+}
+
+/// Verifies eval Closure debug metadata follows php-src for every target family.
+#[test]
+fn test_eval_closure_debug_metadata_covers_targets_and_required_count() {
+    let output = compile_and_run_capture(
+        r#"<?php
+echo eval('function eval_debug_named_target($value) { return $value; }
+class EvalDebugTargetBox {
+    public function method($value) { return $value; }
+    public function __invoke($value) { return $value; }
+}
+
+$literal = function($optional = 1, $required, &...$rest) {};
+$named = eval_debug_named_target(...);
+$box = new EvalDebugTargetBox();
+$method = $box->method(...);
+$invokable = Closure::fromCallable($box);
+print_r($literal);
+print_r($named);
+print_r($method);
+print_r($invokable);');
+"#,
+    );
+    assert!(
+        output.success,
+        "eval Closure debug fixture failed: stdout={:?} stderr={}",
+        output.stdout,
+        output.stderr
+    );
+    assert!(output.stdout.contains("eval_debug_named_target"));
+    assert!(
+        output.stdout.contains("EvalDebugTargetBox::method"),
+        "missing object-method metadata: {}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("EvalDebugTargetBox::__invoke"),
+        "missing invokable metadata: {}",
+        output.stdout
+    );
+    assert!(output.stdout.contains("[$optional] => <required>"));
+    assert!(output.stdout.contains("[$required] => <required>"));
+    assert!(output.stdout.contains("[&$rest] => <optional>"));
+    assert!(!output.stdout.contains("...$rest"));
+}

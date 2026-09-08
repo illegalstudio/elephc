@@ -40,7 +40,9 @@ impl EvalClosureCapture {
 #[derive(Debug, Clone)]
 pub struct EvalFunction {
     name: String,
+    display_name: String,
     source_location: Option<EvalSourceLocation>,
+    strict_types: bool,
     attributes: Vec<EvalAttribute>,
     params: Vec<String>,
     parameter_attributes: Vec<Vec<EvalAttribute>>,
@@ -56,6 +58,8 @@ impl PartialEq for EvalFunction {
     /// Compares function metadata while ignoring retained source-location decoration.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
+            && self.display_name == other.display_name
+            && self.strict_types == other.strict_types
             && self.attributes == other.attributes
             && self.params == other.params
             && self.parameter_attributes == other.parameter_attributes
@@ -76,9 +80,12 @@ impl EvalFunction {
         let parameter_defaults = vec![None; params.len()];
         let parameter_is_by_ref = vec![false; params.len()];
         let parameter_is_variadic = vec![false; params.len()];
+        let name = name.into();
         Self {
-            name: name.into(),
+            display_name: name.clone(),
+            name,
             source_location: None,
+            strict_types: false,
             attributes: Vec::new(),
             params,
             parameter_attributes,
@@ -94,6 +101,18 @@ impl EvalFunction {
     /// Returns a copy of this function with source-location metadata attached.
     pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);
+        self
+    }
+
+    /// Retains the strict-types mode of the compilation unit that owns this body.
+    pub const fn with_strict_types(mut self, strict_types: bool) -> Self {
+        self.strict_types = strict_types;
+        self
+    }
+
+    /// Attaches the PHP-visible callable identity used in runtime diagnostics.
+    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+        self.display_name = display_name.into();
         self
     }
 
@@ -147,9 +166,19 @@ impl EvalFunction {
         &self.name
     }
 
+    /// Returns the PHP-visible callable identity used in runtime diagnostics.
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
     /// Returns eval-fragment source-location metadata, when retained.
     pub const fn source_location(&self) -> Option<EvalSourceLocation> {
         self.source_location
+    }
+
+    /// Returns the lexical strict-types mode used while this function body executes.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
     }
 
     /// Returns attributes declared directly on this eval function.
@@ -185,6 +214,18 @@ impl EvalFunction {
     /// Returns source-order flags for whether each parameter was declared variadic.
     pub fn parameter_is_variadic(&self) -> &[bool] {
         &self.parameter_is_variadic
+    }
+
+    /// Returns PHP's last-required positional count for this function signature.
+    pub fn required_num_args(&self) -> usize {
+        let fixed_count = self
+            .parameter_is_variadic
+            .iter()
+            .position(|is_variadic| *is_variadic)
+            .unwrap_or(self.params.len());
+        (0..fixed_count)
+            .rfind(|index| !self.parameter_defaults.get(*index).is_some_and(Option::is_some))
+            .map_or(0, |index| index + 1)
     }
 
     /// Returns retained return type metadata, if the function declared one.

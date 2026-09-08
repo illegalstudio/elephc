@@ -249,10 +249,13 @@ pub(super) fn static_array_callable_is_callable(
     let [class_expr, method_expr] = items else {
         return None;
     };
-    let class_name = static_callable_class_name(ctx, class_expr)?;
     let ExprKind::StringLiteral(method) = &method_expr.kind else {
         return None;
     };
+    if !crate::codegen_support::callable_dispatch::runtime_method_callable_visible(method) {
+        return Some(false);
+    }
+    let class_name = static_callable_class_name(ctx, class_expr)?;
     Some(static_method_callback_is_callable(ctx, &class_name, method))
 }
 

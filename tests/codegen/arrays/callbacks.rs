@@ -368,6 +368,17 @@ echo $sum;
     assert_eq!(out, "15");
 }
 
+/// Omitted initial values default to null for positional and named native reduce calls.
+#[test]
+fn test_array_reduce_omitted_initial_value() {
+    let out = compile_and_run(r#"<?php
+function sum_optional($carry, $item) { return $carry + $item; }
+echo array_reduce([1, 2, 3], 'sum_optional'), '|';
+echo array_reduce(array: [6, 7], callback: 'sum_optional');
+"#);
+    assert_eq!(out, "6|13");
+}
+
 // Tests `array_reduce` with a user callback (carry * item) and an explicit initial
 // value of 1, verifying the carry accumulates correctly across the array.
 /// Verifies that array reduce with initial.

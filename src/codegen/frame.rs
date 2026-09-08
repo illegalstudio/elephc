@@ -19,7 +19,8 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
-    emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
+    emit_box_current_value_as_mixed, emit_box_current_owned_value_as_mixed,
+    emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
@@ -468,6 +469,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
+    emit_main_static_property_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
@@ -498,6 +500,27 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.epilogue_emitted = true;
 }
 
+/// Releases initialized refcounted static class properties before process-exit diagnostics.
+fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>) {
+    for (symbol, php_type) in super::web::refcounted_static_properties(ctx.module) {
+        let done = ctx.next_label("static_property_cleanup_done");
+        ctx.emitter
+            .comment(&format!("epilogue cleanup static property {symbol}"));
+        abi::emit_load_symbol_to_reg(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &symbol,
+            8,
+        );
+        super::web::emit_branch_if_equals_sentinel(ctx.emitter, &done);
+        let ty = php_type.codegen_repr();
+        super::web::emit_release_symbol_value(ctx.emitter, &symbol, &ty);
+        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
+        ctx.emitter.label(&done);
+    }
+}
+
 /// Releases initialized function static locals before process-exit diagnostics.
 fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
     let static_locals = ctx.data.static_locals().to_vec();
@@ -526,7 +549,14 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
-    let globals = ctx.module.data.global_names.clone();
+    let mut globals = ctx.module.data.global_names.clone();
+    // Eval initializes these globals even when no source-level global declaration
+    // put their names in the module inventory.
+    for name in ["argc", "argv"] {
+        if superglobal_storage_needed(ctx, name) && !globals.iter().any(|global| global == name) {
+            globals.push(name.to_string());
+        }
+    }
     for name in globals {
         if ctx.module.extern_globals.contains_key(&name) {
             continue;
@@ -1223,7 +1253,7 @@ fn return_cleanup_skip_slot_inner(
                 None
             }
         }
-        Op::ArrayToMixed | Op::HashToMixed => {
+        Op::ArrayToMixed | Op::HashToMixed | Op::HashToArrayReturn | Op::DateSerializeHashReturn => {
             let source = *inst.operands.first()?;
             let slot = direct_return_local_slot_inner(function, source, visited)?;
             let local_ty = local_codegen_type(function, slot)?;
@@ -1262,7 +1292,7 @@ fn direct_return_local_slot_inner(
             Some(Immediate::LocalSlot(slot)) => Some(slot),
             _ => None,
         },
-        Op::ArrayToMixed | Op::HashToMixed => {
+        Op::ArrayToMixed | Op::HashToMixed | Op::HashToArrayReturn | Op::DateSerializeHashReturn => {
             let source = *inst.operands.first()?;
             direct_return_local_slot_inner(function, source, visited)
         }
@@ -1960,7 +1990,7 @@ fn store_argv_local_if_present(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.comment("build $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
     if matches!(argv_ty, PhpType::Mixed | PhpType::Union(_)) {
-        emit_box_current_value_as_mixed(ctx.emitter, &array_ty);
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &array_ty);
     }
     abi::emit_store(ctx.emitter, &argv_ty, offset);
 }
@@ -1974,7 +2004,8 @@ fn store_argc_global_if_needed(ctx: &mut FunctionContext<'_>) {
     ctx.data.add_comm(symbol.clone(), PhpType::Int.stack_size().max(8));
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Int, false);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
 }
 
 /// Initializes program-global `$argv` storage for eval or static `global $argv`.
@@ -1987,7 +2018,8 @@ fn store_argv_global_if_needed(ctx: &mut FunctionContext<'_>) {
     ctx.data.add_comm(symbol.clone(), array_ty.stack_size().max(8));
     ctx.emitter.comment("build global $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &array_ty, false);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &array_ty);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
 }
 
 /// Returns true when a process superglobal needs program-global storage.

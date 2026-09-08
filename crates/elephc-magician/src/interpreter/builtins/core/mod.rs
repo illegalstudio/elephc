@@ -18,6 +18,7 @@ mod constant;
 mod define;
 mod defined;
 mod die;
+mod error_reporting;
 mod exit;
 mod ob_clean;
 mod ob_end_clean;
@@ -32,6 +33,8 @@ mod ob_get_status;
 mod ob_implicit_flush;
 mod ob_list_handlers;
 mod ob_start;
+mod native_date_debug;
+mod debug_hooks;
 mod print_r;
 mod var_dump;
 
@@ -41,6 +44,7 @@ pub(in crate::interpreter) use constant::*;
 pub(in crate::interpreter) use define::*;
 pub(in crate::interpreter) use defined::*;
 pub(in crate::interpreter) use die::*;
+pub(in crate::interpreter) use error_reporting::*;
 pub(in crate::interpreter) use exit::*;
 pub(in crate::interpreter) use ob_get_clean::*;
 pub(in crate::interpreter) use ob_get_contents::*;
@@ -50,6 +54,8 @@ pub(in crate::interpreter) use ob_implicit_flush::*;
 pub(in crate::interpreter) use ob_list_handlers::*;
 pub(in crate::interpreter) use ob_start::*;
 pub(in crate::interpreter) use print_r::*;
+pub(in crate::interpreter) use native_date_debug::*;
+pub(in crate::interpreter) use debug_hooks::*;
 pub(in crate::interpreter) use var_dump::*;
 
 /// Dispatches direct expression-level calls for core builtins.
@@ -67,6 +73,7 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "die" => eval_builtin_die(args, context, scope, values),
+        "error_reporting" => eval_builtin_error_reporting(args, context, scope, values),
         "exit" => eval_builtin_exit(args, context, scope, values),
         "ob_get_clean" => eval_builtin_ob_get_clean(args, context, scope, values),
         "ob_get_contents" => eval_builtin_ob_get_contents(args, context, scope, values),
@@ -102,6 +109,7 @@ pub(in crate::interpreter) fn eval_core_values_result(
         "define" => eval_define_result(evaluated_args, context, values),
         "defined" => eval_defined_result(evaluated_args, context, values),
         "die" => eval_die_values_result(evaluated_args, values),
+        "error_reporting" => eval_error_reporting_values_result(evaluated_args, values),
         "exit" => eval_exit_values_result(evaluated_args, values),
         "ob_get_clean" => eval_ob_get_clean_result(evaluated_args, context, values),
         "ob_get_contents" => eval_ob_get_contents_result(evaluated_args, context, values),

@@ -2,7 +2,7 @@
 title: "imagecolorallocate()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 463
+  order: 464
 ---
 
 ## imagecolorallocate()

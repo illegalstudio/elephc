@@ -58,9 +58,9 @@ fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_h
         );
 }
 
-/// Verifies shared runtime bindings removed hooks except for deliberate arity adapters.
+/// Verifies shared runtime bindings retain hooks only for deliberate semantic adapters.
 #[test]
-fn runtime_builtin_bindings_keep_only_intval_and_round_adapters() {
+fn runtime_builtin_bindings_keep_only_declared_adapters() {
     for runtime_id in elephc_builtin_contract::RuntimeBuiltinId::ALL {
         let contract = elephc_builtin_contract::lookup_id(runtime_id.builtin_id())
             .expect("runtime builtin contract must exist");
@@ -71,6 +71,8 @@ fn runtime_builtin_bindings_keep_only_intval_and_round_adapters() {
             runtime_id,
             elephc_builtin_contract::RuntimeBuiltinId::Intval
                 | elephc_builtin_contract::RuntimeBuiltinId::Round
+                | elephc_builtin_contract::RuntimeBuiltinId::DateDefaultTimezoneGet
+                | elephc_builtin_contract::RuntimeBuiltinId::DateDefaultTimezoneSet
         ) {
             assert!(spec.direct.is_some(), "{} needs a direct adapter", spec.name);
             assert!(spec.values.is_some(), "{} needs a values adapter", spec.name);

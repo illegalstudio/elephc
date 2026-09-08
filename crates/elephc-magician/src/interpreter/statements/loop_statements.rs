@@ -96,8 +96,7 @@ pub(in crate::interpreter) fn execute_do_while_stmt(
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
-        let condition = eval_expr(condition, context, scope, values)?;
-        if !values.truthy(condition)? {
+        if !eval_condition(condition, context, scope, values)? {
             break;
         }
     }
@@ -123,8 +122,7 @@ pub(in crate::interpreter) fn execute_for_stmt(
     }
     loop {
         if let Some(condition) = condition {
-            let condition = eval_expr(condition, context, scope, values)?;
-            if !values.truthy(condition)? {
+            if !eval_condition(condition, context, scope, values)? {
                 break;
             }
         }

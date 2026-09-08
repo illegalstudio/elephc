@@ -2,7 +2,7 @@
 title: "timezone_offset_get()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 248
+  order: 249
 ---
 
 ## timezone_offset_get()

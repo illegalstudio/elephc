@@ -2,7 +2,7 @@
 title: "imagecolortransparent() — internals"
 description: "Compiler internals for imagecolortransparent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 478
+  order: 479
 ---
 
 ## `imagecolortransparent()` — internals

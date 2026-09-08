@@ -50,13 +50,14 @@ pub(super) fn eval_static_property_inc_dec_result(
 }
 
 /// Releases one eval-owned value after running an eval-declared dynamic destructor if needed.
-pub(super) fn eval_release_value(
+pub(in crate::interpreter) fn eval_release_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     value: RuntimeCellHandle,
 ) -> Result<(), EvalStatus> {
     if let Some(identity) = values.final_object_identity_for_release(value)? {
         eval_dynamic_destructor_for_release(identity, value, context, values)?;
+        context.unregister_closure_object_target(identity);
     }
     values.release(value)
 }

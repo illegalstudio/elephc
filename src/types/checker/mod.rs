@@ -19,6 +19,10 @@ mod builtin_spl_exceptions;
 /// builtin_stdclass
 pub(crate) mod builtin_stdclass;
 mod builtin_types;
+pub(crate) use builtin_types::{
+    set_state_contract_error, set_state_contract_violation, set_state_visibility_warnings,
+    SetStateContractViolation,
+};
 mod builtin_user_filter;
 pub(crate) mod builtins;
 mod callables;
@@ -52,7 +56,6 @@ use crate::types::{
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use loop_storage::loop_carried_storage_types;
-pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;
@@ -140,6 +143,8 @@ pub(crate) struct Checker {
     pub current_class: Option<String>,
     /// Name of the current method being type-checked, when inside a class body.
     pub current_method: Option<String>,
+    /// Instance properties read through `$this` before their current constructor write.
+    pub constructor_properties_read: HashSet<(String, String)>,
     /// Name of the top-level function whose body is currently being type-checked
     /// (saved/restored around each `resolve_function_signature` body walk, so
     /// nested resolution of a called function tracks the innermost body). Used
@@ -183,6 +188,11 @@ pub(crate) struct Checker {
     pub program_global_names: HashSet<String>,
     /// Names introduced via `static` declarations in the current local scope.
     pub active_statics: HashSet<String>,
+    /// Explicit type contracts declared by Elephc typed-local syntax in the active scope.
+    ///
+    /// Ordinary PHP locals are flow-sensitive and may freely change type. Typed locals keep
+    /// their declared contract across subsequent plain assignments, so the checker must track
+    /// that provenance separately from the current inferred value in `TypeEnv`.
     /// Names bound as `foreach` loop keys in the current function/closure scope.
     /// A foreach key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
     /// even when the checker types it as `Int`/`Str` from the source array, so an
@@ -257,14 +267,14 @@ pub(crate) struct Checker {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
-    /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
+    /// `(scope, local)` pairs for strings requiring stable boxed storage.
     ///
-    /// PHP's string increment can change the value's type (`"9"++` is `int(10)`), so EIR
+    /// String increment or a null-storing unset can change the value's type, so EIR
     /// lowering must give those locals boxed `Mixed` frame storage from their FIRST store
-    /// instead of widening the slot at the increment. Recorded here because the checker
+    /// instead of widening the slot at a later operation. Recorded here because the checker
     /// already visits every expression with a typed environment, so no second AST walk is
-    /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
-    pub string_incdec_locals: HashSet<(String, String)>,
+    /// needed. See `crate::ir_lower::context::LoweringContext::boxed_string_storage_type`.
+    pub boxed_string_locals: HashSet<(String, String)>,
     /// Mirrors `CheckOptions::strict_locals` for the duration of the check. When set, the
     /// permissive local-retype path in `merge_local_assignment_type` and the branch-divergent
     /// `Mixed`-storage marking in `mixed_storage_scan::run_mixed_storage_scan` both step aside
@@ -293,6 +303,9 @@ pub(crate) struct Checker {
     /// and parameters carrying a type hint. A declaration is a programmer contract and stays
     /// strict in both permissive and `--strict-locals` mode.
     pub typed_local_names: HashSet<String>,
+    /// Locals mentioned by `unset()` anywhere in the current body. Retyping an assignment
+    /// expression must not silently revive one of these names through a fresh storage shape.
+    pub unset_mentioned_locals: HashSet<String>,
     /// The `unset()` ARGUMENTS whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed there. EIR lowering consults these to abandon the old frame slot instead of
     /// null-storing into it. The name is half the key: a `Span` has no file identity and include
@@ -405,6 +418,7 @@ pub(crate) struct SavedLocalBindingScope {
     ref_aliased: HashSet<String>,
     statics: HashSet<String>,
     typed: HashSet<String>,
+    unset_mentioned: HashSet<String>,
     mixed_storage: HashSet<String>,
     contains_eval: bool,
 }
@@ -534,6 +548,7 @@ impl Checker {
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
             statics: std::mem::take(&mut self.static_local_names),
             typed: std::mem::take(&mut self.typed_local_names),
+            unset_mentioned: std::mem::take(&mut self.unset_mentioned_locals),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
             // nothing about a same-named local in the callee, and leaking the set inward would
             // box a callee local the pre-scan never marked.
@@ -543,6 +558,7 @@ impl Checker {
         self.local_conditional_depth = 0;
         self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
         self.typed_local_names = typed_param_names.into_iter().collect();
+        self.unset_mentioned_locals.clear();
         // Cleared rather than inherited: a caller that runs `eval` says nothing about the body
         // about to be checked. `run_mixed_storage_scan` fills it in for real, and BOTH callers of
         // this method run that scan immediately afterwards — `with_local_storage_context` and
@@ -559,6 +575,7 @@ impl Checker {
         self.ref_aliased_locals = saved.ref_aliased;
         self.static_local_names = saved.statics;
         self.typed_local_names = saved.typed;
+        self.unset_mentioned_locals = saved.unset_mentioned;
         self.mixed_storage_locals = saved.mixed_storage;
         self.body_contains_eval = saved.contains_eval;
     }
@@ -776,7 +793,11 @@ pub fn check_types_with_options(
         .iter()
         .map(|(name, decl)| (name.clone(), collect_attribute_args(&decl.attributes)))
         .collect();
-    let return_alias_summaries = crate::types::collect_return_alias_summaries(program);
+    let mut return_alias_summaries = crate::types::collect_return_alias_summaries(program);
+    crate::types::extend_return_alias_summaries_with_classes(
+        &mut return_alias_summaries,
+        &checker.classes,
+    );
     dedupe_warnings(&mut warnings);
 
     // A decision key that names more than one syntactic site would let EIR lowering re-bind a
@@ -811,7 +832,7 @@ pub fn check_types_with_options(
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
-        string_incdec_locals: checker.string_incdec_locals,
+        boxed_string_locals: checker.boxed_string_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,

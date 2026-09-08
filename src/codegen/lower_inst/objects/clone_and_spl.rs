@@ -15,7 +15,28 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
     inst: &Instruction,
 ) -> Result<()> {
     let source = expect_operand(inst, 0)?;
-    let class_name = class_name_immediate(ctx, inst)?.to_string();
+    if matches!(
+        ctx.value_php_type(source)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_runtime_mixed_object_clone(ctx, inst, source);
+    }
+    let internal_storage = inst.op == Op::ObjectCloneInternal;
+    let class_name = if internal_storage {
+        let result = inst.result.ok_or_else(|| {
+            CodegenIrError::invalid_module("object_clone_internal missing result value")
+        })?;
+        match ctx.value_php_type(result)?.codegen_repr() {
+            PhpType::Object(class_name) => class_name,
+            actual => {
+                return Err(CodegenIrError::unsupported(format!(
+                    "object_clone_internal result type {actual:?}"
+                )))
+            }
+        }
+    } else {
+        class_name_immediate(ctx, inst)?.to_string()
+    };
     if is_builtin_stdclass(&class_name) {
         return lower_stdclass_clone(ctx, inst, source);
     }
@@ -29,6 +50,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
         class_id,
         property_count,
         allow_dynamic_properties,
+        string_offsets,
         retained_offsets,
         owned_reference_property_offsets,
     ) = {
@@ -36,12 +58,14 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
             ctx.module.class_infos.get(&class_name).ok_or_else(|| {
                 CodegenIrError::unsupported(format!("unknown class {}", class_name))
             })?;
+        let string_offsets = cloned_string_property_offsets(class_info);
         let retained_offsets = cloned_property_retain_offsets(class_info);
         let owned_reference_property_offsets = owned_reference_property_offsets(class_info);
         (
             class_info.class_id,
             class_info.properties.len(),
             class_info.allow_dynamic_properties,
+            string_offsets,
             retained_offsets,
             owned_reference_property_offsets,
         )
@@ -60,12 +84,22 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
         &[],
         &owned_reference_property_offsets,
     )?;
+    if internal_storage {
+        abi::emit_call_label(ctx.emitter, "__rt_object_handle_release");
+    }
     ctx.store_result_value(result)?;
     let source_reg = abi::secondary_scratch_reg(ctx.emitter);
     let dest_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, source_reg);
     ctx.load_value_to_reg(result, dest_reg)?;
-    emit_clone_declared_property_slots(ctx, source_reg, dest_reg, property_count, &retained_offsets);
+    emit_clone_declared_property_slots(
+        ctx,
+        source_reg,
+        dest_reg,
+        property_count,
+        &string_offsets,
+        &retained_offsets,
+    );
     if allow_dynamic_properties {
         emit_clone_dynamic_property_hash(
             ctx,

@@ -27,6 +27,10 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
+use crate::codegen_support::abi;
 
 /// Where `__rt_hash_map` finds the callback result, and who owns it.
 ///
@@ -88,7 +92,9 @@ pub fn emit_hash_map(emitter: &mut Emitter) {
     //   [sp, #48] = saved x21/x22
     //   [sp, #64] = saved x19/x20
     //   [sp, #80] = saved x29/x30
-    emitter.instruction("sub sp, sp, #96");                                     // allocate the hash-map frame
+    let frame_bytes = 96 + TRY_HANDLER_SLOT_SIZE;
+    let handler = 96;
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_bytes));              // allocate hash-map locals plus an exception handler
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // set up the hash-map frame pointer
     emitter.instruction("stp x19, x20, [sp, #64]");                             // save callee-saved x19/x20 for the source and destination tables
@@ -108,6 +114,17 @@ pub fn emit_hash_map(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #32]");                                   // pass the destination value_type tag to the table allocator
     emitter.instruction("bl __rt_hash_new");                                    // allocate the destination hash
     emitter.instruction("mov x20, x0");                                         // x20 = destination hash pointer, updated after every insertion
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler));               // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler + 8));           // preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("str x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("add x10, sp, #{}", handler));                 // materialize the hash-map exception-handler record
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("add x0, sp, #{}", handler + TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch callback exceptions while the destination hash is live
+    emitter.instruction("cbnz x0, __rt_hash_map_throw");                        // release the destination hash before rethrow
     emitter.instruction("str xzr, [sp, #0]");                                   // iterator cursor = 0 (start from header.head)
 
     // -- walk the source hash in insertion order --
@@ -168,11 +185,28 @@ pub fn emit_hash_map(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_map_done");
     emitter.instruction("mov x0, x20");                                         // return the destination hash pointer
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler));               // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after success
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
     emitter.instruction("ldp x21, x22, [sp, #48]");                             // restore callee-saved x21/x22
     emitter.instruction("ldp x19, x20, [sp, #64]");                             // restore callee-saved x19/x20
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // deallocate the hash-map frame
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // deallocate hash-map locals and exception handler
     emitter.instruction("ret");                                                 // return with x0 = destination hash pointer
+
+    emitter.label("__rt_hash_map_throw");
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler));               // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", handler + TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    emitter.instruction("mov x0, x20");                                         // pass the partially built destination hash for cleanup
+    emitter.instruction("bl __rt_decref_hash");                                 // release keys, mapped values, and destination hash storage
+    emitter.instruction("ldp x21, x22, [sp, #48]");                             // restore callback and environment registers
+    emitter.instruction("ldp x19, x20, [sp, #64]");                             // restore source and destination registers
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_bytes));              // discard the protected hash-map frame
+    emitter.instruction("b __rt_throw_current");                                // resume exception propagation at the caller handler
 }
 
 /// Emits the x86_64 System V variant of `__rt_hash_map`.
@@ -205,7 +239,8 @@ fn emit_hash_map_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 72] = destination value_type tag
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-map spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the mapping bookkeeping
-    emitter.instruction("sub rsp, 96");                                         // reserve aligned spill slots so nested helper calls stay 16-byte aligned
+    let frame_bytes = 96 + TRY_HANDLER_SLOT_SIZE;
+    emitter.instruction(&format!("sub rsp, {}", frame_bytes));                  // reserve hash-map locals plus an exception handler
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // preserve the source hash pointer across every helper call
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // preserve the callback address across every helper call
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // preserve the callback environment pointer across every helper call
@@ -223,6 +258,18 @@ fn emit_hash_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // rsi = destination value_type tag
     emitter.instruction("call __rt_hash_new");                                  // allocate the destination hash
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the destination hash pointer across insertions
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes)); // link the previous native exception handler
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes - 8)); // preserve the surviving activation frame
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // preserve diagnostic suppression across longjmp
+    emitter.instruction(&format!("lea r10, [rbp - {}]", frame_bytes));          // materialize the hash-map exception-handler record
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("lea rdi, [rbp - {}]", frame_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the embedded jump buffer to setjmp
+    emitter.bl_c("setjmp");                                                     // catch callback exceptions while the destination hash is live
+    emitter.instruction("test eax, eax");                                       // did control return through longjmp?
+    emitter.instruction("jnz __rt_hash_map_throw_x86");                         // release the destination hash before rethrow
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // iterator cursor = 0 (start from header.head)
 
     // -- walk the source hash in insertion order --
@@ -284,7 +331,22 @@ fn emit_hash_map_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_map_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the destination hash pointer in rax
-    emitter.instruction("add rsp, 96");                                         // release the hash-map spill slots before returning
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes)); // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression after success
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction(&format!("add rsp, {}", frame_bytes));                  // release hash-map locals and exception handler
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return with rax = destination hash pointer
+
+    emitter.label("__rt_hash_map_throw_x86");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes)); // reload the preceding native exception handler
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the partially built destination hash
+    emitter.instruction("call __rt_decref_hash");                               // release keys, mapped values, and destination hash storage
+    emitter.instruction(&format!("add rsp, {}", frame_bytes));                  // discard hash-map locals and exception handler
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_throw_current");                              // resume exception propagation at the caller handler
 }

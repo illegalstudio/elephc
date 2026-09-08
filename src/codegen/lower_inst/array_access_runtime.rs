@@ -9,6 +9,49 @@
 
 use super::*;
 
+/// Lowers the ownership-preserving return boundary of an internal DateTime serializer.
+///
+/// The five synthetic DateTime `__serialize()` methods build an associative hash but declare an
+/// `array` return. This operation is deliberately narrower than `RuntimeCall`: it carries the
+/// same raw heap pointer to the caller so the frame return-owner trace can transfer the local
+/// hash owner instead of freeing it in the callee epilogue.
+pub(super) fn lower_date_serialize_hash_return(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects exactly one operand",
+            inst.op.name()
+        )));
+    }
+    let value = expect_operand(inst, 0)?;
+    let source_ty = ctx.value_php_type(value)?.codegen_repr();
+    let result_ty = inst.result_php_type.codegen_repr();
+    if !matches!(&source_ty, PhpType::AssocArray { .. })
+        || !matches!(&result_ty, PhpType::Array(value) if value.codegen_repr() == PhpType::Mixed)
+    {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} requires an associative hash operand and array<mixed> result, got {:?} -> {:?}",
+            inst.op.name(), source_ty, result_ty
+        )));
+    }
+    ctx.load_value_to_result(value)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a generic ownership-preserving associative-hash to PHP-array return boundary.
+///
+/// PHP's `array` declaration permits both indexed and associative runtime layouts. The EIR op is
+/// pointer identity, but its typed provenance lets frame cleanup transfer a local hash owner
+/// instead of treating the generic `RuntimeCall` fallback as an untraceable conversion.
+pub(super) fn lower_hash_to_array_return(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_date_serialize_hash_return(ctx, inst)
+}
+
 /// Lowers high-level runtime fallback casts that Phase 04 can identify by type.
 pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if let Some(Immediate::RuntimeCall(target)) = inst.immediate {
@@ -55,6 +98,20 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Iterable
         )
     {
+        ctx.load_value_to_result(value)?;
+        return store_if_result(ctx, inst);
+    }
+    // PHP's declared `array` type covers both indexed and associative runtime
+    // layouts. A synthetic method returning an assoc array through an `array`
+    // signature therefore needs no payload conversion: preserve the heap
+    // pointer and let key-sensitive consumers dispatch from its runtime kind.
+    if matches!(
+        (&source_ty, inst.result_php_type.codegen_repr()),
+        (
+            PhpType::AssocArray { .. },
+            PhpType::Array(result_value)
+        ) if result_value.codegen_repr() == PhpType::Mixed
+    ) {
         ctx.load_value_to_result(value)?;
         return store_if_result(ctx, inst);
     }
@@ -290,6 +347,7 @@ pub(super) fn lower_boxed_array_access_interface_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
+    super::emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
@@ -401,21 +459,63 @@ pub(super) fn interface_satisfies_interface(
 /// Converts an untyped boxed Mixed payload into indexed-array storage with Mixed slots.
 pub(super) fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let hash_label = ctx.next_label("mixed_to_array_hash");
+    let invalid_label = ctx.next_label("mixed_to_array_invalid");
+    let done_label = ctx.next_label("mixed_to_array_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #5");                              // does the boxed payload carry associative hash storage?
+            ctx.emitter.instruction(&format!("b.eq {}", hash_label));          // hashes preserve their runtime layout under PHP's generic array type
+            ctx.emitter.instruction("cmp x0, #4");                              // does the boxed payload carry indexed array storage?
+            ctx.emitter.instruction(&format!("b.ne {}", invalid_label));       // non-array tags reach the shared TypeError path below
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before Mixed-slot conversion
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+            ctx.emitter.instruction(&format!("b {}", done_label));             // skip the hash-preserving conversion path
+            ctx.emitter.label(&hash_label);
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed associative hash payload to its Mixed-value converter
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            abi::emit_incref_if_refcounted(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                },
+            );
+            ctx.emitter.instruction(&format!("b {}", done_label));             // preserve the hash payload as the successful generic-array result
         }
         Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 5");                              // does the boxed payload carry associative hash storage?
+            ctx.emitter.instruction(&format!("je {}", hash_label));            // hashes preserve their runtime layout under PHP's generic array type
+            ctx.emitter.instruction("cmp rax, 4");                              // does the boxed payload carry indexed array storage?
+            ctx.emitter.instruction(&format!("jne {}", invalid_label));        // non-array tags reach the shared TypeError path below
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before Mixed-slot conversion
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+            ctx.emitter.instruction(&format!("jmp {}", done_label));           // skip the hash-preserving conversion path
+            ctx.emitter.label(&hash_label);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            abi::emit_incref_if_refcounted(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                },
+            );
+            ctx.emitter.instruction(&format!("jmp {}", done_label));           // preserve the hash payload as the successful generic-array result
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+    ctx.emitter.label(&invalid_label);
+    super::exceptions::emit_type_error(
+        ctx,
+        "array return boundary received a non-array mixed value",
+    );
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 

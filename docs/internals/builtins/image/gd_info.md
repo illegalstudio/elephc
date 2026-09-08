@@ -2,7 +2,7 @@
 title: "gd_info() — internals"
 description: "Compiler internals for gd_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 450
+  order: 451
 ---
 
 ## `gd_info()` — internals

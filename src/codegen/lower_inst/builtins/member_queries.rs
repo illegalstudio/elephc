@@ -322,7 +322,13 @@ pub(in crate::codegen::lower_inst) fn static_method_exists_on_class_info(
     method_name: &str,
     target_is_object: bool,
 ) -> bool {
+    if !crate::codegen_support::callable_dispatch::runtime_method_callable_visible(method_name) {
+        return false;
+    }
     let method_key = php_symbol_key(method_name);
+    if is_hidden_datetime_implementation_method(class_info, &method_key) {
+        return false;
+    }
     if class_info.methods.contains_key(&method_key) {
         return target_is_object
             || method_visible_from_class_string(
@@ -363,14 +369,38 @@ pub(in crate::codegen::lower_inst) fn static_parent_chain_method_exists(
         let Some((_resolved_class, parent_info)) = lookup_class_info(ctx, candidate) else {
             return false;
         };
-        if parent_info.methods.contains_key(method_key)
-            || parent_info.static_methods.contains_key(method_key)
+        if (parent_info.methods.contains_key(method_key)
+            || parent_info.static_methods.contains_key(method_key))
+            && !is_hidden_datetime_implementation_method(parent_info, method_key)
         {
             return true;
         }
         parent_name = parent_info.parent.as_deref();
     }
     false
+}
+
+/// Returns whether one inherited ext/date implementation helper must be invisible to PHP.
+///
+/// A user subclass may legally declare its own similarly prefixed method, so hiding is
+/// based on the original declaring class rather than on the receiver class alone.
+fn is_hidden_datetime_implementation_method(class_info: &ClassInfo, method_key: &str) -> bool {
+    if method_key.starts_with("__elephc_date_magic_restore$") {
+        return true;
+    }
+    if !method_key.starts_with("__elephc_") {
+        return false;
+    }
+    class_info
+        .method_declaring_classes
+        .get(method_key)
+        .or_else(|| class_info.static_method_declaring_classes.get(method_key))
+        .is_some_and(|declaring_class| {
+            matches!(
+                php_symbol_key(declaring_class.trim_start_matches('\\')).as_str(),
+                "datetime" | "datetimeimmutable" | "datetimezone" | "dateinterval" | "dateperiod"
+            )
+        })
 }
 
 /// Returns whether a method should be visible for a class-string member probe.
@@ -394,8 +424,19 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
     resolved_class: &str,
     class_info: &ClassInfo,
     property_name: &str,
-    _target_is_object: bool,
+    target_is_object: bool,
 ) -> bool {
+    let class_key = php_symbol_key(resolved_class.trim_start_matches('\\'));
+    if class_key == "dateinterval" {
+        return target_is_object
+            && matches!(
+                property_name,
+                "y" | "m" | "d" | "h" | "i" | "s" | "f" | "invert" | "days"
+            );
+    }
+    if let Some(property_names) = crate::types::php_src_date_property_names(resolved_class) {
+        return property_names.contains(&property_name);
+    }
     property_visible_from_class_string(
         resolved_class,
         property_name,

@@ -2,7 +2,7 @@
 title: "mysqli_stmt_get_result() — internals"
 description: "Compiler internals for mysqli_stmt_get_result(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 168
+  order: 169
 ---
 
 ## `mysqli_stmt_get_result()` — internals

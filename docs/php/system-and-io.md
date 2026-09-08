@@ -34,52 +34,27 @@ sidebar:
 ## PHP version surface
 
 elephc targets a PHP **language profile** selected by `--php-version`
-(`8.2`/`8.3`/`8.4`/`8.5`, default `8.5`), not a specific upstream patch release.
-The whole version surface therefore reports `8.<minor>.0`:
+(`8.2`/`8.3`/`8.4`/`8.5`, default `8.5`). The default profile is pinned to the
+frozen php-src compliance oracle, `8.5.10-dev`; older profiles retain their
+`8.<minor>.0` spelling:
 
 | Symbol | `--php-version 8.5` | `--php-version 8.2` |
 |---|---|---|
-| `PHP_VERSION` | `"8.5.0"` | `"8.2.0"` |
-| `PHP_VERSION_ID` | `80500` | `80200` |
+| `PHP_VERSION` | `"8.5.10-dev"` | `"8.2.0"` |
+| `PHP_VERSION_ID` | `80510` | `80200` |
 | `PHP_MAJOR_VERSION` | `8` | `8` |
 | `PHP_MINOR_VERSION` | `5` | `2` |
-| `PHP_RELEASE_VERSION` | `0` | `0` |
-| `PHP_EXTRA_VERSION` | `""` | `""` |
-| `phpversion()` | `"8.5.0"` | `"8.2.0"` |
-| `zend_version()` | `"4.5.0"` | `"4.2.0"` |
+| `PHP_RELEASE_VERSION` | `10` | `0` |
+| `PHP_EXTRA_VERSION` | `"-dev"` | `""` |
+| `phpversion()` | `"8.5.10-dev"` | `"8.2.0"` |
+| `zend_version()` | `"4.5.10-dev"` | `"4.2.0"` |
 
-`PHP_VERSION_ID` uses PHP's formula, `major * 10000 + minor * 100 + release`
-(reference PHP 8.5.6 reports `80506`), so the id and the string always agree.
+`PHP_VERSION_ID` uses PHP's formula, `major * 10000 + minor * 100 + release`,
+so the id and the string always agree.
 
 This is the same rule the OPcache surface already applies:
-`opcache_get_configuration()['version']['version']` reports `8.5.0` too, and the
+`opcache_get_configuration()['version']['version']` reports `8.5.10-dev` too, and the
 two are guaranteed to match inside one binary.
-
-**Divergence from reference PHP.** Reference PHP 8.5.6 reports `8.5.6`,
-`80506`, `PHP_RELEASE_VERSION` `6` and Zend `4.5.6`. elephc has no patch release
-to report — there is no PHP runtime inside the compiled binary — so the patch
-component is `0`. Feature detection is unaffected: `PHP_VERSION_ID >= 80500`
-answers exactly the question `--php-version 8.5` answers. `PHP_EXTRA_VERSION`
-and `PHP_MAJOR_VERSION`/`PHP_MINOR_VERSION` match reference exactly.
-
-**Why understate rather than claim the reference patch.** elephc's observable
-surface is verified against a specific reference build, but that is not the same
-as shipping that build's bug fixes: elephc is a reimplementation, not a PHP
-runtime, so "our behavior matches 8.5.6" does not license the claim "we contain
-every fix through 8.5.6". The two directions fail differently, and only one of
-them fails safely:
-
-| Reported | Code gating `>= 8.5.6` | Consequence |
-|---|---|---|
-| `8.5.0` | takes the OLD branch, applies a workaround | redundant work, harmless |
-| `8.5.6` | takes the NEW branch, assumes a fix is present | breaks if elephc lacks it |
-
-Understating makes callers do unnecessary work; overstating makes them skip
-protections. The cost is real and worth knowing: a caller gating on a PATCH
-version (`version_compare(PHP_VERSION, '8.5.6', '>=')`) sees this binary as older
-than the behavior it actually implements. Gating on a MINOR version — by far the
-common case — is unaffected. If elephc ever tracks patch-level fixes explicitly,
-this choice should be revisited.
 
 `phpversion($extension)` returns that same version string for a loaded
 extension and `false` for anything else, matching reference PHP, where every
@@ -130,7 +105,7 @@ are declared only in binaries whose source mentions them, exactly like
 function of the same name keeps it.
 
 Inside `eval()`, the interpreter has no access to `--php-version` or `--web` and
-reports the default profile: `PHP_VERSION` `"8.5.0"`, `PHP_SAPI` `"cli"`. On a
+reports the default profile: `PHP_VERSION` `"8.5.10-dev"`, `PHP_SAPI` `"cli"`. On a
 default-profile CLI binary that is identical to the compiled surface.
 
 `define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode.

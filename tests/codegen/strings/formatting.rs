@@ -147,6 +147,13 @@ echo sprintf("%s|%d", $a["n"], $a["s"]);
     assert_eq!(out, "42|0");
 }
 
+/// Verifies PHP's single `l` length modifier is consumed before integer formatting.
+#[test]
+fn test_sprintf_single_l_length_modifier() {
+    let out = compile_and_run(r#"<?php echo sprintf("%06ld", 123);"#);
+    assert_eq!(out, "000123");
+}
+
 /// Verifies printf applies the same specifier-driven coercion as sprintf for cross-type
 /// arguments (int under `%05d`, plain string), writing the formatted bytes to stdout.
 #[test]

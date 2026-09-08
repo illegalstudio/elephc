@@ -2,7 +2,7 @@
 title: "mysqli_stmt_bind_param() — internals"
 description: "Compiler internals for mysqli_stmt_bind_param(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 160
+  order: 161
 ---
 
 ## `mysqli_stmt_bind_param()` — internals

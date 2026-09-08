@@ -68,7 +68,13 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     args: &[Expr],
     span: Span,
 ) -> Option<LoweredValue> {
-    if crate::types::call_args::has_named_args(args) {
+    let has_assoc_spread = args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::Spread(inner) if is_assoc_spread_source(ctx, inner)
+        )
+    });
+    if crate::types::call_args::has_named_args(args) || has_assoc_spread {
         return Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span));
     }
     Some(lower_untyped_descriptor_invoker_indexed_container(ctx, args, span))
@@ -104,7 +110,12 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
-        crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
+        crate::ir_lower::stmt::release_indexed_array_write_operand(
+            ctx,
+            Some(&elem_ty),
+            value,
+            arg.span,
+        );
     }
     array
 }
@@ -184,6 +195,52 @@ pub(super) fn lower_untyped_descriptor_invoker_spread_into_hash(
     start_key: LoweredValue,
     span: Span,
 ) -> LoweredValue {
+    if source.ir_type == IrType::Heap(IrHeapKind::Hash) {
+        let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+        let mixed_source = match source_ty {
+            PhpType::AssocArray { value, .. } if value.codegen_repr() != PhpType::Mixed => {
+                ctx.emit_value(
+                    Op::HashToMixed,
+                    vec![source.value],
+                    None,
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(PhpType::Mixed),
+                    },
+                    Op::HashToMixed.default_effects(),
+                    Some(span),
+                )
+            }
+            _ => source,
+        };
+        let len = ctx.emit_value(
+            Op::HashLen,
+            vec![mixed_source.value],
+            None,
+            PhpType::Int,
+            Op::HashLen.default_effects(),
+            Some(span),
+        );
+        ctx.emit_void(
+            Op::HashSpread,
+            vec![hash.value, mixed_source.value],
+            None,
+            Op::HashSpread.default_effects(),
+            Some(span),
+        );
+        let next_key = ctx.emit_value(
+            Op::IAdd,
+            vec![start_key.value, len.value],
+            None,
+            PhpType::Int,
+            Op::IAdd.default_effects(),
+            Some(span),
+        );
+        if ctx.value_is_owning_temporary(mixed_source) {
+            crate::ir_lower::ownership::release_if_owned(ctx, mixed_source, Some(span));
+        }
+        return next_key;
+    }
     let source_elem_ty = match ctx.builder.value_php_type(source.value).codegen_repr() {
         PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
         _ => PhpType::Mixed,
@@ -334,13 +391,20 @@ pub(super) fn lower_first_class_callable_expr_call(
             Some(lower_static_method_call(ctx, receiver, method, args, expr))
         }
         ExprKind::FirstClassCallable(target @ CallableTarget::Method { .. }) => {
-            let signature = static_callable_binding_for_expr(ctx, callee)
-                .and_then(|target| signature_for_static_callable_binding(ctx, target));
+            let binding = static_callable_binding_for_expr(ctx, callee);
             let callable = lower_first_class_callable(ctx, target, callee);
-            let result_type = signature
+            let result_type = if binding
                 .as_ref()
-                .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
-                .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+                .is_some_and(|binding| instance_callable_is_date_serialize(ctx, binding))
+            {
+                PhpType::Mixed
+            } else {
+                binding
+                    .clone()
+                    .and_then(|target| signature_for_static_callable_binding(ctx, target))
+                    .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+                    .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr))
+            };
             let arg_container =
                 lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
             Some(emit_callable_descriptor_invoke(
@@ -354,4 +418,3 @@ pub(super) fn lower_first_class_callable_expr_call(
         _ => None,
     }
 }
-

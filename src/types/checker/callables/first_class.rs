@@ -195,7 +195,30 @@ impl Checker {
             CallableTarget::Method { object, method } => {
                 let object_ty = self.infer_type(object, env)?;
                 match object_ty {
+                    PhpType::Mixed | PhpType::Union(_) => {
+                        Ok(self.runtime_method_callable_sig(method))
+                    }
                     PhpType::Object(class_name) => {
+                        if let Some(interface_info) = self.interfaces.get(&class_name) {
+                            let sig = interface_info.methods.get(method).cloned().or_else(|| {
+                                crate::types::date_method_dispatch::concrete_date_interface_method(
+                                    &self.classes, &class_name, method,
+                                )
+                            }).ok_or_else(|| {
+                                CompileError::new(
+                                    span,
+                                    &format!(
+                                        "Undefined method for first-class callable: {}::{}",
+                                        class_name, method
+                                    ),
+                                )
+                            })?;
+                            let effective_sig = Self::callable_sig_for_declared_params(
+                                &sig,
+                                &sig.declared_params,
+                            );
+                            return Ok(Self::callable_wrapper_sig(&effective_sig));
+                        }
                         let class_info = self.classes.get(&class_name).ok_or_else(|| {
                             CompileError::new(span, &format!("Undefined class: {}", class_name))
                         })?;
@@ -238,6 +261,49 @@ impl Checker {
                     )),
                 }
             }
+        }
+    }
+
+    /// Infers a runtime-selected method callable without choosing its concrete receiver.
+    /// A shared parameter contract is retained when available; otherwise argument
+    /// validation is deferred to the selected descriptor's runtime invoker.
+    fn runtime_method_callable_sig(&self, method: &str) -> FunctionSig {
+        let key = crate::names::php_symbol_key(method);
+        let signatures: Vec<_> = self.classes.values()
+            .filter_map(|info| info.methods.get(&key))
+            .map(Self::callable_wrapper_sig)
+            .collect();
+        let returns: Vec<_> = signatures.iter().map(|sig| sig.return_type.clone()).collect();
+        let return_type = if returns.is_empty() {
+            PhpType::Mixed
+        } else {
+            self.normalize_union_type(returns)
+        };
+        if let Some(first) = signatures.first() {
+            if signatures.iter().all(|sig| {
+                sig.params == first.params
+                    && sig.defaults == first.defaults
+                    && sig.ref_params == first.ref_params
+                    && sig.variadic == first.variadic
+                    && sig.by_ref_return == first.by_ref_return
+            }) {
+                let mut signature = first.clone();
+                signature.return_type = return_type;
+                return signature;
+            }
+        }
+        FunctionSig {
+            params: vec![("args".into(), PhpType::Array(Box::new(PhpType::Mixed)))],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type,
+            declared_return: false,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: Some("args".into()),
+            deprecation: None,
         }
     }
 

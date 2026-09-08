@@ -62,28 +62,35 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
     if let Some(message) = eval_native_constructor_access_error(class_name, context, values)? {
         return eval_throw_error(&message, context, values);
     }
-    let bridge_scope =
-        eval_native_constructor_bridge_scope(class_name, context, values)?;
-    let signature = context.native_constructor_signature(class_name);
-    let bound_args = bind_native_callable_bound_args_with_mode(
-        signature,
-        evaluated_args,
-        by_ref_mode,
-        context,
-        values,
-    )?;
-    let result = if let Some(scope) = bridge_scope.as_deref() {
-        eval_with_native_bridge_scope(scope, context, || {
+    context.push_function(format!("{}::__construct", class_name.trim_start_matches('\\')));
+    let mut default_owners = Vec::new();
+    let outcome = (|| {
+        let bridge_scope = eval_native_constructor_bridge_scope(class_name, context, values)?;
+        let signature = context.native_constructor_signature(class_name);
+        let bound_args = bind_native_callable_bound_args_with_mode(
+            signature,
+            evaluated_args,
+            by_ref_mode,
+            context,
+            values,
+            &mut default_owners,
+        )?;
+        let result = if let Some(scope) = bridge_scope.as_deref() {
+            eval_with_native_bridge_scope(scope, context, || {
+                values.construct_object(object, native_bound_arg_values(&bound_args))
+            })
+        } else {
             values.construct_object(object, native_bound_arg_values(&bound_args))
-        })
-    } else {
-        values.construct_object(object, native_bound_arg_values(&bound_args))
-    };
-    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
-    match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(()), Ok(())) => Ok(()),
-    }
+        };
+        let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+        match (result, writeback) {
+            (Err(status), _) | (_, Err(status)) => Err(status),
+            (Ok(()), Ok(())) => Ok(()),
+        }
+    })();
+    let outcome = finish_native_default_owners(outcome, default_owners, None, context, values);
+    context.pop_function();
+    outcome
 }
 
 /// Returns the generated/AOT constructor scope that the runtime bridge can recognize.

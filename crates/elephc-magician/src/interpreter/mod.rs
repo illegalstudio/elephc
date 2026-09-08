@@ -39,7 +39,9 @@ use crate::context::{
     EvalReferenceTarget, EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget,
     NativeCallableDefault, NativeCallableSignature, NativeFunction,
 };
-use crate::errors::{EvalParseError, EvalStatus};
+use crate::errors::EvalStatus;
+#[cfg(test)]
+use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch,
     EvalCastType, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst,
@@ -114,16 +116,25 @@ pub fn execute_program_with_context(
     }
 }
 
-/// Executes an EvalIR program and preserves escaping Throwable cells.
+/// Executes an EvalIR program, returning an owned value cell and preserving escaping throwables.
 pub fn execute_program_outcome_with_context(
     context: &mut ElephcEvalContext,
     program: &EvalProgram,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    match execute_statements(program.statements(), context, scope, values) {
+    emit_eval_compile_warnings(program.compile_warnings(), context, values, false)?;
+    let control = with_lexical_strict_types(context, program.strict_types(), |context| {
+        execute_statements_with_return_ownership(program.statements(), context, scope, values, true)
+    });
+    match control {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
-        Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
+        Ok(EvalControl::Return(result)) => {
+            // Known owners transfer directly. Borrowed or unclassified results
+            // receive a separate ABI owner without consuming their existing source.
+            let value = if result.owned { result.value } else { values.retain(result.value)? };
+            Ok(EvalOutcome::Value(value))
+        }
         Ok(EvalControl::Throw(result)) => Ok(EvalOutcome::Throwable(result)),
         Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
         Err(EvalStatus::UncaughtThrowable) => context
@@ -132,6 +143,38 @@ pub fn execute_program_outcome_with_context(
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
     }
+}
+
+/// Replays cached parse warnings before executing a fragment's first statement.
+pub(crate) fn emit_eval_compile_warnings(
+    warnings: &[crate::eval_ir::EvalCompileWarning], context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps, included_file: bool,
+) -> Result<(), EvalStatus> {
+    let (file, _, caller_line, _) = context.call_site();
+    let source = if included_file { file }
+        else if file.is_empty() { "eval()'d code".to_string() }
+        else { format!("{file}({caller_line}) : eval()'d code") };
+    for warning in warnings {
+        values.compile_warning(&format!("\nWarning: {} in {} on line {}\n",
+            warning.message, source, warning.line))?;
+    }
+    Ok(())
+}
+
+/// Runs one lexical PHP body under its compiled strict-types mode and restores its caller.
+///
+/// This deliberately wraps bodies only: PHP applies scalar parameter coercion at the
+/// caller's site, while calls written inside a function, closure, or method use the
+/// callable's compiled lexical mode.
+pub(in crate::interpreter) fn with_lexical_strict_types<T>(
+    context: &mut ElephcEvalContext,
+    strict_types: bool,
+    operation: impl FnOnce(&mut ElephcEvalContext) -> T,
+) -> T {
+    let previous_strict_types = context.replace_strict_types(strict_types);
+    let result = operation(context);
+    context.replace_strict_types(previous_strict_types);
+    result
 }
 
 /// Executes a zero-argument function declared in the shared eval context.
@@ -242,6 +285,24 @@ pub fn execute_context_is_callable(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     eval_is_callable_value(callback, None, context, values)
+}
+
+/// Materializes a PHP `Closure` for one runtime-resolved static method.
+pub fn execute_context_static_method_callable(
+    context: &mut ElephcEvalContext,
+    class_name: &str,
+    method: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let target = eval_static_method_callable_target(
+        class_name.to_string(),
+        method.to_string(),
+        Some(class_name.to_string()),
+        None,
+        context,
+        values,
+    )?;
+    eval_closure_object_expr(target, context, values)
 }
 
 /// Constructs a class declared in the shared eval context with prepared positional arguments.

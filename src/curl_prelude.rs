@@ -2349,6 +2349,7 @@ mod reachability_tests {
         } else {
             HashSet::new()
         };
+        let structural = HashSet::new();
         let exported = HashSet::new();
         crate::optimize::prune_unreachable_declarations(
             program,
@@ -2356,6 +2357,7 @@ mod reachability_tests {
             PruneOptions {
                 inventory: &inventory,
                 forced_groups: &forced,
+                structural_groups: &structural,
                 exported_functions: &exported,
                 eval_forced: false,
             },

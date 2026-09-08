@@ -61,6 +61,7 @@ fn array_shift_element_type(ty: PhpType) -> Result<PhpType> {
                 elem
             )))
         }
+        PhpType::Mixed => Ok(PhpType::Mixed),
         other => Err(CodegenIrError::unsupported(format!(
             "array_shift for PHP type {:?}",
             other
@@ -81,6 +82,9 @@ fn require_array_shift_result_type(result_ty: &PhpType) -> Result<()> {
 
 /// Splits a shared indexed array before `array_shift()` mutates its slots.
 fn ensure_unique_array_shift_source(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        return ensure_unique_boxed_array_shift_source(ctx, array);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -93,6 +97,81 @@ fn ensure_unique_array_shift_source(ctx: &mut FunctionContext<'_>, array: ValueI
     ctx.store_result_value(array)
 }
 
+/// Splits an indexed-array payload stored inside a boxed Mixed cell and publishes the unique
+/// pointer back into that same cell before `array_shift()` mutates it.
+fn ensure_unique_boxed_array_shift_source(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+) -> Result<()> {
+    let valid_label = ctx.next_label("array_shift_mixed_array");
+    let done_label = ctx.next_label("array_shift_mixed_array_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 is an indexed PHP array
+            ctx.emitter.instruction(&format!("b.eq {}", valid_label));
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            crate::codegen::lower_inst::exceptions::emit_type_error(
+                ctx,
+                "array_shift(): Argument #1 ($array) must be of type array",
+            );
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&valid_label);
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the COW helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.emitter.instruction("str x0, [x9, #8]");                        // publish the unique payload in Mixed.value_lo
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 is an indexed PHP array
+            ctx.emitter.instruction(&format!("je {}", valid_label));
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            crate::codegen::lower_inst::exceptions::emit_type_error(
+                ctx,
+                "array_shift(): Argument #1 ($array) must be of type array",
+            );
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&valid_label);
+            ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed indexed-array payload to the COW helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // publish the unique payload in Mixed.value_lo
+        }
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Loads either a concrete indexed-array value or the indexed payload of a boxed Mixed value into
+/// the requested target register.
+fn load_array_shift_pointer(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    target_reg: &str,
+) -> Result<()> {
+    if ctx.value_php_type(array)?.codegen_repr() != PhpType::Mixed {
+        return ctx.load_value_to_reg(array, target_reg).map(|_| ());
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("mov {}, x1", target_reg));        // select the indexed-array payload low word
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rax")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("mov {}, rdi", target_reg));       // select the indexed-array payload low word
+        }
+    }
+    Ok(())
+}
+
 /// Emits the AArch64 `array_shift()` sequence for indexed arrays.
 fn lower_array_shift_aarch64(
     ctx: &mut FunctionContext<'_>,
@@ -101,7 +180,7 @@ fn lower_array_shift_aarch64(
 ) -> Result<()> {
     let empty_label = ctx.next_label("array_shift_empty");
     let done_label = ctx.next_label("array_shift_done");
-    ctx.load_value_to_reg(array, "x0")?;
+    load_array_shift_pointer(ctx, array, "x0")?;
     ctx.emitter.instruction("ldr x9, [x0]");                                    // load the indexed-array length before deciding whether shift is empty
     ctx.emitter.instruction(&format!("cbz x9, {}", empty_label));               // return boxed null when array_shift() runs on an empty array
     emit_array_shift_save_first_aarch64(ctx, elem_ty)?;
@@ -125,7 +204,7 @@ fn lower_array_shift_x86_64(
 ) -> Result<()> {
     let empty_label = ctx.next_label("array_shift_empty");
     let done_label = ctx.next_label("array_shift_done");
-    ctx.load_value_to_reg(array, "rax")?;
+    load_array_shift_pointer(ctx, array, "rax")?;
     ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the indexed-array length before deciding whether shift is empty
     ctx.emitter.instruction("test r10, r10");                                   // check whether the indexed array has any live elements
     ctx.emitter.instruction(&format!("jz {}", empty_label));                    // return boxed null when array_shift() runs on an empty array

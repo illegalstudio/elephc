@@ -2,7 +2,7 @@
 title: "imagefilledarc()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 500
+  order: 501
 ---
 
 ## imagefilledarc()

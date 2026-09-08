@@ -14,6 +14,24 @@
 
 use crate::support::*;
 
+/// mysqli's internal constructor rejects surplus arguments as a catchable runtime error.
+#[test]
+fn test_mysqli_constructor_rejects_extra_arguments_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    new mysqli("h", "u", "p", "d", 3306, null, 999);
+} catch (ArgumentCountError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "mysqli::__construct() expects at most 6 arguments, 7 given"
+    );
+}
+
 /// A bare `MYSQLI_*` constant is enough to inject the surface (issue: a config
 /// array or helper that only forwards the constant must not fail with
 /// "undefined constant"), and `mysqli_sql_exception::getSqlState()` (php 8.1+)

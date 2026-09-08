@@ -13,15 +13,19 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalProgram {
     source_len: usize,
+    strict_types: bool,
     statements: Vec<EvalStmt>,
+    compile_warnings: Vec<EvalCompileWarning>,
 }
 
 impl EvalProgram {
     /// Creates an EvalIR program for a source fragment and statement list.
-    pub fn new(source_len: usize, statements: Vec<EvalStmt>) -> Self {
+    pub fn new(source_len: usize, strict_types: bool, statements: Vec<EvalStmt>) -> Self {
         Self {
             source_len,
+            strict_types,
             statements,
+            compile_warnings: Vec::new(),
         }
     }
 
@@ -30,15 +34,38 @@ impl EvalProgram {
         self.source_len
     }
 
+    /// Returns whether this eval fragment declared `strict_types=1` at file scope.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
+    }
+
     /// Returns the ordered EvalIR statements in source order.
     pub fn statements(&self) -> &[EvalStmt] {
         &self.statements
+    }
+
+    /// Attaches parse diagnostics so cached programs replay them on each execution.
+    pub(crate) fn with_compile_warnings(mut self, warnings: Vec<EvalCompileWarning>) -> Self {
+        self.compile_warnings = warnings;
+        self
+    }
+
+    /// Returns compile warnings in source encounter order.
+    pub fn compile_warnings(&self) -> &[EvalCompileWarning] {
+        &self.compile_warnings
     }
 
     /// Consumes the program and returns its statement list.
     pub fn into_statements(self) -> Vec<EvalStmt> {
         self.statements
     }
+}
+
+/// One PHP compile warning retained as syntax metadata rather than emitted while caching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvalCompileWarning {
+    pub message: String,
+    pub line: i64,
 }
 
 /// One source range inside the current eval fragment.

@@ -163,7 +163,9 @@ pub(in crate::interpreter) fn eval_is_callable_value(
     let Ok(callback) = callback else {
         return Ok(false);
     };
-    eval_callable_probe_exists(&callback, context, values)
+    let result = eval_callable_probe_exists(&callback, context, values);
+    let cleanup = release_evaluated_callable(callback, None, values);
+    result.and_then(|value| cleanup.map(|()| value))
 }
 
 /// Evaluates `is_callable()` and writes PHP's display callable name when requested.

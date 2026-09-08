@@ -10,6 +10,50 @@
 
 use super::*;
 
+/// Converts PHP parse failures into pending ParseError objects, leaving unsupported syntax distinct.
+pub(in crate::interpreter) fn eval_throw_parse_failure<T>(
+    status: EvalStatus,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    if status != EvalStatus::ParseError {
+        return Err(status);
+    }
+    let exception = values.new_object("ParseError")?;
+    let mut arguments = Vec::new();
+    let constructed = (|| {
+        arguments.push(values.string("Parse error: eval() fragment is invalid\n")?);
+        arguments.push(values.int(0)?);
+        values.construct_object(exception, arguments.clone())
+    })();
+    let mut cleanup = Ok(());
+    for argument in arguments {
+        if let Err(status) = values.release(argument) {
+            cleanup = Err(status);
+        }
+    }
+    if let Err(status) = constructed.and(cleanup) {
+        let _ = values.release(exception);
+        return Err(status);
+    }
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
+/// Creates and schedules the catchable argument-count subtype of TypeError.
+pub(in crate::interpreter) fn eval_throw_argument_count_error<T>(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object("ArgumentCountError")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
 /// Creates and schedules an `Error` through eval's normal Throwable channel.
 pub(in crate::interpreter) fn eval_throw_error<T>(
     message: &str,

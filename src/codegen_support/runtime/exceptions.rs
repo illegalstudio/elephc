@@ -14,6 +14,7 @@ mod dynamic_instanceof;
 mod matches;
 mod rethrow_current;
 mod throw_current;
+mod uncaught_date_traces;
 mod uncaught_report;
 
 pub use class_implements::emit_class_implements_interface;

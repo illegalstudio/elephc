@@ -197,6 +197,35 @@ fn test_program_function_effects_recognize_pure_user_functions() {
     assert_eq!(function_effects.get("len3"), Some(&Effect::PURE));
 }
 
+/// Verifies an ordinary declared return keeps its catchable runtime TypeError boundary.
+#[test]
+fn test_program_function_effects_keep_declared_return_boundary() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "declared".to_string(),
+            params: Vec::new(),
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: Some(TypeExpr::Int),
+            by_ref_return: false,
+            body: vec![Stmt::new(
+                StmtKind::Return(Some(Expr::int_lit(1))),
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("declared"),
+        Some(&Effect::PURE.with_may_throw())
+    );
+}
+
 /// Verifies that a wrapper function calling a function that throws is classified
 /// as `PURE` with `side_effects` and `may_throw` — the throw does not make the
 /// wrapper non-pure, but it does propagate the exception potential.

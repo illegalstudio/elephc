@@ -161,7 +161,10 @@ pub(super) fn emit_aarch64_casts(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish a stable object-identity wrapper frame
     emitter.instruction("bl __rt_mixed_unbox");                                 // unwrap nested Mixed cells to tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means PHP object
-    emitter.instruction("csel x0, x1, xzr, eq");                                // return the object payload pointer or zero on mismatch
+    emitter.instruction("b.eq 1f");                                             // ordinary objects already expose their payload identity
+    emitter.instruction("cmp x0, #10");                                         // runtime tag 10 means a PHP Closure descriptor
+    emitter.label("1");
+    emitter.instruction("csel x0, x1, xzr, eq");                                // return the object/callable payload pointer or zero on mismatch
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the object-identity wrapper frame
     emitter.instruction("ret");                                                 // return the object identity pointer to Rust
@@ -177,7 +180,10 @@ pub(super) fn emit_aarch64_casts(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish a stable object-handle wrapper frame
     emitter.instruction("bl __rt_mixed_unbox");                                 // unwrap nested Mixed cells to tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means PHP object
-    emitter.instruction("b.ne __elephc_eval_value_object_handle_zero");         // non-object values carry no PHP handle
+    emitter.instruction("b.eq 1f");                                             // ordinary objects resolve through the shared handle pool
+    emitter.instruction("cmp x0, #10");                                         // runtime tag 10 means a PHP Closure descriptor
+    emitter.instruction("b.ne __elephc_eval_value_object_handle_zero");         // non-object and non-callable values carry no PHP handle
+    emitter.label("1");
     emitter.instruction("mov x0, x1");                                          // pass the unboxed object payload to the handle pool
     emitter.instruction("bl __rt_object_handle_of");                            // x0 = this object's PHP handle
     emitter.instruction("b __elephc_eval_value_object_handle_done");            // return the resolved handle

@@ -49,6 +49,15 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_has_includes(object) || expr_has_includes(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_has_includes(object)
+                || expr_has_includes(property)
+                || expr_has_includes(value)
+        }
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
             expr_has_includes(condition)
                 || has_includes(then_body)

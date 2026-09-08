@@ -113,30 +113,33 @@ fn eval_array_walk_ref_result_from_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
-    let len = values.array_len(array)?;
-    for position in 0..len {
-        let current_array = eval_reference_target_value(&array_target, context, values)?;
-        let key = values.array_iter_key(current_array, position)?;
-        let value = values.array_get(current_array, key)?;
-        let ref_target = EvalReferenceTarget::NestedArrayElement {
-            array_target: Box::new(array_target.clone()),
-            index: key,
-        };
-        let args = vec![
-            EvaluatedCallArg {
-                name: None,
-                value,
-                ref_target: Some(ref_target),
-            },
-            EvaluatedCallArg {
-                name: None,
-                value: key,
-                ref_target: None,
-            },
-        ];
-        let _ = eval_evaluated_callable_with_call_array_args(&callback, args, context, values)?;
-    }
-    values.bool_value(true)
+    let result = (|| {
+        let len = values.array_len(array)?;
+        for position in 0..len {
+            let current_array = eval_reference_target_value(&array_target, context, values)?;
+            let key = values.array_iter_key(current_array, position)?;
+            let value = values.array_get(current_array, key)?;
+            let ref_target = EvalReferenceTarget::NestedArrayElement {
+                array_target: Box::new(array_target.clone()),
+                index: key,
+            };
+            let args = vec![
+                EvaluatedCallArg {
+                    name: None,
+                    value,
+                    ref_target: Some(ref_target),
+                },
+                EvaluatedCallArg {
+                    name: None,
+                    value: key,
+                    ref_target: None,
+                },
+            ];
+            let _ = eval_evaluated_callable_with_call_array_args(&callback, args, context, values)?;
+        }
+        values.bool_value(true)
+    })();
+    finish_evaluated_callable(callback, result, context, values)
 }
 
 /// Walks one eval array by invoking a callable with value and key cells.
@@ -158,11 +161,14 @@ fn eval_array_walk_result_from_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
-    let len = values.array_len(array)?;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let _ = eval_evaluated_callable_with_values(&callback, vec![value, key], context, values)?;
-    }
-    values.bool_value(true)
+    let result = (|| {
+        let len = values.array_len(array)?;
+        for position in 0..len {
+            let key = values.array_iter_key(array, position)?;
+            let value = values.array_get(array, key)?;
+            let _ = eval_evaluated_callable_with_values(&callback, vec![value, key], context, values)?;
+        }
+        values.bool_value(true)
+    })();
+    finish_evaluated_callable(callback, result, context, values)
 }

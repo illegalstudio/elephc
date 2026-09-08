@@ -97,6 +97,13 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
                 property,
                 value: rhs,
             },
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                StmtKind::DynamicPropertyArrayPush {
+                    object,
+                    property,
+                    value: rhs,
+                }
+            }
             ExprKind::ArrayAccess { array, index } => {
                 return lower_nested_append_assignment(
                     Expr::new(ExprKind::ArrayAccess { array, index }, lhs_span),

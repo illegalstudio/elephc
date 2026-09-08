@@ -1386,6 +1386,8 @@ pub(crate) struct ProgramOutput {
     pub(crate) stderr: String,
     // true if the process exited with a successful (zero) exit code.
     pub(crate) success: bool,
+    // Native exit code; absent only for a signal-only process termination.
+    pub(crate) exit_code: Option<i32>,
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,
@@ -1418,6 +1420,7 @@ pub(crate) fn assemble_and_run_capture(
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         success: output.status.success(),
+        exit_code: output.status.code(),
     }
 }
 

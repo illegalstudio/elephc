@@ -2,7 +2,7 @@
 title: "opcache_get_configuration()"
 description: "Implemented by the compiler-injected OPcache prelude."
 sidebar:
-  order: 613
+  order: 619
 ---
 
 ## opcache_get_configuration()

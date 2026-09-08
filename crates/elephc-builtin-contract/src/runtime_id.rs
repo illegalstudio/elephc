@@ -58,6 +58,10 @@ pub enum RuntimeBuiltinId {
     ObEndClean = 20,
     /// PHP `ob_end_flush`.
     ObEndFlush = 21,
+    /// PHP `date_default_timezone_get` through the shared AOT request state.
+    DateDefaultTimezoneGet = 22,
+    /// PHP `date_default_timezone_set` after eval-side identifier validation.
+    DateDefaultTimezoneSet = 23,
 }
 
 /// Status returned by `__elephc_runtime_builtin_call_v1`.
@@ -89,7 +93,7 @@ impl RuntimeBuiltinStatus {
 
 impl RuntimeBuiltinId {
     /// Every version-one runtime builtin in stable ABI order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 23] = [
         Self::Boolval,
         Self::Floatval,
         Self::Intval,
@@ -111,6 +115,8 @@ impl RuntimeBuiltinId {
         Self::ObFlush,
         Self::ObEndClean,
         Self::ObEndFlush,
+        Self::DateDefaultTimezoneGet,
+        Self::DateDefaultTimezoneSet,
     ];
 
     /// Returns the canonical shared-contract identity implemented by this ABI ID.
@@ -137,6 +143,8 @@ impl RuntimeBuiltinId {
             Self::ObFlush => "ob_flush",
             Self::ObEndClean => "ob_end_clean",
             Self::ObEndFlush => "ob_end_flush",
+            Self::DateDefaultTimezoneGet => "date_default_timezone_get",
+            Self::DateDefaultTimezoneSet => "date_default_timezone_set",
         };
         BuiltinId::from_canonical_name(name)
     }
@@ -170,6 +178,8 @@ impl RuntimeBuiltinId {
             19 => Some(Self::ObFlush),
             20 => Some(Self::ObEndClean),
             21 => Some(Self::ObEndFlush),
+            22 => Some(Self::DateDefaultTimezoneGet),
+            23 => Some(Self::DateDefaultTimezoneSet),
             _ => None,
         }
     }
@@ -186,7 +196,8 @@ impl RuntimeBuiltinId {
             | Self::Ceil
             | Self::Floor
             | Self::Sqrt
-            | Self::Strrev => arg_count == 1,
+            | Self::Strrev
+            | Self::DateDefaultTimezoneSet => arg_count == 1,
             Self::Fdiv | Self::Fmod | Self::Pow | Self::ArrayKeyExists => arg_count == 2,
             Self::Round => arg_count == 1 || arg_count == 2,
             Self::ObGetLevel
@@ -194,7 +205,8 @@ impl RuntimeBuiltinId {
             | Self::ObClean
             | Self::ObFlush
             | Self::ObEndClean
-            | Self::ObEndFlush => arg_count == 0,
+            | Self::ObEndFlush
+            | Self::DateDefaultTimezoneGet => arg_count == 0,
         }
     }
 }
@@ -213,7 +225,7 @@ mod tests {
     /// Verifies every published runtime ID round-trips through its raw ABI value.
     #[test]
     fn runtime_builtin_ids_round_trip() {
-        for raw in 1..=21 {
+        for raw in 1..=23 {
             let id = RuntimeBuiltinId::from_u32(raw).expect("published runtime ID must decode");
             assert_eq!(id.as_u32(), raw);
             assert!(id.supports_arity(match id {
@@ -226,12 +238,13 @@ mod tests {
                 | RuntimeBuiltinId::ObClean
                 | RuntimeBuiltinId::ObFlush
                 | RuntimeBuiltinId::ObEndClean
-                | RuntimeBuiltinId::ObEndFlush => 0,
+                | RuntimeBuiltinId::ObEndFlush
+                | RuntimeBuiltinId::DateDefaultTimezoneGet => 0,
                 _ => 1,
             }));
         }
         assert_eq!(RuntimeBuiltinId::from_u32(0), None);
-        assert_eq!(RuntimeBuiltinId::from_u32(22), None);
+        assert_eq!(RuntimeBuiltinId::from_u32(24), None);
         assert_eq!(
             RuntimeBuiltinStatus::from_i32(0),
             Some(RuntimeBuiltinStatus::Success)

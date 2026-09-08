@@ -182,7 +182,10 @@ pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
     if let Some(runtime_builtin) = runtime_builtin_id(contract.id) {
         return Some(if matches!(
             runtime_builtin,
-            RuntimeBuiltinId::Intval | RuntimeBuiltinId::Round
+            RuntimeBuiltinId::Intval
+                | RuntimeBuiltinId::Round
+                | RuntimeBuiltinId::DateDefaultTimezoneGet
+                | RuntimeBuiltinId::DateDefaultTimezoneSet
         ) {
             EvalExecution::Adapter {
                 runtime_builtin: Some(runtime_builtin),
@@ -325,10 +328,14 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "decbin",
     "dechex",
     "decoct",
+    "gc_collect_cycles",
+    "gc_enable",
+    "getrandmax",
     "hexdec",
     "join",
     "octdec",
     "serialize",
+    "sizeof",
     "strncasecmp",
     "strncmp",
     "substr_count",
@@ -382,18 +389,18 @@ mod tests {
         // The thirty-four prelude-provided `curl_*` contracts are published only
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(eval_registry, 519 + curl_surface);
-        // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
+        assert_eq!(eval_registry, 522 + curl_surface);
+        // 88 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
-        assert_eq!(eval_internal, 99);
-        // 31 registry builtins awaiting eval homes, plus the 326 PHP-visible prelude-provided
+        assert_eq!(eval_internal, 105);
+        // 35 registry builtins awaiting eval homes, plus the 326 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 357);
+        assert_eq!(eval_pending, 361);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts, thirty-five PCNTL contracts, and forty-three
         // internal `__elephc_curl_*` entry points.
-        assert_eq!(aot_registry, 619);
+        assert_eq!(aot_registry, 632);
         // Ten constructs/dedicated-syntax/hash surfaces, the 343 prelude-provided and
         // name-resolver-rewritten contracts, and the curl prelude when published.
         assert_eq!(aot_external, 353 + curl_surface);
@@ -443,9 +450,10 @@ mod tests {
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
-        assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 498 + curl_surface);
-        assert_eq!(unsupported, 456);
+        // intval, round, and the two timezone-context adapters retain eval-specific work.
+        assert_eq!(hybrid_adapter, 4);
+        assert_eq!(interpreter_adapter, 499 + curl_surface);
+        assert_eq!(unsupported, 466);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

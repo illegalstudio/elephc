@@ -142,6 +142,89 @@ fn run_binary(bin: &Path) -> (String, String) {
     )
 }
 
+/// Verifies CLI `--ini error_reporting=<PHP expression>` initializes the runtime
+/// mask before user code executes, including named E_* constants and bitwise operators.
+#[test]
+fn cli_error_reporting_expression_initializes_runtime_mask() {
+    let dir = make_test_dir("error_reporting_ini");
+    let (bin, compile_stderr) = compile_with_ini(
+        &dir,
+        "<?php echo error_reporting();",
+        "mask",
+        &[("error_reporting", "E_ALL&~E_DEPRECATED")],
+    );
+    assert!(
+        compile_stderr.is_empty(),
+        "unexpected compile diagnostic: {compile_stderr}"
+    );
+    let (stdout, stderr) = run_binary(&bin);
+    assert_eq!(stdout, "22527");
+    assert_eq!(stderr, "");
+}
+
+/// Verifies CLI `--ini date.timezone` applies before user code and invalid values reproduce
+/// PHP's startup warning while falling back to UTC.
+#[test]
+fn cli_date_timezone_initializes_runtime_and_warns_on_invalid_value() {
+    let dir = make_test_dir("date_timezone_ini");
+    let (valid_bin, valid_compile_stderr) = compile_with_ini(
+        &dir,
+        "<?php echo date_default_timezone_get();",
+        "valid_tz",
+        &[("date.timezone", "Europe/Paris")],
+    );
+    assert!(valid_compile_stderr.is_empty());
+    let (valid_stdout, valid_stderr) = run_binary(&valid_bin);
+    assert_eq!(valid_stdout, "Europe/Paris");
+    assert_eq!(valid_stderr, "");
+
+    let (invalid_bin, invalid_compile_stderr) = compile_with_ini(
+        &dir,
+        "<?php echo date_default_timezone_get();",
+        "invalid_tz",
+        &[("date.timezone", " Incorrect/Zone")],
+    );
+    assert!(invalid_compile_stderr.is_empty());
+    let (invalid_stdout, invalid_stderr) = run_binary(&invalid_bin);
+    assert_eq!(invalid_stdout, "UTC");
+    assert_eq!(
+        invalid_stderr,
+        "\nWarning: PHP Startup: Invalid date.timezone value ' Incorrect/Zone', using 'UTC' instead in Unknown on line 0\n"
+    );
+}
+
+/// `date.timezone` is the mutable Core/date directive that shares the CLI `ini_get`/`ini_set`
+/// surface with the compile-time OPcache directives. Valid updates return the previous identifier;
+/// invalid updates warn at the real call site, return `false`, preserve the previous value, and
+/// remain suppressible with `@`.
+#[test]
+fn date_timezone_round_trip_and_invalid_warning_match_php_src() {
+    let dir = make_test_dir("opcache_ini_date_timezone");
+    let src = r#"<?php
+echo ini_get("date.timezone"), "\n";
+echo ini_set("date.timezone", "Europe/London"), "\n";
+echo ini_get("date.timezone"), "\n";
+var_dump(ini_set("date.timezone", "Mars/Valles_Marineris"));
+@ini_set("date.timezone", "Incorrect/Zone");
+echo ini_get("date.timezone"), "\n";
+"#;
+    let bin = compile(&dir, src, "app");
+    let source = fs::canonicalize(dir.join("app.php")).unwrap();
+    let (out, err) = run_binary(&bin);
+    assert_eq!(
+        out, "UTC\nUTC\nEurope/London\nbool(false)\nEurope/London\n",
+        "date.timezone must expose php-src's mutable INI state and return values"
+    );
+    assert_eq!(
+        err,
+        format!(
+            "\nWarning: ini_set(): Invalid date.timezone value 'Mars/Valles_Marineris', using 'Europe/London' instead in {} on line 5\n",
+            source.display()
+        ),
+        "the invalid update must emit one suppression-aware warning at the source call site"
+    );
+}
+
 /// REGRESSION ANCHOR for the `ini_get_all(null, false)` SIGSEGV.
 ///
 /// `$details === false` must yield a FLAT map of raw INI strings (`'opcache.enable' => '1'`),

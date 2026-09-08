@@ -945,6 +945,17 @@ RUNTIME_HELPER_OVERRIDES: Dict[str, List[str]] = {
 }
 
 
+# Per-builtin implementation notes for generated internals pages. These document
+# exceptional typed lowering paths that generic registry metadata cannot infer.
+LOWERING_NOTES_OVERRIDES: Dict[str, List[str]] = {
+    "get_extension_funcs": [
+        "Uses `lower_get_extension_funcs_args` and the direct-Rust-AST helper in `src/get_extension_funcs_prelude.rs` for PHP-compatible string binding.",
+        "Weak calls coerce scalar values and deprecate null; strict calls reject every non-string, while arrays, resources, and non-Stringable objects throw catchable TypeError values.",
+        "The production helper never embeds PHP source or routes binding through the PHP parser.",
+    ],
+}
+
+
 # Hand-curated one-line descriptions for the user-facing pages. When a
 # builtin has no override here, the renderer falls back to the first line of
 # the lowering function's `///` doc comment, if available.

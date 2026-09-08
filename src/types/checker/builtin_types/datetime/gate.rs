@@ -17,7 +17,7 @@ use crate::parser::ast::Stmt;
 /// WHY THIS GATE EXISTS, measured rather than assumed. The `_class_*` metadata tables are dense
 /// arrays `max_class_id + 1` entries wide, and a class the checker registers but codegen never
 /// emits still claims its slot — 184 bytes across 22 id-indexed tables, counted from the
-/// emitted assembly. For `<?php echo 1;` 35 of 44 slots were sentinels, and this family held
+/// emitted assembly. For a trivial `echo 1;` program 35 of 44 slots were sentinels, and this family held
 /// the largest single share: gating it takes that program to 29 slots and its type-check phase
 /// from 13.75 ms to 3.30 ms. It is the same shape as the SPL and Reflection gates next door, and
 /// the same argument applies to the checker work these classes cost: DateTime alone carries
@@ -68,6 +68,25 @@ pub(crate) fn program_may_reference_datetime(program: &[Stmt]) -> bool {
         })
 }
 
+/// Returns whether the program can specifically reach `DatePeriod` and its Iterator contract.
+///
+/// The broader DateTime family gate must not register DatePeriod for a source that only names
+/// `DateTime`: doing so also registers Iterator, whose `next`/`rewind` method contracts can retain
+/// unrelated iterator implementations during declaration reachability. Serialized payloads and
+/// dynamic introspection remain conservative because they can name DatePeriod outside source AST.
+pub(crate) fn program_may_reference_date_period(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    if usage.introspects
+        || DATETIME_PRODUCING_BUILTINS
+            .iter()
+            .any(|name| usage.references(name))
+    {
+        return true;
+    }
+    let key = php_symbol_key("DatePeriod");
+    usage.classes.contains(&key) || usage.literals.contains(&key)
+}
+
 /// Builtins that reach a date/time class without the program naming one.
 ///
 /// `unserialize` builds an object from a class name held in its DATA, where no static walk can
@@ -99,6 +118,20 @@ mod tests {
         assert!(!program_may_reference_datetime(&parse("<?php echo 1;")));
         assert!(!program_may_reference_datetime(&parse(
             "<?php function f(int $x): string { return (string) $x; } echo f(2);"
+        )));
+    }
+
+    /// DatePeriod and its Iterator contract stay gated independently from plain DateTime use.
+    #[test]
+    fn date_period_registration_is_independent() {
+        assert!(!program_may_reference_date_period(&parse(
+            "<?php $date = new DateTime('now');"
+        )));
+        assert!(program_may_reference_date_period(&parse(
+            "<?php $period = new DatePeriod('R1/2024-01-01/P1D');"
+        )));
+        assert!(program_may_reference_date_period(&parse(
+            "<?php unserialize($wire);"
         )));
     }
 

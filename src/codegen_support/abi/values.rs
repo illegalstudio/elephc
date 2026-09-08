@@ -200,9 +200,10 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbnz {}, 1f", int_result_reg(emitter))); // skip the long branch when the coerced truthiness result is nonzero
+            let skip = emitter.unique_local_label("branch_if_zero_skip");
+            emitter.instruction(&format!("cbnz {}, {}", int_result_reg(emitter), skip)); // skip the long branch when the coerced truthiness result is nonzero
             emitter.instruction(&format!("b {}", label));                       // branch with the wider unconditional range when the result is zero
-            emitter.label("1");
+            emitter.label(&skip);                                              // resume after the local inverse branch veneer
         }
         crate::codegen_support::platform::Arch::X86_64 => {
             emitter.instruction(&format!(
@@ -224,9 +225,10 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
 pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbz {}, 1f", int_result_reg(emitter))); // skip the long branch when the coerced truthiness result is zero
+            let skip = emitter.unique_local_label("branch_if_nonzero_skip");
+            emitter.instruction(&format!("cbz {}, {}", int_result_reg(emitter), skip)); // skip the long branch when the coerced truthiness result is zero
             emitter.instruction(&format!("b {}", label));                       // branch with the wider unconditional range when the result is nonzero
-            emitter.label("1");
+            emitter.label(&skip);                                              // resume after the local inverse branch veneer
         }
         crate::codegen_support::platform::Arch::X86_64 => {
             emitter.instruction(&format!(

@@ -804,6 +804,24 @@
       },
       "extension": false,
       "internal": false,
+      "kind": "class",
+      "module": "core",
+      "name": "CompileError",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "kind": "interface",
       "module": "core",
       "name": "Countable",
@@ -2157,6 +2175,24 @@
       "kind": "class",
       "module": "spl",
       "name": "ParentIterator",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "core",
+      "name": "ParseError",
       "php_manual": null,
       "since": null
     },
@@ -16343,6 +16379,258 @@
       },
       "extension": false,
       "internal": false,
+      "module": "date",
+      "name": "DATE_ATOM",
+      "route": "predefined",
+      "since": null,
+      "value": "Y-m-d\\TH:i:sP"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_COOKIE",
+      "route": "predefined",
+      "since": null,
+      "value": "l, d-M-Y H:i:s T"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_ISO8601",
+      "route": "predefined",
+      "since": null,
+      "value": "Y-m-d\\TH:i:sO"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_ISO8601_EXPANDED",
+      "route": "predefined",
+      "since": "8.2",
+      "value": "X-m-d\\TH:i:sP"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC1036",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M y H:i:s O"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC1123",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M Y H:i:s O"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC2822",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M Y H:i:s O"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC3339",
+      "route": "predefined",
+      "since": null,
+      "value": "Y-m-d\\TH:i:sP"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC3339_EXTENDED",
+      "route": "predefined",
+      "since": null,
+      "value": "Y-m-d\\TH:i:s.vP"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC7231",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M Y H:i:s \\G\\M\\T"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC822",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M y H:i:s O"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC850",
+      "route": "predefined",
+      "since": null,
+      "value": "l, d-M-y H:i:s T"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RSS",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M Y H:i:s O"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_W3C",
+      "route": "predefined",
+      "since": null,
+      "value": "Y-m-d\\TH:i:sP"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "standard",
       "name": "DIRECTORY_SEPARATOR",
       "route": "predefined",
@@ -16547,7 +16835,9 @@
       "name": "E_ALL",
       "route": "predefined",
       "since": null,
-      "value": 32767
+      "value": {
+        "target_dependent": "int"
+      }
     },
     {
       "aot": {
@@ -19276,6 +19566,146 @@
       "route": "predefined",
       "since": null,
       "value": 256
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_ALL",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_COLLATE",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_CTYPE",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_MESSAGES",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_MONETARY",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_NUMERIC",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_TIME",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
     },
     {
       "aot": {

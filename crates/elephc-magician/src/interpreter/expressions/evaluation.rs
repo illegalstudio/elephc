@@ -343,13 +343,34 @@ pub(super) fn eval_closure_expr(
     for capture in captures {
         bindings.push(eval_closure_capture(capture, context, scope, values)?);
     }
-    let closure = EvalClosure::new(function.clone(), bindings, is_static);
+    let closure = EvalClosure::new(
+        function
+            .clone()
+            .with_strict_types(context.strict_types())
+            .with_display_name(eval_closure_display_name(function, context)),
+        bindings,
+        is_static,
+    );
     let name = context.define_closure(closure);
     eval_closure_object_expr(EvalClosureObjectTarget::Named(name), context, values)
 }
 
+/// Builds the PHP-visible source identity retained by one eval closure literal.
+fn eval_closure_display_name(function: &EvalFunction, context: &ElephcEvalContext) -> String {
+    let (file, _, call_line, _) = context.call_site();
+    let line = function
+        .source_location()
+        .map_or(call_line, |location| location.start_line());
+    let lexical_owner = match context.current_function() {
+        Some(parent) if parent.starts_with("{closure:") => parent.to_string(),
+        Some(parent) => format!("{}()", parent.trim_start_matches('\\')),
+        None => file.to_string(),
+    };
+    format!("{{closure:{lexical_owner}:{line}}}")
+}
+
 /// Materializes one PHP-visible `Closure` object for an eval callable target.
-pub(super) fn eval_closure_object_expr(
+pub(in crate::interpreter) fn eval_closure_object_expr(
     target: EvalClosureObjectTarget,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

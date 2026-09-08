@@ -352,6 +352,15 @@ fn discover_stmt(
             discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(property, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         StmtKind::Return(None)
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::FunctionVariantGroup { .. }

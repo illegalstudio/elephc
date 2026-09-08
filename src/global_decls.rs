@@ -177,6 +177,7 @@ fn collect_in_stmt(stmt: &Stmt, names: &mut HashSet<String>) {
         | StmtKind::ArrayAssign { .. }
         | StmtKind::NestedArrayAssign { .. }
         | StmtKind::PropertyAssign { .. }
+        | StmtKind::DynamicPropertyArrayPush { .. }
         | StmtKind::PropertyArrayPush { .. }
         | StmtKind::PropertyArrayAssign { .. }
         | StmtKind::Return(_)

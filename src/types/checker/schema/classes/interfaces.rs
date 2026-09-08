@@ -39,6 +39,14 @@ pub(super) fn collect_interfaces(
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
     for interface_name in class.implements.iter().rev() {
+        if interface_is_datetime_contract(interface_name)
+            && !class_can_implement_datetime_contract(class, class_map, checker)
+        {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                "DateTimeInterface can't be implemented by user classes",
+            ));
+        }
         if interface_is_throwable_contract(checker, interface_name)
             && !class_can_implement_throwable_contract(state, class)
         {
@@ -71,6 +79,14 @@ pub(super) fn collect_interfaces(
         if !seen_interfaces.insert(interface_name.clone()) {
             continue;
         }
+        if interface_is_datetime_contract(&interface_name)
+            && !class_can_implement_datetime_contract(class, class_map, checker)
+        {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                "DateTimeInterface can't be implemented by user classes",
+            ));
+        }
         let interface_info = checker.interfaces.get(&interface_name).ok_or_else(|| {
             CompileError::new(
                 crate::span::Span::dummy(),
@@ -89,6 +105,46 @@ pub(super) fn collect_interfaces(
 fn interface_is_throwable_contract(checker: &Checker, interface_name: &str) -> bool {
     php_symbol_key(interface_name) == php_symbol_key("Throwable")
         || checker.interface_extends_interface(interface_name, "Throwable")
+}
+
+/// Returns whether one interface name is php-src's sealed DateTime contract.
+fn interface_is_datetime_contract(interface_name: &str) -> bool {
+    php_symbol_key(interface_name) == php_symbol_key("DateTimeInterface")
+}
+
+/// Returns whether `class` is one of php-src's DateTime implementations or a descendant.
+///
+/// The class currently being checked is not registered yet, so this follows its
+/// flattened parent chain first and then already-built parent metadata.
+fn class_can_implement_datetime_contract(
+    class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+) -> bool {
+    let mut current = Some(class.name.clone());
+    let mut first = true;
+    let mut seen = HashSet::new();
+    while let Some(name) = current {
+        let key = php_symbol_key(name.trim_start_matches('\\'));
+        if matches!(key.as_str(), "datetime" | "datetimeimmutable") {
+            return true;
+        }
+        if !seen.insert(key) {
+            return false;
+        }
+        current = if first {
+            first = false;
+            class.extends.clone()
+        } else if let Some(parent) = class_map.get(&name) {
+            parent.extends.clone()
+        } else {
+            checker
+                .classes
+                .get(&name)
+                .and_then(|parent| parent.parent.clone())
+        };
+    }
+    false
 }
 
 /// Returns `true` if `class` is allowed to implement `Throwable` (must be `Error`, `Exception`,

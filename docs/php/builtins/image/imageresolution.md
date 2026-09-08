@@ -2,7 +2,7 @@
 title: "imageresolution()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 523
+  order: 524
 ---
 
 ## imageresolution()

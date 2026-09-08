@@ -2,7 +2,7 @@
 title: "mysqli_free_result()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 127
+  order: 128
 ---
 
 ## mysqli_free_result()

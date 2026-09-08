@@ -37,6 +37,7 @@ elephc-crypto = { path = "../elephc-crypto" }
 elephc-iconv = { path = "../elephc-iconv" }
 elephc-phar = { path = "../elephc-phar" }
 elephc-pcntl = { path = "../elephc-pcntl" }
+elephc-tz = { path = "../elephc-tz" }
 flate2 = "1"
 inventory = "0.3"
 libc = "0.2"

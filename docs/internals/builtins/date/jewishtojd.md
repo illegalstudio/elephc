@@ -2,7 +2,7 @@
 title: "jewishtojd() — internals"
 description: "Compiler internals for jewishtojd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 234
+  order: 235
 ---
 
 ## `jewishtojd()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:686](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L686) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:891](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L891) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

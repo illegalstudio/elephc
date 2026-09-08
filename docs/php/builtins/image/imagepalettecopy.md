@@ -2,7 +2,7 @@
 title: "imagepalettecopy()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 518
+  order: 519
 ---
 
 ## imagepalettecopy()

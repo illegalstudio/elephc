@@ -37,13 +37,26 @@ pub(super) fn check_array_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = env
-        .get(array)
-        .cloned()
-        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
+    let Some(arr_ty) = env.get(array).cloned() else {
+        let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
+        let initial_ty = if matches!(normalized_idx_ty, PhpType::Str)
+            || static_array_key_forces_hash_storage(index)
+        {
+            PhpType::AssocArray {
+                key: Box::new(normalized_idx_ty),
+                value: Box::new(val_ty),
+            }
+        } else if matches!(idx_ty, PhpType::Mixed) {
+            PhpType::Array(Box::new(PhpType::Mixed))
+        } else {
+            PhpType::Array(Box::new(val_ty))
+        };
+        env.insert(array.to_string(), initial_ty);
+        return Ok(());
+    };
     if arr_ty == PhpType::Str {
         return Err(CompileError::new(
             span,
@@ -228,12 +241,12 @@ pub(super) fn check_array_push(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = env
-        .get(array)
-        .cloned()
-        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
+    let Some(arr_ty) = env.get(array).cloned() else {
+        env.insert(array.to_string(), PhpType::Array(Box::new(val_ty)));
+        return Ok(());
+    };
     if let PhpType::Array(elem_ty) = &arr_ty {
         if **elem_ty != val_ty {
             let merged_ty = checker

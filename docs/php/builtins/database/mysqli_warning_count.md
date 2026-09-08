@@ -2,7 +2,7 @@
 title: "mysqli_warning_count()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 181
+  order: 182
 ---
 
 ## mysqli_warning_count()

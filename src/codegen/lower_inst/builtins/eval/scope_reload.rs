@@ -68,8 +68,10 @@ pub(super) fn store_mixed_scope_cell_to_global(
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
     match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
-            emit_retain_scope_cell_if_owned(ctx);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
+            // This global takes its own reference regardless of whether the
+            // scope owns or borrows the cell; retain before releasing a possible alias.
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, true);
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");

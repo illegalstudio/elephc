@@ -75,6 +75,7 @@ sidebar:
 | [`reset()`](./array/reset.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`rsort()`](./array/rsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`shuffle()`](./array/shuffle.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
+| [`sizeof()`](./array/sizeof.md) | `(mixed $value, int $mode = 0): int` | `int` | ✓ | — |
 | [`sort()`](./array/sort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`uasort()`](./array/uasort.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
 | [`uksort()`](./array/uksort.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |

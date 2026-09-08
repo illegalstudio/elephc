@@ -2,7 +2,7 @@
 title: "opcache_is_script_cached_in_file_cache()"
 description: "Implemented by the compiler-injected OPcache prelude."
 sidebar:
-  order: 617
+  order: 623
 ---
 
 ## opcache_is_script_cached_in_file_cache()

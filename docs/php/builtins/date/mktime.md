@@ -2,26 +2,26 @@
 title: "mktime()"
 description: "Returns the Unix timestamp for a date."
 sidebar:
-  order: 238
+  order: 239
 ---
 
 ## mktime()
 
 ```php
-function mktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int
+function mktime(int $hour, ?int $minute = null, ?int $second = null, ?int $month = null, ?int $day = null, ?int $year = null): mixed
 ```
 
 Returns the Unix timestamp for a date.
 
 **Parameters**:
 - `$hour` (`int`)
-- `$minute` (`int`)
-- `$second` (`int`)
-- `$month` (`int`)
-- `$day` (`int`)
-- `$year` (`int`)
+- `$minute` (`?int`), default `null`, optional
+- `$second` (`?int`), default `null`, optional
+- `$month` (`?int`), default `null`, optional
+- `$day` (`?int`), default `null`, optional
+- `$year` (`?int`), default `null`, optional
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 

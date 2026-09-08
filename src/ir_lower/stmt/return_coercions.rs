@@ -8,6 +8,7 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::ir::IrHeapKind;
 
 /// Coerces a value to the current function return storage type when needed.
 pub(super) fn coerce_to_return_type(
@@ -16,6 +17,12 @@ pub(super) fn coerce_to_return_type(
     span: Option<Span>,
 ) -> LoweredValue {
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
+        return value;
+    }
+    if let Some(value) = declared_object_return_boundary(ctx, value, span) {
+        return value;
+    }
+    if let Some(value) = declared_mixed_array_return_boundary(ctx, value, span) {
         return value;
     }
     if value.ir_type == ctx.return_type {
@@ -36,16 +43,120 @@ pub(super) fn coerce_to_return_type(
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
             ctx.box_value_as_mixed(value, ctx.return_php_type.clone(), span)
         }
-        IrType::Heap(_) => ctx.emit_value(
-            Op::RuntimeCall,
-            vec![value.value],
-            None,
-            ctx.return_php_type.clone(),
-            effects_lookup::runtime_effects(),
-            span,
-        ),
+        IrType::Heap(_) => {
+            let releases_replaced_mixed_owner = matches!(
+                ctx.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed
+            ) && matches!(
+                ctx.return_php_type.codegen_repr(),
+                PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+            );
+            let coerced = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                ctx.return_php_type.clone(),
+                effects_lookup::runtime_effects(),
+                span,
+            );
+            if releases_replaced_mixed_owner && ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+            }
+            coerced
+        }
         IrType::Void => value,
     }
+}
+
+/// Consumes a boxed dynamic value at a declared PHP `array` return boundary.
+///
+/// The generic conversion path releases an owning Mixed source after its runtime type check.
+/// That ordering leaks the cell when an invalid tag raises `TypeError`, so this typed boundary
+/// owns the source before the check and balances it on both success and failure paths. DateTime
+/// serializers retain their narrower EIR provenance marker while ordinary declared returns use
+/// the same consuming implementation.
+fn declared_mixed_array_return_boundary(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> Option<LoweredValue> {
+    if !ctx.return_type_is_declared
+        || !matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed)
+        || !matches!(
+            ctx.return_php_type.codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+        )
+    {
+        return None;
+    }
+    let source = if ctx.value_is_owning_temporary(value) {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, span)
+    };
+    let target = if is_date_serialize_return(ctx) {
+        crate::ir::RuntimeCallTarget::DateSerializeMixedToArrayReturn
+    } else {
+        crate::ir::RuntimeCallTarget::MixedToArrayReturn
+    };
+    Some(ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value],
+        Some(Immediate::RuntimeCall(target)),
+        ctx.return_php_type.clone(),
+        effects_lookup::runtime_effects(),
+        span,
+    ))
+}
+
+/// Verifies a dynamically-typed value at a DECLARED class/interface return boundary.
+fn declared_object_return_boundary(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> Option<LoweredValue> {
+    let PhpType::Object(target_class) = &ctx.return_php_type else {
+        return None;
+    };
+    let target_class = target_class.trim_start_matches('\\').to_string();
+    let display_type = if target_class.is_empty() {
+        "object"
+    } else {
+        target_class.as_str()
+    };
+    if !ctx.return_type_is_declared {
+        return None;
+    }
+    let source_type = ctx.builder.value_php_type(value.value).codegen_repr();
+    if source_type == ctx.return_php_type.codegen_repr()
+        || (target_class.is_empty() && matches!(source_type, PhpType::Object(_)))
+    {
+        return None;
+    }
+    let consumed = if value.ir_type == IrType::Heap(IrHeapKind::Mixed) {
+        if ctx.value_is_owning_temporary(value) {
+            value
+        } else {
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, span)
+        }
+    } else {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, span)
+    };
+    let prefix = format!(
+        "{}(): Return value must be of type {}, ",
+        ctx.owner_name(),
+        display_type
+    );
+    let spec = format!("{}\0{}", target_class, prefix);
+    let data = ctx.intern_string(&spec);
+    Some(ctx.emit_value(
+        Op::ReturnBoundaryMixedToObject,
+        vec![consumed.value],
+        Some(Immediate::Data(data)),
+        ctx.return_php_type.clone(),
+        Op::ReturnBoundaryMixedToObject.default_effects(),
+        span,
+    ))
 }
 
 /// Verifies a dynamically-typed value against a DECLARED `int` return boundary.
@@ -167,6 +278,21 @@ pub(super) fn coerce_container_to_return_type(
         {
             Op::ArrayToHash
         }
+        (
+            PhpType::AssocArray {
+                value: _,
+                ..
+            },
+            PhpType::Array(return_value),
+        ) if return_value.codegen_repr() == PhpType::Mixed
+        =>
+        {
+            if is_date_serialize_return(ctx) {
+                Op::DateSerializeHashReturn
+            } else {
+                Op::HashToArrayReturn
+            }
+        }
         _ => return None,
     };
     Some(ctx.emit_value(
@@ -177,6 +303,39 @@ pub(super) fn coerce_container_to_return_type(
         op.default_effects(),
         span,
     ))
+}
+
+/// Returns whether this DateTime-family serializer may preserve its returned hash pointer.
+///
+/// PHP declares this method family as returning generic `array`, while an individual return
+/// expression can still be a string-keyed hash. A user override needs the same owner transfer for
+/// that concrete hash case; indexed returns retain their normal `Array` representation. The EIR
+/// function flag and validator independently enforce this lowering provenance.
+fn is_date_serialize_return(ctx: &LoweringContext<'_, '_>) -> bool {
+    if ctx.by_ref_return {
+        return false;
+    }
+    let Some((class_name, method_name)) = ctx.owner_name().rsplit_once("::") else {
+        return false;
+    };
+    if php_symbol_key(method_name) != "__serialize" {
+        return false;
+    }
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(candidate) = current {
+        if matches!(
+            candidate,
+            "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+        ) {
+            return true;
+        }
+        current = ctx
+            .classes
+            .get(candidate)
+            .and_then(|class_info| class_info.parent.as_deref())
+            .map(|parent| parent.trim_start_matches('\\'));
+    }
+    false
 }
 
 /// Coerces a value to integer storage.
@@ -283,4 +442,3 @@ pub(super) fn coerce_to_string(
         ),
     }
 }
-

@@ -175,6 +175,9 @@ pub(super) fn parse_sprintf_spec_cats(format: &[u8]) -> Vec<SprintfSpecCat> {
                 index += 1;
             }
         }
+        if index < format.len() && format[index] == b'l' {
+            index += 1;
+        }
         if index >= format.len() {
             break;
         }

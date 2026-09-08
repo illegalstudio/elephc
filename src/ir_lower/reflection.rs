@@ -150,6 +150,13 @@ fn referenced_builtin_reflection_classes(module: &Module) -> BTreeSet<String> {
                         insert_builtin_reflection_class(module, class_name, &mut classes);
                     }
                 }
+                Op::MethodCallExact => {
+                    if let Some((class_name, _)) =
+                        string_data_name(module, inst).and_then(|name| name.rsplit_once("::"))
+                    {
+                        insert_builtin_reflection_class(module, class_name, &mut classes);
+                    }
+                }
                 Op::MethodCall | Op::NullsafeMethodCall => {
                     collect_dynamic_reflection_method_candidates(
                         module,

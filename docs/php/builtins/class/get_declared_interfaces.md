@@ -2,7 +2,7 @@
 title: "get_declared_interfaces()"
 description: "Returns an array of all declared interfaces."
 sidebar:
-  order: 88
+  order: 89
 ---
 
 ## get_declared_interfaces()

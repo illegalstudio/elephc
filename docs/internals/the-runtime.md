@@ -459,7 +459,7 @@ path for from a leaf helper.
 
 ## System routines
 
-**Source:** `src/codegen_support/runtime/system/` (43 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, `json_encode_str/`, and `unserialize/` subdirectories; 81 files recursively)
+**Source:** `src/codegen_support/runtime/system/` (43 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, `json_encode_str/`, and `unserialize/` subdirectories; 71 files recursively)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -536,15 +536,19 @@ The runtime also resets the concat-buffer cursor before the final `longjmp`, so 
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_date` / `__rt_gmdate` | Format a Unix timestamp using PHP date format characters (Y, m, d, H, i, s, l, F, T, e, O, P, …). `__rt_date` decomposes with libc `localtime()`, `__rt_gmdate` with `gmtime()` (UTC); both share the formatter and the static `_day_names`/`_month_names` tables. The `T` token reports `"GMT"` on the gmdate path | `x1`/`x2` = format string, `x0` = timestamp | `x1`/`x2` = formatted string |
+| `__rt_date` / `__rt_gmdate` | Format a Unix timestamp through the bundled php-src timelib bridge, including PHP format characters (Y, m, d, H, i, s, l, F, T, e, O, P, …), historical timezone transitions, negative timestamps, and expanded years. `__rt_date` supplies the active PHP timezone; `__rt_gmdate` selects UTC. An omitted timestamp is obtained from libc `time()` before calling the bridge. | format pointer/length, timestamp, presence flag | formatted string pointer/length |
 | `__rt_mktime` / `__rt_gmmktime` | Create a Unix timestamp from date components (hour, minute, second, month, day, year). Populates a `tm` struct and calls libc `mktime()` (local) or `timegm()` (UTC) | `x0`-`x5` = h, m, s, mon, day, year | `x0` = Unix timestamp |
-| `__rt_strtotime` | Parse trimmed date/time strings through strategy emitters: ISO dates/datetimes (`iso_date`), `M/D/Y` slash dates (`slash_date`), textual dates like `15 January 2020` (`textual_date`), `@<timestamp>` epoch forms (`epoch`), `first`/`last day of …` and `first`/`last <weekday> of …` phrases (`first_last_day`), time-only forms, bare keywords (`now`, `today`, `tomorrow`, `yesterday`, `midnight`, `noon`), relative offsets (`+1 day`, `3 months ago`, `a/an <unit>` article forms), and named weekdays with `next` / `last` / `this`. Successful paths populate a `tm` struct and call libc `mktime()`; malformed input returns the `i64::MIN` failure sentinel | `x1`/`x2` = date string | `x0` = Unix timestamp or sentinel |
+| `__rt_strtotime` | Pass the source byte span, optional base timestamp, and active PHP timezone to the bundled php-src timelib parser. The bridge returns a timestamp plus a distinct success flag, so a valid `i64::MIN` timestamp cannot be confused with parse failure. Runtime-cache variants without a date reference provide a deterministic failure stub instead of linking the optional bridge. | date-string pointer/length, base timestamp/presence | timestamp plus success flag |
 | `__rt_getdate` / `__rt_localtime` | Decompose a timestamp into PHP's `getdate()` / `localtime()` associative array via libc `localtime()`, defaulting the timezone to UTC through `__rt_tz_init_utc` on first use | `x0` = timestamp | `x0` = assoc array pointer |
 | `__rt_checkdate` | Validate a Gregorian month/day/year, leap-year aware | `x0`-`x2` = month, day, year | `x0` = 0/1 |
 | `__rt_microtime` / `__rt_hrtime` | Current wall-clock (`gettimeofday`) / monotonic (`clock_gettime`) time, as a float/string or `[sec, nsec]` array | flag | result |
 | `__rt_date_default_timezone_get` / `__rt_date_default_timezone_set` / `__rt_tz_init_utc` | Read / set the process default timezone (`putenv("TZ=…")` + `tzset`); `__rt_tz_init_utc` lazily defaults it to UTC like PHP | — / `x1`/`x2` = id | — |
 
-`DateTimeZone` introspection (`getLocation()`, `getTransitions()`, `listAbbreviations()`) is backed by the bundled **`elephc-tz`** workspace crate, which bakes PHP timelib's IANA timezone tables into committed data files and exposes them through the `elephc_tz_location` / `elephc_tz_transitions` / `elephc_tz_abbreviations` ABI symbols. Like the `elephc-tls` and `elephc-phar` bridges it is linked only into programs that use it. The offset/DST resolution used by `date()`/`gmdate()` themselves is delegated to libc (`localtime`/`gmtime`/`tzset`).
+`DateTimeZone` introspection (`getLocation()`, `getTransitions()`, `listAbbreviations()`), procedural date formatting, and free-form parsing are backed by the bundled **`elephc-tz`** workspace crate. It vendors php-src timelib and IANA timezone data, exposes the bridge symbols `elephc_tz_format`, `elephc_tz_strtotime`, `elephc_tz_location`, `elephc_tz_transitions`, and `elephc_tz_abbreviations`, and is linked only when a program reaches this surface. This avoids platform-libc divergence for historical offsets, negative timestamps, and expanded years.
+
+The formatter consumes the PHP format as a pointer-and-length byte span and returns the result with
+an explicit byte length. Runtime wrappers never scan it with `strlen()`, so embedded NUL and
+non-UTF-8 literal bytes survive intact.
 
 ### JSON routines
 
@@ -1117,7 +1121,6 @@ Additionally, the runtime emits static data tables:
 - `_json_err_msg_0` ... `_json_err_msg_10`, `_json_err_msg_table`, `_json_err_msg_count`, `_json_err_loc_prefix`, `_json_err_loc_colon` — `json_last_error_msg()` lookup data and location-suffix fragments for the supported `JSON_ERROR_*` code range
 - `_day_names` — 7 entries (84 bytes), each 12 bytes: day name padded to 10 chars + 1 length byte + 1 padding byte. Used by `__rt_date` for `l` (full name) and `D` (abbreviated) format characters
 - `_month_names` — 12 entries (144 bytes), same layout as day names. Used by `__rt_date` for `F` (full name) and `M` (abbreviated) format characters
-- `_strtotime_keyword_tab`, `_strtotime_unit_tab` — keyword, weekday, modifier, and unit lookup tables used by `__rt_strtotime`
 - `_instanceof_target_count`, `_instanceof_target_entries`, `_instanceof_name_*` — case-insensitive class/interface name metadata used by dynamic `instanceof` string targets, including leading-backslash aliases
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal metadata used by object deep-free and cycle collection
 - `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>`, `_json_exception_class_id`, `_stdclass_class_id` — JSON object encoding descriptors, JsonException construction metadata, and stdClass runtime class id

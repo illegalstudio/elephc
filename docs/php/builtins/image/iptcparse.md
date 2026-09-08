@@ -2,7 +2,7 @@
 title: "iptcparse()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 538
+  order: 539
 ---
 
 ## iptcparse()

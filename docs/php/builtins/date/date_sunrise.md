@@ -2,7 +2,7 @@
 title: "date_sunrise()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 209
+  order: 210
 ---
 
 ## date_sunrise()

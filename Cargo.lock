@@ -687,12 +687,14 @@ dependencies = [
  "indicatif",
  "inventory",
  "libc",
+ "proc-macro2",
  "rustls",
  "rustls-pemfile",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "stacker",
+ "syn 2.0.117",
  "tar",
  "toml",
  "toml_edit 0.25.12+spec-1.1.0",
@@ -774,6 +776,7 @@ dependencies = [
  "elephc-iconv",
  "elephc-pcntl",
  "elephc-phar",
+ "elephc-tz",
  "flate2",
  "inventory",
  "libc",
@@ -852,6 +855,9 @@ dependencies = [
 [[package]]
 name = "elephc-tz"
 version = "0.1.0"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "elephc-web"

@@ -22,7 +22,6 @@ mod static_closure;
 use super::super::Checker;
 use super::syntactic::null_coalesce_merge_type;
 use static_closure::body_must_not_use_this;
-pub(crate) use static_closure::closure_body_uses_this;
 impl Checker {
     /// Infers the PHP return type of `expr` in the given `env`.
     ///
@@ -528,13 +527,13 @@ impl Checker {
     /// Records that `name` is a `string` local used as a `++` / `--` target in the
     /// function-like scope currently being checked.
     ///
-    /// EIR lowering reads this contract (through `CheckResult::string_incdec_locals`) and
+    /// EIR lowering reads this contract (through `CheckResult::boxed_string_locals`) and
     /// gives the local boxed `Mixed` frame storage from its first store. Without it the
     /// slot only widens at the increment, and every earlier or later `string`-typed read
     /// of the same slot has to detach an owned copy out of the boxed cell — one leaked
     /// heap block per executed read, unbounded inside a loop.
     fn record_string_incdec_local(&mut self, name: &str) {
-        self.string_incdec_locals
+        self.boxed_string_locals
             .insert((self.current_loop_storage_scope.clone(), name.to_string()));
     }
 }

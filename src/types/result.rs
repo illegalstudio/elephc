@@ -87,9 +87,9 @@ pub struct CheckResult {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: LoopStorageTypes,
-    /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
-    /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
-    pub string_incdec_locals: HashSet<(String, String)>,
+    /// `(function-like scope, local name)` pairs for strings changed by increment/decrement
+    /// or null-storing unset, requiring boxed `Mixed` storage from their first store.
+    pub boxed_string_locals: HashSet<(String, String)>,
     /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed at that position, so EIR lowering abandons the old frame slot (after releasing
     /// its value) instead of null-storing into it.

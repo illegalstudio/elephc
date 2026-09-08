@@ -77,6 +77,24 @@ pub(super) fn lower_release_unless_aliases(
         return Ok(());
     }
 
+    if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Object(_))
+        && ctx.value_php_type(result)?.codegen_repr() == PhpType::Mixed
+    {
+        // A raw object and its box are not comparable pointers. Only release the
+        // caller's owner when every callee return proves an independent box owner.
+        if super::object_return_ownership::direct_mixed_return_owns_object_reference(ctx, value, result) {
+            let ty = ctx.load_value_to_result(value)?;
+            abi::emit_decref_if_refcounted(ctx.emitter, &ty);
+        }
+        return Ok(());
+    }
+
+    if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(ctx.value_php_type(result)?.codegen_repr(), PhpType::Object(_))
+    {
+        return release_mixed_argument_unless_object_payload_aliases(ctx, value, result);
+    }
+
     let skip_label = ctx.next_label("release_unless_aliases_skip");
     let value_reg = abi::int_result_reg(ctx.emitter);
     let result_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -108,6 +126,68 @@ pub(super) fn lower_release_unless_aliases(
         _ => {}
     }
     ctx.emitter.label(&skip_label);
+    Ok(())
+}
+
+/// Releases a boxed argument unless its object payload is the raw returned object.
+/// Non-object payloads cannot alias an object result; comparing box addresses
+/// instead of payloads would incorrectly release genuine object aliases.
+fn release_mixed_argument_unless_object_payload_aliases(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    result: ValueId,
+) -> Result<()> {
+    use super::object_return_ownership::{direct_object_return_ownership, ObjectReturnOwnership};
+    let return_ownership = direct_object_return_ownership(ctx, result);
+    if return_ownership == ObjectReturnOwnership::Owned {
+        ctx.load_value_to_result(value)?;
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        return Ok(());
+    }
+    let release = ctx.next_label("release_mixed_argument_independent");
+    let done = ctx.next_label("release_mixed_argument_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // only an object payload can alias a raw object return
+            ctx.emitter.instruction(&format!("b.ne {release}"));                // release scalar and container arguments independently
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // only an object payload can alias a raw object return
+            ctx.emitter.instruction(&format!("jne {release}"));                 // release scalar and container arguments independently
+        }
+    }
+    let returned = abi::symbol_scratch_reg(ctx.emitter);
+    let payload = super::mixed_unbox_low_payload_reg(ctx);
+    ctx.load_value_to_reg(result, returned)?;
+    let compare = format!("cmp {payload}, {returned}");
+    ctx.emitter.instruction(&compare);                                          // compare the actual object identities, not the Mixed box address
+    let alias = if return_ownership == ObjectReturnOwnership::Borrowed {
+        ctx.next_label("release_mixed_argument_transfer_object")
+    } else {
+        done.clone()
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b.eq {alias}"));                  // transfer a proven borrowed payload or preserve an unknown owner
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("je {alias}"));                    // transfer a proven borrowed payload or preserve an unknown owner
+        }
+    }
+    if return_ownership == ObjectReturnOwnership::Borrowed {
+        abi::emit_jump(ctx.emitter, &release);
+        ctx.emitter.label(&alias);
+        ctx.load_value_to_result(result)?;
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object(String::new()));
+    }
+    ctx.emitter.label(&release);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
 }
 
@@ -201,7 +281,6 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             | Op::FToStr
             | Op::BoolToStr
             | Op::ResourceToStr
-            | Op::MixedCastString
             | Op::StrConcat
             | Op::StrCharAt
             | Op::StrInterpolate
@@ -224,18 +303,15 @@ pub(super) fn lower_forward(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
     let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let move_pointer = format!("mov {}, {}", result_reg, ptr_reg);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(                                            // pass the loaded string pointer to validated heap release
-                &format!("mov {}, {}", result_reg, ptr_reg)
-            );
+            ctx.emitter.instruction(&move_pointer);                             // pass the loaded string pointer to the validating heap-free helper
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
         Arch::X86_64 => {
             if ptr_reg != result_reg {
-                ctx.emitter.instruction(                                        // pass the loaded string pointer to validated heap release
-                    &format!("mov {}, {}", result_reg, ptr_reg)
-                );
+                ctx.emitter.instruction(&move_pointer);                         // pass the loaded string pointer to the validating heap-free helper
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }

@@ -2,7 +2,7 @@
 title: "timezone_open() — internals"
 description: "Compiler internals for timezone_open(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 249
+  order: 250
 ---
 
 ## `timezone_open()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:797](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L797) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:1003](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L1003) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

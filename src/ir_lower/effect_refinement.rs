@@ -147,7 +147,7 @@ fn refined_instruction_effects(
 ) -> Effects {
     match instruction.op {
         Op::Call => direct_call_effects(instruction, context).unwrap_or(instruction.effects),
-        Op::MethodCall | Op::NullsafeMethodCall => {
+        Op::MethodCall | Op::MethodCallExact | Op::NullsafeMethodCall => {
             instance_call_effects(function, instruction, context).unwrap_or(instruction.effects)
         }
         Op::PropGet | Op::NullsafePropGet => {
@@ -304,7 +304,10 @@ fn fixed_object_class<'a>(
     if matches!(instruction.op, Op::Acquire | Op::Borrow | Op::Move) {
         return fixed_object_class(function, *instruction.operands.first()?, data);
     }
-    if instruction.op != Op::ObjectNew {
+    if !matches!(
+        instruction.op,
+        Op::ObjectNew | Op::ObjectNewWithoutConstructor
+    ) {
         return None;
     }
     let Immediate::Data(data_id) = instruction.immediate.as_ref()? else {

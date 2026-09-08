@@ -2,7 +2,7 @@
 title: "count_chars()"
 description: "Returns byte-frequency information about a string as a tally or a byte list."
 sidebar:
-  order: 760
+  order: 767
 ---
 
 ## count_chars()

@@ -748,6 +748,13 @@ impl Scanner<'_> {
                 self.receiver_class(receiver).into_iter().collect()
             }
             ExprKind::ObjectClassName { object } => self.expr_classes(object),
+            ExprKind::PropertyAccess { object, property }
+            | ExprKind::NullsafePropertyAccess { object, property } => {
+                let owners = self.expr_classes(object);
+                self.call_signatures
+                    .map(|signatures| signatures.property(&owners, property))
+                    .unwrap_or_default()
+            }
             ExprKind::Ternary {
                 then_expr,
                 else_expr,

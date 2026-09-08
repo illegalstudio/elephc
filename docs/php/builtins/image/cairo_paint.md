@@ -2,7 +2,7 @@
 title: "cairo_paint()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 421
+  order: 422
 ---
 
 ## cairo_paint()

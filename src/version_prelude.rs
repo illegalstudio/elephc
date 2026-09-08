@@ -28,9 +28,8 @@ use crate::web_prelude::PhpVersion;
 
 /// `zend_version()`: the Zend Engine version string for the compile target.
 ///
-/// Reference PHP 8.5.6 reports `4.5.6`. elephc reports `4.<minor>.0` — see
-/// `PhpVersion::zend_version` for why the patch component is `0` and why claiming a Zend
-/// Engine version at all is a *language-profile* statement rather than an engine identity.
+/// Profiles report stable `4.<minor>.0` spellings, independently of the audit oracle.
+/// See `PhpVersion::zend_version` for the shared source of truth.
 /// The version is baked in as a literal at injection time.
 fn zend_version_decl(php_version: PhpVersion) -> Stmt {
     function("zend_version")

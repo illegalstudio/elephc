@@ -40,6 +40,21 @@ macro_rules! constant {
     (@flag) => { false };
 }
 
+/// Resolves POSIX locale categories for Darwin or Linux without duplicating backend tables.
+pub fn locale_category_value(name: &str, is_darwin: bool) -> Option<i64> {
+    let (darwin, linux) = match name {
+        "LC_ALL" => (0, 6),
+        "LC_COLLATE" => (1, 3),
+        "LC_CTYPE" => (2, 0),
+        "LC_MESSAGES" => (6, 5),
+        "LC_MONETARY" => (3, 4),
+        "LC_NUMERIC" => (4, 1),
+        "LC_TIME" => (5, 2),
+        _ => return None,
+    };
+    Some(if is_darwin { darwin } else { linux })
+}
+
 pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("ARRAY_FILTER_USE_BOTH", Standard, ConstValue::Int(1)),
     constant!("ARRAY_FILTER_USE_KEY", Standard, ConstValue::Int(2)),
@@ -67,6 +82,20 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("CAL_NUM_CALS", Calendar, ConstValue::Int(4)),
     constant!("COUNT_NORMAL", Standard, ConstValue::Int(0)),
     constant!("COUNT_RECURSIVE", Standard, ConstValue::Int(1)),
+    constant!("DATE_ATOM", Date, ConstValue::Str("Y-m-d\\TH:i:sP")),
+    constant!("DATE_COOKIE", Date, ConstValue::Str("l, d-M-Y H:i:s T")),
+    constant!("DATE_ISO8601", Date, ConstValue::Str("Y-m-d\\TH:i:sO")),
+    constant!("DATE_ISO8601_EXPANDED", Date, ConstValue::Str("X-m-d\\TH:i:sP"), since: Php82),
+    constant!("DATE_RFC1036", Date, ConstValue::Str("D, d M y H:i:s O")),
+    constant!("DATE_RFC1123", Date, ConstValue::Str("D, d M Y H:i:s O")),
+    constant!("DATE_RFC2822", Date, ConstValue::Str("D, d M Y H:i:s O")),
+    constant!("DATE_RFC3339", Date, ConstValue::Str("Y-m-d\\TH:i:sP")),
+    constant!("DATE_RFC3339_EXTENDED", Date, ConstValue::Str("Y-m-d\\TH:i:s.vP")),
+    constant!("DATE_RFC7231", Date, ConstValue::Str("D, d M Y H:i:s \\G\\M\\T")),
+    constant!("DATE_RFC822", Date, ConstValue::Str("D, d M y H:i:s O")),
+    constant!("DATE_RFC850", Date, ConstValue::Str("l, d-M-y H:i:s T")),
+    constant!("DATE_RSS", Date, ConstValue::Str("D, d M Y H:i:s O")),
+    constant!("DATE_W3C", Date, ConstValue::Str("Y-m-d\\TH:i:sP")),
     constant!("DIRECTORY_SEPARATOR", Standard, ConstValue::TargetDependent(ConstType::Str)),
     constant!("ENT_COMPAT", Standard, ConstValue::Int(2)),
     constant!("ENT_HTML401", Standard, ConstValue::Int(0)),
@@ -78,7 +107,7 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("ENT_XHTML", Standard, ConstValue::Int(32)),
     constant!("ENT_XML1", Standard, ConstValue::Int(16)),
     constant!("EXIF_USE_MBSTRING", Exif, ConstValue::Int(0), route: Prelude),
-    constant!("E_ALL", Core, ConstValue::Int(32767)),
+    constant!("E_ALL", Core, ConstValue::TargetDependent(ConstType::Int)),
     constant!("E_COMPILE_ERROR", Core, ConstValue::Int(64)),
     constant!("E_COMPILE_WARNING", Core, ConstValue::Int(128)),
     constant!("E_CORE_ERROR", Core, ConstValue::Int(16)),
@@ -230,6 +259,13 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("JSON_THROW_ON_ERROR", Json, ConstValue::Int(4194304)),
     constant!("JSON_UNESCAPED_SLASHES", Json, ConstValue::Int(64)),
     constant!("JSON_UNESCAPED_UNICODE", Json, ConstValue::Int(256)),
+    constant!("LC_ALL", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_COLLATE", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_CTYPE", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_MESSAGES", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_MONETARY", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_NUMERIC", Standard, ConstValue::TargetDependent(ConstType::Int)),
+    constant!("LC_TIME", Standard, ConstValue::TargetDependent(ConstType::Int)),
     constant!("LOCK_EX", Standard, ConstValue::Int(2)),
     constant!("LOCK_NB", Standard, ConstValue::Int(4)),
     constant!("LOCK_SH", Standard, ConstValue::Int(1)),
@@ -422,3 +458,24 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("SUNFUNCS_RET_STRING", Date, ConstValue::Int(1)),
     constant!("SUNFUNCS_RET_TIMESTAMP", Date, ConstValue::Int(0)),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Locale constants use each target's native categories and remain catalogued.
+    #[test]
+    fn locale_categories_match_darwin_and_linux() {
+        for (name, darwin, linux) in [
+            ("LC_ALL", 0, 6), ("LC_COLLATE", 1, 3), ("LC_CTYPE", 2, 0),
+            ("LC_MESSAGES", 6, 5), ("LC_MONETARY", 3, 4),
+            ("LC_NUMERIC", 4, 1), ("LC_TIME", 5, 2),
+        ] {
+            assert_eq!(locale_category_value(name, true), Some(darwin));
+            assert_eq!(locale_category_value(name, false), Some(linux));
+            assert_eq!(crate::lookup_constant(name).unwrap().value,
+                ConstValue::TargetDependent(ConstType::Int));
+        }
+        assert_eq!(locale_category_value("unknown", true), None);
+    }
+}

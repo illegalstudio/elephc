@@ -23,6 +23,15 @@ pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs
         let key = lower_expr(ctx, key);
         let value = lower_expr(ctx, value);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
+        // Hash insertion copies string bytes, including raw string entries in
+        // heterogeneous hashes. Persisted expression temporaries remain ours.
+        for inserted in [key, value] {
+            if ctx.builder.value_php_type(inserted.value).codegen_repr() == PhpType::Str
+                && ctx.value_is_owning_temporary(inserted)
+            {
+                crate::ir_lower::ownership::release_if_owned(ctx, inserted, Some(expr.span));
+            }
+        }
     }
     hash
 }
@@ -247,7 +256,7 @@ pub(in crate::ir_lower) fn method_call_expr_type_for_ir(
 ) -> Option<PhpType> {
     let class_name = instance_callable_object_class(ctx, object)?;
     let method_key = php_symbol_key(method);
-    class_method_signature(ctx, &class_name, &method_key)
+    runtime_class_method_signature(ctx, &class_name, &method_key)
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
 }
 
@@ -270,4 +279,3 @@ pub(super) fn nullsafe_method_call_expr_type_for_ir(
 pub(crate) fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
-

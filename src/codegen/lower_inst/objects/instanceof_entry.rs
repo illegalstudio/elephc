@@ -23,7 +23,7 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     }
     if !matches!(
         value_ty,
-        PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        PhpType::Object(_) | PhpType::Callable | PhpType::Mixed | PhpType::Union(_)
     ) {
         emit_false(ctx);
         return store_if_result(ctx, inst);

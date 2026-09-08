@@ -2,7 +2,7 @@
 title: "mysqli_stmt_insert_id()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 170
+  order: 171
 ---
 
 ## mysqli_stmt_insert_id()

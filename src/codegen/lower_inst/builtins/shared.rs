@@ -71,7 +71,7 @@ pub(in crate::codegen::lower_inst) fn maybe_const_string_operand(ctx: &FunctionC
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::ConstStr {
+    if !matches!(inst_ref.op, Op::ConstStr | Op::ConstClassName) {
         return Ok(None);
     }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
@@ -79,9 +79,12 @@ pub(in crate::codegen::lower_inst) fn maybe_const_string_operand(ctx: &FunctionC
             "ConstStr operand has no data id",
         ));
     };
-    ctx.module
-        .data
-        .strings
+    let values = match inst_ref.op {
+        Op::ConstStr => &ctx.module.data.strings,
+        Op::ConstClassName => &ctx.module.data.class_names,
+        _ => unreachable!("constant-string opcode was checked above"),
+    };
+    values
         .get(data.as_raw() as usize)
         .cloned()
         .map(Some)

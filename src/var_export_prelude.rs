@@ -25,8 +25,9 @@
 //!   `sprintf("%.{p}e", ...)` until `(float)` of the result equals the input, then
 //!   rebuilds the digit string per PHP's exponent thresholds — independent of the
 //!   default `(string)`/`echo` precision used elsewhere.
-//! - Objects are out of scope (PHP renders `\Class::__set_state(...)`); a non
-//!   scalar/array value renders as the empty string.
+//! - The ext/date object family renders through its php-src serialization shape as
+//!   `\Class::__set_state(array(...))`, including nested DatePeriod objects.
+//!   Other objects retain the generic visible-property renderer.
 //! - The `$return` flag is FLAG-AWARE at the call site, mirroring `print_r`: `name_resolver`
 //!   retargets a literal-flag call at [`RENDER_HELPER`] (`: string`) or [`ECHO_HELPER`]
 //!   (prints, returns `null`), and only a runtime flag keeps the two-mode `var_export` body
@@ -34,9 +35,10 @@
 
 use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_binop, e_bool, e_call, e_cast, e_float, e_index, e_int, e_neg, e_null,
-    e_post_inc, e_str, e_ternary, e_var, function, internal_declarations, s_assign, s_break,
-    s_continue, s_echo, s_expr, s_for, s_foreach, s_if, s_return, t_mixed,
+    e_binop, e_bool, e_call, e_cast, e_float, e_index, e_instance_of, e_int, e_method_call,
+    e_neg, e_null, e_post_inc, e_str, e_ternary, e_var, function, internal_declarations,
+    s_assign, s_break, s_continue, s_echo, s_expr, s_for, s_foreach, s_if, s_return, t_array,
+    t_mixed,
 };
 
 mod detect;
@@ -143,6 +145,132 @@ fn decl_fn_elephc_var_export_float() -> Stmt {
             ]),
             ),
             s_return(e_binop(e_ternary(e_var("neg"), e_str("-"), e_str("")), BinOp::Concat, e_var("out"))),
+        ])
+        .build()
+}
+
+/// Returns the ext/date object-family test shared by recursive state rendering.
+fn date_instance_condition(variable: &str) -> crate::parser::ast::Expr {
+    [
+        "DateTime",
+        "DateTimeImmutable",
+        "DateTimeZone",
+        "DateInterval",
+        "DatePeriod",
+    ]
+    .into_iter()
+    .map(|class_name| e_instance_of(e_var(variable), class_name))
+    .reduce(|left, right| e_binop(left, BinOp::Or, right))
+    .expect("date instance family is non-empty")
+}
+
+/// `__elephc_var_export_date_object` — renders one ext/date `__serialize()` state recursively.
+fn decl_fn_elephc_var_export_date_object() -> Stmt {
+    function("__elephc_var_export_date_object")
+        .param("value", t_mixed())
+        .param("state", t_array())
+        .param("indent", TypeExpr::Int)
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_assign("pad", e_call("str_repeat", vec![e_str(" "), e_var("indent")])),
+            s_assign(
+                "out",
+                e_binop(
+                    e_binop(e_str("\\"), BinOp::Concat, e_call("get_class", vec![e_var("value")])),
+                    BinOp::Concat,
+                    e_str("::__set_state(array(\n"),
+                ),
+            ),
+            s_foreach(
+                e_var("state"),
+                Some("k"),
+                "v",
+                vec![
+                    s_if(
+                        e_call("is_int", vec![e_var("k")]),
+                        vec![s_assign("key", e_cast(CastType::String, e_var("k")))],
+                        vec![],
+                        Some(vec![s_assign(
+                            "key",
+                            e_binop(
+                                e_binop(
+                                    e_str("'"),
+                                    BinOp::Concat,
+                                    e_call("__elephc_var_export_escape", vec![e_var("k")]),
+                                ),
+                                BinOp::Concat,
+                                e_str("'"),
+                            ),
+                        )]),
+                    ),
+                    s_assign(
+                        "out",
+                        e_binop(
+                            e_binop(
+                                e_binop(
+                                    e_binop(e_var("out"), BinOp::Concat, e_var("pad")),
+                                    BinOp::Concat,
+                                    e_str("   "),
+                                ),
+                                BinOp::Concat,
+                                e_var("key"),
+                            ),
+                            BinOp::Concat,
+                            e_str(" => "),
+                        ),
+                    ),
+                    s_if(
+                        e_binop(
+                            e_call("is_array", vec![e_var("v")]),
+                            BinOp::Or,
+                            date_instance_condition("v"),
+                        ),
+                        vec![s_assign(
+                            "out",
+                            e_binop(
+                                e_binop(
+                                    e_binop(
+                                        e_binop(e_var("out"), BinOp::Concat, e_str("\n")),
+                                        BinOp::Concat,
+                                        e_var("pad"),
+                                    ),
+                                    BinOp::Concat,
+                                    e_str("  "),
+                                ),
+                                BinOp::Concat,
+                                e_call(
+                                    "__elephc_var_export_str",
+                                    vec![
+                                        e_var("v"),
+                                        e_binop(e_var("indent"), BinOp::Add, e_int(2)),
+                                    ],
+                                ),
+                            ),
+                        )],
+                        vec![],
+                        Some(vec![s_assign(
+                            "out",
+                            e_binop(
+                                e_var("out"),
+                                BinOp::Concat,
+                                e_call(
+                                    "__elephc_var_export_str",
+                                    vec![
+                                        e_var("v"),
+                                        e_binop(e_var("indent"), BinOp::Add, e_int(2)),
+                                    ],
+                                ),
+                            ),
+                        )]),
+                    ),
+                    s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_str(",\n"))),
+                ],
+            ),
+            s_return(e_binop(
+                e_binop(e_var("out"), BinOp::Concat, e_var("pad")),
+                BinOp::Concat,
+                e_str("))"),
+            )),
         ])
         .build()
 }
@@ -255,6 +383,19 @@ fn decl_fn_elephc_var_export_str() -> Stmt {
                 None,
             ),
             s_if(
+                date_instance_condition("value"),
+                vec![s_return(e_call(
+                    "__elephc_var_export_date_object",
+                    vec![
+                        e_var("value"),
+                        e_method_call(e_var("value"), "__serialize", vec![]),
+                        e_var("indent"),
+                    ],
+                ))],
+                vec![],
+                None,
+            ),
+            s_if(
                 e_call("is_object", vec![e_var("value")]),
                 vec![
                     s_assign("class", e_call("get_class", vec![e_var("value")])),
@@ -352,6 +493,7 @@ pub(crate) fn var_export_declarations() -> Program {
         vec![
             decl_fn_elephc_var_export_escape(),
             decl_fn_elephc_var_export_float(),
+            decl_fn_elephc_var_export_date_object(),
             decl_fn_elephc_var_export_prop(),
             decl_fn_elephc_var_export_str(),
             decl_fn_elephc_var_export_echo(),
@@ -400,7 +542,7 @@ mod tests {
     use super::*;
     use crate::parser::ast::StmtKind;
 
-    /// The surface is fixed: three helpers, the echo helper, then the entry point. The two
+    /// The surface is fixed: four helpers, the echo helper, then the entry point. The two
     /// helper NAMES are load-bearing — `name_resolver` retargets a literal-flag
     /// `var_export($v, true)` at `RENDER_HELPER` and `var_export($v)` at `ECHO_HELPER`, and
     /// `RENDER_HELPER`'s presence doubles as the "the prelude owns var_export" marker.
@@ -418,6 +560,7 @@ mod tests {
             vec![
                 "__elephc_var_export_escape",
                 "__elephc_var_export_float",
+                "__elephc_var_export_date_object",
                 // Renders ONE object property. Its own function rather than a loop body so the
                 // boxed property value stays a short-lived local instead of a loop-carried one.
                 "__elephc_var_export_prop",

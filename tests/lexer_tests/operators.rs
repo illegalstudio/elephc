@@ -231,6 +231,24 @@ fn test_lex_arrow_operator() {
     assert!(t.contains(&Token::Arrow));
 }
 
+/// Verifies a dynamic-property append keeps the runtime-name variable before the empty subscript.
+#[test]
+fn test_lex_dynamic_property_array_append() {
+    let t = tokens("<?php $period->$property[] = 'extra';");
+    assert_eq!(
+        &t[..7],
+        &[
+            Token::OpenTag,
+            Token::Variable("period".into()),
+            Token::Arrow,
+            Token::Variable("property".into()),
+            Token::LBracket,
+            Token::RBracket,
+            Token::Assign,
+        ]
+    );
+}
+
 /// Verifies `?->` (nullsafe arrow) tokenizes as `QuestionArrow`, not `Question` + `Arrow`.
 #[test]
 fn test_lex_nullsafe_arrow_operator() {

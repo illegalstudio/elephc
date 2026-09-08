@@ -2,7 +2,7 @@
 title: "timezone_identifiers_list()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 244
+  order: 245
 ---
 
 ## timezone_identifiers_list()

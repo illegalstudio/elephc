@@ -80,10 +80,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.comment("--- runtime: unser_at (recursive serialize() value parser) ---");
     emitter.label_global("__rt_unser_at");
     // [rbp-8]=base [16]=pos [24]=end [32]=container [40]=count [48]=index [56]=key_lo [64]=key_hi
-    // [rbp-72]=scratch/hook [80]=policy/data hash [88]=registry index [96]=object box
+    // [rbp-72]=scratch/hook [80]=policy/data hash [88]=registry index [96]=object box [104]=R: marker
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 96");                                         // recursive parser frame (with a reference-index slot)
+    emitter.instruction("sub rsp, 112");                                        // recursive parser frame with a date-reference marker slot
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the base pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the current position
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the end position
@@ -95,13 +95,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("cmp rsi, rdx");                                        // is the cursor already at/past the end?
     emitter.instruction("jge __rt_unser_at_fail");                              // nothing left to parse
     emitter.instruction("movzx r9d, BYTE PTR [rdi + rsi]");                     // load the leading type byte
-    // -- back-reference? r:N; / R:N; resolves to a previously parsed value and
-    //    consumes no new index --
-    emitter.instruction("cmp r9d, 114");                                        // ASCII 'r'?
-    emitter.instruction("je __rt_unser_at_ref");                                // resolve an object back-reference
-    emitter.instruction("cmp r9d, 82");                                         // ASCII 'R'?
-    emitter.instruction("je __rt_unser_at_ref");                                // resolve a PHP reference
-    // -- every other value consumes the next pre-order index, mirroring serialize() --
+    // Every value consumes the next pre-order index, including r:/R: aliases.
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_count");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // current value index
     emitter.instruction("mov QWORD PTR [rbp - 88], r11");                       // reserve this value's index
@@ -113,6 +107,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_unser_values");
     emitter.instruction("mov QWORD PTR [r11 + r10 * 8], 0");                    // erase any stale object pointer before parsing this value
     emitter.label("__rt_unser_at_registry_slot_ready_x");
+    emitter.instruction("cmp r9d, 114");                                        // ASCII 'r'?
+    emitter.instruction("je __rt_unser_at_ref");                                // resolve an object back-reference
+    emitter.instruction("cmp r9d, 82");                                         // ASCII 'R'?
+    emitter.instruction("je __rt_unser_at_ref");                                // resolve a PHP reference
     emitter.instruction("cmp r9d, 78");                                         // ASCII 'N' (null)?
     emitter.instruction("je __rt_unser_at_null");                               // parse null
     emitter.instruction("cmp r9d, 98");                                         // ASCII 'b' (bool)?
@@ -381,10 +379,11 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.label("__rt_unser_obj_incomplete_x");
     emitter.instruction("mov rax, 32");                                         // class id, original class name, and opaque property hash
     emitter.instruction("call __rt_heap_alloc");                                // allocate the incomplete-object payload
-    emitter.instruction(&format!(
+    let object_heap_marker = format!(
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    )); // materialize the full-width object heap marker before storing it
+    );
+    emitter.instruction(&object_heap_marker);                                   // materialize the full-width object heap marker before storing it
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object header without an unencodable imm64 memory move
     emitter.instruction("mov rdi, rax");                                        // object handle allocator input
     emitter.instruction("call __rt_object_handle_acquire");                     // give the incomplete object a normal PHP handle
@@ -461,6 +460,12 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save key_lo
     emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save key_hi
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // advance past the key
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // base for the value-kind probe
+    emitter.instruction("add r10, rcx");                                        // first byte of the serialized value
+    emitter.instruction("xor r11d, r11d");                                      // default: this is not an R: PHP reference
+    emitter.instruction("cmp BYTE PTR [r10], 82");                              // ASCII 'R' denotes a PHP reference, unlike object alias r:
+    emitter.instruction("sete r11b");                                           // retain the wire provenance across recursive parsing
+    emitter.instruction("mov QWORD PTR [rbp - 104], r11");                      // park the R: marker for the date-handler gate
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // base
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // position after the key
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // end
@@ -468,11 +473,25 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // advance past the value
     emitter.instruction("test rax, rax");                                       // did the child decoder reject the value?
     emitter.instruction("jz __rt_unser_obj_data_fail_x");                       // fail without passing a null box to the hash
+    emitter.instruction("xor r8d, r8d");                                        // boxed Mixed entries normally have no high payload word
+    emitter.instruction("cmp QWORD PTR [rbp - 104], 0");                        // did this value originate from R:?
+    emitter.instruction("je __rt_unser_obj_data_store_x");                      // ordinary values enter the user __unserialize array unchanged
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // concrete receiver selects the DateTime-family gate
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // class id
+    crate::codegen_support::abi::emit_symbol_address(
+        emitter,
+        "r11",
+        "_class_date_unserialize_family_flags",
+    );
+    emitter.instruction("cmp QWORD PTR [r11 + r10*8], 0");                      // DateTime family, even when a child overrides magic?
+    emitter.instruction("je __rt_unser_obj_data_store_x");                      // non-date user hooks retain their ordinary wire representation
+    emitter.instruction("mov r8, 1");                                           // preserve R: provenance in the boxed-Mixed hash entry high word
+    emitter.label("__rt_unser_obj_data_store_x");
     emitter.instruction("mov rcx, rax");                                        // value_lo = parsed value box
     emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // $data hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // key_hi (-1 for int keys)
-    emitter.instruction("mov r8, 0");                                           // value_hi unused
+    // r8 carries the DateTime-only R: provenance marker, or zero for an ordinary box.
     emitter.instruction("mov r9, 7");                                           // value tag = boxed Mixed (transfer the box)
     emitter.instruction("call __rt_hash_set");                                  // insert the entry -> rax = (possibly new) hash
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save the updated $data hash pointer
@@ -481,10 +500,90 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // persist the entry index
     emitter.instruction("jmp __rt_unser_obj_data_loop");                        // continue with the next entry
     emitter.label("__rt_unser_obj_data_done");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // cursor where the closing brace must appear
+    emitter.instruction("mov r12, QWORD PTR [rbp - 24]");                       // serialized input length
+    emitter.instruction("cmp r11, r12");                                        // is the closing brace truncated?
+    emitter.instruction("jge __rt_unser_obj_magic_missing_close");              // end-of-input is php-src's failure offset
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload serialized input base
+    emitter.instruction("movzx r10d, BYTE PTR [r9 + r11]");                     // inspect the expected closing byte
+    emitter.instruction("cmp r10d, 125");                                       // ASCII '}'?
+    emitter.instruction("je __rt_unser_obj_magic_close_valid");                 // complete objects invoke the hook directly
+    emitter.label("__rt_unser_obj_magic_missing_close");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_warning_callback");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // call-site warning callback, if one was installed
+    emitter.instruction("test r10, r10");                                       // is a callback available?
+    emitter.instruction("jz __rt_unser_obj_magic_missing_reported");            // runtime-only callers may have no callback
+    emitter.instruction("mov rdi, r11");                                        // callback arg 1 = failure offset
+    emitter.instruction("mov rsi, r12");                                        // callback arg 2 = total input length
+    emitter.instruction("call r10");                                            // warn before invoking __unserialize()
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_unser_warning_emitted");
+    emitter.instruction("mov QWORD PTR [r9], 1");                               // lowering must not duplicate the warning
+    emitter.label("__rt_unser_obj_magic_missing_reported");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_unser_force_failure");
+    emitter.instruction("mov QWORD PTR [r9], 1");                               // hook still runs, but the public result is false
+    emitter.label("__rt_unser_obj_magic_close_valid");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the concrete receiver for native date-hook trace metadata
+    emitter.instruction("mov r9, QWORD PTR [r9]");                              // class id indexes the generated trace-owner table
+    crate::codegen_support::abi::emit_symbol_address(
+        emitter,
+        "r10",
+        "_class_date_unserialize_trace_entries",
+    );
+    emitter.instruction("shl r9, 4");                                           // each owner row contains two eight-byte words
+    emitter.instruction("add r10, r9");                                         // select this class's (owner ptr, owner len) row
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // native implementation class-name pointer
+    emitter.instruction("test r11, r11");                                       // zero identifies an ordinary user hook
+    emitter.instruction("jz __rt_unser_obj_trace_ready");                       // keep the legacy uncaught path for non-date hooks
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_unser_trace_owner_ptr");
+    emitter.instruction("mov QWORD PTR [r9], r11");                             // publish the native implementation class name
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // native implementation class-name length
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_unser_trace_owner_len");
+    emitter.instruction("mov QWORD PTR [r9], r11");                             // publish its byte length
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // serialized call argument base
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_unser_trace_input_ptr");
+    emitter.instruction("mov QWORD PTR [r9], r11");                             // preserve the original wire string for the trace preview
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // serialized call argument length
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_unser_trace_input_len");
+    emitter.instruction("mov QWORD PTR [r9], r11");                             // preserve the wire length for the 15-byte preview bound
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_unser_trace_exception_ptr");
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // the thrown Error identity is captured at the first unwind boundary
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_unser_trace_active");
+    emitter.instruction("mov QWORD PTR [r9], 1");                               // activate the specialized uncaught trace
+    emitter.label("__rt_unser_obj_trace_ready");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this receiver = first argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // $data assoc array (bare hash) = second argument
     emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // reload the __unserialize target
     emitter.instruction("call r10");                                            // call __unserialize($this, $data)
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_trace_active");
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // a successful native hook no longer owns uncaught-trace state
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_trace_exception_ptr");
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // discard the unused exception identity slot after success
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the concrete receiver for DateInterval-handler detection
+    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load its runtime class id
+    crate::codegen_support::abi::emit_symbol_address(
+        emitter,
+        "r10",
+        "_class_dateinterval_unserialize_flags",
+    );
+    emitter.instruction("mov r9, QWORD PTR [r10 + r9*8]");                      // does this class inherit DateInterval's native restoration hook?
+    emitter.instruction("test r9, r9");                                         // inspect the generated handler marker
+    emitter.instruction("jz __rt_unser_dateinterval_dynamic_done");             // other date objects have no DateInterval dynamic fields
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // parsed DateInterval data hash
+    emitter.instruction("xor esi, esi");                                        // empty dynamic-property key pointer
+    emitter.instruction("xor edx, edx");                                        // empty dynamic-property key length
+    emitter.instruction("call __rt_hash_get");                                  // did the malformed payload contain the empty key?
+    emitter.instruction("test rax, rax");                                       // was the empty custom key present?
+    emitter.instruction("jz __rt_unser_dateinterval_dynamic_done");             // no empty custom property means no deprecation
+    crate::codegen_support::abi::emit_symbol_address(
+        emitter,
+        "r10",
+        "_unser_dateinterval_dynamic_callback",
+    );
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // call-site deprecation callback
+    emitter.instruction("test r10, r10");                                       // is a callback available?
+    emitter.instruction("jz __rt_unser_dateinterval_dynamic_done");             // runtime-only callers may have no callback
+    emitter.instruction("call r10");                                            // emit the dynamic-property deprecation at the call site
+    emitter.label("__rt_unser_dateinterval_dynamic_done");
     emitter.instruction("jmp __rt_unser_at_obj_box");                           // box the object (position is at the closing '}')
     emitter.label("__rt_unser_obj_default");
     emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // blocked objects own an opaque Mixed property hash
@@ -538,6 +637,12 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // persist the property index
     emitter.instruction("jmp __rt_unser_at_obj_loop");                          // continue with the next property
     emitter.label("__rt_unser_at_obj_close");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // closing-brace position after the final property
+    emitter.instruction("cmp r11, QWORD PTR [rbp - 24]");                       // is a closing byte available?
+    emitter.instruction("jae __rt_unser_obj_fail_x");                           // truncated default objects are parse failures
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload serialized input base
+    emitter.instruction("cmp BYTE PTR [r9 + r11], 125");                        // exact bounded `}`?
+    emitter.instruction("jne __rt_unser_obj_fail_x");                           // malformed default object is a parse failure
     // -- __wakeup magic: after default property injection, call __wakeup($this) --
     emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // blocked classes cannot run __wakeup
     emitter.instruction("je __rt_unser_at_obj_box");                            // incomplete objects never run class hooks
@@ -551,10 +656,18 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this receiver
     emitter.instruction("call r10");                                            // call __wakeup($this)
     emitter.label("__rt_unser_at_obj_box");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_unser_force_failure");
+    emitter.instruction("cmp QWORD PTR [r9], 0");                               // did a malformed magic object force failure?
+    emitter.instruction("jne __rt_unser_at_force_fail");                        // honor a failure raised by a required magic hook
     emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // return the stable box published before body parsing
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload position (at the closing '}')
     emitter.instruction("add rdx, 1");                                          // newpos skips the '}'
     emitter.instruction("jmp __rt_unser_at_ret");                               // return box and new position
+
+    emitter.label("__rt_unser_at_force_fail");
+    emitter.instruction("xor eax, eax");                                        // required hook effects ran, but result is false
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // preserve php-src's failure offset
+    emitter.instruction("jmp __rt_unser_at_ret");                               // return the preserved failure position
 
     emitter.label("__rt_unser_obj_data_fail_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // partially built __unserialize data hash
@@ -579,6 +692,14 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // newpos = unchanged position
 
     emitter.label("__rt_unser_at_ret");
+    emitter.instruction("test rax, rax");                                       // did the parser produce a referenceable boxed value?
+    emitter.instruction("jz __rt_unser_at_ret_done");                           // failed values have nothing to register
+    emitter.instruction("mov r9, QWORD PTR [rbp - 88]");                        // reserved value index
+    emitter.instruction("cmp r9, 65536");                                       // is the reserved result slot in bounds?
+    emitter.instruction("jge __rt_unser_at_ret_done");                          // skip publishing results beyond registry capacity
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_values");
+    emitter.instruction("mov QWORD PTR [r10 + r9*8], rax");                     // make every parsed value referenceable
+    emitter.label("__rt_unser_at_ret_done");
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r8", "_unser_depth", 0); // load parser depth before returning to the caller
     emitter.instruction("sub r8, 1");                                           // release this completed recursive parser frame
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r8", "_unser_depth", 0); // keep sibling parses independent

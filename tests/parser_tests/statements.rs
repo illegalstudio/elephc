@@ -49,6 +49,27 @@ fn test_multiple_statements() {
     assert_eq!(stmts.len(), 3);
 }
 
+/// Verifies standalone semicolons are accepted as PHP empty statements and omitted from the AST.
+#[test]
+fn test_empty_statements_are_ignored() {
+    let stmts = parse_source("<?php ;;; echo 1; ;;");
+    assert_eq!(stmts, vec![Stmt::echo(Expr::int_lit(1))]);
+}
+
+/// Verifies a braceless loop may use PHP's empty-statement body.
+#[test]
+fn test_braceless_loop_accepts_empty_statement_body() {
+    let stmts = parse_source("<?php while (false); echo 1;");
+    assert_eq!(stmts.len(), 2);
+    assert!(matches!(
+        stmts[0].kind,
+        StmtKind::While {
+            ref body,
+            ..
+        } if body.is_empty()
+    ));
+}
+
 // --- Parse errors ---
 
 /// Verifies that `<?php echo "hi"` (missing semicolon) fails during parsing.

@@ -11,7 +11,8 @@
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
-    BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver, Stmt, TypeExpr,
+    is_synthetic_unary_plus, BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget,
+    StaticReceiver, Stmt, TypeExpr,
 };
 use crate::span::Span;
 use crate::types::{merge_array_key_types, FunctionSig, PhpType, TypeEnv};
@@ -35,6 +36,16 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let lt = self.infer_type(left, env)?;
         let rt = self.infer_type(right, env)?;
+        if is_synthetic_unary_plus(op, right) {
+            return Ok(match lt {
+                PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Never => {
+                    PhpType::Int
+                }
+                PhpType::Float => PhpType::Float,
+                PhpType::TaggedScalar => PhpType::Int,
+                _ => PhpType::Mixed,
+            });
+        }
         match op {
             BinOp::Pow => {
                 let lt_ok = is_numeric_operand_type(self, &lt);
@@ -128,9 +139,11 @@ impl Checker {
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
                 let numeric_ok =
                     is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
-                let datetime_ok =
-                    is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                let datetime_ok = is_datetime_comparable_object(self, &lt)
+                    && is_datetime_comparable_object(self, &rt);
+                let date_interval_ok = is_date_interval_object(self, &lt)
+                    && is_date_interval_object(self, &rt);
+                if !numeric_ok && !datetime_ok && !date_interval_ok {
                     return Err(CompileError::new(
                         expr.span,
                         "Comparison operators require numeric operands",
@@ -158,9 +171,11 @@ impl Checker {
             BinOp::Spaceship => {
                 let numeric_ok =
                     is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
-                let datetime_ok =
-                    is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                let datetime_ok = is_datetime_comparable_object(self, &lt)
+                    && is_datetime_comparable_object(self, &rt);
+                let date_interval_ok = is_date_interval_object(self, &lt)
+                    && is_date_interval_object(self, &rt);
+                if !numeric_ok && !datetime_ok && !date_interval_ok {
                     return Err(CompileError::new(
                         expr.span,
                         "Spaceship operator requires numeric operands",
@@ -1331,15 +1346,39 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     ) || checker.is_union_with_mixed_numeric_dispatch(ty)
 }
 
-/// Returns `true` if `ty` is a concrete `DateTime`/`DateTimeImmutable` object, the family PHP orders
-/// and compares by its absolute instant. Used to allow relational and spaceship operators on these
-/// objects; EIR lowering then reduces each operand to its `timestamp`/`microsecond` instant key.
-fn is_datetime_family_object(ty: &PhpType) -> bool {
-    matches!(
-        ty,
-        PhpType::Object(name)
-            if matches!(name.trim_start_matches('\\'), "DateTime" | "DateTimeImmutable")
-    )
+/// Returns `true` for concrete date objects with a php-src comparison handler.
+///
+/// `DateTime` and `DateTimeImmutable` descendants compare by instant, while `DateTimeZone`
+/// descendants use the zone-kind-aware comparator. Nullable objects remain on the generic path.
+fn is_datetime_comparable_object(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(name) => {
+            let name = name.trim_start_matches('\\');
+            matches!(
+                name,
+                "DateTime" | "DateTimeImmutable" | "DateTimeInterface" | "DateTimeZone"
+            ) || checker.is_subclass_of(name, "DateTime")
+                || checker.is_subclass_of(name, "DateTimeImmutable")
+                || checker.is_subclass_of(name, "DateTimeZone")
+        }
+        PhpType::Union(members) => members.iter().all(|member| {
+            matches!(member, PhpType::False | PhpType::Void)
+                || is_datetime_comparable_object(checker, member)
+        }),
+        _ => false,
+    }
+}
+
+/// Returns `true` for `DateInterval` objects whose non-strict comparison is accepted by PHP
+/// but always reports `Cannot compare DateInterval objects` at runtime.
+fn is_date_interval_object(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(name) => {
+            let name = name.trim_start_matches('\\');
+            name == "DateInterval" || checker.is_subclass_of(name, "DateInterval")
+        }
+        _ => false,
+    }
 }
 
 /// Returns `true` if `ty` is a valid operand type for bitwise binary operators.

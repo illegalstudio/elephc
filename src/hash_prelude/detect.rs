@@ -535,6 +535,11 @@ fn stmt_refs_hash(stmt: &Stmt) -> bool {
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_hash(object) || expr_refs_hash(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_refs_hash(object) || expr_refs_hash(property) || expr_refs_hash(value),
         StmtKind::PropertyArrayAssign {
             object,
             index,

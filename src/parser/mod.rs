@@ -141,10 +141,22 @@ fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<Com
         if tokens[pos].0 == Token::Eof {
             break;
         }
+        if tokens[pos].0 == Token::Semicolon {
+            pos += 1;
+            continue;
+        }
+        // PHP permits standalone compound statements. Blocks do not introduce
+        // a lexical scope, so their statements can be flattened into the
+        // surrounding statement list.
+        if tokens[pos].0 == Token::LBrace {
+            match stmt::parse_block(tokens, &mut pos) {
+                Ok(mut block_stmts) => stmts.append(&mut block_stmts),
+                Err(error) => errors.extend(error.flatten()),
+            }
         // Extern blocks can produce multiple stmts. Attributes on declarations
         // flow through parse_stmt below — extern is an elephc-specific block
         // that does not interact with PHP attributes.
-        if tokens[pos].0 == Token::Extern {
+        } else if tokens[pos].0 == Token::Extern {
             match stmt::parse_extern_stmts(tokens, &mut pos) {
                 Ok(mut extern_stmts) => stmts.append(&mut extern_stmts),
                 Err(error) => {

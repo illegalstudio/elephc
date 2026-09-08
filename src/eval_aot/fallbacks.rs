@@ -65,6 +65,7 @@ pub(super) fn stmt_fallback_reason(stmt: &Stmt) -> Option<EvalAotFallbackReason>
         | StmtKind::StaticPropertyArrayPush { .. }
         | StmtKind::StaticPropertyArrayAssign { .. }
         | StmtKind::PropertyArrayPush { .. }
+        | StmtKind::DynamicPropertyArrayPush { .. }
         | StmtKind::PropertyArrayAssign { .. } => Some(EvalAotFallbackReason::ObjectOrMemberAccess),
         StmtKind::Echo(expr) | StmtKind::ExprStmt(expr) | StmtKind::Return(Some(expr)) => {
             expr_fallback_reason(expr)

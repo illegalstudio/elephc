@@ -1147,6 +1147,37 @@ foreach ($attrs as $attr) {
     assert_eq!(out, "2\nAuthor:[Ada][1815]\nVersion:[1.0][1]\n");
 }
 
+/// Verifies name/`IS_INSTANCEOF` filtering, cloned results, and invalid-flag validation.
+#[test]
+fn test_reflection_get_attributes_filter_contract() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute]
+class BaseMarker {}
+#[Attribute]
+class ChildMarker extends BaseMarker {}
+#[ChildMarker]
+class MarkedTarget {}
+
+$reflection = new ReflectionClass(MarkedTarget::class);
+$all = $reflection->getAttributes();
+$exact = $reflection->getAttributes(ChildMarker::class);
+$derived = $reflection->getAttributes(BaseMarker::class, ReflectionAttribute::IS_INSTANCEOF);
+echo count($all), ":", $exact[0]->getName(), ":", $derived[0]->getName(), ":",
+     ($all[0] !== $derived[0] ? "clone" : "same"), "\n";
+try {
+    $reflection->getAttributes(null, 3);
+} catch (ValueError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:ChildMarker:ChildMarker:clone\nArgument #2 ($flags) must be a valid attribute filter flag"
+    );
+}
+
 /// Verifies that floating-point attribute arguments (including a negated
 /// literal) round-trip through `ReflectionClass::getAttributes()` /
 /// `getArguments()` and echo identically to PHP.

@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 const EMBEDDED_BRIDGE_RELATIONSHIPS: &[(&str, &[&str])] = &[(
     "elephc_magician",
-    &["elephc_crypto", "elephc_iconv", "elephc_phar"],
+    &["elephc_crypto", "elephc_iconv", "elephc_phar", "elephc_tz"],
 )];
 
 /// Identifies which compiler surface contributed a linker input.
@@ -241,11 +241,9 @@ impl LinkPlan {
                 | LinkItem::Framework(_) => None,
             })
             .collect();
-        let embedded: HashSet<&str> = EMBEDDED_BRIDGE_RELATIONSHIPS
-            .iter()
-            .filter(|(container, _)| requested.contains(container))
-            .flat_map(|(_, dependencies)| dependencies.iter().copied())
-            .collect();
+        let embedded: HashSet<&str> = requested.iter().copied().filter(|dependency| {
+            requested.iter().any(|provider| Self::bridge_embeds(provider, dependency))
+        }).collect();
         if embedded.is_empty() {
             return self.clone();
         }
@@ -266,6 +264,13 @@ impl LinkPlan {
                 .cloned()
                 .collect(),
         )
+    }
+
+    /// Reports whether a provider archive carries another bridge's exported symbols.
+    pub(crate) fn bridge_embeds(provider: &str, dependency: &str) -> bool {
+        EMBEDDED_BRIDGE_RELATIONSHIPS.iter().any(|(container, dependencies)| {
+            *container == provider && dependencies.contains(&dependency)
+        })
     }
 
     /// Recomputes Linux mode and diagnostic provenance from ordered typed items.
@@ -360,10 +365,11 @@ mod tests {
 
     /// Verifies Magician's embedded Rust dependencies replace duplicate standalone bridge inputs.
     #[test]
-    fn magician_suppresses_embedded_crypto_and_phar_archives() {
+    fn magician_suppresses_embedded_bridge_archives() {
         let plan = LinkPlan::from_items(vec![
             LinkItem::named_runtime("elephc_crypto"),
             LinkItem::bridge_archive("libelephc_phar.a", "elephc_phar", false),
+            LinkItem::named_runtime("elephc_tz"),
             LinkItem::named_runtime("elephc_magician"),
             LinkItem::named_user("sqlite3"),
         ]);
@@ -387,12 +393,13 @@ mod tests {
         assert_eq!(names, vec!["elephc_magician", "sqlite3"]);
     }
 
-    /// Verifies standalone crypto and Phar bridges remain when Magician is not requested.
+    /// Verifies standalone embedded bridges remain when Magician is not requested.
     #[test]
     fn embedded_dependencies_remain_without_their_container() {
         let plan = LinkPlan::from_items(vec![
             LinkItem::named_runtime("elephc_crypto"),
             LinkItem::named_runtime("elephc_phar"),
+            LinkItem::named_runtime("elephc_tz"),
         ]);
 
         assert_eq!(plan.without_redundant_embedded_bridges(), plan);

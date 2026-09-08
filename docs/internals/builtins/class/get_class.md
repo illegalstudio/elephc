@@ -2,7 +2,7 @@
 title: "get_class() — internals"
 description: "Compiler internals for get_class(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 84
+  order: 85
 ---
 
 ## `get_class()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/get_class.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_class.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

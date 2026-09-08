@@ -300,6 +300,7 @@ impl DeclarationIndex {
                 | StmtKind::Global { .. }
                 | StmtKind::StaticVar { .. }
                 | StmtKind::PropertyAssign { .. }
+                | StmtKind::DynamicPropertyArrayPush { .. }
                 | StmtKind::StaticPropertyAssign { .. }
                 | StmtKind::StaticPropertyArrayPush { .. }
                 | StmtKind::StaticPropertyArrayAssign { .. }

@@ -103,13 +103,14 @@ pub fn emit_cdylib_exit_escape(emitter: &mut Emitter) {
     }
     match emitter.target.arch {
         Arch::AArch64 => {
+            let process_exit = emitter.unique_local_label("cdylib_process_exit");
             super::emit_load_symbol_to_reg(
                 emitter,
                 "x9",
                 crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
                 0,
             );
-            emitter.instruction("cbz x9, 991f");                                // preserve process exit when no host boundary is active
+            emitter.instruction(&format!("cbz x9, {}", process_exit));          // preserve process exit when no host boundary is active
             super::emit_store_imm_to_symbol(
                 emitter,
                 crate::codegen_support::cdylib::BOUNDARY_STATUS,
@@ -118,9 +119,10 @@ pub fn emit_cdylib_exit_escape(emitter: &mut Emitter) {
             );
             super::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // unwind the fatal path into the active host boundary
-            emitter.label("991");
+            emitter.label(&process_exit);
         }
         Arch::X86_64 => {
+            let process_exit = emitter.unique_local_label("cdylib_process_exit");
             super::emit_load_symbol_to_reg(
                 emitter,
                 "r10",
@@ -128,7 +130,7 @@ pub fn emit_cdylib_exit_escape(emitter: &mut Emitter) {
                 0,
             );
             emitter.instruction("test r10, r10");                               // distinguish an active host boundary from executable mode
-            emitter.instruction("jz 991f");                                     // preserve process exit when no host boundary is active
+            emitter.instruction(&format!("jz {}", process_exit));               // preserve process exit when no host boundary is active
             super::emit_store_imm_to_symbol(
                 emitter,
                 crate::codegen_support::cdylib::BOUNDARY_STATUS,
@@ -137,7 +139,7 @@ pub fn emit_cdylib_exit_escape(emitter: &mut Emitter) {
             );
             super::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // unwind the fatal path into the active host boundary
-            emitter.label("991");
+            emitter.label(&process_exit);
         }
     }
 }

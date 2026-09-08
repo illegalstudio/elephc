@@ -2,7 +2,7 @@
 title: "imageopenpolygon() — internals"
 description: "Compiler internals for imageopenpolygon(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 517
+  order: 518
 ---
 
 ## `imageopenpolygon()` — internals

@@ -2,7 +2,7 @@
 title: "pcntl_daemon() — internals"
 description: "Compiler internals for pcntl_daemon(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 622
+  order: 628
 ---
 
 ## `pcntl_daemon()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_daemon.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_daemon.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:635](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L635) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

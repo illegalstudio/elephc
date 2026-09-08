@@ -65,6 +65,13 @@ impl Checker {
         if by_ref {
             return self.require_compatible_arg_type(expected, actual, arg.span, context);
         }
+        // Direct user-function calls emit the matching EIR guard after argument
+        // evaluation. Other call surfaces must not acquire unchecked acceptance.
+        if owner.is_some()
+            && crate::types::param_binding::requires_object_argument_guard(expected, actual)
+        {
+            return Ok(());
+        }
         match classify_param_binding(expected, actual, arg) {
             ParamBinding::Identity | ParamBinding::Cast(_) | ParamBinding::Const(_) => Ok(()),
             ParamBinding::Callable(target) => {

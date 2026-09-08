@@ -2,7 +2,7 @@
 title: "opcache_compile_file()"
 description: "Implemented by the compiler-injected OPcache prelude."
 sidebar:
-  order: 612
+  order: 618
 ---
 
 ## opcache_compile_file()

@@ -280,6 +280,7 @@ pub enum EvalConst {
     Int(i64),
     Float(f64),
     String(String),
+    ByteString(Vec<u8>),
 }
 
 /// PHP magic constants supported by runtime eval fragments.
@@ -336,6 +337,7 @@ pub enum EvalCastType {
 /// Unary operations supported by the initial EvalIR parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalUnaryOp {
+    Suppress,
     Plus,
     Negate,
     LogicalNot,
