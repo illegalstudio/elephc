@@ -428,7 +428,7 @@ pub(super) fn eval_array_set_var_stmt(
     eval_non_object_array_set_var_stmt(name, index, value, existing, context, scope, values)
 }
 
-/// Executes the non-object `$var[index] = value` path with the existing array semantics.
+/// Writes a local array element while retaining operands and updating persistent references.
 pub(super) fn eval_non_object_array_set_var_stmt(
     name: &str,
     index: &EvalExpr,
@@ -438,25 +438,64 @@ pub(super) fn eval_non_object_array_set_var_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut ownership = ScopeCellOwnership::Owned;
-    let array = if let Some((cell, flags_ownership)) = existing {
+    let array = if let Some((cell, _)) = existing {
         if values.is_array_like(cell)? {
-            ownership = flags_ownership;
-            cell
+            values.retain(cell)?
         } else {
             values.array_new(1)?
         }
     } else {
         values.array_new(1)?
     };
-    let index = eval_array_set_index(index, context, scope, values)?;
-    let value = eval_expr(value, context, scope, values)?;
-    let array = eval_array_set_target_for_index(array, index, values)?;
-    let array = values.array_set(array, index, value)?;
-    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
-        values.release(replaced)?;
+    let mut operands = vec![array];
+    let mut result = (|| {
+        let index = eval_owned_array_set_index(index, context, scope, values)?;
+        operands.push(index);
+        let value = eval_owned_expr(value, context, scope, values)?;
+        operands.push(value);
+        let replacement = eval_array_set_target_for_index(array, index, values)?;
+        if replacement != array {
+            operands.push(replacement);
+            context.clone_array_element_aliases(array, replacement, None);
+        }
+        eval_array_element_reference_write(replacement, index, value, context, values)?;
+        values.array_set(replacement, index, value)?;
+        if scope_entry(context, scope, name).is_some_and(|entry| {
+            entry.flags().is_visible() && entry.cell() == replacement
+        }) {
+            // An in-place write preserves the slot's existing owner or call-frame borrow.
+            return Ok(());
+        }
+        write_back_owned_variable_ref_target(scope, name, replacement, context, values)
+    })();
+    for operand in operands.into_iter().rev() {
+        let released = eval_release_value(context, values, operand);
+        if result.is_ok() { result = released; }
     }
-    Ok(())
+    result
+}
+
+/// Propagates an array-element reference write without borrowing the array's value owner.
+fn eval_array_element_reference_write(
+    array: RuntimeCellHandle,
+    index: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(key) = eval_array_reference_key(index, values)? else { return Ok(()); };
+    let Some(target) = context.array_element_alias(array, &key).cloned() else { return Ok(()); };
+    match target {
+        EvalReferenceTarget::Variable { scope, name } => {
+            let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+            write_back_owned_variable_ref_target(scope, &name, value, context, values)
+        }
+        EvalReferenceTarget::Cell { .. } => {
+            context.bind_array_element_alias(array, key, EvalReferenceTarget::Cell { cell: value });
+            Ok(())
+        }
+        _ => write_back_method_ref_target(&target, value, context, values),
+    }
 }
 
 /// Writes an indexed property or appends to it while preserving COW and every operand's owner.
@@ -507,11 +546,7 @@ pub(super) fn eval_property_array_write_result(
         let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
         let value = if value.is_borrowed() { values.retain(value)? } else { value };
         operands.push(value);
-        if let Some(target) = eval_array_reference_key(index, values)?
-            .and_then(|key| context.array_element_alias(array, &key).cloned())
-        {
-            write_back_method_ref_target(&target, value, context, values)?;
-        }
+        eval_array_element_reference_write(array, index, value, context, values)?;
         // Runtime setters mutate the receiver cell in place, retaining only the inserted value.
         values.array_set(array, index, value)?;
         eval_property_set_result(object, property, array, context, values)
@@ -641,7 +676,7 @@ pub(super) fn eval_array_set_index(
     }
 }
 
-/// Normalizes a property mutation key into an owned cell, consuming temporary string inputs.
+/// Normalizes an array mutation key into an owned cell, consuming temporary string inputs.
 fn eval_owned_array_set_index(
     index: &EvalExpr,
     context: &mut ElephcEvalContext,
@@ -670,11 +705,16 @@ pub(super) fn eval_array_set_target_for_index(
         return Ok(array);
     }
     let len = values.array_len(array)?;
-    let mut assoc = values.assoc_new(len + 1)?;
+    let mut assoc = builtins::collection_builder::EvalArrayBuilder::assoc(values, len + 1)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        assoc = values.array_set(assoc, key, value)?;
+        let key = assoc.values().array_iter_key(array, position)?;
+        let inserted = assoc.entry(
+            |values| values.array_get(array, key),
+            |values, _| values.retain(key),
+        );
+        let released = assoc.values().release(key);
+        inserted?;
+        released?;
     }
-    Ok(assoc)
+    Ok(assoc.finish())
 }

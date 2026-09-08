@@ -31,6 +31,43 @@ eval($source);
     assert_eq!(output.stdout, "99:12|".repeat(24), "{}", output.stderr);
 }
 
+/// Promoted local arrays and copied property arrays preserve references and independent value owners.
+#[test]
+fn test_core_eval_array_reference_writes_survive_container_release() {
+    let source = r#"<?php
+$source = '$value = "before";
+$references = [&$value];
+$references["extra"] = "unused";
+$references["0"] = str_repeat("n", 3);
+echo $references[0], ":", $value, "|";
+unset($references);
+echo $value, "|";
+$box = new stdClass();
+$box->items = [&$value];
+$box->items[0] = str_repeat("z", 4);
+unset($box);
+echo $value;' . ' // ' . $argc;
+eval($source);
+"#;
+    let output = compile_and_run_capture(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "nnn:nnn|nnn|zzzz", "{}", output.stderr);
+}
+
+/// Repeated reference writes release their key/value operands and both persistent storage owners.
+#[test]
+fn test_core_eval_array_reference_writes_balance_owners() {
+    let operation = r#"$value = str_repeat("a", 4);
+$references = [&$value];
+$references[0] = str_repeat("b", 4);
+unset($references, $value);"#;
+    assert_eq!(
+        live_blocks_after_eval_operations("", operation, 5),
+        live_blocks_after_eval_operations("", operation, 1),
+        "Array reference writes retained an operand or storage owner",
+    );
+}
+
 /// Native functions, methods, and constructors consume the value captured before later arguments.
 #[test]
 fn test_core_eval_native_arguments_survive_later_source_replacement() {

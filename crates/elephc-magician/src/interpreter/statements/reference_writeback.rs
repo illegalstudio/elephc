@@ -241,6 +241,30 @@ pub(super) fn write_back_method_variadic_ref_args(
     Ok(())
 }
 
+/// Gives a persistent variable reference its own value owner before releasing displaced storage.
+pub(super) fn write_back_owned_variable_ref_target(
+    scope: &mut ElephcEvalScope,
+    name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let retained = values.retain(value)?;
+    let replaced = match set_owned_scope_cell(context, scope, name.to_string(), retained) {
+        Ok(replaced) => replaced,
+        Err(status) => {
+            let _ = eval_release_value(context, values, retained);
+            return Err(status);
+        }
+    };
+    let mut result = Ok(());
+    for replaced in replaced {
+        let released = eval_release_value(context, values, replaced);
+        if result.is_ok() { result = released; }
+    }
+    result
+}
+
 /// Stores one by-reference result in the original caller-side target.
 pub(in crate::interpreter) fn write_back_method_ref_target(
     target: &EvalReferenceTarget,
