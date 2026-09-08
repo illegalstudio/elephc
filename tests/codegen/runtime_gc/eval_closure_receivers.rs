@@ -10,6 +10,36 @@
 
 use crate::support::*;
 
+/// Native receiver throws return through Rust edge cleanup before eval catches the complete chain.
+#[test]
+fn test_core_eval_closure_receiver_destructor_throws_finish_native_owner_cleanup() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NativeThrowingClosureReceiver {
+    public string $buffer;
+    public function __construct() { $this->buffer = str_repeat("x", 48); }
+    public function read(): string { return "live"; }
+    public function __destruct() { throw new RuntimeException("receiver"); }
+}
+function releaseThrowingClosureReceivers(string $source): void { eval($source); }
+$source = '$caught = 0;
+for ($i = 0; $i < 3; $i++) {
+    $callbacks = [(new NativeThrowingClosureReceiver())->read(...), (new NativeThrowingClosureReceiver())->read(...)];
+    try { unset($callbacks); }
+    catch (RuntimeException $error) {
+        $previous = $error->getPrevious();
+        if ($previous !== null && $previous->getMessage() === "receiver" && $previous->getPrevious() === null) { $caught++; }
+        unset($error); unset($previous);
+    }
+}
+echo $caught, ":", gc_status()["protected"] ? "protected" : "ready";' . ' // ' . $argc;
+releaseThrowingClosureReceivers($source);
+unset($source);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3:ready", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Native and eval method receivers survive variable removal and are freed with their closures.
 #[test]
 fn test_core_eval_closure_receivers_survive_collection_and_release() {

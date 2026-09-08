@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Optional callbacks use the C ABI on every target and return borrowed child cells.
+//! - Final release returns an owned exception box; native propagation happens after Rust returns.
 //! - Counting includes these edges so retained closure receivers are not false GC roots.
 //! - Marking happens after the parent mark; cycles cannot recurse indefinitely.
 
@@ -17,6 +18,7 @@ pub fn emit_gc_eval_object_children(emitter: &mut Emitter) {
         Arch::AArch64 => emit_aarch64(emitter),
         Arch::X86_64 => emit_x86_64(emitter),
     }
+    emit_final_release(emitter);
 }
 
 /// Emits AAPCS64 traversal with x0 = object, x1 = unused candidate, x2 = mark flag.
@@ -53,13 +55,6 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // discard the traversal state
     emitter.instruction("ret");                                                 // resume the ordinary object-property walk
 
-    // -- tail-call final ownership release while the object identity is still valid --
-    emitter.label_global("__rt_eval_object_release_children");
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_elephc_eval_object_release_fn", 0);
-    emitter.instruction("cbz x10, __rt_eval_object_release_children_done");     // skip release when eval has never installed callbacks
-    emitter.instruction("br x10");                                              // let the C callback detach and release the owner's cells
-    emitter.label("__rt_eval_object_release_children_done");
-    emitter.instruction("ret");                                                 // objects without eval owners require no extra cleanup
 }
 
 /// Emits System V traversal with rdi = object, rsi = candidate, rdx = mark flag.
@@ -100,14 +95,28 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // resume the ordinary object-property walk
 
-    // -- tail-call final ownership release using the incoming C object argument --
+}
+
+/// Calls Rust's final-release hook and propagates its owned exception only after the callback returns.
+fn emit_final_release(emitter: &mut Emitter) {
     emitter.label_global("__rt_eval_object_release_children");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_eval_object_release_fn", 0);
-    emitter.instruction("test r10, r10");                                       // check whether eval installed the optional release callback
-    emitter.instruction("jz __rt_eval_object_release_children_done");           // skip objects when no eval ownership callback exists
-    emitter.instruction("jmp r10");                                             // let the C callback detach and release the owner's cells
+    let result = abi::int_result_reg(emitter);
+    let arg = abi::int_arg_reg_name(emitter.target, 0);
+    let callback = abi::secondary_scratch_reg(emitter);
+    abi::emit_frame_prologue(emitter, 32);
+    abi::store_at_offset(emitter, arg, 8);
+    abi::emit_load_symbol_to_reg(emitter, result, "_elephc_eval_object_release_fn", 0);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_eval_object_release_children_done");
+    emitter.instruction(&format!("mov {callback}, {result}"));                  // preserve the hook address while restoring its receiver argument
+    abi::load_at_offset(emitter, arg, 8);
+    abi::emit_call_reg(emitter, callback);
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_eval_object_release_children_throw");
     emitter.label("__rt_eval_object_release_children_done");
-    emitter.instruction("ret");                                                 // objects without eval owners require no extra cleanup
+    abi::emit_frame_restore(emitter, 32);
+    abi::emit_return(emitter);
+    emitter.label("__rt_eval_object_release_children_throw");
+    abi::emit_frame_restore(emitter, 32);
+    abi::emit_jump(emitter, "__rt_throw_boxed_destructor_exception");
 }
 
 #[cfg(test)]
@@ -128,6 +137,9 @@ mod tests {
             assert!(helper.contains("__rt_gc_mark_reachable"), "{name}");
             let indirect = if target.arch == Arch::AArch64 { "blr x10" } else { "call r10" };
             assert!(helper.contains(indirect), "{name}");
+            let release_body = helper.split_once("__rt_eval_object_release_children:").unwrap().1;
+            assert!(release_body.find(indirect).unwrap() < release_body.find("__rt_throw_boxed_destructor_exception").unwrap(), "{name}");
+            assert!(release_body.contains("__rt_eval_object_release_children_done:"), "{name}");
 
             let mut emitter = Emitter::new(target);
             super::super::emit_gc_collect_cycles(&mut emitter);

@@ -42,15 +42,7 @@ macro_rules! impl_lifecycle_scalar_ops {
 
     /// Releases a Mixed owner and schedules any contained native destructor exception for eval.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
-        let mut throwable = std::ptr::null_mut();
-        unsafe {
-            __elephc_eval_value_release_v2(value.as_ptr(), &mut throwable);
-        }
-        if !throwable.is_null() {
-            self.schedule_pending_throw(RuntimeCellHandle::from_raw(throwable))?;
-            return Err(EvalStatus::UncaughtThrowable);
-        }
-        Ok(())
+        self.release_cells([value])
     }
 
     /// Forces collection and schedules a bounded native Throwable for eval's catch machinery.

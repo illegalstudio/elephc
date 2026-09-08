@@ -289,7 +289,7 @@ macro_rules! impl_collection_call_ops {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        let arg_array = Self::arg_array(args)?;
+        let arg_array = self.arg_array(args)?;
         let result = unsafe {
             __elephc_eval_value_method_call(
                 object.as_ptr(),
@@ -301,10 +301,7 @@ macro_rules! impl_collection_call_ops {
                 self.context.cast(),
             )
         };
-        unsafe {
-            __elephc_eval_value_release(arg_array.as_ptr());
-        }
-        self.handle_native_call_result(result)
+        self.finish_native_call(result, arg_array)
     }
 
     /// Calls an AOT static method through the generated user helper.
@@ -315,7 +312,7 @@ macro_rules! impl_collection_call_ops {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        let arg_array = Self::arg_array(args)?;
+        let arg_array = self.arg_array(args)?;
         let result = unsafe {
             __elephc_eval_value_static_method_call(
                 class_name.as_ptr(),
@@ -328,10 +325,7 @@ macro_rules! impl_collection_call_ops {
                 self.context.cast(),
             )
         };
-        unsafe {
-            __elephc_eval_value_release(arg_array.as_ptr());
-        }
-        self.handle_native_call_result(result)
+        self.finish_native_call(result, arg_array)
     }
 
     /// Converts a native free-function result into eval status, preserving pending throwables.

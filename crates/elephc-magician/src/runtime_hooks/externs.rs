@@ -486,8 +486,7 @@ unsafe extern "C" {
     ) -> i64;
     pub(super) fn __elephc_eval_install_ob_handler_hook(callback: usize);
     pub(super) fn __elephc_eval_value_final_object_identity(value: *mut RuntimeCell) -> u64;
-    pub(super) fn __elephc_eval_value_release(value: *mut RuntimeCell);
-    /// Consumes a boxed owner and returns any contained native destructor throw through the output slot.
+    /// Consumes a boxed owner, preserving or chaining the owned Throwable already held by the slot.
     pub(super) fn __elephc_eval_value_release_v2(value: *mut RuntimeCell, throwable: *mut *mut RuntimeCell);
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Retains the original boxed handler value installed by compiled AOT code.
@@ -496,6 +495,8 @@ unsafe extern "C" {
     #[link_name = "__elephc_eval_install_dynamic_object_destructor_hook_v2"]
     pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
     /// Installs eval object-edge, final-release, and boxed array-reference retirement callbacks.
+    /// Installs child traversal, boxed-Throwable final release, and array reference retirement callbacks.
+    #[link_name = "__elephc_eval_install_object_owner_hooks_v2"]
     pub(super) fn __elephc_eval_install_object_owner_hooks(child: usize, release: usize, retire: usize);
 }
 

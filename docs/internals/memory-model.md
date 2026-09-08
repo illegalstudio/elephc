@@ -321,6 +321,12 @@ before propagating. The typed-property unset bridge has a versioned Throwable
 output argument so this propagation returns to Magician as an eval exception
 instead of jumping across Rust frames.
 
+Interpreter value releases and native-call argument cleanup use a versioned
+release boundary with an owned Throwable accumulator. Releasing a group finishes
+every element and preserves earlier destructor exceptions in the resulting chain.
+The eval object-edge callback returns that owned exception box to native code;
+it never propagates by jumping out of the Rust registry iteration.
+
 The runtime routine `__rt_heap_alloc`:
 
 1. **Probe the segregated small bins** — requests up to 64 bytes first check `_heap_small_bins` (`<=8`, `<=16`, `<=32`, `<=64`) and reuse a cached block from the smallest fitting class available.

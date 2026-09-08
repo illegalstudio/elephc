@@ -58,9 +58,9 @@ pub(super) fn emit_x86_64_install_dynamic_object_destructor_hook(emitter: &mut E
     emit_install_object_owner_hooks(emitter);
 }
 
-/// Installs C callbacks for object edges, final object release, and array-reference retirement.
+/// Installs C callbacks whose final-release hook returns an owned Throwable box or null.
 fn emit_install_object_owner_hooks(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_install_object_owner_hooks");
+    label_c_global(emitter, "__elephc_eval_install_object_owner_hooks_v2");
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(emitter, "x9", "_elephc_eval_object_gc_child_fn");
@@ -101,7 +101,7 @@ mod tests {
             assert_eq!(output.matches(&format!("{destructor}:")).count(), 1, "{name}");
             let legacy = target.extern_symbol("__elephc_eval_install_dynamic_object_destructor_hook");
             assert!(!output.contains(&format!("{legacy}:")), "{name}");
-            let symbol = target.extern_symbol("__elephc_eval_install_object_owner_hooks");
+            let symbol = target.extern_symbol("__elephc_eval_install_object_owner_hooks_v2");
             assert_eq!(output.matches(&format!("{symbol}:")).count(), 1, "{name}");
             assert!(output.contains("_elephc_eval_object_gc_child_fn"), "{name}");
             assert!(output.contains("_elephc_eval_object_release_fn"), "{name}");

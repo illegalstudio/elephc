@@ -5,7 +5,7 @@
 //! - The shared eval bridge emitter on every supported target.
 //!
 //! Key details:
-//! - The versioned C ABI consumes one boxed value and writes an owned Throwable box on failure.
+//! - The versioned C ABI consumes one value and updates an owned, nullable Throwable accumulator.
 //! - Cleanup installs its jump target below Rust and restores the enclosing native exception state.
 
 use super::{abi, label_c_global, Emitter};
@@ -15,7 +15,7 @@ const VALUE: usize = 8;
 const OUTPUT: usize = 16;
 const THROWN: usize = 24;
 
-/// Emits bounded value release with a non-null caller-owned exception output slot.
+/// Emits bounded value release, preserving and chaining any exception already owned by the slot.
 pub(super) fn emit(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_release_v2");
     let result = abi::int_result_reg(emitter);
@@ -24,8 +24,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), VALUE);
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), OUTPUT);
     abi::load_at_offset(emitter, scratch, OUTPUT);
+    abi::emit_load_from_address(emitter, result, scratch, 0);
     abi::emit_store_zero_to_address(emitter, scratch, 0);
-    abi::emit_load_int_immediate(emitter, result, 0);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_eval_release_begin");
+    abi::emit_call_label(emitter, "__rt_throwable_take_boxed");
+    emitter.label("__rt_eval_release_begin");
     abi::store_at_offset(emitter, result, THROWN);
     abi::load_at_offset(emitter, result, VALUE);
     super::super::exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_mixed", result, THROWN);
@@ -54,6 +57,7 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains(&target.extern_symbol("__elephc_eval_value_release_v2")), "{name}");
             assert!(asm.find("__rt_cleanup_invoke").unwrap() < asm.find("__rt_throwable_box_owned").unwrap(), "{name}");
+            assert!(asm.find("__rt_throwable_take_boxed").unwrap() < asm.find("__rt_cleanup_invoke").unwrap(), "{name}");
             assert_eq!(asm.matches("__rt_decref_mixed").count(), 1, "{name}");
             assert!(!asm.contains("__rt_throw_current"), "{name}");
         }

@@ -9,7 +9,7 @@
 //! - The runtime visits these edges and removes them before recursive child release.
 //! - No eval context pointer is needed, so object release may outlive eval teardown.
 
-use super::{ElephcRuntimeOps, EvalStatus, RuntimeCellHandle};
+use super::{ElephcRuntimeOps, EvalStatus, RuntimeCell, RuntimeCellHandle};
 use crate::interpreter::RuntimeValueOps;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -34,7 +34,7 @@ pub(super) fn retain_object_children(
         match values.retain(*child) {
             Ok(child) => retained.push(child.as_ptr() as usize),
             Err(status) => {
-                release_children(retained);
+                values.release_cells(owned_children(retained))?;
                 return Err(status);
             }
         }
@@ -42,11 +42,11 @@ pub(super) fn retain_object_children(
     let previous = match object_owners().lock() {
         Ok(mut owners) => owners.insert(identity, retained),
         Err(_) => {
-            release_children(retained);
+            values.release_cells(owned_children(retained))?;
             return Err(EvalStatus::RuntimeFatal);
         }
     };
-    if let Some(previous) = previous { release_children(previous); }
+    if let Some(previous) = previous { values.release_cells(owned_children(previous))?; }
     Ok(())
 }
 
@@ -59,19 +59,18 @@ pub(super) extern "C" fn object_gc_child(identity: u64, index: u64) -> usize {
     }).ok().flatten().unwrap_or(0)
 }
 
-/// Detaches a final object's edge list before releasing children that may recursively free other objects.
-pub(super) extern "C" fn release_object_children(identity: u64) {
-    let _ = std::panic::catch_unwind(|| {
+/// Releases every detached child, returning an owned Throwable only after Rust cleanup has finished.
+pub(super) extern "C" fn release_object_children(identity: u64) -> *mut RuntimeCell {
+    std::panic::catch_unwind(|| {
         let children = object_owners().lock().ok()
             .and_then(|mut owners| owners.remove(&identity));
-        if let Some(children) = children { release_children(children); }
+        let thrown = super::release::release_native_cells(owned_children(children.unwrap_or_default()), None);
         crate::ffi::dynamic_destructors::forget_released_object(identity);
-    });
+        thrown.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr)
+    }).unwrap_or(std::ptr::null_mut())
 }
 
-/// Releases detached owners without holding the registry mutex across runtime/destructor callbacks.
-fn release_children(children: Vec<usize>) {
-    for child in children {
-        unsafe { super::externs::__elephc_eval_value_release(child as *mut super::RuntimeCell); }
-    }
+/// Converts a detached registry vector into owned handles without keeping the registry locked.
+fn owned_children(children: Vec<usize>) -> impl Iterator<Item = RuntimeCellHandle> {
+    children.into_iter().map(|child| RuntimeCellHandle::from_raw(child as *mut RuntimeCell))
 }
