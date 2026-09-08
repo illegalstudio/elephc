@@ -330,6 +330,10 @@ Scope replacement, unset, and free similarly return exceptions through versioned
 Rust entries. Native adapters propagate them only after the scope mutation or
 complete scope retirement has finished; cleared native cleanup slots prevent
 reentrant unwinding from consuming a retired scope or local owner twice.
+Descriptor invokers also bound native calls, not only eval callbacks. An escaping
+exception releases all acquired argument owners and any interrupted return value;
+further destructor exceptions are accumulated before native propagation or the
+eval ABI's null-result return.
 
 The runtime routine `__rt_heap_alloc`:
 

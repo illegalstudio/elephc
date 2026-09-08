@@ -146,7 +146,7 @@ pub(crate) fn emit_runtime_callable_invoker_with_exception_boundary(
     emit_runtime_callable_invoker_impl(emitter, data, invoker, true);
 }
 
-/// Emits a descriptor invoker wrapper, optionally bounded by an exception handler.
+/// Bounds every invoker's owners; eval receives a pending throw while native callers rethrow it.
 fn emit_runtime_callable_invoker_impl(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -155,12 +155,7 @@ fn emit_runtime_callable_invoker_impl(
 ) {
     let call_reg = abi::nested_call_reg(emitter);
     let escape_label = format!("{}_eval_escape", invoker.label);
-    let base_frame_size = if catch_native_throws {
-        INVOKER_BOUNDARY_FRAME_SIZE
-    } else {
-        INVOKER_FRAME_SIZE
-    };
-    let argument_owners = InvokerArgumentOwners::new(base_frame_size, invoker.sig.params.len());
+    let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
     let mut ctx = InvokerEmitContext::new(invoker.label, argument_owners);
 
@@ -179,26 +174,22 @@ fn emit_runtime_callable_invoker_impl(
         INVOKER_DESCRIPTOR_OFFSET,
     );
     ctx.argument_owners.initialize(emitter);
-    if catch_native_throws {
-        abi::store_at_offset(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 1),
-            INVOKER_ARG_ARRAY_OFFSET,
-        );
-        emit_invoker_exception_boundary_push(
-            emitter,
-            INVOKER_BOUNDARY_BASE_OFFSET,
-            &escape_label,
-        );
-        abi::load_at_offset(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 1),
-            INVOKER_ARG_ARRAY_OFFSET,
-        );
-        emit_saved_descriptor_entry_to_call_reg(emitter, call_reg);
-    } else {
-        emit_descriptor_entry_to_call_reg(emitter, call_reg);
-    }
+    abi::store_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 1),
+        INVOKER_ARG_ARRAY_OFFSET,
+    );
+    emit_invoker_exception_boundary_push(
+        emitter,
+        INVOKER_BOUNDARY_BASE_OFFSET,
+        &escape_label,
+    );
+    abi::load_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 1),
+        INVOKER_ARG_ARRAY_OFFSET,
+    );
+    emit_saved_descriptor_entry_to_call_reg(emitter, call_reg);
 
     let ret_ty = emit_loaded_array_callback_call(
         LoadedArraySource::ArgumentRegister(1),
@@ -212,22 +203,24 @@ fn emit_runtime_callable_invoker_impl(
     );
     emit_boxed_invoker_return(emitter, &ret_ty);
     ctx.argument_owners.finish_return(emitter);
-    if catch_native_throws {
-        emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
-    }
+    emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
     // Restore before tearing down the frame (and on the escape path below): the boxed
     // Mixed result travels in return registers, which these loads never touch.
     emit_invoker_callee_saved_restores(emitter);
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
+    emitter.label(&escape_label);
+    emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+    ctx.argument_owners.release_all(emitter);
     if catch_native_throws {
-        emitter.label(&escape_label);
-        emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
-        ctx.argument_owners.release_all(emitter);
         emit_null_invoker_result(emitter);
-        emit_invoker_callee_saved_restores(emitter);
-        abi::emit_frame_restore(emitter, frame_size);
+    }
+    emit_invoker_callee_saved_restores(emitter);
+    abi::emit_frame_restore(emitter, frame_size);
+    if catch_native_throws {
         abi::emit_return(emitter);
+    } else {
+        abi::emit_jump(emitter, "__rt_throw_current");
     }
 }
 
@@ -265,19 +258,6 @@ fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
         return;
     }
     emit_box_current_value_as_mixed(emitter, &repr);
-}
-
-/// Loads the descriptor entry slot from the first invoker argument into `call_reg`.
-fn emit_descriptor_entry_to_call_reg(emitter: &mut Emitter, call_reg: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, x0", call_reg));              // keep descriptor while loading its native entry
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, rdi", call_reg));             // keep descriptor while loading its native entry
-        }
-    }
-    callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
 }
 
 /// Loads the saved descriptor entry slot into `call_reg` after a `setjmp` boundary.
@@ -2600,6 +2580,37 @@ fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut
 mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
+
+    /// Native and eval invokers both catch cleanup failures but preserve their distinct escape ABIs.
+    #[test]
+    fn invoker_exception_cleanup_covers_native_and_eval_calls_on_all_targets() {
+        let sig = FunctionSig {
+            params: vec![("value".to_string(), PhpType::Str)],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type: PhpType::Str,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+        };
+        let invoker = RuntimeCallableInvoker { label: "owned_invoker", sig: &sig, captures: &[] };
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for eval_boundary in [false, true] {
+                let mut emitter = Emitter::new(target);
+                emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, eval_boundary);
+                let asm = emitter.output();
+                assert!(asm.contains(&target.extern_symbol("setjmp")), "{name}: {eval_boundary}");
+                let escape = asm.split_once("owned_invoker_eval_escape:").unwrap().1;
+                assert_eq!(escape.matches("__rt_cleanup_invoke").count(), 2, "{name}: {eval_boundary}");
+                assert_eq!(escape.contains("__rt_throw_current"), !eval_boundary, "{name}: {eval_boundary}");
+            }
+        }
+    }
 
     /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
     #[test]

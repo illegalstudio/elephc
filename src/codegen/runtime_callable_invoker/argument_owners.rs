@@ -25,7 +25,7 @@ impl InvokerArgumentOwners {
         Self {
             first_offset: base_frame_size - 8,
             count,
-            frame_size: base_frame_size + ((count + 1) * 8).div_ceil(16) * 16,
+            frame_size: base_frame_size + ((count + 2) * 8).div_ceil(16) * 16,
         }
     }
 
@@ -43,7 +43,7 @@ impl InvokerArgumentOwners {
     pub(super) fn initialize(&self, emitter: &mut Emitter) {
         let zero = abi::secondary_scratch_reg(emitter);
         abi::emit_load_int_immediate(emitter, zero, 0);
-        for index in 0..=self.count {
+        for index in 0..=self.count + 1 {
             abi::store_at_offset(emitter, zero, self.offset(index));
         }
     }
@@ -70,11 +70,22 @@ impl InvokerArgumentOwners {
         self.clear_slot(self.count, emitter);
     }
 
-    /// Releases any acquired arguments and an interrupted return after native exception escape.
+    /// Finishes all owners after exception escape, accumulating further destructor throws.
     pub(super) fn release_all(&self, emitter: &mut Emitter) {
+        let result = abi::int_result_reg(emitter);
+        let pending = self.offset(self.count + 1);
+        abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
+        abi::store_at_offset(emitter, result, pending);
+        abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
         for index in 0..=self.count {
-            self.release_slot(index, emitter);
+            abi::load_at_offset(emitter, result, self.offset(index));
+            self.clear_slot(index, emitter);
+            crate::codegen_support::runtime::emit_guarded_cleanup_call(
+                emitter, "__rt_decref_any", result, pending,
+            );
         }
+        abi::load_at_offset(emitter, result, pending);
+        abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
     }
 
     /// Clears one owner before its release so reentrant cleanup cannot consume it twice.
@@ -105,6 +116,7 @@ mod tests {
             let owners = InvokerArgumentOwners::new(super::super::INVOKER_BOUNDARY_FRAME_SIZE, 4);
             assert!(owners.offset(0) > super::super::INVOKER_BOUNDARY_BASE_OFFSET);
             assert!(owners.offset(3) <= owners.frame_size() - 16);
+            assert!(owners.offset(5) <= owners.frame_size() - 16);
             assert_eq!(owners.frame_size() % 16, 0);
             owners.initialize(&mut emitter);
             owners.record_pushed(0, &PhpType::Mixed, &mut emitter);
@@ -113,7 +125,9 @@ mod tests {
             owners.record_pushed(3, &PhpType::Str, &mut emitter);
             owners.finish_return(&mut emitter);
             owners.release_all(&mut emitter);
-            assert_eq!(emitter.output().matches("__rt_decref_any").count(), 9, "{name}");
+            let asm = emitter.output();
+            assert!(asm.matches("__rt_decref_any").count() >= 9, "{name}");
+            assert_eq!(asm.matches("__rt_cleanup_invoke").count(), 5, "{name}");
         }
     }
 }
