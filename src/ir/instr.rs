@@ -897,7 +897,8 @@ impl Op {
             ReleaseLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP
             }
-            ReleaseLocalSlot => E::READS_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            // Retiring the slot can invoke an arbitrary PHP destructor after clearing its owner.
+            ReleaseLocalSlot => E::all(),
             LoadGlobal
             | LoadStaticProperty
             | StaticPropInitialized

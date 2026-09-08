@@ -10,6 +10,28 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Unsetting a plain heap local uses atomic slot retirement instead of releasing a still-rooted load.
+#[test]
+fn unset_heap_local_retires_its_slot_before_destructor_escape() {
+    let module = super::lower_source(r#"<?php
+        class RetiredSlotValue {
+            public function __destruct() { throw new RuntimeException("retired"); }
+        }
+        function retire_heap_slot(): void {
+            $value = new RetiredSlotValue();
+            unset($value);
+        }
+        try { retire_heap_slot(); } catch (RuntimeException $error) { echo "caught"; }
+    "#);
+    let function = module.functions.iter().find(|function| function.name == "retire_heap_slot").unwrap();
+    let slot = function.locals.iter().find(|local| local.name.as_deref() == Some("value")).unwrap().id;
+    let retirement = function.instructions.iter().find(|inst| {
+        inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))
+    }).expect("unset must clear the owning slot before invoking a throwing destructor");
+    assert!(retirement.effects.contains(crate::ir::Effects::WRITES_LOCAL));
+    assert!(retirement.effects.contains(crate::ir::Effects::MAY_THROW));
+}
+
 /// Every PHP catch snapshots the live activation before setjmp, including nested handlers.
 #[test]
 fn exception_handlers_preserve_their_surviving_activation_on_all_targets() {

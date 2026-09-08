@@ -336,6 +336,9 @@ reentrant unwinding from consuming a retired scope or local owner twice.
 Promoted local reference cells follow the same rule: detach the owner before
 releasing the payload, contain any payload exception, and free the cell before
 propagating. This applies both to explicit retirement and function epilogues.
+Plain local overwrites and `unset()` also retire the previous slot owner before
+calling its release helper. The EIR retirement operation records that local
+mutation and the observable effects of a potentially throwing destructor.
 Ordinary executable PHP frames and library frames both publish exception-cleanup
 activations. Each PHP catch saves the current activation as the unwind stop, so
 the catching function and its callers keep their live local owners. The unwinder

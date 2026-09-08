@@ -10,6 +10,30 @@
 
 use crate::support::*;
 
+/// A destructor escaping an explicit unset cannot make frame unwinding release its retired owner again.
+#[test]
+fn test_core_unset_throwing_local_retires_owner_before_unwinding() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RetiredLocalDestructor {
+    public static int $calls = 0;
+    public function __destruct() { self::$calls++; throw new RuntimeException("retired"); }
+}
+function retireThrowingLocal(): void {
+    $value = new RetiredLocalDestructor();
+    unset($value);
+}
+try { retireThrowingLocal(); }
+catch (RuntimeException $error) {
+    echo $error->getMessage(), ":", RetiredLocalDestructor::$calls;
+    unset($error);
+}
+echo "|after";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "retired:1|after", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Catching in a PHP function retires child frames without releasing the surviving function's owners.
 #[test]
 fn test_core_native_unwind_preserves_the_catching_frame_owners() {
@@ -183,7 +207,7 @@ $cycle->self = $cycle;
 unset($cycle);
 echo gc_collect_cycles() > 0 ? "collected" : "suppressed";
 "#);
-    assert!(out.success, "{}", out.stderr);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "chain|chain|chain|chain|unprotected|collected", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
