@@ -278,3 +278,57 @@ echo eval($source);
     };
     assert_eq!(live(5), live(1), "Reflection arguments leaked while propagating an exception");
 }
+
+/// Counts live blocks after repeated opaque-eval operations without retaining each operation's output.
+fn live_blocks_after_eval_operations(setup: &str, operation: &str, iterations: usize) -> i128 {
+    let source = format!(r#"<?php
+$source = '{setup}
+{}
+return 42;' . ' // ' . $argc;
+echo eval($source);
+"#, operation.repeat(iterations));
+    let output = compile_and_run_with_gc_stats(&source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "42", "{}", output.stderr);
+    let (allocated, freed) = parse_gc_stats(&output.stderr);
+    allocated as i128 - freed as i128
+}
+
+/// Throwable construction and destruction balance owners even when no exception is thrown.
+#[test]
+fn test_core_eval_throwable_constructor_owners_release_without_throw() {
+    let operation = r#"$error = new RuntimeException("stop"); unset($error);"#;
+    assert_eq!(
+        live_blocks_after_eval_operations("", operation, 5),
+        live_blocks_after_eval_operations("", operation, 1),
+        "Throwable construction or destruction retained an owner",
+    );
+}
+
+/// Direct eval exceptions balance owners independently of Reflection's call-array adapter.
+#[test]
+fn test_core_eval_throwable_catch_owners_release_without_reflection() {
+    let setup = r#"function failDirectArguments($value) { throw new RuntimeException("stop"); }"#;
+    let operation = r#"try { failDirectArguments(str_repeat("v", 2)); echo "missing throw"; }
+catch (RuntimeException $error) { unset($error); }"#;
+    assert_eq!(
+        live_blocks_after_eval_operations(setup, operation, 5),
+        live_blocks_after_eval_operations(setup, operation, 1),
+        "Direct eval exception propagation retained an owner",
+    );
+}
+
+/// Reflected eval-declared functions release extracted argument cells on an ordinary return.
+#[test]
+fn test_core_eval_reflection_declared_call_array_owners_release_after_return() {
+    let setup = r#"function returnReflectedArgument($value) { return $value; }
+$function = new ReflectionFunction("returnReflectedArgument");"#;
+    let operation = r#"$result = $function->invokeArgs([str_repeat("v", 2)]);
+if ($result !== "vv") { echo "invalid return"; }
+unset($result);"#;
+    assert_eq!(
+        live_blocks_after_eval_operations(setup, operation, 5),
+        live_blocks_after_eval_operations(setup, operation, 1),
+        "Reflected eval return retained an argument or result owner",
+    );
+}
