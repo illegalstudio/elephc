@@ -11,8 +11,8 @@
 use super::super::super::*;
 use super::backtrace_runtime::{eval_debug_backtrace, eval_debug_print_backtrace};
 use super::super::collection_builder::EvalArrayBuilder;
+use super::object_inventory::eval_get_mangled_object_vars;
 use crate::context::EvalErrorHandlerState;
-use std::collections::HashSet;
 
 const E_USER_ERROR: i64 = 256;
 const E_USER_WARNING: i64 = 512;
@@ -482,61 +482,6 @@ fn eval_get_included_files(
     }
     let names = context.included_file_names();
     string_array_from_iter(names.iter().map(String::as_str), values)
-}
-
-/// Returns all initialized object properties under visibility-mangled PHP keys.
-fn eval_get_mangled_object_vars(
-    args: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [object] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    if values.type_tag(*object)? != EVAL_TAG_OBJECT {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let identity = values.object_identity(*object)?;
-    let Some(class_name) = context.dynamic_object_class_name(identity) else {
-        return eval_get_object_vars_result(args, context, values);
-    };
-    let initial_capacity = values.object_property_len(*object)?;
-    let mut result = EvalArrayBuilder::assoc(values, initial_capacity)?;
-    let mut storage_names = HashSet::new();
-    for class in context.class_chain(&class_name) {
-        for property in class.properties() {
-            if property.is_static() {
-                continue;
-            }
-            let storage = eval_instance_property_storage_name(class.name(), property);
-            storage_names.insert(storage.clone());
-            if !result.values().property_is_initialized(*object, &storage)? {
-                continue;
-            }
-            let key_name = match property.visibility() {
-                EvalVisibility::Public => property.name().to_string(),
-                EvalVisibility::Protected => format!("\0*\0{}", property.name()),
-                EvalVisibility::Private => format!(
-                    "\0{}\0{}",
-                    class.name().trim_start_matches('\\'),
-                    property.name()
-                ),
-            };
-            result.string(&key_name, |values| values.property_get(*object, &storage))?;
-        }
-    }
-    let property_count = result.values().object_property_len(*object)?;
-    for position in 0..property_count {
-        let key = result.values().object_property_iter_key(*object, position)?;
-        let key_bytes = result.values().string_bytes(key);
-        result.values().release(key)?;
-        let key_name = String::from_utf8(key_bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
-        if storage_names.contains(&key_name) {
-            continue;
-        }
-        result.string(&key_name, |values| values.property_get(*object, &key_name))?;
-    }
-    Ok(result.finish())
 }
 
 /// Returns all live eval resources, optionally restricted to one type name.

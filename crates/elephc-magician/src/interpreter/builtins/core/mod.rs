@@ -54,6 +54,7 @@ mod ob_get_status;
 mod ob_implicit_flush;
 mod ob_list_handlers;
 mod ob_start;
+mod object_inventory;
 mod print_r;
 mod restore_error_handler;
 mod restore_exception_handler;

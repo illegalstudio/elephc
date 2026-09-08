@@ -379,7 +379,7 @@ pub(super) fn eval_native_static_method_call_with_scope(
 }
 
 /// Runs one generated/AOT bridge operation while exposing an explicit PHP class scope.
-pub(super) fn eval_with_native_bridge_scope<T>(
+pub(in crate::interpreter) fn eval_with_native_bridge_scope<T>(
     scope: &str,
     context: &mut ElephcEvalContext,
     call: impl FnOnce() -> Result<T, EvalStatus>,

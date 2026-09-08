@@ -9,6 +9,46 @@
 
 use crate::support::*;
 
+/// Mangled inventories include private native ancestors and raw eval slots without invoking hooks.
+#[test]
+fn test_core_eval_mangled_inventory_combines_native_and_dynamic_storage() {
+    let source = r#"<?php
+class NativeInventoryRoot {
+    private int $secret = 3;
+    protected int $guard = 4;
+    public int $pending;
+}
+class NativeInventoryChild extends NativeInventoryRoot {
+    private int $secret = 5;
+    public int $visible = 6;
+}
+$source = '$native = new NativeInventoryChild();
+$vars = get_mangled_object_vars($native);
+echo $vars["\0NativeInventoryRoot\0secret"], ":", $vars["\0NativeInventoryChild\0secret"], ":",
+     $vars["\0*\0guard"], ":", $vars["visible"], ":", count($vars), "|";
+class DynamicInventoryChild extends NativeInventoryRoot {
+    public int $secret = 7;
+    protected int $guard = 8;
+    public int $later;
+    public int $virtual { get { echo "hook-called"; return 99; } }
+}
+$dynamic = new DynamicInventoryChild();
+$vars = get_mangled_object_vars($dynamic);
+echo $vars["\0NativeInventoryRoot\0secret"], ":", $vars["secret"], ":", $vars["\0*\0guard"], ":", count($vars), "|";
+class PureInventory {
+    private int $secret = 9;
+    public int $value = 10;
+    public int $pending;
+}
+$pure = new PureInventory();
+$value = 11; $pure->value =& $value; $value = 12;
+$vars = get_mangled_object_vars($pure);
+echo $vars["\0PureInventory\0secret"], ":", $vars["value"], ":", count($vars);' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "3:5:4:6:4|3:7:8:3|9:12:2");
+}
+
 /// Unset eval overrides invalidate the native slot, and later writes initialize both views again.
 #[test]
 fn test_core_eval_native_typed_property_unset_keeps_both_views_uninitialized() {

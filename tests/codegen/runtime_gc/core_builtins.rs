@@ -10,6 +10,17 @@
 
 use crate::support::*;
 
+/// Mangled native/eval inventories release metadata arrays, keys, and property result cells.
+#[test]
+fn test_core_eval_mangled_inventory_releases_metadata_temporaries() {
+    assert_core_eval_collection_cleanup_with_native(
+        "class NativeMangledGcParent { private int $secret = 3; protected int $guard = 4; }",
+        "class EvalMangledGcChild extends NativeMangledGcParent { public int $secret = 5; }
+         $object = new EvalMangledGcChild();",
+        "$vars = get_mangled_object_vars($object); unset($vars);",
+    );
+}
+
 /// SPL mutators own inserted values and offset readers do not consume the eval caller's indexes.
 #[test]
 fn test_core_eval_spl_intrinsics_preserve_caller_cells_and_stored_values() {

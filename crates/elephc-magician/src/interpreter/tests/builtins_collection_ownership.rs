@@ -12,6 +12,25 @@ use super::super::*;
 use super::support::*;
 use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
+/// Metadata decoding releases its keys and fetched cells on both success and invalid UTF-8.
+#[test]
+fn metadata_array_decoder_releases_temporary_owners() {
+    for invalid in [false, true] {
+        let mut values = FakeOps::default();
+        let value = values.string_bytes_value(if invalid { &[0xff] } else { b"NativeParent" }).unwrap();
+        let array = values.alloc(FakeValue::Array(vec![value]));
+        let result = crate::interpreter::builtins::eval_runtime_string_array_to_vec(array, &mut values);
+        if invalid {
+            assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+        } else {
+            assert_eq!(result.unwrap(), vec!["NativeParent"]);
+        }
+        assert_eq!(values.releases.len(), 2);
+        assert!(values.releases.contains(&value));
+        assert!(!values.releases.contains(&array));
+    }
+}
+
 /// Successful insertion releases temporary operands but transfers the finished array to its caller.
 #[test]
 fn collection_builder_releases_operands_without_releasing_finished_array() {

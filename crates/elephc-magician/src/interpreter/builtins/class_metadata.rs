@@ -165,7 +165,7 @@ pub(in crate::interpreter) fn eval_indexed_string_array_result(
     Ok(result)
 }
 
-/// Copies a runtime string array into Rust-owned strings for class metadata helpers.
+/// Borrows a runtime string array and releases temporary keys and element owners after decoding.
 pub(in crate::interpreter) fn eval_runtime_string_array_to_vec(
     array: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -174,8 +174,14 @@ pub(in crate::interpreter) fn eval_runtime_string_array_to_vec(
     let mut result = Vec::with_capacity(len);
     for position in 0..len {
         let key = values.int(position as i64)?;
-        let value = values.array_get(array, key)?;
-        result.push(eval_class_metadata_name(value, values)?);
+        let value = values.array_get(array, key);
+        let key_released = values.release(key);
+        let value = value?;
+        let name = eval_class_metadata_name(value, values);
+        let value_released = values.release(value);
+        key_released?;
+        value_released?;
+        result.push(name?);
     }
     Ok(result)
 }
