@@ -91,6 +91,9 @@ fn test_core_class_vars_mixed_extract_preserves_methods_object_type() {
         class CoreMixedMethodsTarget {
             public function m(): void {}
         }
+        function core_mixed_methods_factory(): CoreMixedMethodsTarget {
+            return new CoreMixedMethodsTarget();
+        }
 
         $a = get_class_vars("CoreMixedVarsSource")["x"];
         echo $a, ":", implode(",", get_class_methods(new CoreMixedMethodsTarget())), "|";
@@ -98,9 +101,12 @@ fn test_core_class_vars_mixed_extract_preserves_methods_object_type() {
         $obj = new CoreMixedMethodsTarget();
         $x = get_class_vars(CoreMixedVarsSource::class)["bar"];
         echo $x, ":", implode(",", get_class_methods($obj));
+
+        $factoryValue = get_class_vars(CoreMixedVarsSource::class)["x"];
+        echo "|", $factoryValue, ":", implode(",", get_class_methods(core_mixed_methods_factory()));
         "#,
     );
-    assert_eq!(out, "1:m|7:m");
+    assert_eq!(out, "1:m|7:m|1:m");
 }
 
 /// Verifies runtime class-name strings and concrete object subclasses select AOT metadata.
