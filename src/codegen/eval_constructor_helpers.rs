@@ -605,7 +605,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the message argument
     emitter.instruction("cmp x9, #0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("b.eq {}", success_label));                    // keep the empty Throwable defaults when no message was supplied
-    emit_aarch64_load_eval_arg(module, emitter, 0);
+    emit_aarch64_load_eval_arg(module, emitter, 0, fail_label);
     emit_aarch64_cast_eval_arg(
         module,
         emitter,
@@ -621,7 +621,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the code argument
     emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep code zero when only the message was supplied
-    emit_aarch64_load_eval_arg(module, emitter, 1);
+    emit_aarch64_load_eval_arg(module, emitter, 1, fail_label);
     emit_aarch64_cast_eval_arg(
         module,
         emitter,
@@ -655,7 +655,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the message argument
     emitter.instruction("cmp r11, 0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("je {}", success_label));                      // keep the empty Throwable defaults when no message was supplied
-    emit_x86_64_load_eval_arg(module, emitter, 0);
+    emit_x86_64_load_eval_arg(module, emitter, 0, fail_label);
     emit_x86_64_cast_eval_arg(
         module,
         emitter,
@@ -671,7 +671,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the code argument
     emitter.instruction("cmp r11, 1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep code zero when only the message was supplied
-    emit_x86_64_load_eval_arg(module, emitter, 1);
+    emit_x86_64_load_eval_arg(module, emitter, 1, fail_label);
     emit_x86_64_cast_eval_arg(
         module,
         emitter,
@@ -701,7 +701,7 @@ fn emit_aarch64_builtin_throwable_previous_arg(
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload argc before testing the previous argument
     emitter.instruction("cmp x9, #2");                                          // did eval supply the normalized previous argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep null when the legacy bridge omitted previous
-    emit_aarch64_load_eval_arg(module, emitter, 2);
+    emit_aarch64_load_eval_arg(module, emitter, 2, fail_label);
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed previous argument for inspection
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the nullable previous payload
     emitter.instruction("cmp x0, #8");                                          // runtime tag 8 means the previous argument is null
@@ -725,7 +725,7 @@ fn emit_x86_64_builtin_throwable_previous_arg(
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload argc before testing the previous argument
     emitter.instruction("cmp r11, 2");                                          // did eval supply the normalized previous argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep null when the legacy bridge omitted previous
-    emit_x86_64_load_eval_arg(module, emitter, 2);
+    emit_x86_64_load_eval_arg(module, emitter, 2, fail_label);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed previous argument for inspection
     emitter.instruction("call __rt_mixed_unbox");                               // expose the nullable previous payload
     emitter.instruction("cmp rax, 8");                                          // runtime tag 8 means the previous argument is null
@@ -1120,7 +1120,7 @@ fn emit_aarch64_prepare_constructor_args(
             let done_label = format!("{}_arg_{}_done", body_label, index);
             emitter.instruction("ldr x9, [sp, #32]");                           // reload argc before selecting the optional constructor default
             emitter.instruction(&format!("cbz x9, {}", default_label));         // omitted SplFixedArray size uses PHP's zero default
-            emit_aarch64_load_eval_arg(module, emitter, index);
+            emit_aarch64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_aarch64_cast_eval_arg(
                 module,
@@ -1145,7 +1145,7 @@ fn emit_aarch64_prepare_constructor_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_aarch64_load_eval_arg(module, emitter, index);
+            emit_aarch64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_aarch64_cast_eval_arg(
                 module,
@@ -1195,7 +1195,7 @@ fn emit_x86_64_prepare_constructor_args(
             emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload argc before selecting the optional constructor default
             emitter.instruction("test r10, r10");                               // did eval pass an explicit constructor argument?
             emitter.instruction(&format!("jz {}", default_label));              // omitted SplFixedArray size uses PHP's zero default
-            emit_x86_64_load_eval_arg(module, emitter, index);
+            emit_x86_64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_x86_64_cast_eval_arg(
                 module,
@@ -1220,7 +1220,7 @@ fn emit_x86_64_prepare_constructor_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_x86_64_load_eval_arg(module, emitter, index);
+            emit_x86_64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_x86_64_cast_eval_arg(
                 module,
@@ -1266,7 +1266,7 @@ fn emit_aarch64_constructor_ref_arg_cells(
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, true);
     for slot in &ref_slots {
-        emit_aarch64_load_eval_arg(module, emitter, slot.param_index);
+        emit_aarch64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
@@ -1302,7 +1302,7 @@ fn emit_x86_64_constructor_ref_arg_cells(
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, true);
     for slot in &ref_slots {
-        emit_x86_64_load_eval_arg(module, emitter, slot.param_index);
+        emit_x86_64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
@@ -1325,30 +1325,14 @@ fn emit_x86_64_constructor_ref_arg_cells(
     ref_slots
 }
 
-/// Loads one eval argument into an ARM64 spill slot as a boxed Mixed cell.
-fn emit_aarch64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usize) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
-    abi::emit_load_int_immediate(emitter, "x0", index as i64);
-    abi::emit_call_label(emitter, &value_int_symbol);
-    emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed index while loading from the argument array
-    emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the boxed index to the eval array reader
-    emitter.instruction("ldr x0, [x29, #-24]");                                 // pass the eval argument array to the reader
-    abi::emit_call_label(emitter, &array_get_symbol);
-    emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed eval argument for coercion
+/// Borrows one normalized eval argument in an ARM64 spill slot for constructor dispatch.
+fn emit_aarch64_load_eval_arg(_module: &Module, emitter: &mut Emitter, index: usize, fail_label: &str) {
+    super::eval_argument_helpers::emit_borrowed_argument(emitter, index, 24, 16, fail_label);
 }
 
-/// Loads one eval argument into an x86_64 spill slot as a boxed Mixed cell.
-fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usize) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
-    abi::emit_load_int_immediate(emitter, "rdi", index as i64);
-    abi::emit_call_label(emitter, &value_int_symbol);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed index while loading from the argument array
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the boxed index to the eval array reader
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the eval argument array to the reader
-    abi::emit_call_label(emitter, &array_get_symbol);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed eval argument for coercion
+/// Borrows one normalized eval argument in an x86_64 spill slot for constructor dispatch.
+fn emit_x86_64_load_eval_arg(_module: &Module, emitter: &mut Emitter, index: usize, fail_label: &str) {
+    super::eval_argument_helpers::emit_borrowed_argument(emitter, index, 32, 40, fail_label);
 }
 
 /// Casts one boxed eval argument into ARM64 result registers for temporary staging.

@@ -1607,7 +1607,7 @@ fn emit_aarch64_prepare_method_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_aarch64_load_eval_arg(module, emitter, index, 24);
+            emit_aarch64_load_eval_arg(module, emitter, index, 24, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_aarch64_cast_eval_arg(
                 module,
@@ -1659,7 +1659,7 @@ fn emit_aarch64_prepare_static_method_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_aarch64_load_eval_arg(module, emitter, index, 40);
+            emit_aarch64_load_eval_arg(module, emitter, index, 40, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_aarch64_cast_eval_arg(
                 module,
@@ -1712,7 +1712,7 @@ fn emit_x86_64_prepare_method_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_x86_64_load_eval_arg(module, emitter, index);
+            emit_x86_64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_x86_64_cast_eval_arg(
                 module,
@@ -1765,7 +1765,7 @@ fn emit_x86_64_prepare_static_method_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_x86_64_load_eval_arg(module, emitter, index);
+            emit_x86_64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_x86_64_cast_eval_arg(
                 module,
@@ -1826,7 +1826,7 @@ fn emit_aarch64_ref_arg_cells(
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
     for slot in &ref_slots {
-        emit_aarch64_load_eval_arg(module, emitter, slot.param_index, arg_array_frame_offset);
+        emit_aarch64_load_eval_arg(module, emitter, slot.param_index, arg_array_frame_offset, fail_label);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
@@ -1863,7 +1863,7 @@ fn emit_x86_64_ref_arg_cells(
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
     for slot in &ref_slots {
-        emit_x86_64_load_eval_arg(module, emitter, slot.param_index);
+        emit_x86_64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
@@ -1917,37 +1917,22 @@ fn preserve_result_and_write_back_x86_64_ref_args(
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
 }
 
-/// Loads one eval argument into an ARM64 spill slot as a boxed Mixed cell.
+/// Borrows one normalized eval argument in an ARM64 spill slot for the native call.
 fn emit_aarch64_load_eval_arg(
-    module: &Module,
+    _module: &Module,
     emitter: &mut Emitter,
     index: usize,
     arg_array_frame_offset: usize,
+    fail_label: &str,
 ) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
-    abi::emit_load_int_immediate(emitter, "x0", index as i64);
-    abi::emit_call_label(emitter, &value_int_symbol);
-    emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed index while loading from the argument array
-    emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the boxed index to the eval array reader
-    emitter.instruction(
-        &format!("ldr x0, [x29, #-{}]", arg_array_frame_offset)
-    );                                                                          // pass the eval argument array to the reader
-    abi::emit_call_label(emitter, &array_get_symbol);
-    emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed eval argument for coercion
+    super::eval_argument_helpers::emit_borrowed_argument(
+        emitter, index, arg_array_frame_offset, 16, fail_label,
+    );
 }
 
-/// Loads one eval argument into an x86_64 spill slot as a boxed Mixed cell.
-fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usize) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
-    abi::emit_load_int_immediate(emitter, "rdi", index as i64);
-    abi::emit_call_label(emitter, &value_int_symbol);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed index while loading from the argument array
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the boxed index to the eval array reader
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the eval argument array to the reader
-    abi::emit_call_label(emitter, &array_get_symbol);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed eval argument for coercion
+/// Borrows one normalized eval argument in an x86_64 spill slot for the native call.
+fn emit_x86_64_load_eval_arg(_module: &Module, emitter: &mut Emitter, index: usize, fail_label: &str) {
+    super::eval_argument_helpers::emit_borrowed_argument(emitter, index, 32, 40, fail_label);
 }
 
 /// Casts one boxed eval argument into ARM64 result registers for temporary staging.

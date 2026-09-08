@@ -15,6 +15,7 @@ pub(crate) mod context;
 mod enum_singletons;
 mod eval_callable_helpers;
 mod eval_class_constant_helpers;
+mod eval_argument_helpers;
 mod eval_constructor_helpers;
 mod eval_error_handler_helpers;
 mod eval_handler_helpers;
