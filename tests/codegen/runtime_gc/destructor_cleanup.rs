@@ -10,6 +10,40 @@
 
 use crate::support::*;
 
+/// Catching in a PHP function retires child frames without releasing the surviving function's owners.
+#[test]
+fn test_core_native_unwind_preserves_the_catching_frame_owners() {
+    let out = compile_and_run(r#"<?php
+class SurvivingCatchOwner {
+    public static int $destroyed = 0;
+    public int $value;
+    public function __construct(int $value) { $this->value = $value; }
+    public function __destruct() { self::$destroyed++; }
+}
+function abortCatchChild(Exception $error): void {
+    $child = new SurvivingCatchOwner(7);
+    echo $child->value, ":";
+    throw $error;
+}
+function preserveCatchOwner(Exception $error): void {
+    $owner = new SurvivingCatchOwner(42);
+    for ($i = 0; $i < 3; $i++) {
+        try { abortCatchChild($error); }
+        catch (Exception $caught) {
+            echo $owner->value, ":", SurvivingCatchOwner::$destroyed, "|";
+            unset($caught);
+        }
+    }
+    echo $owner->value, "|";
+}
+$error = new Exception("shared");
+preserveCatchOwner($error);
+unset($error);
+echo SurvivingCatchOwner::$destroyed;
+"#);
+    assert_eq!(out, "7:42:1|7:42:2|7:42:3|42|4");
+}
+
 /// A throw to the caller releases every owned local in an ordinary native executable frame.
 #[test]
 fn test_core_native_unwind_releases_owned_frame_locals() {

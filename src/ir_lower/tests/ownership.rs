@@ -10,6 +10,33 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Every PHP catch snapshots the live activation before setjmp, including nested handlers.
+#[test]
+fn exception_handlers_preserve_their_surviving_activation_on_all_targets() {
+    let source = r#"<?php
+        function preserve_catch_frame(Exception $error): void {
+            try {
+                try { throw $error; } catch (Exception $inner) { echo "inner"; }
+                throw $error;
+            } catch (Exception $outer) { echo "outer"; }
+        }
+        preserve_catch_frame(new Exception("stop"));
+    "#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(name).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let handlers = asm.split("push EIR exception handler").skip(1).collect::<Vec<_>>();
+        assert!(handlers.len() >= 2, "{name}: the nested PHP catches must survive lowering");
+        for handler in handlers {
+            let setup = handler.split("setjmp").next().unwrap();
+            assert!(setup.contains("_exc_call_frame_top"), "{name}: catch must preserve its activation");
+        }
+    }
+}
+
 /// Executable PHP frames publish callbacks that contain destructor throws on every supported ABI.
 #[test]
 fn executable_frames_publish_non_escaping_local_cleanup_on_all_targets() {

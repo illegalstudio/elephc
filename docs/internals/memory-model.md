@@ -337,7 +337,9 @@ Promoted local reference cells follow the same rule: detach the owner before
 releasing the payload, contain any payload exception, and free the cell before
 propagating. This applies both to explicit retirement and function epilogues.
 Ordinary executable PHP frames and library frames both publish exception-cleanup
-activations. The unwinder detaches each abandoned activation before running its
+activations. Each PHP catch saves the current activation as the unwind stop, so
+the catching function and its callers keep their live local owners. The unwinder
+detaches each younger, abandoned activation before running its
 callback. That callback clears local owners before release and contains each
 destructor exception, preserving the original exception chain while finishing
 the remaining locals, reference cells, and eval handles. Cleanup of a frame must
