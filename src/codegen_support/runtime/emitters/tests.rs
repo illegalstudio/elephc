@@ -11,6 +11,32 @@ use super::*;
 use crate::codegen_support::platform::{Arch, Platform, Target};
 use crate::codegen_support::runtime::{arrays, buffers, pointers};
 
+/// Full and native-only eval runtimes define scope APIs once and gate every Rust scope dependency.
+#[test]
+fn eval_scope_exports_are_unique_and_native_fragments_do_not_require_rust() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        for bridge in [false, true] {
+            let mut emitter = Emitter::new(target);
+            emit_runtime(&mut emitter, RuntimeFeatures {
+                eval_scope: true,
+                eval_bridge: bridge,
+                ..RuntimeFeatures::none()
+            });
+            let asm = emitter.output();
+            for entry in ["__elephc_eval_scope_free", "__elephc_eval_scope_set"] {
+                let label = format!("{}:", target.extern_symbol(entry));
+                assert_eq!(asm.lines().filter(|line| *line == label).count(), 1,
+                    "{name}, bridge={bridge}: duplicate or missing {entry}");
+            }
+            for entry in ["__elephc_eval_scope_free_v2", "__elephc_eval_scope_set_v2", "__elephc_eval_scope_unset_v2"] {
+                assert_eq!(asm.contains(&target.extern_symbol(entry)), bridge,
+                    "{name}, bridge={bridge}: wrong dependency on {entry}");
+            }
+        }
+    }
+}
+
 /// Verifies that AArch64 runtime emits fiber routines.
 #[test]
 fn test_aarch64_runtime_emits_fiber_routines() {

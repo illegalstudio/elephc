@@ -207,7 +207,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
         // the self-contained value wrappers plus the native scope helpers
         // (the magician staticlib supplies the scope symbols only in the full
         // bridge configuration).
-        eval_bridge::emit_eval_bridge_runtime(emitter);
+        eval_bridge::emit_eval_value_runtime(emitter);
         eval_scope::emit_eval_scope_runtime(emitter);
     }
 

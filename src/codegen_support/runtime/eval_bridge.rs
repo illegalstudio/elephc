@@ -9,6 +9,7 @@
 //! - Exported wrapper labels use platform C-symbol mangling because they are
 //!   referenced from Rust object files, while internal `__rt_*` calls keep the
 //!   existing assembly ABI.
+//! - Native eval fragments share value wrappers but never emit Rust scope adapters.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -26,6 +27,12 @@ fn x86_64_mixed_heap_kind_instruction() -> String {
 
 /// Emits every eval value wrapper required by `libelephc-magician`.
 pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
+    emit_eval_value_runtime(emitter);
+    scope_release::emit(emitter);
+}
+
+/// Emits self-contained value wrappers shared by native eval fragments and Magician.
+pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: eval bridge value wrappers ---");
     match emitter.target.arch {
@@ -34,7 +41,6 @@ pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
     }
     emit_gc_lifecycle_wrappers(emitter);
     release_boundary::emit(emitter);
-    scope_release::emit(emitter);
     resources::emit_resource_inventory_wrapper(emitter);
     backtrace::emit_backtrace_entry_wrapper(emitter);
 }
