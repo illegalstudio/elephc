@@ -341,9 +341,9 @@ echo (string) $values["s"];
     );
 }
 
-/// Verifies a user-call result that aliases a borrowed Mixed argument is not released.
+/// A by-value Mixed identity call returns an owned detached cell without consuming its borrowed input.
 #[test]
-fn borrowed_user_call_result_is_not_treated_as_an_owning_temporary() {
+fn mixed_identity_call_result_is_owned_independently_of_borrowed_input() {
     let module = super::lower_source(
         r#"<?php
 function identity(mixed $value): mixed { return $value; }
@@ -358,24 +358,30 @@ echo $value;
         .iter()
         .find(|function| function.name == "main")
         .expect("expected main EIR function");
-    let result = function
+    let call = function
         .instructions
         .iter()
         .find(|inst| inst.op == Op::Call)
-        .and_then(|inst| inst.result)
-        .expect("expected the identity user-call result");
-    assert!(
+        .expect("expected the identity user call");
+    let result = call.result.expect("expected the identity user-call result");
+    assert_eq!(
         function
             .instructions
             .iter()
-            .all(|inst| inst.op != Op::Release || inst.operands.first().copied() != Some(result)),
-        "a user-call result borrowed from a local argument must not be released"
+            .filter(|inst| inst.op == Op::Release && inst.operands == [result])
+            .count(),
+        1,
+        "the detached result must be released exactly once after echo"
     );
-    assert_ne!(
+    assert_eq!(
         function.value(result).expect("call result metadata").ownership,
         Ownership::Owned,
-        "borrowed call results must not publish an owning EIR contract"
+        "the callee clones its by-value Mixed input before returning it"
     );
+    let argument = call.operands[0];
+    assert!(function.instructions.iter().all(|inst| {
+        inst.op != Op::Release || inst.operands != [argument]
+    }), "the caller's borrowed argument must stay alive for the following echo");
 }
 
 /// Verifies fresh boxed producers publish `Owned` instead of requiring codegen inference.
@@ -449,12 +455,9 @@ echo scratch_string(3);
     );
 }
 
-/// Verifies a freshly boxed owned Mixed argument to a callee that returns it is not
-/// released as an argument temporary (issue #604). The argument box and the returned
-/// box are the same allocation, so the caller must let ownership flow through the
-/// result; releasing the argument as well frees the box once too often.
+/// A fresh Mixed argument and the callee's detached return each require their own release.
 #[test]
-fn owned_mixed_argument_returned_by_callee_is_not_released_as_arg_temp() {
+fn owned_mixed_argument_and_detached_return_are_released_independently() {
     let module = super::lower_source(
         r#"<?php
 function idv(mixed $value): mixed { return $value; }
@@ -470,17 +473,14 @@ run(5);
         .iter()
         .find(|function| function.name == "run")
         .expect("expected the run EIR function");
-    let argument = function
+    let call = function
         .instructions
         .iter()
         .find(|inst| inst.op == Op::Call)
-        .and_then(|inst| inst.operands.first().copied())
-        .expect("expected the idv call argument value");
-    assert!(
-        function
-            .instructions
-            .iter()
-            .all(|inst| inst.op != Op::Release || inst.operands.first().copied() != Some(argument)),
-        "a fresh owned Mixed argument returned by the callee must not also be released as an arg temporary"
-    );
+        .expect("expected the idv call");
+    for value in [call.operands[0], call.result.expect("expected the detached result")] {
+        assert_eq!(function.instructions.iter().filter(|inst| {
+            inst.op == Op::Release && inst.operands == [value]
+        }).count(), 1, "each independent producer must release exactly one owner");
+    }
 }
