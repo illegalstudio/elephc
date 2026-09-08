@@ -16,7 +16,7 @@ fn hook_inventory_declaration() -> &'static str {
 class HookInventory {
     public int $ordinary = 1;
     public int $virtual { get => 42; }
-    public int $closureOnly { get { $read = fn() => $this->closureOnly; return $read(); } }
+    public int $closureOnly { get { $read = function() { return $this->closureOnly; }; return $read(); } }
     public int $backed { get => $this->backed; set { $this->backed = $value; } }
     public int $plain = 3;
     public function visible(): void {}
