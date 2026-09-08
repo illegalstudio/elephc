@@ -262,7 +262,12 @@ pub(super) fn eval_array_unset_target_result(
         return Err(EvalStatus::UnsupportedConstruct);
     }
     let index = eval_owned_array_set_index(index, context, scope, values)?;
-    let result = eval_array_without_key_result(array, index, values);
+    let result = (|| {
+        let key = eval_array_reference_key(index, values)?;
+        let replacement = eval_array_without_key_result(array, index, values)?;
+        context.clone_array_element_aliases(array, replacement, key.as_ref());
+        Ok(replacement)
+    })();
     let released = eval_release_value(context, values, index);
     match (result, released) {
         (Err(status), _) => Err(status),
@@ -498,9 +503,15 @@ pub(super) fn eval_property_array_write_result(
             values.array_new(1)?
         };
         operands.push(array);
+        context.clone_array_element_aliases(current, array, None);
         let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
         let value = if value.is_borrowed() { values.retain(value)? } else { value };
         operands.push(value);
+        if let Some(target) = eval_array_reference_key(index, values)?
+            .and_then(|key| context.array_element_alias(array, &key).cloned())
+        {
+            write_back_method_ref_target(&target, value, context, values)?;
+        }
         // Runtime setters mutate the receiver cell in place, retaining only the inserted value.
         values.array_set(array, index, value)?;
         eval_property_set_result(object, property, array, context, values)

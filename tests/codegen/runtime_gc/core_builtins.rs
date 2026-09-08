@@ -107,6 +107,24 @@ eval($source);
     assert_eq!(compile_and_run(source), "RNKV:112|1:3:1");
 }
 
+/// COW property arrays keep PHP element references through append, assignment, and unrelated unset.
+#[test]
+fn test_core_eval_property_array_mutations_preserve_element_references() {
+    let source = r#"<?php
+$source = '$value = 1; $original = [&$value];
+$box = new stdClass(); $box->items = $original;
+$box->items[] = 2;
+$value = 3; echo $box->items[0], ":";
+$box->items[0] = 4; echo $value, ":", $original[0], ":";
+unset($box->items[1]);
+$value = 5; echo $box->items[0], ":";
+unset($box->items[0]);
+$value = 6; echo count($box->items);' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "3:4:4:5:0");
+}
+
 /// A variable aliased to a property keeps its own owner after writing and destroying the object.
 #[test]
 fn test_core_eval_property_reference_survives_receiver_release() {

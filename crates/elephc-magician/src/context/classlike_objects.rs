@@ -421,6 +421,24 @@ impl ElephcEvalContext {
             .get(&(array.as_ptr() as usize, key.clone()))
     }
 
+    /// Copies element references into a fresh COW array, omitting an explicitly removed key.
+    pub(crate) fn clone_array_element_aliases(
+        &mut self,
+        source: RuntimeCellHandle,
+        destination: RuntimeCellHandle,
+        removed: Option<&EvalArrayReferenceKey>,
+    ) {
+        let aliases = self.array_element_aliases.iter()
+            .filter(|((array, key), _)| *array == source.as_ptr() as usize && Some(key) != removed)
+            .map(|((_, key), target)| (key.clone(), target.clone()))
+            .collect::<Vec<_>>();
+        let destination = destination.as_ptr() as usize;
+        self.array_element_aliases.retain(|(array, _), _| *array != destination);
+        for (key, target) in aliases {
+            self.array_element_aliases.insert((destination, key), target);
+        }
+    }
+
     /// Marks one eval object storage slot as initialized.
     pub fn mark_dynamic_property_initialized(
         &mut self,
