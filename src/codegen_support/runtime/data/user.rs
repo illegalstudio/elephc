@@ -3195,7 +3195,8 @@ mod tests {
             info.property_hooks.insert(name.to_string(), hooks);
             let method = format!("__propget_{name}");
             info.methods.insert(method.clone(), signature.clone());
-            info.method_declaring_classes.insert(method, "HookMetadata".to_string());
+            info.method_declaring_classes.insert(method.clone(), "HookMetadata".to_string());
+            info.method_impl_classes.insert(method, "HookMetadata".to_string());
         }
         let classes = HashMap::from([("HookMetadata".to_string(), info)]);
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -3203,7 +3204,7 @@ mod tests {
             let asm = emit_runtime_data_user(
                 &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
                 &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
-                &classes, &HashMap::new(), None, false, None, target,
+                &classes, &HashMap::new(), None, true, None, target,
             );
             let properties = asm.split("_eval_reflection_properties:\n").nth(1).unwrap();
             let flags = properties.lines().take(21).collect::<Vec<_>>();
