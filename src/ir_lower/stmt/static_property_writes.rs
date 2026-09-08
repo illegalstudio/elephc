@@ -22,7 +22,10 @@ use super::*;
 ///   *released* after the store (its reference is not the one the slot holds), and
 ///   a borrowed source must be left untouched. Acquiring here would leak the extra
 ///   reference on top of the box's retained one.
-/// - **Moving store** (every other case: concrete-typed slot, or a Mixed→Mixed
+/// - **Unboxing store** (a Mixed/Union value converted into a scalar, string, or
+///   object slot): the slot stores a converted payload, never the source box.
+///   Owning source boxes must be released; borrowed boxes need no extra owner.
+/// - **Moving store** (matching concrete storage, or a Mixed-to-Mixed
 ///   move): the store consumes (moves) its value operand. An owning temporary is
 ///   moved in as-is, but a *borrowed* value (a parameter, local, or container read)
 ///   must be `Acquire`d first. Without this, storing a borrowed `Mixed`
@@ -54,10 +57,10 @@ pub(super) fn lower_static_property_assign(
 
 /// Returns true when codegen gives the static-property slot an independently retained value.
 ///
-/// This covers both concrete values boxed into Mixed/Union slots and boxed Mixed values
-/// unboxed into object slots. Both backend paths retain the stored child independently,
-/// so borrowed sources need no `Acquire` and owning temporary sources are released after
-/// the store. Unknown metadata conservatively keeps the moving-store discipline.
+/// Boxing retains a child; unboxing stores an independent scalar, string, or object.
+/// Neither operation consumes the source owner, so borrowed sources need no `Acquire`
+/// and owning temporary sources are released after the store. Unknown metadata keeps
+/// the moving-store discipline.
 pub(super) fn static_property_store_retains_independent_value(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -72,9 +75,11 @@ pub(super) fn static_property_store_retains_independent_value(
     let value_ty = value_ty.codegen_repr();
     let boxes_into_mixed = matches!(slot_ty, PhpType::Mixed | PhpType::Union(_))
         && !matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
-    let unboxes_into_object = matches!(slot_ty, PhpType::Object(_))
+    let unboxes_into_value = matches!(slot_ty,
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+            | PhpType::TaggedScalar | PhpType::Object(_))
         && matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
-    boxes_into_mixed || unboxes_into_object
+    boxes_into_mixed || unboxes_into_value
 }
 
 /// Lowers `Class::$prop[] = value`.

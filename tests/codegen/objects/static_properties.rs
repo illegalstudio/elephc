@@ -9,6 +9,69 @@
 
 use super::*;
 
+/// Checked increments of a typed static integer retire every intermediate Mixed cell.
+#[test]
+fn test_static_integer_increment_releases_checked_boxes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StaticIncrementOwner {
+    public static int $count = 0;
+    public static function bump(): void { self::$count++; }
+}
+for ($i = 0; $i < 20; $i = (int)($i + 1)) { StaticIncrementOwner::bump(); }
+echo StaticIncrementOwner::$count;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "20", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Borrowed boxed scalar conversions neither leak a retain nor consume the caller's source.
+#[test]
+fn test_static_scalar_stores_release_only_owned_source_boxes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StaticScalarOwner {
+    public static int $integer = 0;
+    public static bool $flag = false;
+    public static float $fraction = 0.0;
+    public static string $text = "";
+}
+function storeStaticScalars(mixed $value): void {
+    StaticScalarOwner::$integer = $value;
+    StaticScalarOwner::$flag = $value;
+    StaticScalarOwner::$fraction = $value;
+    StaticScalarOwner::$text = $value;
+    echo StaticScalarOwner::$integer, ":", StaticScalarOwner::$flag ? "1" : "0",
+        ":", StaticScalarOwner::$fraction, ":", StaticScalarOwner::$text, ":", $value, "|";
+}
+storeStaticScalars($argc);
+storeStaticScalars(3);
+StaticScalarOwner::$text = "";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:1:1:1:1|3:1:3:3:3|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Persisting boxed string payloads creates exactly one static owner and leaves the source usable.
+#[test]
+fn test_static_string_stores_persist_boxed_payload_once() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StaticStringOwner { public static string $text = ""; }
+function storeStaticString(mixed $value): void {
+    StaticStringOwner::$text = $value;
+    echo strlen(StaticStringOwner::$text), ":", $value, "|";
+}
+$text = str_repeat("x", 24);
+for ($i = 0; $i < 4; $i = (int)($i + 1)) { storeStaticString($text); }
+unset($text);
+echo strlen(StaticStringOwner::$text);
+StaticStringOwner::$text = "";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}24", "24:xxxxxxxxxxxxxxxxxxxxxxxx|".repeat(4)), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Tests calling a class static method with a string parameter and concatenating the result.
 #[test]
 fn test_class_static_method_string_param() {

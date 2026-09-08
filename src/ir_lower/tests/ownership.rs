@@ -10,6 +10,58 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Static scalar stores release fresh boxes but do not acquire borrowed conversion sources on any ABI.
+#[test]
+fn static_scalar_conversions_preserve_source_box_ownership_on_all_targets() {
+    let source = r#"<?php
+        class StaticConversionOwner {
+            public static int $integer = 0;
+            public static bool $flag = false;
+            public static float $fraction = 0.0;
+            public static string $text = "";
+        }
+        function store_static_borrow(mixed $value): void {
+            StaticConversionOwner::$integer = $value;
+            StaticConversionOwner::$flag = $value;
+            StaticConversionOwner::$fraction = $value;
+            StaticConversionOwner::$text = $value;
+        }
+        function store_static_fresh(int $value): void {
+            StaticConversionOwner::$integer = $value + 1;
+        }
+        store_static_borrow($argc);
+        store_static_fresh($argc);
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let borrowed = module.functions.iter().find(|function| function.name == "store_static_borrow").unwrap();
+        let stores = borrowed.instructions.iter().filter(|inst| inst.op == Op::StoreStaticProperty)
+            .collect::<Vec<_>>();
+        assert_eq!(stores.len(), 4, "{target}");
+        for store in stores {
+            let value = store.operands[0];
+            let ValueDef::Instruction { inst, .. } = borrowed.value(value).unwrap().def else {
+                panic!("{target}: the borrowed conversion source must be a local load");
+            };
+            assert_eq!(borrowed.instruction(inst).unwrap().op, Op::LoadLocal, "{target}");
+            assert!(!borrowed.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands == [value]
+            }), "{target}: a conversion must not consume its borrowed box");
+        }
+        let fresh = module.functions.iter().find(|function| function.name == "store_static_fresh").unwrap();
+        let store = fresh.instructions.iter().position(|inst| inst.op == Op::StoreStaticProperty).unwrap();
+        let value = fresh.instructions[store].operands[0];
+        assert_eq!(fresh.value(value).unwrap().php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+        assert!(fresh.instructions[store + 1..].iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [value]
+        }), "{target}: a scalar slot does not own the checked arithmetic box");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Unsetting a plain heap local uses atomic slot retirement instead of releasing a still-rooted load.
 #[test]
 fn unset_heap_local_retires_its_slot_before_destructor_escape() {
