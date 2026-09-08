@@ -480,6 +480,21 @@ pub(super) fn eval_reference_target_write(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if let EvalReferenceTarget::Variable { scope, name } = &target {
+        let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+        let retained = values.retain(value)?;
+        let replaced = match set_owned_scope_cell(context, scope, name.clone(), retained) {
+            Ok(replaced) => replaced,
+            Err(status) => {
+                let _ = eval_release_value(context, values, retained);
+                return Err(status);
+            }
+        };
+        for replaced in replaced {
+            eval_release_value(context, values, replaced)?;
+        }
+        return Ok(());
+    }
     if matches!(target, EvalReferenceTarget::Cell { .. }) {
         context.bind_dynamic_property_alias(
             object_identity,

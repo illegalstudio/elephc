@@ -503,7 +503,9 @@ pub(super) fn eval_dynamic_class_allocate_object(
             };
             let storage_name = eval_instance_property_storage_name(class.name(), property);
             if let Some(value) = value {
-                values.property_set(object, &storage_name, value)?;
+                let written = values.property_set(object, &storage_name, value);
+                let released = release_expr_result(value, context, values);
+                written.and(released)?;
                 context.mark_dynamic_property_initialized(identity, &storage_name);
             }
         }

@@ -29,6 +29,39 @@ echo ":", eval($source);
     assert_eq!(compile_and_run(source), ":first:second|second|B|C42");
 }
 
+/// Direct and dynamic property assignments release fresh values and receiver/name leases.
+#[test]
+fn test_core_eval_property_assignments_release_temporary_cells() {
+    assert_core_eval_collection_cleanup(
+        "$box = new stdClass(); $name = \"value\";",
+        "$box->value = \"first\";
+         $box->{$name} = \"second\";
+         $box->{\"value\"} = [1, 2, 3];",
+    );
+}
+
+/// Eval object defaults and assignment values are freed when their sole object owner disappears.
+#[test]
+fn test_core_eval_property_defaults_release_temporary_cells() {
+    assert_core_eval_collection_cleanup(
+        "class OwnedDefaults { public string $value = \"initial\"; }",
+        "$box = new OwnedDefaults(); $box->value = \"changed\"; unset($box);",
+    );
+}
+
+/// A variable aliased to a property keeps its own owner after writing and destroying the object.
+#[test]
+fn test_core_eval_property_reference_survives_receiver_release() {
+    let source = r#"<?php
+$source = 'class OwnedAlias { public $value; }
+$box = new OwnedAlias(); $original = "before";
+$box->value =& $original; $box->value = "after";
+unset($box); echo $original; return 42;' . ' // ' . $argc;
+echo eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "after42");
+}
+
 /// Compares deep cleanup after repeated eval results, without allocating loop-control temporaries.
 fn assert_core_eval_collection_cleanup(setup: &str, body: &str) {
     let outstanding = |iterations| {

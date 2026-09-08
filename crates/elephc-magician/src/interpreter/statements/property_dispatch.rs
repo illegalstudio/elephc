@@ -48,10 +48,12 @@ pub(super) fn execute_property_stmt(
             property,
             value,
         } => {
-            let object = eval_expr(object, context, scope, values)?;
-            let property = eval_dynamic_member_name(property, context, scope, values)?;
-            let value = eval_expr(value, context, scope, values)?;
-            eval_property_set_result(object, &property, value, context, values)?;
+            with_eval_void_operands(&[object], context, scope, values, |receiver, context, scope, values| {
+                let property = eval_dynamic_member_name(property, context, scope, values)?;
+                with_eval_void_operands(&[value], context, scope, values, |args, context, _, values| {
+                    eval_property_set_result(receiver[0], &property, args[0], context, values)
+                })
+            })?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicPropertyArrayAppend {
@@ -101,14 +103,15 @@ pub(super) fn execute_property_stmt(
             let property = eval_dynamic_member_name(property, context, scope, values)?;
             eval_property_inc_dec_result(object, &property, *increment, context, values)?;
             Ok(EvalControl::None)
-        }        EvalStmt::PropertySet {
+        }
+        EvalStmt::PropertySet {
             object,
             property,
             value,
         } => {
-            let object = eval_expr(object, context, scope, values)?;
-            let value = eval_expr(value, context, scope, values)?;
-            eval_property_set_result(object, property, value, context, values)?;
+            with_eval_void_operands(&[object, value], context, scope, values, |args, context, _, values| {
+                eval_property_set_result(args[0], property, args[1], context, values)
+            })?;
             Ok(EvalControl::None)
         }
         EvalStmt::PropertyArrayAppend {

@@ -51,6 +51,33 @@ fn failed_operand_evaluation_releases_earlier_arguments() {
     assert_eq!(values.releases.iter().filter(|cell| **cell == source).count(), 1);
 }
 
+/// Statement consumers release owned temporaries and retained storage even when the write fails.
+#[test]
+fn statement_operand_cleanup_covers_success_and_failure() {
+    for fail in [false, true] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let source = values.int(2).unwrap();
+        scope.set("source", source, ScopeCellOwnership::Owned);
+        let borrowed = EvalExpr::LoadVar("source".into());
+        let temporary = EvalExpr::Const(EvalConst::Int(3));
+        let result = with_eval_void_operands(
+            &[&borrowed, &temporary], &mut context, &mut scope, &mut values,
+            |args, _, _, values| {
+                assert_eq!(args[0], source);
+                assert!(values.releases.is_empty());
+                if fail { Err(EvalStatus::RuntimeFatal) } else { Ok(()) }
+            },
+        );
+        assert_eq!(result.is_err(), fail);
+        assert_eq!(values.retains, vec![source]);
+        assert_eq!(values.releases.len(), 2);
+        assert_eq!(values.releases.iter().filter(|cell| **cell == source).count(), 1);
+        assert_eq!(scope.visible_cell("source"), Some(source));
+    }
+}
+
 /// Same-cell assignments consume a new lease and release the old owner, including reference aliases.
 #[test]
 fn owned_assignments_balance_identical_reference_cells() {

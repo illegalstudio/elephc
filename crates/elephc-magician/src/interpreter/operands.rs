@@ -2,7 +2,7 @@
 //! Owns expression operands until their consumer has finished reading them.
 //!
 //! Called from:
-//! - Core builtin adapters, scalar expression evaluation, and branch conditions.
+//! - Core builtin adapters, property assignments, scalar expressions, and branch conditions.
 //!
 //! Key details:
 //! - Storage reads acquire a retained lease; newly produced cells transfer their owner.
@@ -127,4 +127,28 @@ pub(in crate::interpreter) fn with_eval_operands<V: RuntimeValueOps>(
         }
         (Ok(value), Ok(())) => Ok(value),
     }
+}
+
+/// Keeps operands alive through a statement and releases every lease on success or failure.
+pub(in crate::interpreter) fn with_eval_void_operands<V: RuntimeValueOps>(
+    args: &[&EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut V,
+    consume: impl FnOnce(
+        &[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
+    ) -> Result<(), EvalStatus>,
+) -> Result<(), EvalStatus> {
+    let mut operands = Vec::with_capacity(args.len());
+    let mut result = (|| {
+        for arg in args {
+            operands.push(eval_owned_expr(arg, context, scope, values)?);
+        }
+        consume(&operands, context, scope, values)
+    })();
+    for operand in operands {
+        let released = eval_release_value(context, values, operand);
+        if result.is_ok() { result = released; }
+    }
+    result
 }

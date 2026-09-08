@@ -60,10 +60,18 @@ pub(in crate::interpreter) fn eval_dynamic_member_name(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let value = eval_expr(expr, context, scope, values)?;
-    let value = eval_string_context_value(value, context, values)?;
-    let bytes = values.string_bytes(value)?;
-    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+    let source = eval_owned_expr(expr, context, scope, values)?;
+    let result = (|| {
+        let value = eval_string_context_value(source, context, values)?;
+        let bytes = values.string_bytes(value);
+        let released = if value != source {
+            release_expr_result(value, context, values)
+        } else { Ok(()) };
+        let bytes = bytes.and_then(|bytes| released.map(|()| bytes))?;
+        String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+    })();
+    let released = eval_release_value(context, values, source);
+    result.and_then(|result| released.map(|()| result))
 }
 
 /// Reads an array element or dispatches `ArrayAccess::offsetGet()` for objects.
