@@ -25,6 +25,7 @@ mod program;
 mod property_initializers;
 mod reflection;
 mod stmt;
+mod throwable_constructors;
 
 #[cfg(test)]
 mod tests;

@@ -305,6 +305,14 @@ The size is stored at header offset `+0`, the reference count at `+4`, and the h
 
 On x86_64 the 8-byte kind word also carries an ownership marker: the ASCII bytes `"ELPH"` in its high 32 bits. Every x86_64 heap stamp goes through the shared `codegen_support::sentinels` helpers — `x86_64_heap_kind_word(low_bits)` builds the full word (magic + packed kind/COW/value_type low bits) and checkers compare against `X86_64_HEAP_MAGIC_HI32` — instead of hand-typed immediates. Refcount and free helpers ignore pointers whose header does not carry the marker, so foreign or static pointers silently opt out of refcounting. For array/hash containers, the low 16 bits of the kind word are persistent metadata: the low byte is still the heap kind, indexed arrays still pack their runtime `value_type` in the next byte, and bit 15 is reserved as the persistent copy-on-write container flag. Higher bits remain transient collector metadata.
 
+Throwable subclasses with properties or constructors supplied by a user-defined
+ancestor keep ordinary object storage. Their inherited `Error::__construct` and
+`Exception::__construct` bodies use the typed EIR `object.throwable_initialize`
+operation. It consults the receiver's previous-slot descriptor, installs owned
+replacement fields, then releases displaced owners. The same constructor can
+therefore reinitialize a compact native Throwable or an ordinary eval/subclass
+object without mixing raw previous pointers and nullable Mixed cells.
+
 The runtime routine `__rt_heap_alloc`:
 
 1. **Probe the segregated small bins** — requests up to 64 bytes first check `_heap_small_bins` (`<=8`, `<=16`, `<=32`, `<=64`) and reuse a cached block from the smallest fitting class available.

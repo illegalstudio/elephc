@@ -1332,7 +1332,7 @@ fn lower_body_into_function(
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
     if let Some(class) = property_initializers {
         super::property_initializers::lower(&mut ctx, class);
-    } else {
+    } else if !super::throwable_constructors::lower(&mut ctx) {
         for stmt in body {
             crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
         }

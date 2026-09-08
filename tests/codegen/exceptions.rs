@@ -9,6 +9,47 @@
 
 use crate::support::*;
 
+/// Descendants preserve properties and custom constructor behavior inherited through user parents.
+#[test]
+fn test_throwable_grandchildren_preserve_inherited_storage_and_constructor() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StoredException extends Exception { public int $marker = 42; }
+class LeafStoredException extends StoredException {}
+class ConstructedException extends Exception {
+    public function __construct(string $message) { parent::__construct("custom:" . $message); }
+}
+class LeafConstructedException extends ConstructedException {}
+$stored = new LeafStoredException("outer", 7, new Error("inner"));
+echo $stored->marker, ":", $stored->getMessage(), ":", $stored->getPrevious()->getMessage(), "|";
+$constructed = new LeafConstructedException("leaf");
+echo $constructed->getMessage();
+unset($stored, $constructed);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "42:outer:inner|custom:leaf", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Reinitializing a builtin constructor releases displaced owners while preserving a shared previous.
+#[test]
+fn test_throwable_constructor_reinitialization_preserves_compact_and_ordinary_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReinitializedException extends Exception { public int $marker = 13; }
+$previous = new Error("inner");
+$compact = new Exception("old", 1, $previous);
+$ordinary = new ReinitializedException("old", 1, $previous);
+$compact->__construct("compact", 2, $compact->getPrevious());
+$ordinary->__construct("ordinary", 3, $ordinary->getPrevious());
+unset($previous);
+echo $compact->getMessage(), ":", $compact->getCode(), ":", $compact->getPrevious()->getMessage(), "|";
+echo $ordinary->getMessage(), ":", $ordinary->getCode(), ":", $ordinary->getPrevious()->getMessage(), ":", $ordinary->marker;
+unset($compact, $ordinary);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "compact:2:inner|ordinary:3:inner:13", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies a Throwable owns a dynamically concatenated message after the source
 /// temporary is released and unrelated catch-block strings reuse scratch storage.
 #[test]
@@ -757,7 +798,11 @@ $outer = new OrdinaryPreviousError("outer", 0, $ordinary);
 echo readPrevious(new OrdinaryPreviousException()) === null ? "null|" : "bad|";
 $saved = readPrevious($outer);
 unset($outer, $ordinary, $inner);
-echo get_class($saved), ":", $saved->getMessage(), ":", readPrevious($saved)->getMessage();
+if ($saved !== null) {
+    echo get_class($saved), ":", $saved->getMessage(), ":", readPrevious($saved)->getMessage();
+} else {
+    echo "lost-previous";
+}
 "#);
     assert_eq!(out, "null|OrdinaryPreviousException:ordinary:inner");
 }

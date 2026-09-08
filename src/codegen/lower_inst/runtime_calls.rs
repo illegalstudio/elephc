@@ -24,6 +24,7 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ArrayFetchForWrite => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
@@ -41,6 +42,20 @@ pub(super) fn lower(
             super::runtime_functions::lower(ctx, inst, target)
         }
     }
+}
+
+/// Materializes normalized constructor parameters through the shared target-aware call ABI.
+fn lower_throwable_initialize(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 4 {
+        return Err(CodegenIrError::invalid_module("Throwable initialization requires four operands"));
+    }
+    let types = [PhpType::Object("Throwable".into()), PhpType::Str, PhpType::Int, PhpType::Mixed];
+    let overflow = super::materialize_direct_call_args(ctx, &inst.operands, &types)?;
+    let padding = super::direct_call_stack_pad_bytes(ctx, overflow);
+    abi::emit_reserve_temporary_stack(ctx.emitter, padding);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_initialize");
+    abi::emit_release_temporary_stack(ctx.emitter, padding + overflow);
+    Ok(())
 }
 
 /// Clones a stored Mixed cell before a nested mutation publishes a new payload.

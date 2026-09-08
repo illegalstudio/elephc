@@ -13,6 +13,7 @@ mod chain;
 mod class_implements;
 mod dynamic_instanceof;
 mod destructor_throw;
+mod initialize;
 mod matches;
 mod rethrow_current;
 mod previous;
@@ -24,6 +25,7 @@ pub use cleanup_frames::emit_exception_cleanup_frames;
 pub use chain::emit_exception_chain;
 pub use dynamic_instanceof::emit_dynamic_instanceof;
 pub use destructor_throw::emit_destructor_throw;
+pub use initialize::emit_throwable_initialize;
 pub use matches::emit_exception_matches;
 // The fixed-data emitter defines the string this helper prints; both must agree on its bytes.
 pub(crate) use matches::{ABSENT_MESSAGE, ABSENT_MESSAGE_SYMBOL};
