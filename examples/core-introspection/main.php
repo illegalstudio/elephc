@@ -29,3 +29,10 @@ $source = 'return new DisplaySettings();' . ' // ' . $argc;
 $settings = eval($source);
 echo 'Runtime object methods: ', implode(', ', get_class_methods($settings)), "\n";
 echo 'Default accent: ', $settings->palette['accent'][0], "\n";
+
+// A customized copy of a nested default leaves the original settings unchanged.
+$nativeSettings = new DisplaySettings();
+$customPalette = $nativeSettings->palette;
+$customPalette['accent'][0] = 'green';
+echo 'Custom accent: ', $customPalette['accent'][0], "\n";
+echo 'Original accent: ', $nativeSettings->palette['accent'][0], "\n";

@@ -7,6 +7,7 @@
 //! Key details:
 //! - Separates array/hash storage before by-reference iteration and writes the
 //!   result back through either a direct property slot or its reference cell.
+//! - Mixed roots detach their zval before nested writes, preserving other value copies.
 //! - Unsupported slot shapes are hard errors because the EIR result is borrowed.
 
 use super::*;
@@ -44,9 +45,16 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
         )));
     };
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg_reg = if split.boxed {
+        result_reg
+    } else {
+        abi::int_arg_reg_name(ctx.emitter.target, 0)
+    };
     ctx.load_value_to_reg(object, base_reg)?;
+    if slot.is_declared {
+        emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
+    }
     abi::emit_load_from_address(ctx.emitter, arg_reg, base_reg, slot.offset);
     if split.through_reference_cell {
         // A reference slot stores the ref-cell pointer, not the container. The container the
@@ -54,7 +62,17 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
         // separated one is published so every alias of the reference observes it.
         abi::emit_load_from_address(ctx.emitter, arg_reg, arg_reg, 0);
     }
-    abi::emit_call_label(ctx.emitter, split.helper);
+    if split.boxed {
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        abi::emit_call_label(ctx.emitter, split.helper);
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(ctx.emitter, result_reg);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    } else {
+        abi::emit_call_label(ctx.emitter, split.helper);
+    }
     // The split helper clobbers the scratch registers on both targets, so reload the receiver
     // before publishing the separated container into its slot.
     ctx.load_value_to_reg(object, base_reg)?;
@@ -74,6 +92,8 @@ struct PropertyContainerSplit {
     helper: &'static str,
     /// Whether the property slot holds a reference cell containing the container pointer.
     through_reference_cell: bool,
+    /// Mixed cloning acquires the payload but leaves the old zval owner for explicit release.
+    boxed: bool,
 }
 
 /// Classifies a property slot as a container `PropGetForWrite` can split.
@@ -88,10 +108,12 @@ fn property_container_split(slot: &PropertySlot) -> Option<PropertyContainerSpli
     let helper = match slot.php_type.codegen_repr() {
         PhpType::Array(_) => "__rt_array_ensure_unique",
         PhpType::AssocArray { .. } => "__rt_hash_ensure_unique",
+        PhpType::Mixed => "__rt_mixed_clone",
         _ => return None,
     };
     Some(PropertyContainerSplit {
         helper,
         through_reference_cell: slot.is_reference,
+        boxed: slot.php_type.codegen_repr() == PhpType::Mixed,
     })
 }

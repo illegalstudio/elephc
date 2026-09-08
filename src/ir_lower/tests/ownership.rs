@@ -10,6 +10,45 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Nested Mixed writes detach local/reference roots and borrow separated property cells on every target.
+#[test]
+fn nested_mixed_write_roots_preserve_storage_ownership_on_all_targets() {
+    let source = r#"<?php
+        class NestedWriteRoot { public mixed $tree = [[1]]; }
+        function change_nested_root(mixed &$tree): void { $tree[0][0] = 2; }
+        $object = new NestedWriteRoot();
+        $copy = $object->tree;
+        $copy[0][0] = 3;
+        $object->tree[0][0] = 4;
+        change_nested_root($copy);
+        echo $copy[0][0], $object->tree[0][0];
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "change_nested_root").unwrap();
+        let clone = function.instructions.iter().find(|inst| inst.op == Op::MixedClone)
+            .expect("a by-reference root needs a detached value before nested mutation");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::StoreRefCell), "{target}");
+        assert_eq!(clone.result_php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+        let mut property_fetches = 0;
+        for function in &module.functions {
+            for inst in &function.instructions {
+                if inst.op == Op::PropGetForWrite {
+                    assert_eq!(inst.result_php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+                    assert_eq!(function.value(inst.result.unwrap()).unwrap().ownership, Ownership::Borrowed, "{target}");
+                    property_fetches += 1;
+                }
+            }
+        }
+        assert_eq!(property_fetches, 1, "{target}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Physical defaults use the property's hash representation, including empty Reflection defaults.
 #[test]
 fn property_initializers_contextualize_array_defaults_on_all_targets() {

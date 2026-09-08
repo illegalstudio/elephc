@@ -87,6 +87,22 @@ pub(super) fn lower_nested_assign_parent(
     span: Span,
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array, index } = &expr.kind else {
+        if let ExprKind::Variable(name) = &expr.kind {
+            if ctx.local_type(name).codegen_repr() == PhpType::Mixed {
+                let original = ctx.load_local(name, Some(span));
+                let detached = ctx.emit_owned_value(
+                    Op::MixedClone, vec![original.value], None, PhpType::Mixed,
+                    Op::MixedClone.default_effects(), Some(span),
+                );
+                ctx.store_local(name, detached, PhpType::Mixed, Some(span));
+                return ctx.load_local(name, Some(span));
+            }
+        }
+        if let ExprKind::PropertyAccess { object, property } = &expr.kind {
+            return crate::ir_lower::expr::lower_nested_assignment_property_source(
+                ctx, object, property, expr,
+            );
+        }
         return lower_expr(ctx, expr);
     };
     // Concrete container locals: ensure the element exists through the
@@ -99,11 +115,7 @@ pub(super) fn lower_nested_assign_parent(
     }
     // Boxed Mixed receivers: chains recurse with for-write semantics; other
     // receiver shapes evaluate once as plain reads of the receiver cell.
-    let receiver = if matches!(array.kind, ExprKind::ArrayAccess { .. }) {
-        lower_nested_assign_parent(ctx, array, span)
-    } else {
-        lower_expr(ctx, array)
-    };
+    let receiver = lower_nested_assign_parent(ctx, array, span);
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         let key = lower_expr(ctx, index);
         let parent = ctx.emit_value(

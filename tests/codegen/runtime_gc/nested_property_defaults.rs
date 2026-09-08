@@ -51,6 +51,42 @@ echo $first->hash["tree"]["leaf"][0], ":", $second->hash["tree"]["leaf"][0];
     assert_eq!(compile_and_run(&source), "9:2:2|8:5");
 }
 
+/// Mutating the original property or its detached copy leaves the other nested value unchanged.
+#[test]
+fn test_core_native_nested_defaults_cow_in_both_directions() {
+    let source = format!(r#"<?php
+{NATIVE_DEFAULTS}
+$object = new NativeNestedDefaults();
+$list = $object->list;
+$hash = $object->hash;
+$object->list[1][0] = 8;
+$object->hash["tree"]["leaf"][0] = 9;
+echo $list[1][0], ":", $hash["tree"]["leaf"][0], "|";
+$list[1][1] = 10;
+$hash["tree"]["leaf"][1] = false;
+echo $object->list[1][0], ":", $object->list[1][1], ":", $list[1][1], "|";
+echo $object->hash["tree"]["leaf"][0], ":";
+echo $object->hash["tree"]["leaf"][1] ? "true:" : "false:";
+echo $hash["tree"]["leaf"][1] ? "true" : "false";
+"#);
+    assert_eq!(compile_and_run(&source), "2:5|8:3:10|9:true:false");
+}
+
+/// A by-reference Mixed root publishes separated cells through its caller slot, preserving aliases.
+#[test]
+fn test_core_native_nested_defaults_reference_root_preserves_aliases() {
+    let source = format!(r#"<?php
+{NATIVE_DEFAULTS}
+function mutateNestedRoot(mixed &$tree): void {{ $tree[1][0] = 9; }}
+$object = new NativeNestedDefaults();
+$copy = $object->list;
+$alias =& $copy;
+mutateNestedRoot($alias);
+echo $copy[1][0], ":", $alias[1][0], ":", $object->list[1][0];
+"#);
+    assert_eq!(compile_and_run(&source), "9:9:2");
+}
+
 /// Static Mixed defaults retain nested indexed/hash storage and scalar runtime tags.
 #[test]
 fn test_core_native_static_nested_defaults_preserve_values() {
@@ -79,5 +115,22 @@ fn test_core_inherited_nested_default_owners_release() {
     super::core_builtins::assert_core_eval_collection_cleanup_with_native(
         NATIVE_DEFAULTS, "class EvalNestedDefaults extends NativeNestedDefaults {}",
         "$object = new EvalNestedDefaults(); unset($object);",
+    );
+}
+
+/// Repeated native nested mutations release the detached root, child zvals, and container owners.
+#[test]
+fn test_core_native_nested_write_owners_release() {
+    let native = format!(r#"{NATIVE_DEFAULTS}
+function mutate_native_nested_defaults(): void {{
+    $object = new NativeNestedDefaults();
+    $copy = $object->list;
+    $copy[1][0] = 9;
+    $object->hash["tree"]["leaf"][0] = 8;
+    unset($copy, $object);
+}}
+"#);
+    super::core_builtins::assert_core_eval_collection_cleanup_with_native(
+        &native, "", "mutate_native_nested_defaults();",
     );
 }
