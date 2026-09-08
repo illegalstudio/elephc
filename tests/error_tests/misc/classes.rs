@@ -9,6 +9,15 @@
 
 use super::*;
 
+/// Defaults require a backing slot even when virtual hook bodies are concrete.
+#[test]
+fn test_error_virtual_property_hook_default() {
+    expect_error(
+        "<?php class Box { public int $value = 1 { get => 42; } }",
+        "Virtual properties cannot have a default value",
+    );
+}
+
 /// Verifies `method_exists()` requires both a class/object and method name.
 #[test]
 fn test_error_method_exists_wrong_args() {

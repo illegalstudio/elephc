@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// Backed hook declarations retain defaults, including implicit backing writes in short setters.
+#[test]
+fn test_parse_backed_property_hook_defaults() {
+    for hooks in ["get => $this->x;", "set => $value;", "set { $this->x = $value; }"] {
+        let source = format!("<?php class C {{ public int $x = 7 {{ {hooks} }} }}");
+        let stmts = parse_source(&source);
+        let StmtKind::ClassDecl { properties, .. } = &stmts[0].kind else {
+            panic!("expected class declaration");
+        };
+        assert!(!properties[0].hooks.is_virtual(), "{hooks}");
+        assert!(matches!(properties[0].default.as_ref().map(|value| &value.kind),
+            Some(ExprKind::IntLiteral(7))), "{hooks}");
+    }
+}
+
 /// Hook storage detection includes dead branches but excludes separately compiled closure bodies.
 #[test]
 fn test_parse_property_hook_backing_storage_metadata() {

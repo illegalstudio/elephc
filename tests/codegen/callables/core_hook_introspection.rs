@@ -10,6 +10,34 @@
 
 use crate::support::*;
 
+/// AOT, opaque eval, and native-by-name defaults populate backing storage without calling setters.
+#[test]
+fn test_core_hook_defaults_initialize_backing_storage_without_setter() {
+    let declaration = r#"
+class HookDefault {
+    public int $value = 7 { get => $this->value; set { echo "set:"; $this->value = $value; } }
+}
+"#;
+    let probes = r#"
+echo get_class_vars("HookDefault")["value"], ":";
+$object = new HookDefault();
+echo $object->value, ":";
+$object->value = 9;
+echo $object->value;
+"#;
+    assert_eq!(compile_and_run(&format!("<?php {declaration} {probes}")), "7:7:set:9");
+    for native in [false, true] {
+        let (native_source, body) = if native {
+            (declaration, probes.to_string())
+        } else {
+            ("", format!("{declaration} {probes}"))
+        };
+        let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+        let source = format!("<?php {native_source} $source = '{quoted}' . ' // ' . $argc; eval($source);");
+        assert_eq!(compile_and_run(&source), "7:7:set:9", "native={native}");
+    }
+}
+
 /// Returns a declaration whose virtual and backed hooks must not appear as ordinary methods.
 fn hook_inventory_declaration() -> &'static str {
     r#"
