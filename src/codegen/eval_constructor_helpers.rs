@@ -35,6 +35,7 @@ use super::eval_ref_arg_helpers::{
     emit_aarch64_write_back_ref_args, emit_acquire_mixed_ref_args, emit_x86_64_write_back_ref_args,
 };
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
+use super::eval_argument_helpers::emit_borrowed_string_arg;
 
 const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "Error",
@@ -1149,15 +1150,11 @@ fn emit_aarch64_prepare_constructor_args(
         } else {
             emit_aarch64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_aarch64_cast_eval_arg(
-                module,
-                emitter,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                data,
-                callable_support,
-            );
+            if !emit_borrowed_string_arg(emitter, param_ty, 16, fail_label) {
+                emit_aarch64_cast_eval_arg(
+                    module, emitter, param_ty, &label_prefix, fail_label, data, callable_support,
+                );
+            }
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1224,15 +1221,11 @@ fn emit_x86_64_prepare_constructor_args(
         } else {
             emit_x86_64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_x86_64_cast_eval_arg(
-                module,
-                emitter,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                data,
-                callable_support,
-            );
+            if !emit_borrowed_string_arg(emitter, param_ty, 40, fail_label) {
+                emit_x86_64_cast_eval_arg(
+                    module, emitter, param_ty, &label_prefix, fail_label, data, callable_support,
+                );
+            }
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);

@@ -15,6 +15,41 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 use crate::intrinsics::IntrinsicCall;
 use crate::types::PhpType;
 
+/// Borrows a normalized by-value string payload, returning false for non-string parameters.
+/// Magician applies PHP coercion before staging; its argument array roots the string for the call.
+/// Reference slots and object-field initialization must keep their separate owning conversion.
+pub(super) fn emit_borrowed_string_arg(
+    emitter: &mut Emitter,
+    param_type: &PhpType,
+    frame_offset: usize,
+    fail_label: &str,
+) -> bool {
+    if param_type.codegen_repr() != PhpType::Str {
+        return false;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x0, [x29, #-{frame_offset}]"));   // reload the argument cell retained by the normalized argument array
+            emitter.instruction(&format!("cbz x0, {fail_label}"));              // reject a missing normalized string cell
+            emitter.instruction("ldr x9, [x0]");                                // inspect the normalized argument tag before borrowing its payload
+            emitter.instruction("cmp x9, #1");                                  // PHP parameter coercion must already have produced a string
+            emitter.instruction(&format!("b.ne {fail_label}"));                 // reject malformed bridge input without allocating a conversion
+            emitter.instruction("ldr x1, [x0, #8]");                            // borrow the stable string bytes for the native activation
+            emitter.instruction("ldr x2, [x0, #16]");                           // preserve the full string length including embedded NUL bytes
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {frame_offset}]")); // reload the argument cell retained by the normalized argument array
+            emitter.instruction("test rax, rax");                               // check whether the normalized string cell exists
+            emitter.instruction(&format!("jz {fail_label}"));                   // reject a missing normalized string cell
+            emitter.instruction("cmp QWORD PTR [rax], 1");                      // PHP parameter coercion must already have produced a string
+            emitter.instruction(&format!("jne {fail_label}"));                  // reject malformed bridge input without allocating a conversion
+            emitter.instruction("mov rdx, QWORD PTR [rax + 16]");               // preserve the full string length including embedded NUL bytes
+            emitter.instruction("mov rax, QWORD PTR [rax + 8]");                // borrow the stable string bytes for the native activation
+        }
+    }
+    true
+}
+
 /// Transfers independent owners for staged boxed arguments consumed by an intrinsic helper.
 /// Call after fallible preparation and boundary installation, before materializing ABI registers.
 pub(super) fn emit_consumed_intrinsic_arguments(
@@ -93,6 +128,30 @@ pub(super) fn emit_borrowed_argument(
 mod tests {
     use super::*;
     use crate::codegen::platform::Target;
+
+    /// All targets borrow normalized strings without allocation and leave other parameter types alone.
+    #[test]
+    fn native_string_argument_borrows_are_guarded_and_allocation_free() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            assert!(!emit_borrowed_string_arg(&mut emitter, &PhpType::Int, 40, "invalid"));
+            assert!(emitter.output().is_empty(), "{name}");
+            let mut emitter = Emitter::new(target);
+            assert!(emit_borrowed_string_arg(&mut emitter, &PhpType::Str, 40, "invalid"));
+            let asm = emitter.output();
+            assert!(!asm.contains("__rt_"), "{name}: {asm}");
+            if target.arch == Arch::AArch64 {
+                assert!(asm.contains("cmp x9, #1"), "{name}");
+                assert!(asm.contains("ldr x1, [x0, #8]"), "{name}");
+                assert!(asm.contains("ldr x2, [x0, #16]"), "{name}");
+            } else {
+                assert!(asm.contains("cmp QWORD PTR [rax], 1"), "{name}");
+                assert!(asm.contains("mov rdx, QWORD PTR [rax + 16]"), "{name}");
+                assert!(asm.contains("mov rax, QWORD PTR [rax + 8]"), "{name}");
+            }
+        }
+    }
 
     /// Every target retains consumed offsets and values without retaining borrowed array arguments.
     #[test]

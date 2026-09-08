@@ -41,6 +41,7 @@ mod core_builtins;
 mod dynamic_property_cycles;
 mod eval_sparse_arrays;
 mod mixed_parameters;
+mod native_string_arguments;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
 #[path = "runtime_gc/heap.rs"]
