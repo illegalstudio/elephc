@@ -11,10 +11,10 @@
 use crate::builtins::semantics::{
     BuiltinArgumentLowering, BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering,
     BuiltinLoweringContext, BuiltinLoweringError, BuiltinRequirements, BuiltinResultOwnership,
-    BuiltinResultType, BuiltinRuntimeFunctions, BuiltinSemantics, BuiltinTargetStrategy,
-    BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
+    BuiltinResultType, BuiltinRuntimeFunctions, BuiltinSemanticInput, BuiltinSemantics,
+    BuiltinTargetStrategy, BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue,
+    NormalizedBuiltinCall,
 };
-use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::ir::Effects;
 use crate::parser::ast::ExprKind;
@@ -22,10 +22,9 @@ use crate::types::PhpType;
 
 builtin! {
     contract: "get_class_vars",
-    check: check,
     semantics: BuiltinSemantics {
-        validation: BuiltinValidation::SignatureOnly,
-        result_type: BuiltinResultType::Checked,
+        validation: BuiltinValidation::Shared(validate),
+        result_type: BuiltinResultType::Shared(result_type),
         effects: BuiltinEffects::Static(Effects::from_bits_retain(
             Effects::READS_GLOBAL.bits()
                 | Effects::ALLOC_HEAP.bits()
@@ -44,25 +43,30 @@ builtin! {
     },
 }
 
-/// Requires a string class name and returns a string-keyed Mixed array.
-fn check(cx: &mut BuiltinCheckCtx<'_>) -> Result<PhpType, CompileError> {
-    let argument = match &cx.args[0].kind {
-        ExprKind::NamedArg { name, value } if crate::names::php_symbol_key(name) == "class" => {
-            value.as_ref()
-        }
-        _ => &cx.args[0],
-    };
-    let ty = cx.checker.infer_type(argument, cx.env)?;
-    if ty.codegen_repr() != PhpType::Str {
+/// Validates concrete class-name arguments and defers unpacked entries to runtime binding.
+fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
+    if input.args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+        return Ok(());
+    }
+    if !input
+        .arg_types
+        .first()
+        .is_some_and(|ty| ty.codegen_repr() == PhpType::Str)
+    {
         return Err(CompileError::new(
-            cx.span,
+            input.span,
             "get_class_vars() argument must be a string in AOT mode",
         ));
     }
-    Ok(PhpType::AssocArray {
+    Ok(())
+}
+
+/// Shares the concrete string-keyed Mixed result layout between checker and EIR consumers.
+fn result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
-    })
+    }
 }
 
 /// Rejects any path that bypassed the statically resolved class metadata specialization.

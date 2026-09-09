@@ -22,8 +22,8 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `eir_graph`
-- **Validation**: `checker_hook`
-- **Result type source**: `checked`
+- **Validation**: `shared`
+- **Result type source**: `shared`
 - **Result ownership**: `fresh`
 - **Effects**: `static (3 declared effects)`
 - **Requirements**: `static (0 requirements)`

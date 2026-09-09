@@ -188,7 +188,17 @@ impl Checker {
         // validation, and result typing. Only compiler-resident language
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
-            crate::builtins::registry::check_arity(name, args.len(), span)?;
+            // An unpack contributes its runtime entries, not one argument. Shared
+            // validators accept unknown argument types and leave dynamic bounds to
+            // EIR binding. Legacy checker hooks still require their fixed AST shape.
+            let runtime_arity = args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+                && !matches!(
+                    def.spec.semantics.validation,
+                    crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
+                );
+            if !runtime_arity {
+                crate::builtins::registry::check_arity(name, args.len(), span)?;
+            }
             if !catalog::builtin_is_available_for_target(name, self.target) {
                 return Err(CompileError::new(
                     span,

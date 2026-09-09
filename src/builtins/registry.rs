@@ -215,7 +215,7 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// |------------------------|------------------------------------------------|
 /// | `params`               | `BuiltinDef.params` (typed via `TypeSpec`)    |
 /// | `defaults`             | `BuiltinDef.defaults` (via `DefaultSpec`)     |
-/// | `return_type`          | `BuiltinDef.return_type` (via `TypeSpec`)     |
+/// | `return_type`          | Shared checker/EIR result resolver, otherwise `TypeSpec` |
 /// | `declared_return`      | `false` for a direct builtin signature          |
 /// | `by_ref_return`        | `BuiltinDef.by_ref_return` (from spec)        |
 /// | `ref_params`           | `BuiltinDef.ref_params` (from spec)           |
@@ -226,12 +226,31 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// Returns `None` if the builtin is not registered.
 pub fn function_sig(name: &str) -> Option<FunctionSig> {
     let def = lookup(name)?;
+    // A neutral PHP array declaration does not distinguish indexed arrays from
+    // hashes. When checker and EIR share result typing, callable signatures must
+    // consume that same resolver instead of inventing an indexed payload shape.
+    // Checker-hook builtins retain their existing checker-facing signature here.
+    let return_type = match (def.spec.semantics.validation, def.spec.semantics.result_type) {
+        (
+            crate::builtins::semantics::BuiltinValidation::Shared(_),
+            crate::builtins::semantics::BuiltinResultType::Shared(resolve),
+        ) => {
+            let arg_types = def.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>();
+            resolve(&crate::builtins::semantics::BuiltinSemanticInput {
+                name: def.name,
+                args: &[],
+                arg_types: &arg_types,
+                span: crate::span::Span::dummy(),
+            })
+        }
+        _ => def.return_type.clone(),
+    };
     Some(FunctionSig {
         params: def.params.clone(),
         param_type_exprs: vec![None; def.params.len()],
         param_attributes: vec![Vec::new(); def.params.len()],
         defaults: def.defaults.clone(),
-        return_type: def.return_type.clone(),
+        return_type,
         declared_return: false,
         by_ref_return: def.by_ref_return,
         ref_params: def.ref_params.clone(),
@@ -767,6 +786,21 @@ mod tests {
         assert!(sig.variadic.is_none());
         assert!(sig.deprecation.is_none());
         assert_eq!(sig.return_type, PhpType::Bool);
+    }
+
+    /// Direct and first-class signatures use the shared introspection result payload layouts.
+    #[test]
+    fn class_introspection_signatures_preserve_shared_array_shapes() {
+        for (name, expected) in [
+            ("get_class_vars", PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }),
+            ("get_class_methods", PhpType::Array(Box::new(PhpType::Str))),
+        ] {
+            assert_eq!(function_sig(name).unwrap().return_type, expected, "{name}");
+            assert_eq!(first_class_callable_sig(name).unwrap().return_type, expected, "{name}");
+        }
     }
 
     /// Verifies `first_class_callable_sig` applies the variadic-upgrade for variadic builtins.

@@ -49022,7 +49022,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [],
       "target_strategy": "eir_graph",
       "target_support": [
@@ -49034,8 +49034,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "checker_hook",
-        "lazy": false
+        "kind": "shared"
       }
     },
     "sig": {
@@ -49147,7 +49146,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [],
       "target_strategy": "eir_graph",
       "target_support": [
@@ -49159,8 +49158,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "checker_hook",
-        "lazy": false
+        "kind": "shared"
       }
     },
     "sig": {

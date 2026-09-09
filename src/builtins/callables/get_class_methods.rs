@@ -14,10 +14,10 @@
 use crate::builtins::semantics::{
     BuiltinArgumentLowering, BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering,
     BuiltinLoweringContext, BuiltinLoweringError, BuiltinRequirements, BuiltinResultOwnership,
-    BuiltinResultType, BuiltinRuntimeFunctions, BuiltinSemantics, BuiltinTargetStrategy,
-    BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
+    BuiltinResultType, BuiltinRuntimeFunctions, BuiltinSemanticInput, BuiltinSemantics,
+    BuiltinTargetStrategy, BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue,
+    NormalizedBuiltinCall,
 };
-use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::ir::Effects;
 use crate::parser::ast::ExprKind;
@@ -25,10 +25,9 @@ use crate::types::PhpType;
 
 builtin! {
     contract: "get_class_methods",
-    check: check,
     semantics: BuiltinSemantics {
-        validation: BuiltinValidation::SignatureOnly,
-        result_type: BuiltinResultType::Checked,
+        validation: BuiltinValidation::Shared(validate),
+        result_type: BuiltinResultType::Shared(result_type),
         effects: BuiltinEffects::Static(Effects::from_bits_retain(
             Effects::READS_HEAP.bits()
                 | Effects::ALLOC_HEAP.bits()
@@ -47,24 +46,28 @@ builtin! {
     },
 }
 
-/// Accepts static or boxed object/string arguments and returns an indexed string array.
-fn check(cx: &mut BuiltinCheckCtx<'_>) -> Result<PhpType, CompileError> {
-    let argument = match &cx.args[0].kind {
-        ExprKind::NamedArg { name, value }
-            if crate::names::php_symbol_key(name) == "object_or_class" =>
-        {
-            value.as_ref()
-        }
-        _ => &cx.args[0],
-    };
-    let ty = cx.checker.infer_type(argument, cx.env)?;
-    if !matches!(ty.codegen_repr(), PhpType::Object(_) | PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
+/// Accepts static or boxed object/string arguments and defers unpacked entry validation to runtime binding.
+fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
+    if input.args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+        return Ok(());
+    }
+    if !input.arg_types.first().is_some_and(|ty| {
+        matches!(
+            ty.codegen_repr(),
+            PhpType::Object(_) | PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+        )
+    }) {
         return Err(CompileError::new(
-            cx.span,
+            input.span,
             "get_class_methods() argument must be an object or string in AOT mode",
         ));
     }
-    Ok(PhpType::Array(Box::new(PhpType::Str)))
+    Ok(())
+}
+
+/// Shares the concrete indexed-string result layout between checker and EIR consumers.
+fn result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Array(Box::new(PhpType::Str))
 }
 
 /// Rejects any path that bypassed the AOT class-metadata specialization.

@@ -9,6 +9,33 @@
 
 use super::*;
 
+/// Runtime unpack support does not relax the arity of concrete introspection calls.
+#[test]
+fn test_error_core_introspection_concrete_arity() {
+    for name in ["get_class_vars", "get_class_methods"] {
+        expect_error(
+            &format!("<?php {name}();"),
+            &format!("{name}() takes exactly 1 argument"),
+        );
+        expect_error(
+            &format!("<?php {name}('stdClass', 'stdClass');"),
+            &format!("{name}() takes exactly 1 argument"),
+        );
+    }
+}
+
+/// Shared introspection validators still reject concrete invalid positional and named values.
+#[test]
+fn test_error_core_introspection_concrete_argument_types() {
+    for (name, parameter, expected) in [
+        ("get_class_vars", "class", "get_class_vars() argument must be a string in AOT mode"),
+        ("get_class_methods", "object_or_class", "get_class_methods() argument must be an object or string in AOT mode"),
+    ] {
+        expect_error(&format!("<?php {name}(false);"), expected);
+        expect_error(&format!("<?php {name}({parameter}: false);"), expected);
+    }
+}
+
 /// Verifies that error call user func wrong args.
 #[test]
 fn test_error_call_user_func_wrong_args() {
