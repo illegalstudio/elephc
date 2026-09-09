@@ -74,6 +74,28 @@ exerciseNamedArguments(namedArgumentLength(...), namedArgumentThrow(...));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Named containers release copied temporary strings without consuming a borrowed caller local.
+#[test]
+fn test_core_named_descriptor_string_arguments_preserve_borrowed_inputs() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function namedStringPair(string $first, string $second): int {
+    return strlen($first) + strlen($second);
+}
+function exerciseNamedStringPair(callable $callback): void {
+    $borrowed = str_repeat("a", 24);
+    $total = 0;
+    for ($i = 0; $i < 12; $i++) {
+        $total += call_user_func($callback, $borrowed, second: str_repeat("b", 24));
+    }
+    echo $total, ":", strlen($borrowed);
+}
+exerciseNamedStringPair(namedStringPair(...));
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "576:24", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A caller-frame catch observes destruction of callback-builtin input temporaries before its body.
 #[test]
 fn test_core_callback_builtin_operand_scope_retires_before_same_frame_catch() {

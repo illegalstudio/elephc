@@ -108,7 +108,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
     );
     let mut next_positional_key = 0i64;
     for arg in args {
-        match &arg.kind {
+        let (key, value) = match &arg.kind {
             ExprKind::NamedArg { name, value } => {
                 let key = lower_string_literal(ctx, name, arg);
                 let param_index = sig.and_then(|sig| {
@@ -122,13 +122,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                     None
                 }
                 .unwrap_or_else(|| lower_expr(ctx, value));
-                ctx.emit_void(
-                    Op::HashSet,
-                    vec![hash.value, key.value, value.value],
-                    None,
-                    Op::HashSet.default_effects(),
-                    Some(arg.span),
-                );
+                (key, value)
             }
             _ => {
                 let key = emit_i64_at_span(ctx, next_positional_key, arg.span);
@@ -140,14 +134,22 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                     lower_expr(ctx, arg)
                 };
                 next_positional_key += 1;
-                ctx.emit_void(
-                    Op::HashSet,
-                    vec![hash.value, key.value, value.value],
-                    None,
-                    Op::HashSet.default_effects(),
-                    Some(arg.span),
-                );
+                (key, value)
             }
+        };
+        ctx.emit_void(
+            Op::HashSet,
+            vec![hash.value, key.value, value.value],
+            None,
+            Op::HashSet.default_effects(),
+            Some(arg.span),
+        );
+        // HashSet persists strings but transfers other fresh heap payloads.
+        // Retire the original string before invoking a callback that may throw.
+        if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str
+            && ctx.value_is_owning_temporary(value)
+        {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(arg.span));
         }
     }
     ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span))
@@ -201,4 +203,3 @@ pub(super) fn lower_invoker_ref_arg_marker(
         Some(span),
     )
 }
-

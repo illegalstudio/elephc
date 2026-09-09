@@ -9,6 +9,38 @@
 
 use crate::ir::Op;
 
+/// Named containers retire copied string operands before the callback can unwind past them.
+#[test]
+fn named_descriptor_arguments_release_persisted_strings_before_invocation_on_all_targets() {
+    let source = r#"<?php
+        function named_string_target(string $first, string $second): int {
+            return strlen($first) + strlen($second);
+        }
+        function invoke_named_strings(callable $callback): int {
+            return call_user_func($callback, str_repeat("a", 24), second: str_repeat("b", 24));
+        }
+        echo invoke_named_strings(named_string_target(...));
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "invoke_named_strings").unwrap();
+        let invoke = function.instructions.iter().position(|inst| inst.op == Op::CallableDescriptorInvoke).unwrap();
+        let writes = function.instructions[..invoke].iter().enumerate()
+            .filter(|(_, inst)| inst.op == Op::HashSet).collect::<Vec<_>>();
+        assert_eq!(writes.len(), 2, "{target}");
+        for (index, write) in writes {
+            let value = write.operands[2];
+            assert!(function.instructions[index + 1..invoke].iter().any(|inst| {
+                inst.op == Op::Release && inst.operands == [value]
+            }), "{target}: copied argument must be retired before invoking the callback");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Callback roots preserve callable-array provenance and single-word object predicate arguments.
 #[test]
 fn retained_callback_arrays_and_object_predicates_lower_on_all_targets() {
