@@ -255,3 +255,17 @@ boxed returns and retained closure captures.
 tests were executed. The assembly-comment checker reports the same 45
 multiline-call false positives on HEAD and the edited file; this change
 adds no direct assembly instructions. Executable results remain pending CI.
+
+### Internal strlen coercion owner
+
+The list-unpack fixture leaks six strings after three iterations containing
+two `strlen` calls on boxed values. `strlen`'s EIR graph creates a string cast,
+whose string-tagged runtime path calls `__rt_str_persist`, but did not release
+that detached copy. The graph now retires its internal cast after reading the
+length, leaving concrete borrowed strings and original boxed arguments alone.
+An all-target EIR fixture checks the release dependency; a heap fixture covers
+direct, call_user_func and first-class invocations with surviving aliases.
+
+Build and test compilation pass. The builtin documentation regeneration and
+all three audits pass without generated changes. No local tests were run;
+the list-unpack regression and new ownership fixture remain executable CI gates.

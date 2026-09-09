@@ -275,6 +275,35 @@ fn strlen_uses_backend_neutral_eir_graph() {
     );
 }
 
+/// Dynamic strlen retires its internal cast after reading the length on every target.
+#[test]
+fn strlen_releases_only_its_internal_string_cast_on_every_target() {
+    use crate::ir::Op;
+
+    let source = r#"<?php
+function boxedLength(mixed $value): int { return strlen($value); }
+function borrowedLength(string $value): int { return strlen($value); }
+echo boxedLength("abc"), borrowedLength("abc");
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."),
+            crate::codegen::platform::Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "boxedLength").unwrap();
+        let length_index = function.instructions.iter().position(|inst| inst.op == Op::StrLen).unwrap();
+        let string = function.instructions[length_index].operands[0];
+        let cast = function.instructions.iter().find(|inst| inst.result == Some(string)).unwrap();
+        assert_eq!(cast.op, Op::Cast, "{name}");
+        assert!(function.instructions[length_index + 1..].iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [string]
+        }), "{name}: the detached string must be released after reading its length");
+        let borrowed = module.functions.iter().find(|function| function.name == "borrowedLength").unwrap();
+        assert!(!borrowed.instructions.iter().any(|inst| inst.op == Op::Cast), "{name}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Verifies nested autovivification carries a typed fetch-for-write runtime identity.
 #[test]
 fn nested_autovivify_uses_typed_fetch_for_write_runtime_call() {

@@ -7,7 +7,7 @@
 //! Key details:
 //! - Shared validation accepts `Str`, `Mixed`, and `Union` types (PHP coerces the argument to a
 //!   string per standard type-juggling rules); other types are rejected.
-//! - Lowering emits `StrLen` directly or `Cast(Str) -> StrLen` for dynamic operands.
+//! - Dynamic operands use `Cast(Str) -> StrLen -> Release` to retire the detached string copy.
 
 use crate::builtins::semantics::{
     BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering, BuiltinLoweringContext,
@@ -64,7 +64,7 @@ fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
 fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
     match input.arg_types.first().map(PhpType::codegen_repr) {
         Some(PhpType::Str) => Op::StrLen.default_effects(),
-        _ => Op::Cast.default_effects() | Op::StrLen.default_effects(),
+        _ => Op::Cast.default_effects() | Op::StrLen.default_effects() | Op::Release.default_effects(),
     }
 }
 
@@ -93,12 +93,24 @@ fn lower(
             ));
         }
     };
-    Ok(ctx.emit_value(
+    let length = ctx.emit_value(
         Op::StrLen,
         vec![string],
         None,
         call.result_type.clone(),
         Op::StrLen.default_effects(),
         Some(call.span),
-    ))
+    );
+    if string != value {
+        // Mixed string coercion detaches an owned copy. Retire only that copy;
+        // the caller still owns the original operand and any aliases of it.
+        ctx.emit_void(
+            Op::Release,
+            vec![string],
+            None,
+            Op::Release.default_effects(),
+            Some(call.span),
+        );
+    }
+    Ok(length)
 }
