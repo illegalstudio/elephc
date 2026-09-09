@@ -41,9 +41,18 @@ pub(super) fn lower_boxed_usort(
     }
     let sig = call_signature(ctx, name, false)?;
     let plan = plan_call_args(&sig, args, expr.span, false, false).ok()?;
-    let [PlannedRegularArg::Source { source_index: array_index, expr: array },
-        PlannedRegularArg::Source { source_index: callback_index, expr: callback }] =
-        plan.regular_args.as_slice() else { return None; };
+    let (array, callback, array_first) = match plan.regular_args.as_slice() {
+        [PlannedRegularArg::Source { source_index: array_index, expr: array },
+            PlannedRegularArg::Source { source_index: callback_index, expr: callback }] =>
+            (array, callback, array_index < callback_index),
+        [] if plan.first_named_pos.is_none() => {
+            // The shared planner deliberately leaves positional-only calls
+            // as source-order passthroughs instead of filling regular_args.
+            let [array, callback] = plan.source_args.as_slice() else { return None; };
+            (array, callback, true)
+        }
+        _ => return None,
+    };
     if ref_place_args::static_place_type(ctx, array)?.codegen_repr() != PhpType::Mixed
         || !supported_place(ctx, array)
     {
@@ -56,7 +65,7 @@ pub(super) fn lower_boxed_usort(
     ctx.store_local(&started, no, PhpType::Bool, Some(expr.span));
     let guard = SortGuard { handler, started };
     handler_op(ctx, Op::TryPushHandler, guard.handler, expr.span);
-    let (place, callback_source) = if array_index < callback_index {
+    let (place, callback_source) = if array_first {
         let place = capture_place(ctx, array);
         (place, root_expression(ctx, callback))
     } else {

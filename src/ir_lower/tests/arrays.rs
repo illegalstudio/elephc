@@ -264,6 +264,8 @@ echo implode(',', array_keys($items));
 #[test]
 fn boxed_usort_publishes_private_arrays_on_every_target() {
     use crate::codegen::platform::Target;
+    use crate::ir::{Immediate, RuntimeCallTarget, RuntimeFnId};
+    use crate::types::PhpType;
     use std::path::Path;
 
     let source = r#"<?php
@@ -273,12 +275,28 @@ $bag = new TargetSortBag();
 $items = [2, 1];
 targetBoxedSort($items);
 usort($bag->items, fn(int $a, int $b): int => $b <=> $a);
+usort(callback: fn(int $a, int $b): int => $a <=> $b, array: $bag->items);
 echo implode(',', $bag->items);
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
+        let mut sorts = 0;
+        for function in &module.functions {
+            for inst in &function.instructions {
+                if matches!(inst.immediate,
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Usort)
+                        | RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::Usort, .. })))
+                {
+                    sorts += 1;
+                    let array = function.value(inst.operands[0]).unwrap();
+                    assert_eq!(array.php_type, PhpType::Array(Box::new(PhpType::Mixed)),
+                        "{name}: positional and named sorts must consume a dense working array");
+                }
+            }
+        }
+        assert!(sorts >= 3, "{name}: both planner forms reach the private-array lowering");
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert!(assembly.contains("__rt_usort"), "{name}");
