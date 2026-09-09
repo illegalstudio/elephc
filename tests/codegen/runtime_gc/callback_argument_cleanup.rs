@@ -21,7 +21,7 @@ class ParentArgumentOwners {
 class ChildArgumentOwners extends ParentArgumentOwners {
     public function exercise(): void {
         $value = parent::forward(41);
-        $output = 0;
+        $output = parent::forward(0);
         $updated = parent::update(42, $output);
         if ($value !== 41 || $updated !== 42 || $output !== 42) { echo "bad"; }
     }
