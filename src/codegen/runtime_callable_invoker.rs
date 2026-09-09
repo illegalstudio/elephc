@@ -1596,9 +1596,9 @@ fn push_materialized_mixed_hash_value_arg(
     }
     let (pushed_ty, _boxed_to_mixed) =
         owned_value_args::coerce(emitter, ctx, data, &PhpType::Mixed, target_ty);
-    // A borrowed hash cell and an unboxed container need their own invoker lease.
+    // A borrowed hash cell and every unboxed heap payload need their own invoker lease.
     // Newly boxed Mixed results already carry that owner.
-    if FunctionSig::parameter_needs_owned_shadow(&pushed_ty, false)
+    if pushed_ty.is_refcounted()
         && (!release_source_mixed_after_coerce || pushed_ty.codegen_repr() != PhpType::Mixed)
     {
         abi::emit_incref_if_refcounted(emitter, &pushed_ty);

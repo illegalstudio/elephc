@@ -137,6 +137,31 @@ catch (RuntimeException $error) { echo $error->getMessage(); unset($error); }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Positional and named descriptor object arguments release leases on success and exception escape.
+#[test]
+fn test_core_descriptor_object_argument_leases_preserve_caller_ownership() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class DescriptorObjectLease { public function __destruct() { echo "released|"; } }
+function acceptDescriptorObject(DescriptorObjectLease $value): bool { return true; }
+function throwDescriptorObject(DescriptorObjectLease $value): bool { throw new RuntimeException("caught|"); }
+function exerciseDescriptorObject(callable $accept, callable $fail): void {
+    $value = new DescriptorObjectLease();
+    if (call_user_func($accept, $value)) { echo "pos|"; }
+    if (call_user_func($accept, value: $value)) { echo "named|"; }
+    try { call_user_func($fail, $value); }
+    catch (RuntimeException $error) { echo $error->getMessage(); unset($error); }
+    try { call_user_func($fail, value: $value); }
+    catch (RuntimeException $error) { echo $error->getMessage(); unset($error); }
+    echo "alive|";
+    unset($value);
+}
+exerciseDescriptorObject(acceptDescriptorObject(...), throwDescriptorObject(...));
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "pos|named|caught|caught|alive|released|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A throwing temporary receiver is cleaned before catch dispatch, chaining its destructor exception.
 #[test]
 fn test_core_descriptor_operand_scope_chains_destructor_throw_before_catch() {

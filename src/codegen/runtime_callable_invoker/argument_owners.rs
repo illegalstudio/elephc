@@ -6,11 +6,12 @@
 //!
 //! Key details:
 //! - Arrays and Mixed arguments get independent callee shadows; invocation leases remain caller-owned.
+//! - Object and iterable argument leases also remain caller-owned, even when the callee borrows them.
 //! - By-value strings have detached buffers owned here, including defaults and scalar coercions.
 //! - Frame slots start empty and are cleared before release, including partial preparation failures.
 //! - Hidden captures and by-reference marker slots are not by-value invocation owners.
 
-use super::{abi, Emitter, FunctionSig, PhpType};
+use super::{abi, Emitter, PhpType};
 
 /// Frame-relative slots for the caller-owned argument cells and an in-flight boxed return.
 pub(super) struct InvokerArgumentOwners {
@@ -48,9 +49,10 @@ impl InvokerArgumentOwners {
         }
     }
 
-    /// Records a pushed by-value string buffer or a container with a callee-owned shadow.
+    /// Records a pushed by-value string buffer or a refcounted argument lease.
     pub(super) fn record_pushed(&self, index: usize, ty: &PhpType, emitter: &mut Emitter) {
-        if ty.codegen_repr() != PhpType::Str && !FunctionSig::parameter_needs_owned_shadow(ty, false) {
+        let repr = ty.codegen_repr();
+        if repr != PhpType::Str && !repr.is_refcounted() {
             return;
         }
         assert!(index < self.count, "invoker argument owner exceeds its frame layout");
@@ -128,6 +130,19 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.matches("__rt_decref_any").count() >= 9, "{name}");
             assert_eq!(asm.matches("__rt_cleanup_invoke").count(), 5, "{name}");
+        }
+    }
+
+    /// Borrowed native object and iterable parameters still have invoker leases on every target.
+    #[test]
+    fn invoker_tracks_object_and_iterable_argument_leases() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for ty in [PhpType::Object("LeaseOwner".to_string()), PhpType::Iterable] {
+                let mut emitter = Emitter::new(crate::codegen::platform::Target::parse(name).unwrap());
+                let owners = InvokerArgumentOwners::new(super::super::INVOKER_BOUNDARY_FRAME_SIZE, 1);
+                owners.record_pushed(0, &ty, &mut emitter);
+                assert!(!emitter.output().is_empty(), "{name}: {ty:?}");
+            }
         }
     }
 }
