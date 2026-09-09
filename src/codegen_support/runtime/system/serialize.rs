@@ -22,6 +22,8 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
+mod magic_result;
+
 /// Emits `__rt_serialize_value`, the tag-dispatching serializer, and the
 /// `__rt_serialize_mixed` wrapper that unpacks a boxed Mixed cell first.
 ///
@@ -31,11 +33,11 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 /// (a null pointer serializes as `N;`).
 /// Both return the serialized slice pointer/length in the string result registers.
 pub(crate) fn emit_serialize(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_serialize_x86_64(emitter);
-        return;
+    match emitter.target.arch {
+        Arch::X86_64 => emit_serialize_x86_64(emitter),
+        Arch::AArch64 => emit_serialize_aarch64(emitter),
     }
-    emit_serialize_aarch64(emitter);
+    magic_result::emit_magic_result(emitter);
 }
 
 /// AArch64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
@@ -589,23 +591,13 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #24]");                                  // save it so any method scratch can be rewound away
     emitter.instruction("ldr x0, [sp, #0]");                                    // $this receiver for the method call
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the __serialize target
-    emitter.instruction("blr x10");                                             // call __serialize($this) -> x0 = array (bare pointer)
+    emitter.instruction("blr x10");                                             // transfer the raw or boxed array result from __serialize($this)
     emitter.instruction("str x0, [sp, #32]");                                   // save the returned array pointer
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved post-prefix offset
     emitter.instruction("str x10, [x9]");                                       // rewind, discarding any concat scratch the method left
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the returned array pointer
-    emitter.instruction("ldur x9, [x0, #-8]");                                  // load its heap kind word
-    emitter.instruction("and x9, x9, #0xff");                                   // isolate the heap kind (2=indexed, 3=hash)
-    emitter.instruction("cmp x9, #3");                                          // is the returned array a hash?
-    emitter.instruction("b.eq __rt_serialize_object_ser_hash");                 // hashes use the hash body emitter
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the indexed array pointer
-    emitter.instruction("bl __rt_serialize_indexed_body");                      // append <count>:{ i:K;<v>... }
-    emitter.instruction("b __rt_serialize_object_magic_done");                  // finish the object
-    emitter.label("__rt_serialize_object_ser_hash");
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the hash pointer
-    emitter.instruction("bl __rt_serialize_hash_body");                         // append <count>:{ <key><val>... }
-    emitter.label("__rt_serialize_object_magic_done");
+    emitter.instruction("bl __rt_serialize_magic_result");                      // serialize the array payload and retire its owner even on a nested throw
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // deallocate the object frame
     emitter.instruction("ret");                                                 // return with the object appended
@@ -1459,23 +1451,13 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save it so method scratch can be rewound away
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // $this receiver for the method call
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the __serialize target
-    emitter.instruction("call r10");                                            // __serialize($this) -> rax = array (bare pointer)
+    emitter.instruction("call r10");                                            // transfer the raw or boxed array result from __serialize($this)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the returned array pointer
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
     emitter.instruction("mov QWORD PTR [r10], rax");                            // rewind, discarding any concat scratch the method left
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the returned array pointer
-    emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load its heap kind word
-    emitter.instruction("and rcx, 0xff");                                       // isolate the heap kind (2=indexed, 3=hash)
-    emitter.instruction("cmp rcx, 3");                                          // is the returned array a hash?
-    emitter.instruction("je __rt_serialize_object_ser_hash");                   // hashes use the hash body emitter
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the indexed array pointer
-    emitter.instruction("call __rt_serialize_indexed_body");                    // append <count>:{ i:K;<v>... }
-    emitter.instruction("jmp __rt_serialize_object_magic_done");                // finish the object
-    emitter.label("__rt_serialize_object_ser_hash");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the hash pointer
-    emitter.instruction("call __rt_serialize_hash_body");                       // append <count>:{ <key><val>... }
-    emitter.label("__rt_serialize_object_magic_done");
+    emitter.instruction("call __rt_serialize_magic_result");                    // serialize the array payload and retire its owner even on a nested throw
     emitter.instruction("add rsp, 64");                                         // deallocate the object frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with the object appended

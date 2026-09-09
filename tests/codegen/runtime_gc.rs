@@ -60,6 +60,7 @@ mod eval_argument_lifetimes;
 mod eval_operand_owners;
 mod eval_scope_writeback;
 mod unserialize_hydration_data;
+mod serialize_magic_results;
 mod nested_property_defaults;
 #[path = "runtime_gc/growth.rs"]
 mod growth;

@@ -112,3 +112,21 @@ Native/eval Throwable round trips still leak 12 blocks (597 bytes). The
 reference-return cleanup-throw regression currently prints `holder|` followed
 by an uncaught `Exception: cleanup`; its next failure log includes assembly.
 Neither exception problem is claimed resolved by the receiver correction.
+
+### Serialization return boundary and 89491f41d evidence
+
+On `89491f41d`, Linux x86_64 codegen shards 8 and 10 passed. Shard 7 now
+reports only the magic serializer layout mismatch and the old property COW
+assembly expectation; the throwing comparator factory no longer fails there.
+The native/eval exception and exceptional reference-return gates remain open.
+
+The object serializer previously read a declared `array` return directly as
+an indexed/hash header. Such PHP returns now carry a Mixed cell, so the cell's
+tag became the serialized count and its payload words became bogus elements.
+The new magic-result boundary validates and borrows either physical array
+representation. It keeps the original return owner through recursive encoding,
+then retires it under a separate cleanup guard, including nested hook and
+destructor exceptions. Completed concat output is restored after cleanup.
+Regression fixtures cover both layouts, shared properties, invalid dynamic
+returns, nested throws and destructor throws. Their executable results are
+pending CI. `__sleep()` still needs the corresponding names-array adaptation.

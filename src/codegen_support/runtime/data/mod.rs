@@ -138,6 +138,8 @@ pub(crate) const ALLOC_OVERFLOW_MSG: &str =
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.
 pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
+/// Catchable TypeError for a magic serializer that returns a non-array value.
+pub(crate) const SERIALIZE_RETURN_ARRAY_MSG: &str = "__serialize() must return an array";
 /// Prefix for a catchable TypeError naming a non-array `unserialize()` options argument.
 pub(crate) const UNSER_OPTIONS_TYPE_PREFIX: &str =
     "unserialize(): Argument #2 ($options) must be of type array, ";
