@@ -18,7 +18,10 @@ fn hydration_parameter_metadata_preserves_boxed_and_synthetic_abis_on_all_target
     let source = r#"<?php
 class H { public function __unserialize(array $data): void { echo $data["x"]; } }
 class ChildH extends H {}
+class U { public function __unserialize($data): void { echo $data["x"]; } }
 $value = unserialize('O:6:"ChildH":1:{s:1:"x";i:42;}');
+$untyped = new U();
+$untyped->__unserialize(["x" => 9]);
 $storage = new SplObjectStorage();
 $storage->__unserialize([]);
 "#;
@@ -31,7 +34,7 @@ $storage->__unserialize([]);
         let (_, table) = assembly.split_once("_class_unserialize_data_boxed:\n").unwrap();
         let flags = table.lines().map_while(|line| line.trim().strip_prefix(".quad "))
             .map(|value| value.parse::<u8>().unwrap()).collect::<Vec<_>>();
-        for (class, expected) in [("H", 1), ("ChildH", 1), ("SplObjectStorage", 0)] {
+        for (class, expected) in [("H", 1), ("ChildH", 1), ("U", 1), ("SplObjectStorage", 0)] {
             let class_info = module.class_infos.get(class).unwrap();
             assert_eq!(flags[class_info.class_id as usize], expected, "{name}: {class}");
         }

@@ -10,6 +10,25 @@
 
 use crate::support::*;
 
+/// Untyped user hooks share the boxed signature for explicit method calls and decoder invocation.
+#[test]
+fn test_unserialize_untyped_hook_matches_direct_call_array_storage() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class U {
+    public array $values = [];
+    public function __unserialize($data): void { $this->values = $data; }
+}
+$direct = new U();
+$direct->__unserialize(["x" => 7]);
+$decoded = unserialize('O:1:"U":1:{s:1:"x";i:42;}');
+echo $direct->values["x"], ":", $decoded->values["x"];
+unset($direct, $decoded);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "7:42", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A declared array hydration parameter can be read and retained as an ordinary PHP array.
 #[test]
 fn test_unserialize_declared_array_hydration_data_uses_boxed_storage() {
