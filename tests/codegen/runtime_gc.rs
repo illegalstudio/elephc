@@ -48,6 +48,7 @@ mod native_string_arguments;
 mod native_property_unset;
 mod eval_closure_receivers;
 mod eval_argument_lifetimes;
+mod eval_operand_owners;
 mod nested_property_defaults;
 #[path = "runtime_gc/growth.rs"]
 mod growth;

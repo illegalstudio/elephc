@@ -19,6 +19,7 @@ mod corpus;
 mod debug_info;
 mod descriptor_ownership;
 mod effects;
+mod eval_ownership;
 mod exhaustive;
 mod ownership;
 mod static_properties;

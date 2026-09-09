@@ -215,6 +215,33 @@ fn deferred_local_load_release_is_pruned_for_concrete_storage() {
     assert!(function.instructions[1].operands.is_empty());
 }
 
+/// String loads release detached Mixed payloads but never ordinary borrowed local buffers.
+#[test]
+fn deferred_string_load_release_tracks_final_storage_representation() {
+    for kind in [LocalKind::PhpLocal, LocalKind::StaticLocal] {
+        for widened in [false, true] {
+            let mut function = Function::new("string_load_release".to_string(), IrType::Void, PhpType::Void);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                let slot = builder.add_local(Some("value".to_string()), IrType::Str, PhpType::Str, kind);
+                let op = if kind == LocalKind::StaticLocal { Op::LoadStaticLocal } else { Op::LoadLocal };
+                let load = builder.emit(
+                    op, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                    IrType::Str, PhpType::Str, Ownership::MaybeOwned,
+                ).unwrap();
+                builder.emit(Op::Release, vec![load], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+                if widened { builder.widen_local_storage_type(slot, PhpType::Mixed); }
+                builder.prune_borrowed_local_load_release_ops();
+                builder.terminate(Terminator::Return { value: None });
+            }
+            assert_eq!(function.instructions[1].op, if widened { Op::Release } else { Op::Nop });
+        }
+    }
+}
+
 /// Preserves an explicit owned-slot cleanup even when its storage remains concrete.
 #[test]
 fn owned_local_load_release_is_not_pruned_for_concrete_storage() {

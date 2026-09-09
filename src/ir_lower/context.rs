@@ -2883,7 +2883,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh
             ),
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::UnaryString(_))) => true,
-            Some(Immediate::Data(name_id)) if inst.op == Op::LanguageConstructCall => self
+            Some(Immediate::Data(name_id) | Immediate::ProfiledData { data: name_id, .. })
+                if inst.op == Op::LanguageConstructCall => self
                 .data
                 .function_names
                 .get(name_id.as_raw() as usize)

@@ -195,13 +195,14 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
         };
         return Ok(!result_is_fresh);
     }
+    // MixedCastString detaches an owned buffer for string-tagged inputs. Its
+    // other tags return scratch or literals, both ignored by validated release.
     Ok(matches!(
         inst.op,
         Op::IToStr
             | Op::FToStr
             | Op::BoolToStr
             | Op::ResourceToStr
-            | Op::MixedCastString
             | Op::StrConcat
             | Op::StrCharAt
             | Op::StrInterpolate

@@ -337,12 +337,12 @@ pub(super) fn emit_callable_descriptor_invoke(
     result_type: PhpType,
     span: Span,
 ) -> LoweredValue {
-    let (callback, callback_owner) = root_descriptor_call_temporary(ctx, callback, span);
+    let (callback, callback_owner) = root_owned_call_operand(ctx, callback, span);
     // The backend borrows raw containers and owns its normalized copy. Keep the
     // original in the caller's unwind inventory instead of leaving it only in SSA.
     let (arg_container, container_owner) = match ctx.builder.value_php_type(arg_container.value).codegen_repr() {
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            root_descriptor_call_temporary(ctx, arg_container, span)
+            root_owned_call_operand(ctx, arg_container, span)
         }
         _ => (arg_container, None),
     };
@@ -355,47 +355,12 @@ pub(super) fn emit_callable_descriptor_invoke(
         Some(span),
     );
     if let Some(slot) = container_owner {
-        retire_descriptor_call_temporary(ctx, slot, span);
+        retire_owned_call_operand(ctx, slot, span);
     } else if ctx.value_is_owning_temporary(arg_container) {
         crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
     }
     if let Some(slot) = callback_owner {
-        retire_descriptor_call_temporary(ctx, slot, span);
+        retire_owned_call_operand(ctx, slot, span);
     }
     result
-}
-
-/// Publishes a temporary owner in a frame slot and returns its stable invocation operand.
-fn root_descriptor_call_temporary(
-    ctx: &mut LoweringContext<'_, '_>,
-    value: LoweredValue,
-    span: Span,
-) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
-    if !ctx.value_is_owning_temporary(value) {
-        return (value, None);
-    }
-    let ty = ctx.builder.value_php_type(value.value);
-    let name = ctx.declare_hidden_temp(ty.clone());
-    // Concrete local loads can still be provisional owned unboxes until frame
-    // types are finalized. Acquire explicitly, then let ownership finalization
-    // prune the source release when that load turns out to be borrowed.
-    let rooted = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
-    ctx.store_local(&name, rooted, ty, Some(span));
-    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
-    (rooted, ctx.local_slots.get(&name).copied())
-}
-
-/// Clears a rooted operand before releasing it, including when its destructor throws.
-fn retire_descriptor_call_temporary(
-    ctx: &mut LoweringContext<'_, '_>,
-    slot: crate::ir::LocalSlotId,
-    span: Span,
-) {
-    ctx.emit_void(
-        Op::ReleaseLocalSlot,
-        Vec::new(),
-        Some(Immediate::LocalSlot(slot)),
-        Op::ReleaseLocalSlot.default_effects(),
-        Some(span),
-    );
 }

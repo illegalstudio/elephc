@@ -603,19 +603,21 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
 fn local_load_release_is_deferred_candidate(result_type: &PhpType) -> bool {
     matches!(
         result_type.codegen_repr(),
-        PhpType::Array(_)
+        PhpType::Str
+            | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Object(_)
             | PhpType::Iterable
     )
 }
 
-/// Returns whether codegen retains a concrete heap payload extracted from Mixed local storage.
+/// Returns whether codegen owns a retained payload or detached string extracted from Mixed storage.
 fn local_load_requires_owned_mixed_unbox(storage_type: &PhpType, result_type: &PhpType) -> bool {
     matches!(storage_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         && matches!(
             result_type.codegen_repr(),
-            PhpType::Array(_)
+            PhpType::Str
+                | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Callable
                 | PhpType::Object(_)

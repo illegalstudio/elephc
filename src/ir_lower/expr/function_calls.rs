@@ -224,6 +224,18 @@ pub(super) fn emit_builtin_call_value(
             return call;
         }
     }
+    let is_eval = php_symbol_key(name.trim_start_matches('\\')) == "eval";
+    let mut operands = operands;
+    let eval_source_owner = if is_eval {
+        operands.first().copied().and_then(|code| {
+            let source = LoweredValue { value: code, ir_type: ctx.builder.value_type(code) };
+            let (source, owner) = root_owned_call_operand(ctx, source, span);
+            operands[0] = source.value;
+            owner
+        })
+    } else {
+        None
+    };
     let (op, immediate, effects) = if let Some(fragment) = eval_literal {
         (
             Op::EvalLiteralCall,
@@ -257,18 +269,19 @@ pub(super) fn emit_builtin_call_value(
         effects,
         Some(span),
     );
-    release_owned_call_arg_temporaries(
-        ctx,
-        &operands,
-        Some(call.value),
-        &ReturnArgAlias::Unknown,
-        span,
-    );
+    if let Some(slot) = eval_source_owner {
+        retire_owned_call_operand(ctx, slot, span);
+    } else {
+        // Eval returns a boxed PHP value, never ownership of the code buffer
+        // passed to the parser. Even `return $source` reads its scope cell.
+        let return_alias = if is_eval { ReturnArgAlias::None } else { ReturnArgAlias::Unknown };
+        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), &return_alias, span);
+    }
     let eval_needs_barrier = match eval_literal {
         Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
         None => true,
     };
-    if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
+    if is_eval {
         ctx.mark_eval_executed();
         if eval_needs_barrier {
             ctx.apply_eval_barrier();
