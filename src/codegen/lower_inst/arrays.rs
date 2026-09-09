@@ -559,6 +559,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::AArch64 => lower_array_set_aarch64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
         Arch::X86_64 => lower_array_set_x86_64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
     }
+    stamp_scalar_array_write_result(ctx, &value_ty);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
@@ -729,12 +730,28 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
         Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, &elem_ty)?,
         Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
     }
+    let stored_type = if matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never) {
+        ctx.value_php_type(value)?.codegen_repr()
+    } else {
+        elem_ty.codegen_repr()
+    };
+    stamp_scalar_array_write_result(ctx, &stored_type);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     Ok(())
+}
+
+/// Restores semantic tags after shared word-write helpers specialize an empty array's storage.
+fn stamp_scalar_array_write_result(ctx: &mut FunctionContext<'_>, stored_type: &PhpType) {
+    if matches!(stored_type, PhpType::Float | PhpType::Bool | PhpType::Callable) {
+        // The helper has already performed COW and possible growth. Stamp its returned
+        // owner, not the original pointer, so aliases retain their original metadata.
+        let result = abi::int_result_reg(ctx.emitter);
+        crate::codegen::emit_array_value_type_stamp(ctx.emitter, result, stored_type);
+    }
 }
 
 /// Lowers appends through a boxed Mixed array cell.

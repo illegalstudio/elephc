@@ -240,3 +240,18 @@ named, union, intersection and null type objects, not just unions. Its expected
 class and member counts remain unchanged; a non-union result takes an explicitly
 failing output branch. This is a fixture correction, not a relaxation of the
 method checker or a production reflection implementation change.
+
+### Scalar metadata after empty-array writes
+
+Linux ARM64 shard 15 on `9e0a0994a` prints float bit patterns as integers
+after a foreach builder crosses a declared-array return. The shared word
+write helpers specialize empty storage as integer storage, so float, bool
+and callable writes now restore their semantic header tag on the returned
+post-COW pointer. Indexed assignment receives the same correction.
+Regressions cover all five target emitters, growth, empty-source aliases,
+boxed returns and retained closure captures.
+
+`cargo build`, `cargo check --tests` and `git diff --check` pass. No local
+tests were executed. The assembly-comment checker reports the same 45
+multiline-call false positives on HEAD and the edited file; this change
+adds no direct assembly instructions. Executable results remain pending CI.

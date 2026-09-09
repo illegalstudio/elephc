@@ -10,6 +10,47 @@
 
 use crate::ir::print_module;
 
+/// Scalar and descriptor writes stamp the post-COW array returned by the shared word helpers.
+#[test]
+fn indexed_array_word_writes_preserve_semantic_tags_on_every_target() {
+    use crate::codegen::platform::Target;
+    use std::path::Path;
+
+    let source = r#"<?php
+function appendFloatMetadata(float $value): array { $items = []; $items[] = $value; return $items; }
+function appendBoolMetadata(bool $value): array { $items = []; $items[] = $value; return $items; }
+function appendCallableMetadata(callable $value): array { $items = []; $items[] = $value; return $items; }
+function setFloatMetadata(float $value): array { $items = []; $items[0] = $value; return $items; }
+function metadataIdentity(int $value): int { return $value; }
+echo count(appendFloatMetadata($argc / 2.0));
+echo count(appendBoolMetadata($argc > 0));
+echo count(appendCallableMetadata(metadataIdentity(...)));
+echo count(setFloatMetadata($argc / 4.0));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let lines = assembly.lines().collect::<Vec<_>>();
+        for (helper, tag) in [
+            ("__rt_array_push_int", 2), ("__rt_array_push_int", 3),
+            ("__rt_array_push_int", 10), ("__rt_array_set_int", 2),
+        ] {
+            let stamp = if name == "linux-x86_64" {
+                format!("mov r12, {tag}")
+            } else {
+                format!("mov x11, #{tag}")
+            };
+            assert!(lines.iter().enumerate().any(|(index, line)| {
+                line.contains(helper) && lines.iter().skip(index + 1).take(12)
+                    .any(|line| line.contains(&stamp))
+            }), "{name}: missing tag {tag} after {helper}");
+        }
+    }
+}
+
 /// Generic array spreads use an owned hash boundary instead of raw array operations on boxed cells.
 #[test]
 fn php_array_literal_spreads_use_typed_hash_boundary_on_every_target() {
