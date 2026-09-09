@@ -12,6 +12,41 @@ use crate::codegen::platform::Target;
 use crate::ir::{Effects, Immediate, LocalKind, Op};
 use std::path::Path;
 
+/// Rebinding a local to its own property retains the cell before retiring the old object slot.
+#[test]
+fn reference_rebinding_retires_the_previous_slot_owner_on_every_target() {
+    let source = r#"<?php
+class ReboundReferenceOwner { public array $items = [6]; }
+function rebindReferenceOwner(): void {
+    $holder = new ReboundReferenceOwner();
+    $holder = &$holder->items;
+    echo $holder[0];
+    unset($holder);
+}
+rebindReferenceOwner();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("rebindReferenceOwner")).unwrap();
+        let holder = function.locals.iter().find(|local| local.name.as_deref() == Some("holder")).unwrap().id;
+        let retained = function.instructions.iter().position(|inst| inst.op == Op::BindRefCellPtr
+            && matches!(inst.immediate, Some(Immediate::LocalSlotPair { .. }))).unwrap();
+        let released = function.instructions.iter().enumerate().skip(retained + 1)
+            .find(|(_, inst)| inst.op == Op::ReleaseLocalSlot
+                && inst.immediate == Some(Immediate::LocalSlot(holder)))
+            .map(|(index, _)| index).expect("old object slot is retired explicitly");
+        let rebound = function.instructions.iter().position(|inst| inst.op == Op::AliasLocalRefCell
+            && matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, .. }) if first == holder)).unwrap();
+        assert!(retained < released && released < rebound,
+            "{name}: retain the new cell, retire the old value, then publish the alias");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Resolved returns lease their managed cells until the caller adopts or copies their values.
 #[test]
 fn reference_returns_transfer_cell_owners_on_every_target() {

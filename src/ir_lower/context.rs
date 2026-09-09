@@ -2500,7 +2500,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !self.initialized_slots.contains(&slot) {
             return;
         }
-        self.release_stored_local_value(name, slot, span);
+        // Retire the slot itself, avoiding a cleanup load whose representation may later widen.
+        // The new cell has already been staged, so this may safely destroy the source object.
+        self.release_stored_local_value_before_overwrite(name, slot, span);
     }
 
     /// Releases a promoted fallback ref-cell owner if the variable still owns one.

@@ -152,6 +152,29 @@ rebindPropertyOwner();
     assert_eq!(compile_and_run_tagged(source), "holder|6|done");
 }
 
+/// Rebinding remains exception-safe when retirement of the replaced object interrupts alias publication.
+#[test]
+fn test_core_owned_property_rebinding_retires_staging_when_destructor_throws() {
+    let source = r#"<?php
+class ThrowingReboundPropertyHolder {
+    public array $items = [6];
+    public function __destruct() { echo 'holder|'; throw new RuntimeException('stop'); }
+}
+function rebindThrowingPropertyOwner(): void {
+    $holder = new ThrowingReboundPropertyHolder();
+    $holder = &$holder->items;
+    echo 'unreachable';
+}
+try { rebindThrowingPropertyOwner(); }
+catch (RuntimeException $error) { echo 'caught'; unset($error); }
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "holder|caught", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "holder|caught");
+}
+
 /// References returned by methods or free functions must survive retirement of their object owner.
 #[test]
 fn test_core_returned_property_reference_outlives_object() {
