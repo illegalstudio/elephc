@@ -68,8 +68,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
     match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
-            emit_retain_scope_cell_if_owned(ctx);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
+            replace_eval_mixed_global(ctx, &symbol, true);
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
@@ -107,6 +106,23 @@ pub(super) fn store_mixed_scope_cell_to_global(
         }
     }
     Ok(())
+}
+
+/// Publishes an independent global owner before retiring displaced storage, including identical cells.
+fn replace_eval_mixed_global(ctx: &mut FunctionContext<'_>, symbol: &str, borrowed: bool) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_symbol_to_result(ctx.emitter, symbol, &PhpType::Mixed);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    if borrowed {
+        // Both owned and borrowed scope entries are borrowed by the native reload operation.
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    }
+    abi::emit_store_result_to_symbol(ctx.emitter, symbol, &PhpType::Mixed, false);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
 }
 
 /// Retains a scope-owned Mixed cell before storing it into a native local owner.
@@ -184,7 +200,7 @@ pub(super) fn store_missing_scope_entry_to_global(
         PhpType::Mixed | PhpType::Union(_) => {
             let symbol_name = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol_name);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
+            replace_eval_mixed_global(ctx, &symbol, false);
         }
         PhpType::Int => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);

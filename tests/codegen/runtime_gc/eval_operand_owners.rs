@@ -10,6 +10,41 @@
 
 use crate::support::*;
 
+/// Top-level eval replaces initial process-global boxes without leaking them or stealing local owners.
+#[test]
+fn test_core_eval_top_level_process_globals_retire_initial_storage() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$source = 'echo $argc > 0 && count($argv) === $argc ? "ready|" : "bad|"; // ' . $argc;
+eval($source);
+eval($source);
+unset($source);
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ready|ready|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Changed globals retire old owners while unchanged reloads preserve the existing value.
+#[test]
+fn test_core_eval_global_reload_balances_replacements_and_identical_cells() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function seedReloadGlobal(): void { global $payload; $payload = str_repeat("a", 48); }
+function runReloadGlobal(string $source): void { eval($source); }
+seedReloadGlobal();
+$source = 'global $payload; echo strlen($payload), "|"; $payload = str_repeat("b", 64); // ' . $argc;
+runReloadGlobal($source);
+runReloadGlobal($source);
+$source = 'global $payload; echo strlen($payload), "|"; // ' . $argc;
+runReloadGlobal($source);
+runReloadGlobal($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "48|64|64|64|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Native and opaque-eval globals share boxed process arguments and release their implicit owners.
 #[test]
 fn test_core_eval_process_argument_globals_have_balanced_ownership() {
