@@ -140,6 +140,11 @@ pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
 /// Catchable TypeError for a magic serializer that returns a non-array value.
 pub(crate) const SERIALIZE_RETURN_ARRAY_MSG: &str = "__serialize() must return an array";
+/// Runtime warning prefix for legacy serializer return validation.
+pub(crate) const SLEEP_WARNING_PREFIX: &str = "Warning: serialize(): ";
+/// Class-qualified warning suffix for invalid legacy serializer property names.
+pub(crate) const SLEEP_WARNING_SUFFIX: &str =
+    "::__sleep() should return an array only containing the names of instance-variables to serialize\n";
 /// Prefix for a catchable TypeError naming a non-array `unserialize()` options argument.
 pub(crate) const UNSER_OPTIONS_TYPE_PREFIX: &str =
     "unserialize(): Argument #2 ($options) must be of type array, ";

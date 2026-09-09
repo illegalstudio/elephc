@@ -118,6 +118,104 @@ echo serialize(8);
     assert_clean_magic_result(source, "drop|cleanup|i:8;");
 }
 
+/// Boxed sleep names preserve property order and visibility mangling without leaking their return owner.
+#[test]
+fn test_core_serialize_sleep_boxed_names_preserve_order_and_mangled_keys() {
+    let source = r#"<?php
+class T {
+    public int $x = 7;
+    protected string $y = 'z';
+    private bool $a = true;
+    public function __sleep(): array { return ['a', 'x', 'y']; }
+}
+for ($i = 0; $i < 2; $i++) {
+    $t = new T();
+    echo serialize($t), "\n";
+    unset($t);
+}
+"#;
+    let expected = "O:1:\"T\":3:{s:4:\"\0T\0a\";b:1;s:1:\"x\";i:7;s:4:\"\0*\0y\";s:1:\"z\";}\n";
+    assert_clean_magic_result(source, &expected.repeat(2));
+}
+
+/// Sleep consumes array values, including boxed associative entries, rather than assuming packed strings.
+#[test]
+fn test_core_serialize_sleep_associative_names_share_their_property_owner() {
+    let source = r#"<?php
+class H {
+    public int $x = 7;
+    public string $tag = 'ready';
+    public array $names = ['first' => 'tag', 'second' => 'x'];
+    public function __sleep(): array { return $this->names; }
+}
+$h = new H();
+echo serialize($h), '|', serialize($h), '|', $h->names['first'];
+unset($h);
+"#;
+    let wire = "O:1:\"H\":2:{s:3:\"tag\";s:5:\"ready\";s:1:\"x\";i:7;}";
+    assert_clean_magic_result(source, &format!("{wire}|{wire}|tag"));
+}
+
+/// A nested serializer exception retires sleep's names and converted string before the outer catch.
+#[test]
+fn test_core_serialize_sleep_nested_throw_releases_name_owners() {
+    let source = r#"<?php
+class SleepChild {
+    public function __serialize(): array { throw new Exception('nested'); }
+    public function __destruct() { echo 'drop|'; }
+}
+class SleepOuter {
+    public SleepChild $child;
+    public function __construct() { $this->child = new SleepChild(); }
+    public function __sleep(): array { return [str_repeat('child', 1)]; }
+}
+for ($i = 0; $i < 2; $i++) {
+    $outer = new SleepOuter();
+    try { serialize($outer); }
+    catch (Exception $error) { echo $error->getMessage(), '|'; unset($error); }
+    unset($outer);
+}
+echo serialize(8);
+"#;
+    assert_clean_magic_result(source, "nested|drop|nested|drop|i:8;");
+}
+
+/// A warning handler may throw on an invalid sleep result without abandoning that result's owner.
+#[test]
+fn test_core_serialize_sleep_invalid_return_warning_throw_releases_owner() {
+    let source = r#"<?php
+function invalidSleepResult(): mixed { return str_repeat('bad', 2); }
+class BadSleep {
+    public function __sleep() { return invalidSleepResult(); }
+}
+set_error_handler(function (int $level, string $message): bool { throw new Exception('warning'); });
+$bad = new BadSleep();
+try { serialize($bad); }
+catch (Exception $error) { echo $error->getMessage(), '|'; unset($error); }
+restore_error_handler();
+unset($bad);
+echo serialize(9);
+"#;
+    assert_clean_magic_result(source, "warning|i:9;");
+}
+
+/// Invalid sleep returns replace only the provisional object prefix after a handled warning.
+#[test]
+fn test_core_serialize_sleep_invalid_return_preserves_outer_concat_prefix() {
+    let source = r#"<?php
+function scalarSleepResult(): mixed { return str_repeat('bad', 2); }
+class InvalidSleep {
+    public function __sleep() { return scalarSleepResult(); }
+}
+set_error_handler(function (int $level, string $message): bool { return true; });
+$bad = new InvalidSleep();
+echo 'prefix|' . serialize($bad), '|', serialize(1);
+restore_error_handler();
+unset($bad);
+"#;
+    assert_clean_magic_result(source, "prefix|N;|i:1;");
+}
+
 /// Requires exact serialization output and balanced native heap ownership without weakening failures.
 fn assert_clean_magic_result(source: &str, expected: &str) {
     let out = compile_and_run_with_heap_debug(source);

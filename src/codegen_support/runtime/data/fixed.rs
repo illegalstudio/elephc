@@ -71,6 +71,15 @@ pub(crate) fn emit_runtime_data_fixed(
         super::SERIALIZE_RETURN_ARRAY_MSG,
     ));
     out.push_str(&comm_directive("_unser_depth", 8, target));
+    for (symbol, message) in [
+        ("_sleep_warning_prefix", super::SLEEP_WARNING_PREFIX),
+        ("_sleep_warning_suffix", super::SLEEP_WARNING_SUFFIX),
+    ] {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii \"{}\"\n",
+            message.replace('\n', "\\n"),
+        ));
+    }
     out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
     out.push_str(&comm_directive("_unser_allowed_mode", 8, target));
     out.push_str(&comm_directive("_unser_allowed_list", 8, target));

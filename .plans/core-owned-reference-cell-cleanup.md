@@ -156,3 +156,21 @@ assignment now includes the source effects and conservatively accounts for
 throwing/global-mutating destruction of the replaced target. Structural
 optimizer regressions retain catch/finally for both call and variable sources.
 The existing heap-debug callee-cleanup regression remains the executable gate.
+
+### Sleep return layout and lifetime
+
+The sleep path now shares the guarded magic-result ownership boundary. It
+validates raw versus boxed arrays, traverses their logical values instead of
+assuming packed strings, and retains converted names across nested serializers.
+Both the names result and a pending converted name are retired on exceptions.
+Invalid return shapes warn and replace the provisional object prefix with null.
+Regressions cover visibility-mangled keys, associative shared name arrays,
+nested throws, throwing warning handlers and concat-prefix preservation.
+Build and test compilation pass without executing local tests. Runtime results
+remain a CI gate.
+
+This change does not close the older property-selection gaps: missing,
+duplicate and uninitialized names still require filtered counts and PHP
+diagnostics, and recursive encoding should consume a selected-property
+snapshot. Ancestor-private-name lookup and property references also remain
+explicit audit items. No full serialization-parity claim is made.

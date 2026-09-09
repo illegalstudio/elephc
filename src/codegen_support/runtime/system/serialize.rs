@@ -18,11 +18,13 @@
 //!   written, and return the slice pointer/length in the string result registers
 //!   (`x1`/`x2` on AArch64, `rax`/`rdx` on x86_64).
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 mod magic_result;
+mod sleep_result;
 
 /// Emits `__rt_serialize_value`, the tag-dispatching serializer, and the
 /// `__rt_serialize_mixed` wrapper that unpacks a boxed Mixed cell first.
@@ -38,6 +40,7 @@ pub(crate) fn emit_serialize(emitter: &mut Emitter) {
         Arch::AArch64 => emit_serialize_aarch64(emitter),
     }
     magic_result::emit_magic_result(emitter);
+    sleep_result::emit_sleep_result(emitter);
 }
 
 /// AArch64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
@@ -560,6 +563,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // set the frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_off", 0);
+    emitter.instruction("str x10, [sp, #56]");                                  // retain the prefix start if an invalid sleep return serializes as null
     emitter.instruction("ldr x1, [x0]");                                        // load the class id from the object header
     emitter.instruction("str x1, [sp, #8]");                                    // save the class id
     emitter.instruction("mov x10, #-2");                                        // synthetic __PHP_Incomplete_Class id
@@ -639,30 +644,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved post-prefix offset
     emitter.instruction("str x10, [x9]");                                       // rewind away any method scratch
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the names array pointer
-    emitter.instruction("ldr x0, [x0]");                                        // names count = indexed-array header word
-    emitter.instruction("str x0, [sp, #24]");                                   // save the names count
-    emitter.instruction("bl __rt_serialize_uint");                              // append the property count digits
-    emit_append_literal_aarch64(emitter, &[b':', b'{'], "the object body open");
-    emitter.instruction("str xzr, [sp, #40]");                                  // name index = 0
-    emitter.label("__rt_serialize_object_sleep_loop");
-    emitter.instruction("ldr x4, [sp, #40]");                                   // reload the name index
-    emitter.instruction("ldr x3, [sp, #24]");                                   // reload the names count
-    emitter.instruction("cmp x4, x3");                                          // emitted every named property?
-    emitter.instruction("b.ge __rt_serialize_object_sleep_done");               // close the body when done
-    emitter.instruction("ldr x7, [sp, #32]");                                   // reload the names array pointer
-    emitter.instruction("add x8, x4, x4");                                      // index * 2 for the string ptr/len pair
-    emitter.instruction("add x8, x8, #3");                                      // skip the 24-byte (3-word) header
-    emitter.instruction("ldr x1, [x7, x8, lsl #3]");                            // name string pointer
-    emitter.instruction("add x8, x8, #1");                                      // advance to the length slot
-    emitter.instruction("ldr x2, [x7, x8, lsl #3]");                            // name string length
-    emitter.instruction("ldr x0, [sp, #0]");                                    // object pointer
-    emitter.instruction("bl __rt_serialize_named_prop");                        // emit mangled-key + value for the named property
-    emitter.instruction("ldr x4, [sp, #40]");                                   // reload the name index
-    emitter.instruction("add x4, x4, #1");                                      // advance to the next name
-    emitter.instruction("str x4, [sp, #40]");                                   // persist the name index
-    emitter.instruction("b __rt_serialize_object_sleep_loop");                  // continue the name loop
-    emitter.label("__rt_serialize_object_sleep_done");
-    emit_append_literal_aarch64(emitter, &[b'}'], "the object body close");
+    emitter.instruction("ldr x1, [sp, #0]");                                    // borrow the object while its selected properties are serialized
+    emitter.instruction("ldr x2, [sp, #56]");                                   // pass the provisional object prefix start
+    emitter.instruction("bl __rt_serialize_sleep_result");                      // consume raw or boxed names through the guarded owner boundary
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // deallocate the object frame
     emitter.instruction("ret");                                                 // return with the object appended
@@ -1419,6 +1403,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the object frame
     emitter.instruction("sub rsp, 64");                                         // reserve frame slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);
+    emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // retain the prefix start if an invalid sleep return serializes as null
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the class id from the object header
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the class id
     emitter.instruction("cmp rax, -2");                                         // synthetic __PHP_Incomplete_Class id
@@ -1499,31 +1485,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
     emitter.instruction("mov QWORD PTR [r10], rax");                            // rewind away any method scratch
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the names array pointer
-    emitter.instruction("mov rax, QWORD PTR [rax]");                            // names count = indexed-array header word
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the names count
-    emitter.instruction("call __rt_serialize_uint");                            // append the property count digits
-    emit_append_literal_x86_64(emitter, &[b':', b'{'], "the object body open");
-    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // name index = 0
-    emitter.label("__rt_serialize_object_sleep_loop");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the name index
-    emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // emitted every named property?
-    emitter.instruction("jae __rt_serialize_object_sleep_done");                // close the body when done
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the names array pointer
-    emitter.instruction("lea rcx, [rcx + rcx]");                                // index * 2 for the string ptr/len pair
-    emitter.instruction("add rcx, 3");                                          // skip the 24-byte (3-word) header
-    emitter.instruction("mov r8, QWORD PTR [rsi + rcx*8]");                     // name string pointer
-    emitter.instruction("add rcx, 1");                                          // advance to the length slot
-    emitter.instruction("mov r9, QWORD PTR [rsi + rcx*8]");                     // name string length
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // object pointer
-    emitter.instruction("mov rsi, r8");                                         // name string pointer argument
-    emitter.instruction("mov rdx, r9");                                         // name string length argument
-    emitter.instruction("call __rt_serialize_named_prop");                      // emit mangled-key + value for the named property
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the name index
-    emitter.instruction("add rcx, 1");                                          // advance to the next name
-    emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // persist the name index
-    emitter.instruction("jmp __rt_serialize_object_sleep_loop");                // continue the name loop
-    emitter.label("__rt_serialize_object_sleep_done");
-    emit_append_literal_x86_64(emitter, &[b'}'], "the object body close");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // borrow the object while its selected properties are serialized
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // pass the provisional object prefix start
+    emitter.instruction("call __rt_serialize_sleep_result");                    // consume raw or boxed names through the guarded owner boundary
     emitter.instruction("add rsp, 64");                                         // deallocate the object frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with the object appended

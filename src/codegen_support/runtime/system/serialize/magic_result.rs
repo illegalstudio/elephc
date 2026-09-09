@@ -1,5 +1,5 @@
 //! Purpose:
-//! Consumes __serialize() results while borrowing their raw array payload for recursive encoding.
+//! Owns magic serialization results while borrowed callbacks encode their payloads.
 //!
 //! Called from:
 //! - The object serializer after invoking the native magic method.
@@ -12,29 +12,58 @@
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::{data::SERIALIZE_RETURN_ARRAY_MSG, exceptions};
 
-const FRAME: usize = 48;
+const FRAME: usize = 80;
 const OWNER: usize = 8;
 const PENDING: usize = 16;
 const CONCAT_END: usize = 24;
+const OBJECT: usize = 32;
+const NAMES: usize = 40;
+const NAME_STRING: usize = 48;
+const PREFIX_START: usize = 56;
 
 /// Emits a consuming serializer boundary and its borrowed array-body dispatcher.
 pub(super) fn emit_magic_result(emitter: &mut Emitter) {
+    emit_owned_result_boundary(emitter, "__rt_serialize_magic_result", "__rt_serialize_magic_body", false);
+    emit_magic_body(emitter);
+}
+
+/// Retires a magic return and an optional converted property name after all nested PHP calls finish.
+/// Sleep callbacks borrow a context containing prefix offset, owned name string, names and object.
+pub(super) fn emit_owned_result_boundary(
+    emitter: &mut Emitter,
+    entry: &str,
+    body: &str,
+    sleep: bool,
+) {
     let result = abi::int_result_reg(emitter);
     let older = match emitter.target.arch { Arch::AArch64 => "x1", Arch::X86_64 => "rdi" };
     emitter.blank();
-    emitter.label_global("__rt_serialize_magic_result");
+    emitter.label_global(entry);
     abi::emit_frame_prologue(emitter, FRAME);
     abi::store_at_offset(emitter, result, OWNER);
     abi::emit_store_zero_to_local_slot(emitter, PENDING);
-    exceptions::emit_guarded_cleanup_call(emitter, "__rt_serialize_magic_body", result, PENDING);
+    if sleep {
+        let high = match emitter.target.arch { Arch::AArch64 => "x2", Arch::X86_64 => "rsi" };
+        abi::store_at_offset(emitter, result, NAMES);
+        abi::store_at_offset(emitter, older, OBJECT);
+        abi::store_at_offset(emitter, high, PREFIX_START);
+        abi::emit_store_zero_to_local_slot(emitter, NAME_STRING);
+        abi::emit_frame_slot_address(emitter, result, PREFIX_START);
+    }
+    exceptions::emit_guarded_cleanup_call(emitter, body, result, PENDING);
     abi::emit_load_symbol_to_reg(emitter, result, "_concat_off", 0);
     abi::store_at_offset(emitter, result, CONCAT_END);
+    if sleep {
+        abi::load_at_offset(emitter, result, NAME_STRING);
+        exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, PENDING);
+    }
     abi::load_at_offset(emitter, result, OWNER);
     exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, PENDING);
     abi::load_at_offset(emitter, result, CONCAT_END);
     abi::emit_store_reg_to_symbol(emitter, result, "_concat_off", 0);
     abi::load_at_offset(emitter, result, PENDING);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_serialize_magic_result_return");
+    let return_label = format!("{entry}_return");
+    abi::emit_branch_if_int_result_zero(emitter, &return_label);
     abi::emit_load_symbol_to_reg(emitter, older, "_exc_value", 0);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_call_label(emitter, "__rt_exception_chain");
@@ -42,10 +71,9 @@ pub(super) fn emit_magic_result(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_jump(emitter, "__rt_throw_current");
-    emitter.label("__rt_serialize_magic_result_return");
+    emitter.label(&return_label);
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);
-    emit_magic_body(emitter);
 }
 
 /// Checks storage and value tags before borrowing the payload for an ordinary body emitter.
