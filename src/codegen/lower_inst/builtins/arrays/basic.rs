@@ -66,6 +66,7 @@ pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
+        super::boxed_take::prepare_boxed_array_receiver(ctx, array, "array_push")?;
         super::super::super::arrays::lower_mixed_array_append(ctx, inst)?;
     } else {
         super::super::super::arrays::lower_array_push(ctx, inst)?;

@@ -235,6 +235,33 @@ echo count(reversePhpArray(["key" => $argc], $argc > 1));
     }
 }
 
+/// Boxed property push validates and separates its receiver before appending on every target.
+#[test]
+fn boxed_array_push_properties_publish_separated_cells_on_every_target() {
+    use crate::codegen::platform::Target;
+    use std::path::Path;
+
+    let source = r#"<?php
+class BoxedPushEmitter {
+    public array $items = [1];
+    public static array $shared = [2];
+}
+$owner = new BoxedPushEmitter();
+array_push($owner->items, $argc);
+array_push(BoxedPushEmitter::$shared, $argc);
+echo count($owner->items), count(BoxedPushEmitter::$shared);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(assembly.matches("__rt_array_cell_ensure_unique").count(), 2, "{name}");
+        assert_eq!(assembly.matches("__rt_mixed_array_append").count(), 2, "{name}");
+    }
+}
+
 /// Every target boxes scalar and nested array slots before exposing addresses to boxed ref parameters.
 #[test]
 fn php_array_reference_elements_use_boxed_parent_slots_on_every_target() {

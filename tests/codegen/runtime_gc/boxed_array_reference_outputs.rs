@@ -10,6 +10,37 @@
 
 use crate::support::*;
 
+/// Push separates boxed local and property cells while preserving reference aliases and value copies.
+#[test]
+fn test_core_boxed_array_push_publishes_local_and_property_owners() {
+    let source = r#"<?php
+class BoxedPushOwner {
+    public array $items = [1];
+    public static array $shared = [2];
+}
+function appendBoxedValue(array $items): array { array_push($items, 3); return $items; }
+$owner = new BoxedPushOwner();
+$reference = &$owner->items;
+$snapshot = $owner->items;
+array_push($owner->items, 4);
+$push = array_push(...);
+$push($reference, 5);
+$staticSnapshot = BoxedPushOwner::$shared;
+array_push(BoxedPushOwner::$shared, 6);
+$original = ['key' => 7];
+$returned = appendBoxedValue($original);
+echo implode(',', $owner->items), '|', implode(',', $reference), '|', implode(',', $snapshot), '|';
+echo implode(',', BoxedPushOwner::$shared), '|', implode(',', $staticSnapshot), '|';
+echo implode(',', $returned), '|', implode(',', $original);
+unset($owner, $reference, $snapshot, $staticSnapshot, $original, $returned);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1,4,5|1,4,5|1|2,6|2|7,3|7", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "1,4,5|1,4,5|1|2,6|2|7,3|7");
+}
+
 /// Named and first-class calls widen scalar element slots without changing earlier value copies.
 #[test]
 fn test_core_array_element_mixed_reference_named_and_callable_storage() {
