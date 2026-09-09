@@ -81,11 +81,15 @@ fn emit_value_release(emitter: &mut Emitter) {
             emitter.instruction("mov rax, QWORD PTR [rax]");                    // load the cell's low-word payload for unary release
         }
     }
-    emit_payload_dispatch(emitter, "__rt_decref_any", "__rt_callable_descriptor_release");
+    emit_payload_dispatch(emitter, "__rt_reference_cell_value_heap", "__rt_reference_cell_value_callable");
     abi::emit_return(emitter);
+    emitter.label("__rt_reference_cell_value_heap");
+    abi::emit_jump(emitter, "__rt_decref_any");
+    emitter.label("__rt_reference_cell_value_callable");
+    abi::emit_jump(emitter, "__rt_callable_descriptor_release");
 }
 
-/// Branches on the payload tag in x9/r9, leaving the low-word value in the result register.
+/// Branches to assembler-local stubs by payload tag, preserving the low-word result register.
 fn emit_payload_dispatch(emitter: &mut Emitter, ordinary: &str, callable: &str) {
     for tag in [1, 4, 5, 6, 7, 10] {
         let target = if tag == 10 { callable } else { ordinary };
@@ -136,7 +140,7 @@ fn emit_clone(emitter: &mut Emitter) {
             emitter.instruction("ubfx x10, x10, #18, #1");                      // isolate the artificial destructor pin
             emitter.instruction("sub w9, w9, w10");                             // PHP alias sharing excludes collector-only ownership
             emitter.instruction("cmp w9, #1");                                  // singleton references separate when their object is cloned
-            emitter.instruction("b.hi __rt_incref");                            // preserve sharing while another alias owns the reference
+            emitter.instruction("b.hi __rt_reference_cell_clone_shared");       // preserve sharing while another alias owns the reference
         }
         Arch::X86_64 => {
             emitter.instruction("mov ecx, DWORD PTR [rax - 12]");               // read the cell's physical owner count
@@ -145,7 +149,7 @@ fn emit_clone(emitter: &mut Emitter) {
             emitter.instruction("and r9d, 1");                                  // isolate collector-only ownership
             emitter.instruction("sub ecx, r9d");                                // PHP alias sharing excludes collector pins
             emitter.instruction("cmp ecx, 1");                                  // singleton references separate when their object is cloned
-            emitter.instruction("ja __rt_incref");                              // preserve sharing while another alias owns the reference
+            emitter.instruction("ja __rt_reference_cell_clone_shared");         // preserve sharing while another alias owns the reference
         }
     }
     abi::emit_frame_prologue(emitter, 48);
@@ -182,6 +186,8 @@ fn emit_clone(emitter: &mut Emitter) {
     abi::emit_frame_restore(emitter, 48);
     emitter.label("__rt_reference_cell_clone_done");
     abi::emit_return(emitter);
+    emitter.label("__rt_reference_cell_clone_shared");
+    abi::emit_jump(emitter, "__rt_incref");
 }
 
 
@@ -251,6 +257,31 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
+    /// Mach-O conditional branches require local labels even when a helper is emitted in the same object.
+    #[test]
+    fn reference_cell_dispatch_uses_local_stubs_before_global_tail_calls() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_reference_cells(&mut emitter);
+            super::super::arrays::emit_decref_any(&mut emitter);
+            let assembly = emitter.output();
+            for entry in ["__rt_decref_any", "__rt_callable_descriptor_release",
+                "__rt_incref", "__rt_reference_cell_release"] {
+                for line in assembly.lines() {
+                    let words = line.split_whitespace().collect::<Vec<_>>();
+                    if words.len() == 2 && words[1] == entry {
+                        assert!(!words[0].starts_with("b.") && !matches!(words[0], "je" | "ja"),
+                            "{name}: global conditional branch {line}");
+                    }
+                }
+            }
+            for stub in ["__rt_reference_cell_value_heap:", "__rt_reference_cell_value_callable:",
+                "__rt_reference_cell_clone_shared:", "__rt_decref_any_reference:"] {
+                assert!(assembly.contains(stub), "{name}: missing local dispatch stub {stub}");
+            }
+        }
+    }
+
     /// All supported emitters expose typed cell allocation, release and graph traversal together.
     #[test]
     fn owned_reference_cells_are_complete_on_every_target() {
@@ -270,9 +301,9 @@ mod tests {
                 assert!(assembly.contains(&format!("{entry}:")), "{name}: missing {entry}");
             }
             let (alias, retire, singleton) = if name == "linux-x86_64" {
-                ("je __rt_reference_cell_release", "cmp r8, 11", "ja __rt_incref")
+                ("je __rt_decref_any_reference", "cmp r8, 11", "ja __rt_reference_cell_clone_shared")
             } else {
-                ("b.eq __rt_reference_cell_release", "cmp x15, #11", "b.hi __rt_incref")
+                ("b.eq __rt_decref_any_reference", "cmp x15, #11", "b.hi __rt_reference_cell_clone_shared")
             };
             assert!(assembly.contains(alias) && assembly.contains(retire), "{name}: object owners use cell release");
             assert!(assembly.contains(singleton), "{name}: live aliases survive object cloning");
