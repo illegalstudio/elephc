@@ -39,7 +39,9 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     emit_owned_args_entry(emitter, "__rt_callable_invoke_owned_args", false);
     abi::emit_jump(emitter, "__rt_callable_owned_args_enter");
     emit_owned_args_entry(emitter, "__rt_callable_invoke_owned_descriptor_args", true);
-    emitter.label("__rt_callable_owned_args_enter");
+    // The borrowed entry branches across the second global entry. Keep its shared
+    // body reachable as a Mach-O atom when only the borrowed entry is referenced.
+    emitter.label_shared("__rt_callable_owned_args_enter");
     // -- preserve inputs and install a boundary before entering the descriptor invoker --
     clear_slot(emitter, RESULT);
     clear_slot(emitter, PENDING);
@@ -164,6 +166,21 @@ fn previous_exception_reg(emitter: &Emitter) -> &'static str {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Darwin dead stripping keeps the shared body reachable from the borrowed-descriptor entry.
+    #[test]
+    fn owned_argument_shared_body_is_not_localized_across_darwin_atoms() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emitter.dead_strip = true;
+            emit_callable_invoke_owned_args(&mut emitter);
+            assert!(!emitter.take_internal_labels().contains("__rt_callable_owned_args_enter"), "{name}");
+            let asm = emitter.output();
+            assert!(asm.contains(".alt_entry __rt_callable_owned_args_enter\n"), "{name}");
+            let borrowed = asm.split_once("__rt_callable_invoke_owned_descriptor_args:").unwrap().0;
+            assert!(borrowed.contains("b __rt_callable_owned_args_enter\n"), "{name}");
+        }
+    }
 
     /// All five targets protect the callback and clear both owners before their release sites.
     #[test]

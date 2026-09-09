@@ -10,6 +10,19 @@
 
 use crate::support::*;
 
+/// A program referencing only the borrowed-descriptor invoker retains its shared runtime body.
+#[test]
+fn test_core_borrowed_descriptor_entry_survives_runtime_dead_stripping() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function borrowedEntryTarget(int $value): int { return $value + 1; }
+function borrowedEntryInvoke(callable $callback): int { return call_user_func($callback, 16); }
+echo borrowedEntryInvoke(borrowedEntryTarget(...));
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "17", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Same-signature callable results keep borrowed inputs alive without duplicating owned concat returns.
 #[test]
 fn test_core_descriptor_owned_and_borrowed_string_results_do_not_share_copy_policy() {
