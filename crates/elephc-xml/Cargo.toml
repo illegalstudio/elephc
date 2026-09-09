@@ -1,0 +1,24 @@
+[package]
+name = "elephc-xml"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "libxml2-backed bridge staticlib implementing PHP's ext/xml SAX parser (php-src compat.c semantics) and ext/xmlwriter for the elephc PHP-to-native compiler"
+publish = false
+
+# Built as a C-callable staticlib (linked into compiled PHP programs whose prelude
+# declares the `extern "elephc_xml"` block, together with the managed `libxml2` native
+# package's `libelephc_libxml2_shim.a` + `libxml2.a`) and an rlib (so the engines are
+# unit-testable via `cargo test -p elephc-xml`). Mirrors crates/elephc-curl.
+#
+# Like elephc-curl, this bridge DECLARES libxml2's `extern "C"` symbols (and those of
+# the Elephc-owned shim compiled by the libxml2 catalog recipe) without linking them:
+# `cargo build -p elephc-xml` only ever produces the staticlib/rlib archives, which never
+# invoke the system linker, so the unresolved symbols simply stay unresolved in the
+# archive. See `build.rs` for how `cargo test -p elephc-xml` opts into a real link.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+# No Rust dependencies: the crate is a thin FFI layer, and the observable behavior is
+# pinned to libxml2 2.15.3 / php-src 8.5 by the corpus tests, not by a Rust XML crate.
+[dependencies]

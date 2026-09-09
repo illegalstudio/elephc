@@ -209,7 +209,7 @@ jobs:
       # list is guarded by `every_bridge_crate_is_in_the_build_lists`; a bridge
       # missing here ships a compiler that refuses the flag it advertises.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-magician -p elephc-curl
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
 
       - name: Strip binary
         run: strip target/release/elephc
@@ -257,7 +257,8 @@ jobs:
     if: needs.gate.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     # Cold `elephc native add curl` builds openssl/zlib/nghttp2/libssh2/curl
-    # from source (~6 minutes). A warm cache is a no-op. Other packed
+    # from source (~6 minutes), and `native add libxml2` (the xml bridge's
+    # parser) adds about a minute. A warm cache is a no-op. Other packed
     # bridges still compile-probe in the same job.
     timeout-minutes: 45
     strategy:
@@ -279,24 +280,31 @@ jobs:
       # runners; macOS runners carry the Xcode command line tools already.
       # `build-essential` is also what `elephc native add curl` needs to
       # compile the managed libcurl chain (perl is on the image; openssl's
-      # Configure invokes it). Same package set as managed-native-smoke.
+      # Configure invokes it). libbz2/zlib are the runtime's own stream-layer
+      # libraries (`-lz -lbz2`, src/codegen_support/runtime_features.rs), not
+      # catalog packages: the `--with-xml probe.php` link needs them on Linux
+      # because every program linking the xml bridge carries them, even a
+      # parser-only one — the bridge's prelude calls `fopen()`, which enables
+      # the runtime's phar stream feature. Same package set as
+      # managed-native-smoke.
       - name: Install a linking toolchain
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils build-essential file
+          sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
 
       # The probe native-adds curl in its empty WORKDIR before
-      # --with-curl, then compile-probes the packed archive. This cache
-      # is the default root that add writes (`~/.cache/elephc/native`),
-      # keyed like curl-codegen-tests so a warm runner skips the
-      # from-source openssl/libcurl rebuild. The compiler itself stays
+      # --with-curl, and libxml2 before --with-xml, then compile-probes the
+      # packed archives. This cache is the default root that add writes
+      # (`~/.cache/elephc/native`), keyed like curl-codegen-tests (plus the
+      # libxml2 lock and recipe) so a warm runner skips the from-source
+      # openssl/libcurl/libxml2 rebuild. The compiler itself stays
       # fail-closed for real projects.
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib/libxml2
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
-          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             verify-native-${{ matrix.target }}-
 

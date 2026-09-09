@@ -1,0 +1,260 @@
+== entity expansion variants
+  C 'a'
+  C 'EE'
+  C 'b'
+  C '<b>bb</b>'
+  C 'c'
+  C '&e;n'
+  C 'd'
+  C '&'
+  C 'e'
+  C 'A'
+'<!DOCTYPE r [<!ENTITY e "EE"><!ENTITY m "<b>bb</b>"><!ENTITY n "&e;n">]><r>a&e;b&m;c&n;d&amp;e&#65;</r>' [cdata] => 1 code=0
+  D '<r>'
+  C 'a'
+  D '&e;'
+  C 'b'
+  D '&m;'
+  C 'c'
+  D '&n;'
+  C 'd'
+  C '&'
+  C 'e'
+  C 'A'
+  D '</r>'
+'<!DOCTYPE r [<!ENTITY e "EE"><!ENTITY m "<b>bb</b>"><!ENTITY n "&e;n">]><r>a&e;b&m;c&n;d&amp;e&#65;</r>' [cdata,default] => 1 code=0
+  D '<r>'
+  D 'a'
+  D '&e;'
+  D 'b'
+  D '&m;'
+  D 'c'
+  D '&n;'
+  D 'd'
+  D '&amp;'
+  D 'e'
+  D 'A'
+  D '</r>'
+'<!DOCTYPE r [<!ENTITY e "EE"><!ENTITY m "<b>bb</b>"><!ENTITY n "&e;n">]><r>a&e;b&m;c&n;d&amp;e&#65;</r>' [default] => 1 code=0
+  S R []
+  C 'a'
+  C 'EE'
+  C 'b'
+  C '<b>bb</b>'
+  C 'c'
+  C '&e;n'
+  C 'd'
+  C '&'
+  C 'e'
+  C 'A'
+  E R
+'<!DOCTYPE r [<!ENTITY e "EE"><!ENTITY m "<b>bb</b>"><!ENTITY n "&e;n">]><r>a&e;b&m;c&n;d&amp;e&#65;</r>' [start,cdata] => 1 code=0
+  S R []
+  D 'a'
+  D '&e;'
+  D 'b'
+  D '&m;'
+  D 'c'
+  D '&n;'
+  D 'd'
+  D '&amp;'
+  D 'e'
+  D 'A'
+  E R
+'<!DOCTYPE r [<!ENTITY e "EE"><!ENTITY m "<b>bb</b>"><!ENTITY n "&e;n">]><r>a&e;b&m;c&n;d&amp;e&#65;</r>' [start,default] => 1 code=0
+  S R []
+  E R
+'<!DOCTYPE r [<!ENTITY e "EE"><!ENTITY m "<b>bb</b>"><!ENTITY n "&e;n">]><r>a&e;b&m;c&n;d&amp;e&#65;</r>' [start] => 1 code=0
+'<!DOCTYPE r [<!ENTITY e "EE"><!ENTITY m "<b>bb</b>"><!ENTITY n "&e;n">]><r>a&e;b&m;c&n;d&amp;e&#65;</r>' [] => 1 code=0
+== attr with entities
+  S R {"A":"xEEy&A<"}
+  E R
+'<!DOCTYPE r [<!ENTITY e "EE">]><r a="x&e;y&amp;&#65;&lt;"/>' [start] => 1 code=0
+  S R {"A":"xEEy&A<"}
+  E R
+'<!DOCTYPE r [<!ENTITY e "EE">]><r a="x&e;y&amp;&#65;&lt;"/>' [start,default] => 1 code=0
+  S R {"A":"  x  y\\t\\nz  "}
+  E R
+'<r a="  x  y\\t\\nz  "/>' [start] => 1 code=0
+== external entity in content
+  C 'a'
+  EXTREF ["x","","xsys",false]
+  C 'b'
+'<!DOCTYPE r [<!ENTITY x SYSTEM "xsys">]><r>a&x;b</r>' [cdata] => 1 code=0
+  D '<r>'
+  C 'a'
+  EXTREF ["x","","xsys",false]
+  C 'b'
+  D '</r>'
+'<!DOCTYPE r [<!ENTITY x SYSTEM "xsys">]><r>a&x;b</r>' [cdata,default] => 1 code=0
+  C 'a'
+  EXTREF ["x","","xsys","pubid"]
+  C 'b'
+'<!DOCTYPE r [<!ENTITY x PUBLIC "pubid" "xsys">]><r>a&x;b</r>' [cdata] => 1 code=0
+'<!DOCTYPE r [<!ENTITY x SYSTEM "xsys">]><r a="&x;"/>' [start] => 0 code=29
+== param entity / external subset
+  S R []
+  E R
+'<!DOCTYPE r SYSTEM "ext.dtd"><r/>' [start,default] => 1 code=0
+  S R []
+  E R
+'<!DOCTYPE r PUBLIC "pub" "ext.dtd" [<!ENTITY % pe "x">%pe;]><r/>' [start,default] => 0 code=27
+== standalone, decl edge
+  S R []
+  E R
+'<?xml version="1.0" standalone="yes"?><r/>' [start,default] => 1 code=0
+  S R []
+  E R
+'<?xml version="1.1"?><r/>' [start] => 1 code=0
+'<?xml version="2.0"?><r/>' [start] => 0 code=108
+'<?xml encoding="UTF-8"?><r/>' [start] => 0 code=65
+  S R []
+  E R
+'<?xml version=\'1.0\' ?>
+
+<r/>
+
+' [start,default] => 1 code=0
+' <?xml version=\'1.0\'?><r/>' [start] => 0 code=64
+  S R []
+  E R
+'﻿<r/>' [start] => 1 code=0
+  S R []
+  E R
+  D '<!-- c -->'
+  D '<?pi x?>'
+'<r/>
+<!-- c -->
+<?pi x?>
+' [start,default] => 1 code=0
+== whitespace in prolog / epilog
+  S R []
+  E R
+'
+
+<r/>' [start,cdata,default] => 1 code=0
+== comment/pi in DTD, default handler
+  D '<!-- dc -->'
+  D '<?dpi x?>'
+  S R []
+  E R
+'<!DOCTYPE r [<!-- dc --><?dpi x?><!ELEMENT r ANY>]><r/>' [start,default] => 1 code=0
+== cdata sections split
+  C ''
+  C 'a]]'
+  C '>'
+'<r><![CDATA[]]><![CDATA[a]]]]><![CDATA[>]]></r>' [cdata] => 1 code=0
+  C 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+'<r><![CDATA[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]]></r>' [cdata] => 1 code=0
+== char refs
+  C '€'
+  C '€'
+  C ''
+  C '
+'
+  C '	'
+  C '􏿿'
+'<r>&#x20AC;&#8364;&#xD;&#10;&#x9;&#x10FFFF;&#xFFFE;&#xD800;&#x110000;</r>' [cdata] => 0 code=9
+'<r>&#x1;</r>' [cdata] => 0 code=9
+'<r>&#xFFFE;</r>' [cdata] => 0 code=9
+'<r>&#xD800;</r>' [cdata] => 0 code=9
+'<r>&#x110000;</r>' [cdata] => 0 code=9
+  C ''
+'<r>�</r>' [cdata] => 0 code=81
+'<r>￾</r>' [cdata] => 0 code=9
+'<r>����</r>' [cdata] => 0 code=81
+'<r>���</r>' [cdata] => 0 code=81
+'<r>��</r>' [cdata] => 0 code=81
+'<r></r>' [cdata] => 0 code=9
+'<r a=\'\'/>' [start] => 0 code=9
+  C '
+'
+'<r></r>' [cdata] => 1 code=0
+  C '
+
+'
+'<r>
+
+</r>' [cdata] => 1 code=0
+  C 'a'
+  C '
+'
+'<r>a</r>' [cdata] => 1 code=0
+  C 'a'
+  C '
+b'
+'<r>ab</r>' [cdata] => 1 code=0
+  C 'a'
+  C '
+b'
+  C '
+c'
+'<r>a
+b
+c</r>' [cdata] => 1 code=0
+  C 'a'
+  C '
+
+b'
+'<r>ab</r>' [cdata] => 1 code=0
+  C 'é
+é'
+'<r>é
+é</r>' [cdata] => 1 code=0
+  C 'abc'
+  C 'é
+def'
+'<r>abcé
+def</r>' [cdata] => 1 code=0
+== names
+  S R []
+  S A.B-C_D:E []
+  E A.B-C_D:E
+  S _X []
+  E _X
+  S é []
+  E é
+  S :A []
+  E :A
+  S A:B:C []
+  E A:B:C
+'<r><a.b-c_d:e/><_x/><é/><:a/><a:b:c/><-a/><.a/></r>' [start] => 0 code=68
+  S R []
+  S A:B:C []
+  E A:B:C
+  E R
+'<r><a:b:c/></r>' [start] => 0 code=202
+  S R []
+  S A:B:C []
+  E A:B:C
+  E R
+'<r xmlns:a=\'u\'><a:b:c/></r>' [start] => 0 code=202
+  S R {"HTTP:\/\/WWW.W3.ORG\/XML\/1998\/NAMESPACE:LANG":"en"}
+  E R
+'<r xmlns:xml=\'http://www.w3.org/XML/1998/namespace\' xml:lang=\'en\'/>' [start] => 1 code=0
+  S R {"HTTP:\/\/WWW.W3.ORG\/XML\/1998\/NAMESPACE:LANG":"en","URN:P:X":"1"}
+  E R
+'<r xml:lang=\'en\' xmlns:p=\'urn:p\' p:x=\'1\'/>' [start] => 1 code=0
+  S R []
+  E R
+'<r xmlns=\'\' xmlns:p=\'\'/>' [start] => 0 code=200
+  S R []
+  S U2:A []
+  S U2:B []
+  E U2:B
+  E U2:A
+  S U:C []
+  E U:C
+  E R
+'<r xmlns:p=\'u\'><p:a xmlns:p=\'u2\'><p:b/></p:a><p:c/></r>' [start] => 1 code=0
+== attribute order and duplicates by case
+  S R {"B":"2","A":"3"}
+  E R
+'<r B=\'2\' a=\'1\' A=\'3\'/>' [start] => 1 code=0
+  S R {"B":"2","A":"1"}
+  E R
+'<r b=\'2\' a=\'1\'/>' [start] => 1 code=0
+== case folding of non-ascii
+  S éTé {"\u00e0":"1"}
+  E éTé
+'<été à=\'1\'>x</été>' [start] => 1 code=0

@@ -1,0 +1,123 @@
+== basic
+DEFAULT '<!-- c -->'
+START 'ROOT' {"A":"1","B":"two"} @3:20/69
+CDATA '
+  ' @4:3/73
+START 'ITEM' [] @4:8/78
+CDATA 'hello ' @4:15/85
+CDATA '&' @4:20/90
+CDATA ' world ' @4:27/97
+CDATA '<' @4:31/101
+CDATA 'x' @4:32/102
+CDATA '>' @4:36/106
+END 'ITEM' @4:43/113
+CDATA '
+  ' @5:3/116
+START 'E' [] @5:5/118
+END 'E' @5:7/120
+CDATA '
+  ' @6:3/123
+PI 'pi' 'some data'
+CDATA '
+  ' @7:3/142
+CDATA 'raw <cdata> & stuff' @7:34/173
+CDATA '
+  text
+' @9:1/181
+END 'ROOT' @9:8/188
+RESULT 1 code=0 msg='No error' @10:1/189
+-----
+== no case folding, skip white
+START 'Root' [] @1:6/5
+CDATA '
+  ' @2:3/9
+START 'Item' [] @2:8/14
+CDATA '  a  ' @2:14/20
+END 'Item' @2:21/27
+CDATA '
+' @3:1/28
+END 'Root' @3:8/35
+RESULT 1 code=0 msg='No error' @3:8/35
+-----
+== default only
+DEFAULT '<root x=\'1\'>'
+DEFAULT 't '
+DEFAULT '&foo;'
+DEFAULT ' '
+DEFAULT '<!-- c -->'
+DEFAULT ' '
+DEFAULT '<?pi d?>'
+DEFAULT ' '
+DEFAULT 'cd'
+DEFAULT '</root>'
+RESULT 1 code=0 msg='No error' @3:62/121
+-----
+== no handlers except default + start
+START 'ROOT' {"X":"1"} @1:12/11
+DEFAULT 't'
+START 'B' [] @1:16/15
+END 'B' @1:18/17
+END 'ROOT' @1:25/24
+RESULT 1 code=0 msg='No error' @1:25/24
+-----
+== ns
+NSSTART 'r' 'urn:r'
+NSSTART false 'urn:d'
+START 'URN:R:ROOT' {"URN:R:A":"1","B":"2"} @1:52/51
+START 'URN:D:CHILD' [] @1:59/58
+END 'URN:D:CHILD' @1:61/60
+START 'URN:R:C' [] @1:65/64
+END 'URN:R:C' @1:67/66
+END 'URN:R:ROOT' @1:76/75
+RESULT 1 code=0 msg='No error' @1:76/75
+-----
+== error tag mismatch
+START 'ROOT' [] @1:6/5
+START 'A' [] @1:9/8
+RESULT 0 code=76 msg='Mismatched tag' @1:14/13
+-----
+== error syntax
+START 'ROOT' [] @1:6/5
+START 'A' [] @1:9/8
+RESULT 0 code=68 msg='XML_ERR_NAME_REQUIRED' @1:11/10
+-----
+== error junk after doc
+START 'ROOT' [] @1:6/5
+END 'ROOT' @1:8/7
+RESULT 0 code=5 msg='Invalid document end' @1:8/7
+-----
+== empty doc
+RESULT 0 code=4 msg='Not well-formed (invalid token)' @1:1/0
+-----
+== unclosed
+START 'ROOT' [] @1:6/5
+START 'A' [] @1:9/8
+RESULT 0 code=77 msg='Tag not finished' @1:10/9
+-----
+== entities
+NOTATION ["n",false,"nsys",false]
+UNPARSED ["u",false,"usys",false,"n"]
+START 'R' [] @1:118/118
+CDATA 'a' @1:120/120
+DEFAULT '&e;'
+CDATA 'b' @1:124/124
+CDATA 'A' @1:129/129
+CDATA 'B' @1:135/135
+CDATA 'c' @1:136/136
+EXTREF ["x","","xsys",false]
+CDATA 'd' @1:140/140
+END 'R' @1:144/144
+RESULT 1 code=0 msg='No error' @1:144/144
+-----
+== long text
+CDATA 'abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij' @1:404/403
+RESULT 1 code=0 msg='No error' @1:408/407
+-----
+== crlf
+CDATA 'line1' @1:9/8
+CDATA '
+line2' @2:6/15
+CDATA '
+line3' @2:12/21
+RESULT 1 code=0 msg='No error' @2:16/25
+-----

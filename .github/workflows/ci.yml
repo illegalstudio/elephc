@@ -28,6 +28,7 @@ env:
     -p elephc-tz
     -p elephc-image
     -p elephc-pcntl
+    -p elephc-xml
     -p elephc-magician
     -p elephc-web
     -p elephc-instr
@@ -85,11 +86,13 @@ jobs:
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
-        # control), libelephc_magician.a (eval), libelephc_web.a, and
+        # control), libelephc_magician.a (eval), libelephc_web.a,
         # libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
         # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
-        # managed-native-smoke). Build
+        # managed-native-smoke), and libelephc_xml.a (xml; likewise unresolved
+        # until the link pulls in the managed libelephc_libxml2_shim.a +
+        # libxml2.a, materialized below and in every codegen shard). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -122,6 +125,41 @@ jobs:
         # Doctests cannot run from a nextest archive, so run them here where the
         # workspace is already built.
         run: cargo test --workspace --doc
+
+      - name: Cache managed native libxml2
+        # The xml bridge's parser is libxml2 itself (the managed `libxml2` catalog
+        # package: pinned 2.15.3 plus the Elephc-owned shim, see
+        # src/native_deps/recipes/libxml2.rs). Shared default cache path, like the
+        # curl jobs, keyed on the committed lock plus the recipe sources that decide
+        # what gets built; the codegen shards below restore the same key, so the
+        # from-source build happens here once and never in a shard.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libxml2-native-macos-aarch64-
+
+      - name: Materialize managed native libxml2
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/xml/elephc.lock; a fast no-op once the cache above is warm, a
+        # ~1 minute from-source build otherwise.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/xml/elephc.toml
+
+      - name: Test the xml bridge against managed libxml2
+        # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
+        # lib/, holding libelephc_libxml2_shim.a + libxml2.a), links both statically
+        # into the crate's test binary and compiles the libxml2-calling unit tests in
+        # behind cfg(elephc_xml_native). Without the variable the crate's tests take a
+        # skip path, which is what the archived non-codegen run exercises. Runs AFTER
+        # the archive was taken so the plain libelephc_xml.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh macos-aarch64)" \
+            cargo test -p elephc-xml
 
       - name: Upload test archive
         uses: actions/upload-artifact@v4
@@ -181,11 +219,13 @@ jobs:
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
-        # control), libelephc_magician.a (eval), libelephc_web.a, and
+        # control), libelephc_magician.a (eval), libelephc_web.a,
         # libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
         # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
-        # managed-native-smoke). Build
+        # managed-native-smoke), and libelephc_xml.a (xml; likewise unresolved
+        # until the link pulls in the managed libelephc_libxml2_shim.a +
+        # libxml2.a, materialized below and in every codegen shard). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -218,6 +258,41 @@ jobs:
         # Doctests cannot run from a nextest archive, so run them here where the
         # workspace is already built.
         run: cargo test --workspace --doc
+
+      - name: Cache managed native libxml2
+        # The xml bridge's parser is libxml2 itself (the managed `libxml2` catalog
+        # package: pinned 2.15.3 plus the Elephc-owned shim, see
+        # src/native_deps/recipes/libxml2.rs). Shared default cache path, like the
+        # curl jobs, keyed on the committed lock plus the recipe sources that decide
+        # what gets built; the codegen shards below restore the same key, so the
+        # from-source build happens here once and never in a shard.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libxml2-native-linux-x86_64-
+
+      - name: Materialize managed native libxml2
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/xml/elephc.lock; a fast no-op once the cache above is warm, a
+        # ~1 minute from-source build otherwise.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/xml/elephc.toml
+
+      - name: Test the xml bridge against managed libxml2
+        # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
+        # lib/, holding libelephc_libxml2_shim.a + libxml2.a), links both statically
+        # into the crate's test binary and compiles the libxml2-calling unit tests in
+        # behind cfg(elephc_xml_native). Without the variable the crate's tests take a
+        # skip path, which is what the archived non-codegen run exercises. Runs AFTER
+        # the archive was taken so the plain libelephc_xml.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \
+            cargo test -p elephc-xml
 
       - name: Upload test archive
         uses: actions/upload-artifact@v4
@@ -272,11 +347,13 @@ jobs:
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
-        # control), libelephc_magician.a (eval), libelephc_web.a, and
+        # control), libelephc_magician.a (eval), libelephc_web.a,
         # libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
         # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
-        # managed-native-smoke). Build
+        # managed-native-smoke), and libelephc_xml.a (xml; likewise unresolved
+        # until the link pulls in the managed libelephc_libxml2_shim.a +
+        # libxml2.a, materialized below and in every codegen shard). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -309,6 +386,41 @@ jobs:
         # Doctests cannot run from a nextest archive, so run them here where the
         # workspace is already built.
         run: cargo test --workspace --doc
+
+      - name: Cache managed native libxml2
+        # The xml bridge's parser is libxml2 itself (the managed `libxml2` catalog
+        # package: pinned 2.15.3 plus the Elephc-owned shim, see
+        # src/native_deps/recipes/libxml2.rs). Shared default cache path, like the
+        # curl jobs, keyed on the committed lock plus the recipe sources that decide
+        # what gets built; the codegen shards below restore the same key, so the
+        # from-source build happens here once and never in a shard.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libxml2-native-linux-aarch64-
+
+      - name: Materialize managed native libxml2
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/xml/elephc.lock; a fast no-op once the cache above is warm, a
+        # ~1 minute from-source build otherwise.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/xml/elephc.toml
+
+      - name: Test the xml bridge against managed libxml2
+        # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
+        # lib/, holding libelephc_libxml2_shim.a + libxml2.a), links both statically
+        # into the crate's test binary and compiles the libxml2-calling unit tests in
+        # behind cfg(elephc_xml_native). Without the variable the crate's tests take a
+        # skip path, which is what the archived non-codegen run exercises. Runs AFTER
+        # the archive was taken so the plain libelephc_xml.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-aarch64)" \
+            cargo test -p elephc-xml
 
       - name: Upload test archive
         uses: actions/upload-artifact@v4
@@ -527,10 +639,45 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
+      - name: Cache managed native libxml2
+        # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
+        # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libxml2-native-macos-aarch64-
+
+      - name: Extract test archive
+        # The same nextest archive that carries the codegen_tests binary also carries
+        # target/debug/elephc (see the archive notes in .config/nextest.toml); the
+        # compiler is what materializes the managed package below.
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
+      - name: Materialize managed native libxml2
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/xml/elephc.lock build from source (~1 minute).
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/xml/elephc.toml
+
       - name: Run codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
+          # the package was materialized just above, so absence is a provisioning bug.
+          ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -563,10 +710,45 @@ jobs:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
 
+      - name: Cache managed native libxml2
+        # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
+        # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libxml2-native-linux-x86_64-
+
+      - name: Extract test archive
+        # The same nextest archive that carries the codegen_tests binary also carries
+        # target/debug/elephc (see the archive notes in .config/nextest.toml); the
+        # compiler is what materializes the managed package below.
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
+      - name: Materialize managed native libxml2
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/xml/elephc.lock build from source (~1 minute).
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/xml/elephc.toml
+
       - name: Run codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
+          # the package was materialized just above, so absence is a provisioning bug.
+          ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -599,10 +781,45 @@ jobs:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
 
+      - name: Cache managed native libxml2
+        # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
+        # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libxml2-native-linux-aarch64-
+
+      - name: Extract test archive
+        # The same nextest archive that carries the codegen_tests binary also carries
+        # target/debug/elephc (see the archive notes in .config/nextest.toml); the
+        # compiler is what materializes the managed package below.
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
+      - name: Materialize managed native libxml2
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/xml/elephc.lock build from source (~1 minute).
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/xml/elephc.toml
+
       - name: Run codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
+          # the package was materialized just above, so absence is a provisioning bug.
+          ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1039,6 +1256,66 @@ jobs:
             "${{ matrix.sdk }}" \
             "${{ matrix.clang_target }}"
 
+  # Same shape for the xml bridge: build the managed libxml2 package (with its Elephc
+  # shim) using the real Xcode toolchain, cross-build the Rust xml bridge (and the phar
+  # bridge the xml prelude's fopen() drags in through the runtime's stream layer),
+  # compile a PHP library that uses both halves — the SAX parser with handlers and
+  # XMLWriter — and perform the final application-host link for both device and
+  # Simulator. A recipe that loses the platform iconv, or a link plan missing the shim,
+  # libxml2, `-liconv`, or the SDK's zlib/bzip2 on either platform, fails here.
+  xml-ios-compile-link:
+    name: XML iOS Compile & Link (${{ matrix.elephc_target }})
+    runs-on: macos-14
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust with the iOS standard library
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-xml-${{ matrix.elephc_target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-xml-${{ matrix.elephc_target }}-
+
+      - name: Cache managed native libxml2 for iOS
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/elephc-native
+          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            xml-native-${{ matrix.elephc_target }}-
+
+      - name: Build and link xml with the managed libxml2
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+        run: |
+          bash scripts/ci/test_ios_xml_link.sh \
+            "${{ matrix.elephc_target }}" \
+            "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" \
+            "${{ matrix.clang_target }}"
+
   # Eval integration tests compile, link, and run full programs while exercising
   # eval/magician paths, so keep them out of the ordinary codegen shards. Two
   # workers per shard reduce wall time without increasing the number of test runs.
@@ -1347,9 +1624,14 @@ jobs:
         if: startsWith(matrix.target, 'linux-')
         # Deliberately omit system PCRE2 packages: this smoke must use only the
         # exact shim/POSIX/8-bit archives materialized by `elephc native`.
+        # libbz2/zlib are the runtime's own stream-layer libraries (`-lz -lbz2`,
+        # src/codegen_support/runtime_features.rs), not catalog packages: every
+        # program linking the xml bridge carries them, even a parser-only one,
+        # because the bridge's prelude calls `fopen()` and that enables the
+        # runtime's phar stream feature.
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils build-essential file
+          sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
 
       - name: Build elephc
         run: cargo build --bin elephc
@@ -1407,6 +1689,25 @@ jobs:
             examples/curl-get/elephc.toml \
             examples/curl-get/elephc.lock
 
+      - name: Materialize catalog libxml2 from verified source
+        # The xml bridge's parser is libxml2 itself: `elephc_xml` calls the
+        # Elephc-owned shim (src/native_deps/recipes/libxml2_shim.c) that the
+        # recipe compiles against the freshly built libxml2 headers and archives
+        # as libelephc_libxml2_shim.a next to libxml2.a. libxml2 has no catalog
+        # dependencies, so this one `native add` materializes the whole package
+        # (~1 minute from source). See crates/elephc-xml/build.rs for why the
+        # elephc_xml BRIDGE staticlib (built via BRIDGE_CRATES elsewhere) still
+        # needs these two archives at PHP-program link time even though `cargo
+        # build -p elephc-xml` itself does not.
+        shell: bash
+        run: |
+          ./target/debug/elephc native add libxml2 \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/xml/elephc.toml
+          git diff --exit-code -- \
+            examples/xml/elephc.toml \
+            examples/xml/elephc.lock
+
       - name: Compile and run regex through the production resolver
         shell: bash
         run: |
@@ -1435,6 +1736,29 @@ jobs:
           grep -F "handle still usable after curl_close()" "$RUNNER_TEMP/curl-get.out"
           grep -F "connection refused, as expected" "$RUNNER_TEMP/curl-get.out"
 
+      - name: Compile and run xml through the production resolver
+        # Exercises the chain every tests/codegen/xml fixture also needs (see
+        # tests/codegen/support/xml_native.rs) end to end through the real
+        # resolver: the elephc_xml bridge staticlib linked against the managed
+        # libelephc_libxml2_shim.a + libxml2.a from the project's lock. The example
+        # writes a document with XMLWriter and parses it back with the SAX API,
+        # so every asserted line proves both halves reached real libxml2. The
+        # lines are PHP 8.5's own output for the same program -- including the
+        # `titles:` one, where libxml2 splits the character data of
+        # `Design Patterns &amp; Friends` at the entity reference into three
+        # handler calls, exactly as PHP's ext/xml does.
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ matrix.target }}" \
+            examples/xml/main.php
+          ./examples/xml/main > "$RUNNER_TEMP/xml.out"
+          grep -F '<?xml version="1.0" encoding="UTF-8"?>' "$RUNNER_TEMP/xml.out"
+          grep -F '  <title>Design Patterns &amp; Friends</title>' "$RUNNER_TEMP/xml.out"
+          grep -F 'book 978-0-13-468599-1' "$RUNNER_TEMP/xml.out"
+          grep -F 'titles: The Pragmatic Programmer / Design Patterns  / & /  Friends' "$RUNNER_TEMP/xml.out"
+          grep -F 'tags: 10, price entries at 3,7' "$RUNNER_TEMP/xml.out"
+
       - name: Reinstall locked state offline
         shell: bash
         run: |
@@ -1448,6 +1772,11 @@ jobs:
             --offline \
             --target "${{ matrix.target }}" \
             --manifest-path examples/curl-get/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/xml/elephc.toml
 
   test:
     name: Build & Test
@@ -1472,6 +1801,7 @@ jobs:
       - curl-codegen-tests-linux-x86_64
       - curl-codegen-tests-linux-aarch64
       - curl-ios-compile-link
+      - xml-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
       - eval-codegen-tests-linux-aarch64
@@ -1502,6 +1832,7 @@ jobs:
           test "${{ needs.curl-codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.curl-codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.curl-ios-compile-link.result }}" = "success"
+          test "${{ needs.xml-ios-compile-link.result }}" = "success"
           test "${{ needs.eval-codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.eval-codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.eval-codegen-tests-linux-aarch64.result }}" = "success"

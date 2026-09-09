@@ -1,0 +1,397 @@
+== bom and cr
+  S R [] @1:3/5
+  C 'x' @1:5/7
+  E R @1:9/11
+'﻿<r>x</r>' [start,cdata] => 1 code=0 @1:9/11
+  S R [] @2:3/6
+  E R @2:5/8
+'﻿
+<r/>' [start,cdata] => 1 code=0 @2:5/8
+  S R [] @1:3/2
+  C 'a' @1:5/4
+  C '
+b' @1:7/6
+  E R @1:11/10
+'<r>ab</r>' [start,cdata] => 1 code=0 @1:11/10
+  S R [] @1:3/2
+  C 'a' @1:5/4
+  C '
+
+b
+' @1:9/8
+  E R @1:13/12
+'<r>ab</r>' [start,cdata] => 1 code=0 @1:13/12
+  S R [] @1:3/2
+  C '
+' @1:5/4
+  S A [] @1:7/6
+  E A @1:9/8
+  C '
+' @1:10/9
+  E R @1:14/13
+'<r><a/></r>' [start,cdata] => 1 code=0 @1:14/13
+  S R [] @1:3/2
+  C '
+' @2:1/5
+  S A [] @2:3/7
+  E A @2:5/9
+  C '
+' @3:1/11
+  E R @3:5/15
+'<r>
+<a/>
+</r>' [start,cdata] => 1 code=0 @3:5/15
+  S R [] @1:3/2
+  C 'é
+b' @1:7/7
+  E R @1:11/11
+'<r>éb</r>' [start,cdata] => 1 code=0 @1:11/11
+  S R [] @1:3/2
+  C 'é
+b' @2:2/8
+  E R @2:6/12
+'<r>é
+b</r>' [start,cdata] => 1 code=0 @2:6/12
+  S R [] @1:3/2
+  C 'é
+b
+é
+
+c' @5:2/17
+  E R @5:6/21
+'<r>é
+b
+é
+
+c</r>' [start,cdata] => 1 code=0 @5:6/21
+  S R [] @1:3/2
+  C 'a' @1:5/4
+  C '&' @1:10/9
+  C '
+b' @1:12/11
+  E R @1:16/15
+'<r>a&amp;b</r>' [start,cdata] => 1 code=0 @1:16/15
+  S R {"A":"x y z "} @2:4/14
+  E R @2:6/16
+'<r a=\'xy
+z\'/>' [start] => 1 code=0 @2:6/16
+  S R {"A":"1"} @2:8/11
+  E R @2:10/13
+'<r
+ a=\'1\'/>' [start] => 1 code=0 @2:10/13
+  S R [] @1:3/2
+  C '
+' @1:5/4
+  E R @1:9/8
+'<r></r>' [start,cdata] => 1 code=0 @1:9/8
+  S R [] @1:3/2
+  C '
+x' @1:6/5
+  E R @1:10/9
+'<r>x</r>' [start,cdata] => 1 code=0 @1:10/9
+  S R [] @1:3/2
+  C '
+
+
+x' @1:8/7
+  E R @1:12/11
+'<r>x</r>' [start,cdata] => 1 code=0 @1:12/11
+  S R [] @1:3/2
+  C '
+' @2:1/4
+  C '
+
+
+x' @3:4/9
+  E R @3:8/13
+'<r>
+
+x</r>' [start,cdata] => 1 code=0 @3:8/13
+  D '<!-- a
+b
+c -->' @2:6/15
+  S R [] @2:9/18
+  E R @2:11/20
+'<!-- ab
+c --><r/>' [start,default] => 1 code=0 @2:11/20
+  S R [] @1:3/2
+  C 'a
+b
+c' @2:5/21
+  E R @2:9/25
+'<r><![CDATA[ab
+c]]></r>' [start,cdata] => 1 code=0 @2:9/25
+  S R [] @1:3/2
+  PI 'p' 'a
+b' @1:13/12
+  E R @1:17/16
+'<r><?p ab?></r>' [start,pi] => 1 code=0 @1:17/16
+  S R [] @1:3/2
+  C '
+  x' @2:4/8
+  C '
+  y' @3:4/13
+  E R @3:8/17
+'<r>
+  x
+  y</r>' [start,cdata] => 1 code=0 @3:8/17
+  S R [] @1:3/2
+  C ']' @1:5/4
+  E R @1:9/8
+'<r>]</r>' [start,cdata] => 1 code=0 @1:9/8
+  S R [] @1:3/2
+  C ']]' @1:6/5
+  E R @1:10/9
+'<r>]]</r>' [start,cdata] => 1 code=0 @1:10/9
+  S R [] @1:3/2
+  C 'a]]b' @1:8/7
+  E R @1:12/11
+'<r>a]]b</r>' [start,cdata] => 1 code=0 @1:12/11
+  S R [] @1:3/2
+  C 'ab' @1:7/6
+  E R @1:11/10
+'<r>ab</r>' [start,cdata] => 1 code=0 @1:11/10
+  S R [] @1:3/2
+  C 'é' @1:5/5
+  E R @1:9/9
+'<r>é</r>' [start,cdata] => 1 code=0 @1:9/9
+  S R [] @1:3/2
+  C 'a' @1:5/4
+  C 'éb' @1:7/7
+  E R @1:11/11
+'<r>aéb</r>' [start,cdata] => 1 code=0 @1:11/11
+  S R [] @1:3/2
+  C 'é
+é' @2:2/8
+  E R @2:6/12
+'<r>é
+é</r>' [start,cdata] => 1 code=0 @2:6/12
+== defaults / attlist normalization in ns and plain
+  S R {"B":"x y","A":"d"} @1:76/75
+  E R @1:78/77
+'<!DOCTYPE r [<!ATTLIST r a CDATA \'d\' b NMTOKENS #IMPLIED>]><r b=\'  x   y  \'/>' [start,NS] => 1 code=0 @1:78/77
+  S R {"B":"  x   y  "} @1:76/75
+  E R @1:78/77
+'<!DOCTYPE r [<!ATTLIST r a CDATA \'d\' b NMTOKENS #IMPLIED>]><r b=\'  x   y  \'/>' [start] => 1 code=0 @1:78/77
+  NS 'p' 'urn:p' @1:74/73
+  S R {"URN:P:B":"1","URN:P:A":"v"} @1:74/73
+  E R @1:76/75
+'<!DOCTYPE r [<!ATTLIST r xmlns:p CDATA \'urn:p\' p:a CDATA \'v\'>]><r p:b=\'1\'/>' [start,ns,NS] => 1 code=0 @1:76/75
+  S R {"P:B":"1"} @1:74/73
+  E R @1:76/75
+'<!DOCTYPE r [<!ATTLIST r xmlns:p CDATA \'urn:p\' p:a CDATA \'v\'>]><r p:b=\'1\'/>' [start] => 1 code=0 @1:76/75
+  S R {"A":"given"} @1:52/51
+  E R @1:54/53
+'<!DOCTYPE r [<!ATTLIST r a CDATA \'d\'>]><r a=\'given\'/>' [start,NS] => 1 code=0 @1:54/53
+  S R {"A":"d"} @1:49/48
+  E R @1:51/50
+'<!DOCTYPE r [<!ATTLIST r a CDATA #FIXED \'d\'>]><r/>' [start,NS] => 1 code=0 @1:51/50
+  S R {"A":"y"} @1:50/49
+  E R @1:52/51
+'<!DOCTYPE r [<!ATTLIST r a (x|y) \'x\'>]><r a=\' y \'/>' [start,NS] => 1 code=0 @1:52/51
+  S R {"A":"y z"} @1:55/54
+  E R @1:57/56
+'<!DOCTYPE r [<!ATTLIST r a ID #IMPLIED>]><r a=\' y  z \'/>' [start,NS] => 1 code=0 @1:57/56
+  S R {"A":"y"} @1:65/64
+  E R @1:67/66
+'<!DOCTYPE r [<!ATTLIST r a NMTOKEN #IMPLIED>]><r a=\'&#32;y&#32;\'/>' [start,NS] => 1 code=0 @1:67/66
+  S R {"A":"v"} @1:73/73
+  E R @1:75/75
+'<!DOCTYPE r [<!ENTITY e \' v \'><!ATTLIST r a NMTOKEN #IMPLIED>]><r a=\'&e;\'/>' [start,NS] => 1 code=0 @1:75/75
+  D '<r>' @1:42/41
+  D '</r>' @1:44/43
+'<!DOCTYPE r [<!ATTLIST r a CDATA \'d\'>]><r/>' [default,NS] => 1 code=0 @1:44/43
+  D '<r>' @1:42/41
+  D '</r>' @1:44/43
+'<!DOCTYPE r [<!ATTLIST r a CDATA \'d\'>]><r/>' [default] => 1 code=0 @1:44/43
+== ns edge
+'<r xmlns:p=\'u\' p:a=\'1\' p:a=\'2\'/>' [start,NS] => 0 code=42 @1:33/32
+'<r a=\'1\' a=\'2\'/>' [start,NS] => 0 code=42 @1:17/16
+  S R [] @1:21/20
+  E R @1:23/22
+'<r xmlns:xml=\'wrong\'/>' [start,ns,NS] => 0 code=200 @1:23/22
+  S R [] @1:50/49
+  E R @1:52/51
+'<r xmlns:p=\'http://www.w3.org/XML/1998/namespace\'/>' [start,ns,NS] => 0 code=200 @1:52/51
+  S R [] @1:48/47
+  E R @1:50/49
+'<r xmlns=\'http://www.w3.org/XML/1998/namespace\'/>' [start,ns,NS] => 0 code=200 @1:50/49
+  S R [] @1:19/18
+  E R @1:21/20
+'<r xmlns:xmlns=\'u\'/>' [start,ns,NS] => 0 code=200 @1:21/20
+  S R [] @1:43/42
+  E R @1:45/44
+'<r xmlns:p=\'http://www.w3.org/2000/xmlns/\'/>' [start,ns,NS] => 0 code=200 @1:45/44
+  NS 'p' 'not a uri' @1:23/22
+  S R [] @1:23/22
+  E R @1:25/24
+'<r xmlns:p=\'not a uri\'/>' [start,ns,NS] => 0 code=99 @1:25/24
+  NS false 'rel' @1:15/14
+  S REL:R [] @1:15/14
+  E REL:R @1:17/16
+'<r xmlns=\'rel\'/>' [start,ns,NS] => 1 code=0 @1:17/16
+  S R [] @1:14/13
+  E R @1:16/15
+'<r xmlns:p=\'\'/>' [start,ns,NS] => 0 code=200 @1:16/15
+  NS false '' @1:12/11
+  S R [] @1:12/11
+  E R @1:14/13
+'<r xmlns=\'\'/>' [start,ns,NS] => 1 code=0 @1:14/13
+  NS 'p' 'u' @1:17/16
+  S U:R [] @1:17/16
+  S U:A [] @1:33/32
+  E U:A @1:35/34
+  E U:R @1:41/40
+'<p:r xmlns:p=\'u\'><p:a xmlns:p=\'\'/></p:r>' [start,ns,NS] => 0 code=200 @1:41/40
+  NS 'p' 'u' @1:15/14
+  S R [] @1:15/14
+  S A [] @1:29/28
+  S U:B [] @1:34/33
+  E U:B @1:36/35
+  E A @1:40/39
+  E R @1:44/43
+'<r xmlns:p=\'u\'><a xmlns:p=\'\'><p:b/></a></r>' [start,ns,NS] => 0 code=200 @1:44/43
+  NS 'r' 'u' @1:17/16
+  S U:A [] @1:17/16
+'<r:a xmlns:r=\'u\'></r:b>' [start,ns,NS] => 0 code=76 @1:24/23
+  NS 'r' 'u' @1:17/16
+  S U:A [] @1:17/16
+'<r:a xmlns:r=\'u\'></a>' [start,ns,NS] => 0 code=76 @1:22/21
+  NS 'r' 'u' @1:17/16
+  S U:A [] @1:17/16
+'<r:a xmlns:r=\'u\'></q:a>' [start,ns,NS] => 0 code=76 @1:24/23
+  S A [] @1:3/2
+'<a></b>' [start,NS] => 0 code=76 @1:8/7
+  S A [] @1:5/4
+  E A @1:12/11
+'<p:a></p:a>' [start,NS] => 0 code=201 @1:12/11
+  S HTTP://WWW.W3.ORG/XML/1998/NAMESPACE:A [] @1:7/6
+  E HTTP://WWW.W3.ORG/XML/1998/NAMESPACE:A @1:9/8
+'<xml:a/>' [start,NS] => 1 code=0 @1:9/8
+'<r xml:a=\'1\' xml:a=\'2\'/>' [start,NS] => 0 code=42 @1:25/24
+  S R {"A":"2"} @1:19/18
+  E R @1:21/20
+'<r p:a=\'1\' q:a=\'2\'/>' [start,NS] => 0 code=201 @1:21/20
+'<r xmlns:p=\'u\' xmlns:q=\'u\' p:a=\'1\' q:a=\'2\' p:a=\'3\'/>' [start,NS] => 0 code=42 @1:53/52
+  NS 'r' 'u' @1:25/24
+  S U:X {"U:X":"1"} @1:25/24
+  E U:X @1:27/26
+'<r:x xmlns:r=\'u\' r:x=\'1\'/>' [start,ns,NS] => 1 code=0 @1:27/26
+'<r xmlns:p=\'u\' xmlns:p=\'v\'/>' [start,ns,NS] => 0 code=42 @1:29/28
+'<r xmlns=\'a\' xmlns=\'b\'/>' [start,ns,NS] => 0 code=42 @1:25/24
+'<r xmlns:p=\'u\' p:a=\'1\' xmlns:p=\'v\'/>' [start,ns,NS] => 0 code=42 @1:37/36
+  D '<p:r xmlns:p=\'u\'>' @1:17/16
+  D '</p:r>' @1:19/18
+'<p:r xmlns:p=\'u\'/>' [default,NS] => 1 code=0 @1:19/18
+  D '<p:r xmlns:p=\'u\'>' @1:17/16
+  D 't' @1:19/18
+  D '</p:r>' @1:25/24
+'<p:r xmlns:p=\'u\'>t</p:r>' [default,NS] => 1 code=0 @1:25/24
+  NS 'r' 'u' @1:17/16
+  S U:A [] @1:17/16
+  E U:A @1:25/24
+'<r:a xmlns:r=\'u\'></r:a >' [start,ns,NS] => 1 code=0 @1:25/24
+  NS 'a' 'u' @1:19/18
+  S A:B:C [] @1:19/18
+  E A:B:C @1:21/20
+'<a:b:c xmlns:a=\'u\'/>' [start,ns,NS] => 0 code=202 @1:21/20
+  NS 'a' 'u' @1:16/15
+  S A: [] @1:16/15
+  E A: @1:18/17
+'<a: xmlns:a=\'u\'/>' [start,ns,NS] => 0 code=202 @1:18/17
+  S :A [] @1:4/3
+  E :A @1:6/5
+'<:a/>' [start,NS] => 0 code=202 @1:6/5
+  S R {":A":"1"} @1:10/9
+  E R @1:12/11
+'<r :a=\'1\'/>' [start,NS] => 0 code=202 @1:12/11
+  S R {"A:":"1"} @1:10/9
+  E R @1:12/11
+'<r a:=\'1\'/>' [start,NS] => 0 code=202 @1:12/11
+== end tag variants
+  S R [] @1:3/2
+  S A [] @1:6/5
+  E A @2:2/11
+  E R @2:6/15
+'<r><a></a
+></r>' [start] => 1 code=0 @2:6/15
+  S R [] @1:3/2
+  S A [] @1:6/5
+'<r><a></ a></r>' [start] => 0 code=76 @1:10/9
+  S R [] @1:3/2
+  S A [] @1:6/5
+'<r><a></a x></r>' [start] => 0 code=73 @1:11/10
+  S R [] @1:3/2
+  S A [] @1:6/5
+'<r><a></ab></r>' [start] => 0 code=76 @1:12/11
+  S R [] @1:3/2
+  S AB [] @1:7/6
+'<r><ab></a></r>' [start] => 0 code=76 @1:12/11
+  S R [] @1:3/2
+  S A [] @1:6/5
+'<r><a></A></r>' [start] => 0 code=76 @1:11/10
+  S R [] @1:3/2
+  S A [] @2:3/6
+'<r>
+<a>
+</
+</r>' [start] => 0 code=76 @4:1/11
+== pi target / misc
+  S R [] @1:3/2
+  PI 'xml-stylesheet' 'x' @1:24/23
+  PI 'XML-x' 'y' @1:35/34
+'<r><?xml-stylesheet x?><?XML-x y?><?Xml z?></r>' [start,pi] => 0 code=64 @1:44/43
+  S R [] @1:3/2
+  PI 'a:b' 'c' @1:13/12
+  E R @1:17/16
+'<r><?a:b c?></r>' [start,pi] => 0 code=205 @1:17/16
+  S R [] @2:3/24
+  E R @2:5/26
+'<?xml version=\'1.0\'?>
+<r/>
+<?xml version=\'1.0\'?>' [start,pi] => 0 code=64 @3:22/48
+  S R [] @1:3/2
+'<r><?xml version=\'1.0\'?></r>' [start,pi] => 0 code=64 @1:25/24
+  S R [] @1:3/2
+  D '<!--->-->' @1:13/12
+  E R @1:17/16
+'<r><!--->--></r>' [start,default] => 1 code=0 @1:17/16
+  S R [] @1:3/2
+'<r><!---></r>' [start,default] => 0 code=45 @1:14/13
+  S R [] @1:3/2
+'<r><!--a--->x</r>' [start,default] => 0 code=45 @1:18/17
+  S R [] @1:3/2
+  D '<!---->' @1:11/10
+  E R @1:15/14
+'<r><!----></r>' [start,default] => 1 code=0 @1:15/14
+  S R [] @1:3/2
+'<r><!-- é -- x --></r>' [start,default] => 0 code=80 @1:19/19
+  S R [] @1:3/2
+  D '<!-- é -->' @1:14/14
+  E R @1:18/18
+'<r><!-- é --></r>' [start,default] => 1 code=0 @1:18/18
+  S R [] @1:3/2
+'<r><!----></r>' [start,default] => 0 code=9 @1:8/7
+  S R [] @1:3/2
+'<r><?p ?></r>' [start,pi] => 0 code=47 @1:8/7
+  S R [] @1:3/2
+'<r><![CDATA[]]></r>' [start,cdata] => 0 code=63 @1:13/12
+  S R [] @1:3/2
+  C 'a]]' @1:19/18
+  E R @1:23/22
+'<r><![CDATA[a]]]]></r>' [start,cdata] => 1 code=0 @1:23/22
+  S R [] @1:3/2
+'<r><![CDATA[a�]]></r>' [start,cdata] => 0 code=81 @1:18/17
+'<r a=\'�\'/>' [start] => 0 code=81 @1:11/10
+'<r a=\'�\'/>' [start] => 0 code=81 @1:11/10
+'<�/>' [start] => 0 code=68 @1:2/1
+'<r�/>' [start] => 0 code=73 @1:3/2
+  S R [] @1:3/2
+  E R @1:5/4
+'<r/>�' [start] => 0 code=5 @1:5/4
+  S R [] @1:3/2
+'<r>&é;</r>' [start,cdata] => 0 code=26 @1:7/7
+  S R [] @1:32/33
+  D '&é;' @1:36/38
+  E R @1:40/42
+'<!DOCTYPE r [<!ENTITY é \'v\'>]><r>&é;</r>' [start,cdata,default] => 1 code=0 @1:40/42

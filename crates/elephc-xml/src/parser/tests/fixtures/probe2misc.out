@@ -1,0 +1,33 @@
+== misc errors
+'<a b>x</a>' => 0 code=41 'Attribute without value' @1:6/5
+'<a b=1/>' => 0 code=73 '> required' @1:6/5
+'<a b=\'1\' b=\'2\'/>' => 0 code=42 'Attribute redefined' @1:17/16
+'<a b=\'<\'/>' => 0 code=38 '< in attribute' @1:11/10
+'<a>&foo</a>' => 0 code=23 'EntityRef: expecting ';'' @1:8/7
+'<a>]]></a>' => 0 code=62 'Sequence ']]>' not allowed in content' @1:7/6
+'<!-- -- --><a/>' => 0 code=80 'Comment must not contain '--' (double-hyphen)' @1:12/11
+'<?xml version=\'1.0\'?><?xml version=\'1.0\'?><a/>' => 0 code=64 'Reserved XML Name' @1:43/42
+'<a><![CDATA[x</a>' => 0 code=63 'CDATA not finished' @1:18/17
+'<a>&#xZZ;</a>' => 0 code=9 'Invalid character' @1:7/6
+'<a>&#0;</a>' => 0 code=9 'Invalid character' @1:8/7
+'<a b=\'1\'c=\'2\'/>' => 0 code=65 'Space required' @1:16/15
+'<a b 1/>' => 0 code=73 '> required' @1:6/5
+'<a/><!-- c' => 0 code=45 'Comment not finished' @1:11/10
+'<a' => 0 code=73 '> required' @1:3/2
+'<a b=\'1\'' => 0 code=73 '> required' @1:9/8
+'<a></a' => 0 code=73 '> required' @1:7/6
+'<?xml version=\'1.0\' encoding=\'bogus\'?><a/>' => 0 code=32 'Unsupported encoding' @1:39/38
+  C 'Ã©'
+'<?xml version=\'1.0\' encoding=\'ISO-8859-1\'?><a>é</a>' => 1 code=0 'No error' @1:52/52
+'<a>é</a>' => 0 code=81 'Invalid encoding' @1:5/4
+'<a></a>' => 0 code=9 'Invalid character' @1:5/4
+'<a><b></c></a>' => 0 code=76 'Mismatched tag' @1:11/10
+'<a><!DOCTYPE x><b/></a>' => 0 code=68 'XML_ERR_NAME_REQUIRED' @1:5/4
+  C '&r;'
+'<!DOCTYPE a [<!ENTITY r \'&r;\'>]><a>&r;</a>' => 1 code=0 'No error' @1:42/42
+'<a xmlns:p=\'u\'><p:b/></a>' => 1 code=0 'No error' @1:26/25
+'<a><p:b/></a>' => 1 code=0 'No error' @1:14/13
+'<1a/>' => 0 code=68 'XML_ERR_NAME_REQUIRED' @1:2/1
+'<a>&lt</a>' => 0 code=23 'EntityRef: expecting ';'' @1:7/6
+'<a>&#;</a>' => 0 code=9 'Invalid character' @1:7/6
+'<a>&;</a>' => 0 code=68 'XML_ERR_NAME_REQUIRED' @1:5/4

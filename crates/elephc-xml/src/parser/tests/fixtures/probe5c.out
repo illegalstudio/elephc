@@ -1,0 +1,181 @@
+== xml decl variants
+  S R []
+  E R
+'<?xml version=\'1.0\'?><r/>' => 1 code=0 @1:26/25
+  S R []
+  E R
+'<?xml version="1.0" encoding=\'utf-8\'?><r/>' => 1 code=0 @1:43/42
+  S R []
+  E R
+'<?xml version=\'1.0\' encoding=\'UTF8\'?><r/>' => 1 code=0 @1:42/41
+  S R []
+  E R
+'<?xml version=\'1.0\' encoding=\'latin1\'?><r/>' => 1 code=0 @1:44/43
+  S R []
+  E R
+'<?xml version=\'1.0\' encoding=\'ISO-8859-15\'?><r/>' => 1 code=0 @1:49/48
+  S R []
+  E R
+'<?xml version=\'1.0\' encoding=\'us-ascii\'?><r/>' => 1 code=0 @1:46/45
+'<?xml version=\'1.0\' encoding=\'UTF-16\'?><r/>' => 0 code=57 @1:41/46
+'<?xml version=\'1.0\' standalone=\'maybe\'?><r/>' => 0 code=57 @1:41/40
+'<?xml version=\'1.0\'standalone=\'yes\'?><r/>' => 0 code=65 @1:38/37
+'<?xml version=\'1.0\' standalone=\'yes\' encoding=\'UTF-8\'?><r/>' => 0 code=57 @1:56/55
+  S R []
+  E R
+'<?xml version = \'1.0\' ?><r/>' => 1 code=0 @1:29/28
+'<?xml version=\'1.0\' foo=\'bar\'?><r/>' => 0 code=57 @1:32/31
+'<?xml version=\'1.0\'' => 0 code=57 @1:20/19
+'<?xml?><r/>' => 0 code=64 @1:8/7
+'<?XML version=\'1.0\'?><r/>' => 0 code=64 @1:22/21
+'<?xml version=\'1.0\'?>' => 0 code=4 @1:22/21
+  S R []
+  E R
+'<?xml version=\'1.0\'?><!DOCTYPE r><r/>' => 1 code=0 @1:38/37
+'<!DOCTYPE r><!DOCTYPE r><r/>' => 0 code=68 @1:14/13
+  S R []
+  E R
+'<!DOCTYPE r [<!ELEMENT r (#PCDATA)><!ATTLIST r x CDATA \'def\'>]><r/>' => 1 code=0 @1:68/67
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'v\'>]><r>&e;</r>' => 1 code=0 @1:40/40
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'v\'><!ENTITY e \'w\'>]><r>&e;</r>' => 1 code=0 @1:54/55
+  S R []
+  C '&'
+  E R
+'<!DOCTYPE r [<!ENTITY amp \'x\'>]><r>&amp;</r>' => 1 code=0 @1:44/44
+  S R []
+  C '<'
+  E R
+'<!DOCTYPE r [<!ENTITY lt \'<\'>]><r>&lt;</r>' => 1 code=0 @1:42/42
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'&#38;\'>]><r>&e;</r>' => 1 code=0 @1:44/44
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'&#60;\'>]><r>&e;</r>' => 1 code=0 @1:44/44
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'&lt;\'>]><r>&e;</r>' => 1 code=0 @1:43/43
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'<x/>\'>]><r>&e;</r>' => 1 code=0 @1:43/43
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'<x>\'>]><r>&e;</r>' => 1 code=0 @1:42/42
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'</r>\'>]><r>&e;</r>' => 1 code=0 @1:43/43
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'a&f;b\'><!ENTITY f \'F\'>]><r>&e;</r>' => 1 code=0 @1:58/59
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'a&g;b\'>]><r>&e;</r>' => 1 code=0 @1:44/44
+  S R []
+  D '&e;'
+'<r>&e;</r>' => 0 code=26 @1:7/6
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r SYSTEM \'x.dtd\'><r>&e;</r>' => 0 code=27 @1:38/37
+  S R []
+  C '%p;'
+  E R
+'<!DOCTYPE r [<!ENTITY % p \'x\'>]><r>%p;</r>' => 1 code=0 @1:42/42
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY % p \'<!ENTITY e "v">\'>%p;]><r>&e;</r>' => 0 code=27 @1:59/59
+  S R []
+  EXTREF ["e","","x",false]
+  E R
+'<!DOCTYPE r [<!ENTITY e SYSTEM \'x\'>]><r>&e;</r>' => 1 code=0 @1:48/47
+  NOTATION ["n",false,"y",false]
+  UNPARSED ["u",false,"z",false,"n"]
+  S R []
+  D '&u;'
+'<!DOCTYPE r [<!ENTITY e SYSTEM \'x\'><!NOTATION n SYSTEM \'y\'><!ENTITY u SYSTEM \'z\' NDATA n>]><r>&u;</r>' => 0 code=26 @1:98/97
+  S R {"A":"z"}
+  E R
+'<!DOCTYPE r [<!ELEMENT r ANY><!ATTLIST r a (x|y) \'x\'>]><r a=\'z\'/>' => 1 code=0 @1:66/65
+  S R []
+  E R
+'<!DOCTYPE r [<!ATTLIST r a CDATA #FIXED \'v\'>]><r/>' => 1 code=0 @1:51/50
+  S R []
+  E R
+'<!DOCTYPE r [<!ATTLIST r xmlns:p CDATA \'urn\'>]><r/>' => 1 code=0 @1:52/51
+  S R []
+  E R
+'<!DOCTYPE r [<!ATTLIST r a CDATA \'d\'>]><r/>' => 1 code=0 @1:44/43
+  S R []
+  C 'x'
+  E R
+'<!DOCTYPE r [<!ELEMENT r EMPTY>]><r>x</r>' => 1 code=0 @1:42/41
+  S R []
+  E R
+'<!DOCTYPE r [ ]><r/>' => 1 code=0 @1:21/20
+  S R []
+  E R
+'<!DOCTYPE r[]><r/>' => 1 code=0 @1:19/18
+'<!DOCTYPE r []]><r/>' => 0 code=61 @1:15/14
+'<!DOCTYPE r [<!ENTITY e \'v\'><![INCLUDE[<!ENTITY f \'w\'>]]>]><r/>' => 0 code=118 @1:30/30
+  S R []
+  E R
+'<!DOCTYPE r [<!ENTITY e \'v\' >]><r/>' => 1 code=0 @1:35/35
+'<!DOCTYPE r [<!ENTITY e>]><r/>' => 0 code=84 @1:27/26
+'<!DOCTYPE r [<!ENTITY e \'v\' \'w\'>]><r/>' => 0 code=118 @1:28/28
+'<!DOCTYPE r [<!FOO>]><r/>' => 0 code=118 @1:16/15
+'<!DOCTYPE r [<!ELEMENT>]><r/>' => 0 code=118 @1:23/22
+'<!DOCTYPE r [<!ELEMENT r>]><r/>' => 0 code=118 @1:25/24
+  S R []
+  E R
+'<!DOCTYPE r [<!ELEMENT r (a|b)*>]><r/>' => 1 code=0 @1:39/38
+  S R []
+  E R
+'<!DOCTYPE r [<!ELEMENT r (a,(b|c)+,d?)>]><r/>' => 1 code=0 @1:46/45
+  S R []
+  E R
+'<!DOCTYPE r [<!ELEMENT r (#PCDATA|a)*>]><r/>' => 1 code=0 @1:45/44
+'<!DOCTYPE r [<!ELEMENT r (#PCDATA|a)>]><r/>' => 0 code=118 @1:36/35
+  S R []
+  E R
+'<!DOCTYPE r [<!ATTLIST r a ID #REQUIRED b IDREF #IMPLIED c NMTOKENS \'x y\' d NOTATION (n) #IMPLIED>]><r/>' => 1 code=0 @1:105/104
+'<!DOCTYPE r [<!ATTLIST r a FOO #IMPLIED>]><r/>' => 0 code=118 @1:28/27
+  NOTATION ["n",false,false,"p"]
+  S R []
+  E R
+'<!DOCTYPE r [<!NOTATION n PUBLIC \'p\'>]><r/>' => 1 code=0 @1:44/43
+  NOTATION ["n",false,"s","p"]
+  S R []
+  E R
+'<!DOCTYPE r [<!NOTATION n PUBLIC \'p\' \'s\'>]><r/>' => 1 code=0 @1:48/47
+'<!DOCTYPE r [<!NOTATION n \'p\'>]><r/>' => 0 code=118 @1:27/26
+'<!DOCTYPE r PUBLIC \'p\'><r/>' => 0 code=70 @1:24/23
+'<!DOCTYPE r SYSTEM><r/>' => 0 code=70 @1:20/19
+'<!DOCTYPE r SYSTEM \'a\' \'b\'><r/>' => 0 code=61 @1:24/23
+'<!DOCTYPE r PUBLIC \'p\' \'s\'><r/>' => 0 code=61 @1:22/21
+  S R []
+  E R
+'<!DOCTYPE r [<!ENTITY e \'a<b\'>]><r/>' => 1 code=0 @1:36/36
+  S R []
+  E R
+'<!DOCTYPE r [<!ENTITY e \'a%p;b\'>]><r/>' => 0 code=27 @1:38/38
+  S R []
+  D '&e;'
+  E R
+'<!DOCTYPE r [<!ENTITY e \'a&amp;b\'>]><r>&e;</r>' => 1 code=0 @1:46/46
+'<!DOCTYPE r [<!ENTITY e \'a&#x;b\'>]><r/>' => 0 code=9 @1:35/35
+'<!DOCTYPE r [<!ENTITY e \'a&b\'>]><r/>' => 0 code=87 @1:32/32

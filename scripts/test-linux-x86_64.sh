@@ -70,9 +70,24 @@ trap cleanup EXIT INT TERM
 # Run tests with the project mounted as a volume. Build the bridge staticlib
 # crates first so libelephc_tls.a / libelephc_pdo.a / libelephc_crypto.a /
 # libelephc_bcmath.a / libelephc_iconv.a / libelephc_phar.a / libelephc_tz.a /
-# libelephc_image.a / libelephc_web.a / libelephc_pcntl.a /
+# libelephc_image.a / libelephc_web.a / libelephc_pcntl.a / libelephc_xml.a /
 # libelephc_magician.a / libelephc_curl.a exist in the target dir —
 # `cargo test` alone never emits the staticlib crate-type.
+#
+# Then materialize the managed native libxml2 package (the xml bridge's parser
+# is libxml2 itself; see tests/codegen/support/xml_native.rs) with the compiler
+# just built, into a cache that lives on the target volume
+# (ELEPHC_NATIVE_CACHE) so a kept volume reuses the from-source build. The two
+# exported variables make the run COVER xml rather than skip it:
+# ELEPHC_XML_LIBXML2_LIB_DIR compiles the crate's libxml2-calling unit tests in
+# (crates/elephc-xml/build.rs), and ELEPHC_TEST_REQUIRE_XML_NATIVE turns a
+# missing artifact into a loud failure in tests/codegen/xml instead of a skip.
+DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-instr -p elephc-probe -p elephc-curl \
+    && cargo build --bin elephc \
+    && "$CARGO_TARGET_DIR/debug/elephc" native install --locked --target linux-x86_64 --manifest-path examples/xml/elephc.toml \
+    && ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \
+       ELEPHC_TEST_REQUIRE_XML_NATIVE=1 \
+       cargo test "$@"'
 if [ "$TEST_ARG_COUNT" -eq 0 ]; then
     echo "Running all tests on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using temporary target volume '$TARGET_VOLUME'..."
     docker run \
@@ -83,11 +98,12 @@ if [ "$TEST_ARG_COUNT" -eq 0 ]; then
         -e "RUST_TEST_THREADS=$TEST_THREADS" \
         -e "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1}" \
         -e "CARGO_TARGET_DIR=/cargo-target" \
+        -e "ELEPHC_NATIVE_CACHE=/cargo-target/elephc-native" \
         -v "$PROJECT_DIR:/app" \
         -v "$TARGET_VOLUME:/cargo-target" \
         -w /app \
         "$IMAGE" \
-        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-magician -p elephc-instr -p elephc-probe -p elephc-curl && cargo test'
+        sh -c "$DOCKER_TEST_COMMAND" sh
 else
     echo "Running tests matching '${TEST_ARGS[*]}' on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using temporary target volume '$TARGET_VOLUME'..."
     docker run \
@@ -98,9 +114,10 @@ else
         -e "RUST_TEST_THREADS=$TEST_THREADS" \
         -e "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1}" \
         -e "CARGO_TARGET_DIR=/cargo-target" \
+        -e "ELEPHC_NATIVE_CACHE=/cargo-target/elephc-native" \
         -v "$PROJECT_DIR:/app" \
         -v "$TARGET_VOLUME:/cargo-target" \
         -w /app \
         "$IMAGE" \
-        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-magician -p elephc-instr -p elephc-probe -p elephc-curl && cargo test "$@"' sh "${TEST_ARGS[@]}"
+        sh -c "$DOCKER_TEST_COMMAND" sh "${TEST_ARGS[@]}"
 fi
