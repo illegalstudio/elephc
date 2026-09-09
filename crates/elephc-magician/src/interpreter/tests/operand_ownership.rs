@@ -11,6 +11,43 @@
 use super::super::*;
 use super::support::*;
 
+/// Raw staging cleanup releases the current slot, not a stale original address consumed by native code.
+#[test]
+fn native_function_ref_staging_releases_only_its_current_owner() {
+    for string in [false, true] {
+        for replaced in [false, true] {
+            for writeback in [false, true] {
+                let mut values = FakeOps::default();
+                let mut context = ElephcEvalContext::new();
+                let original = if string { values.string("old") } else { values.array_new(0) }.unwrap();
+                let current = if replaced {
+                    if string { values.string("new") } else { values.array_new(0) }.unwrap()
+                } else {
+                    original
+                };
+                let original_word = original.as_ptr() as u64;
+                let current_word = current.as_ptr() as u64;
+                let slot = if string {
+                    BoundNativeFunctionRefSlot::RawString {
+                        original: [original_word, 3], slot: Box::new([current_word, 3]), target: None,
+                    }
+                } else {
+                    BoundNativeFunctionRefSlot::OwnedRawWord {
+                        original: original_word, slot: Box::new(current_word), target: None,
+                    }
+                };
+                let bound = BoundNativeFunctionArgs { values: Vec::new(), ref_slots: vec![slot] };
+                if writeback {
+                    write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
+                } else {
+                    cleanup_native_function_ref_args(&bound, &mut values).unwrap();
+                }
+                assert_eq!(values.releases, vec![current], "string={string} replaced={replaced} writeback={writeback}");
+            }
+        }
+    }
+}
+
 /// Escaping borrowed Throwables acquire an owner before argument cleanup; fresh throws transfer theirs.
 #[test]
 fn pending_throwables_own_their_cells_after_function_return_control() {

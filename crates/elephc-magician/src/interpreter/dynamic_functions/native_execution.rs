@@ -88,26 +88,20 @@ fn build_native_function_arg_array(
     Ok(arg_array)
 }
 
-/// Releases retained raw native-function by-reference staging slots without writeback.
-fn cleanup_native_function_ref_args(
+/// Releases current staging owners; native replacement has already consumed each old slot value.
+pub(in crate::interpreter) fn cleanup_native_function_ref_args(
     bound_args: &BoundNativeFunctionArgs,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for ref_slot in &bound_args.ref_slots {
         match ref_slot {
-            BoundNativeFunctionRefSlot::RawString { original, slot, .. } => {
+            BoundNativeFunctionRefSlot::RawString { slot, .. } => {
                 let words = **slot;
                 values.release_raw_string_words(words[0], words[1])?;
-                if words[0] != original[0] {
-                    values.release_raw_string_words(original[0], original[1])?;
-                }
             }
-            BoundNativeFunctionRefSlot::OwnedRawWord { original, slot, .. } => {
+            BoundNativeFunctionRefSlot::OwnedRawWord { slot, .. } => {
                 let word = **slot;
                 values.release_raw_heap_word(word)?;
-                if word != *original {
-                    values.release_raw_heap_word(*original)?;
-                }
             }
             BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
                 values.release(RuntimeCellHandle::from_raw(**slot))?;
@@ -119,7 +113,7 @@ fn cleanup_native_function_ref_args(
 }
 
 /// Writes changed staged native-function by-reference slots back to eval caller targets.
-fn write_back_native_function_ref_args(
+pub(in crate::interpreter) fn write_back_native_function_ref_args(
     bound_args: &BoundNativeFunctionArgs,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -192,9 +186,6 @@ fn write_back_native_function_ref_args(
                 let words = **slot;
                 if target.is_none() {
                     values.release_raw_string_words(words[0], words[1])?;
-                    if words[0] != original[0] {
-                        values.release_raw_string_words(original[0], original[1])?;
-                    }
                     continue;
                 }
                 let Some(target) = target else {
@@ -206,9 +197,6 @@ fn write_back_native_function_ref_args(
                 }
                 let value = values.raw_string_value(words[0], words[1]);
                 values.release_raw_string_words(words[0], words[1])?;
-                if words[0] != original[0] {
-                    values.release_raw_string_words(original[0], original[1])?;
-                }
                 let value = value?;
                 eval_write_direct_ref_target(
                     target,
@@ -226,9 +214,6 @@ fn write_back_native_function_ref_args(
                 let word = **slot;
                 if target.is_none() {
                     values.release_raw_heap_word(word)?;
-                    if word != *original {
-                        values.release_raw_heap_word(*original)?;
-                    }
                     continue;
                 }
                 let Some(target) = target else {
@@ -240,7 +225,6 @@ fn write_back_native_function_ref_args(
                 }
                 let value = values.raw_heap_word_value(word);
                 values.release_raw_heap_word(word)?;
-                values.release_raw_heap_word(*original)?;
                 let value = value?;
                 eval_write_direct_ref_target(
                     target,
