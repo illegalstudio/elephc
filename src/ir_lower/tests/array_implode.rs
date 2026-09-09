@@ -20,10 +20,17 @@ function renderedTail(int $value): string { return "tail" . $value; }
 function joinOwnedConcat(array $items, int $value): string {
     return implode(",", $items) . renderedTail($value);
 }
+class OwnedJoinMethod {
+    public function join(string $left, string $right): string {
+        $items = [$left, $right];
+        return implode(",", $items);
+    }
+}
 echo joinOwnedResult([1, 2]), joinOwnedConcat([3, 4], $argc);
+echo (new OwnedJoinMethod())->join("left", "right");
 "#);
     let mut observed = 0;
-    for function in &module.functions {
+    for function in module.functions.iter().chain(module.class_methods.iter()) {
         for instruction in &function.instructions {
             if !matches!(instruction.immediate,
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Implode))))
@@ -37,7 +44,7 @@ echo joinOwnedResult([1, 2]), joinOwnedConcat([3, 4], $argc);
                 use_inst.op == Op::StrPersist && use_inst.operands == [joined]), "{}", function.name);
         }
     }
-    assert_eq!(observed, 2);
+    assert_eq!(observed, 3);
 }
 
 /// Declared-array joins emit normalization, exception owners and string persistence on every ABI.

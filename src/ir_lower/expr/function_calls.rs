@@ -202,6 +202,17 @@ pub(super) fn emit_builtin_call_value(
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
             };
+            // Consumers make lifetime decisions during lowering, before final
+            // ownership refinement. In particular, Fresh strings already own
+            // heap storage and must not be persisted again as concat scratch.
+            if matches!(
+                def.spec.semantics.result_ownership,
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh,
+            ) && Ownership::php_type_needs_lifetime_tracking(
+                &ctx.builder.value_php_type(call.value),
+            ) {
+                ctx.builder.set_value_ownership(call.value, Ownership::Owned);
+            }
             let return_alias = match def.spec.semantics.result_ownership {
                 crate::builtins::semantics::BuiltinResultOwnership::NonHeap
                 | crate::builtins::semantics::BuiltinResultOwnership::Fresh
