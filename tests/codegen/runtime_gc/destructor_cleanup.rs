@@ -39,18 +39,20 @@ fn test_core_dynamic_property_unset_preserves_reentrant_replacement_after_throw(
 class ReentrantUnsetValue {
     public static stdClass $owner;
     public function __destruct() {
-        echo isset(self::$owner->value) ? "present|" : "absent|";
-        self::$owner->value = 17;
-        self::$owner->next = "fresh";
+        $owner = self::$owner;
+        echo isset($owner->value) ? "present|" : "absent|";
+        $owner->value = 17;
+        $owner->next = "fresh";
         throw new RuntimeException("replaced");
     }
 }
-ReentrantUnsetValue::$owner = new stdClass();
-ReentrantUnsetValue::$owner->value = new ReentrantUnsetValue();
-try { unset(ReentrantUnsetValue::$owner->value); }
+$owner = new stdClass();
+ReentrantUnsetValue::$owner = $owner;
+$owner->value = new ReentrantUnsetValue();
+try { unset($owner->value); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
-echo ReentrantUnsetValue::$owner->value, ":", ReentrantUnsetValue::$owner->next;
-unset(ReentrantUnsetValue::$owner->value, ReentrantUnsetValue::$owner->next);
+echo $owner->value, ":", $owner->next;
+unset($owner->value, $owner->next);
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "absent|replaced|17:fresh", "{}", out.stderr);
