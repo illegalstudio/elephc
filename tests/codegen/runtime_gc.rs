@@ -46,6 +46,7 @@ mod eval_sparse_arrays;
 mod boxed_array_merge;
 mod boxed_array_map;
 mod boxed_array_reference_outputs;
+mod boxed_array_call_results;
 mod mixed_parameters;
 mod native_string_arguments;
 mod native_property_unset;

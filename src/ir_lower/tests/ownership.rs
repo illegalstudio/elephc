@@ -10,6 +10,33 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// A boxed PHP array result cannot take ownership of an unrelated raw object argument.
+#[test]
+fn php_array_results_release_object_argument_temporaries_on_all_targets() {
+    let source = r#"<?php
+class ArrayResultProducer {
+    public function values(): array { return [42]; }
+}
+function readProducedArray(ArrayResultProducer $producer): array { return $producer->values(); }
+function makeProducedArray(): array { return readProducedArray(new ArrayResultProducer()); }
+echo makeProducedArray()[0];
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "makeProducedArray").unwrap();
+        let call = function.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        let argument = function.instructions[call].operands[0];
+        assert!(function.instructions[call].result_php_type.is_php_array(), "{target}");
+        assert!(function.instructions[call + 1..].iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [argument]
+        }), "{target}: {}", print_module(&module));
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Mixed reference stores consume the explicit string acquire on every supported ABI.
 #[test]
 fn mixed_reference_stores_adopt_acquired_strings_on_all_targets() {

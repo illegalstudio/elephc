@@ -2699,8 +2699,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         argument: ValueId,
         result: ValueId,
     ) -> bool {
-        let argument_type = self.builder.value_php_type(argument).codegen_repr();
-        let result_type = self.builder.value_php_type(result).codegen_repr();
+        let argument_type = self.builder.value_php_type(argument);
+        let result_type = self.builder.value_php_type(result);
+        // A declared PHP array has boxed storage, but its container cannot be the
+        // object, string or callable passed to the call. Array children own their
+        // references separately, so they do not justify keeping that argument alive.
+        let may_contain_array_payload = |ty: &PhpType| matches!(
+            ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Mixed
+        );
+        if (argument_type.is_php_array() && !may_contain_array_payload(&result_type))
+            || (result_type.is_php_array() && !may_contain_array_payload(&argument_type))
+        {
+            return false;
+        }
+        let argument_type = argument_type.codegen_repr();
+        let result_type = result_type.codegen_repr();
         if !Ownership::php_type_needs_lifetime_tracking(&argument_type)
             || !Ownership::php_type_needs_lifetime_tracking(&result_type)
         {
