@@ -28,6 +28,23 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Immediate array indexing releases temporary containers while keeping extracted payloads alive.
+#[test]
+fn test_core_eval_array_read_releases_temporary_container_and_index() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function evalArrayReadOwners(string $source): void { eval($source); }
+$source = 'echo strlen(["key" => str_repeat("x", 48)]["key"]), ":";
+echo gc_status()["protected"] ? "protected" : "ready", "|";
+$items = [10, 20];
+echo $items[($items = []) ? 0 : 1], "|"; // ' . $argc;
+for ($i = 0; $i < 3; $i++) { evalArrayReadOwners($source); }
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "48:ready|20|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A finally unset cannot invalidate the eval return consumed after native scope teardown.
 #[test]
 fn test_core_eval_returned_local_survives_finally_unset() {

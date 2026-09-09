@@ -47,9 +47,10 @@ pub(in crate::interpreter) fn eval_expr(
             }
         }
         EvalExpr::ArrayGet { array, index } => {
-            let array = eval_expr(array, context, scope, values)?;
-            let index = eval_expr(index, context, scope, values)?;
-            eval_array_get_result(array, index, context, values)
+            with_eval_operands(&[array, index], context, scope, values, |args, context, _, values| {
+                let result = eval_array_get_result(args[0], args[1], context, values)?;
+                if result.is_borrowed() { values.retain(result) } else { Ok(result) }
+            })
         }
         EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
         EvalExpr::Cast { target, expr } => eval_cast_expr(target, expr, context, scope, values),

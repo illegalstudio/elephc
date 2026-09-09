@@ -31,6 +31,29 @@ fn program_return_retains_borrowed_scope_storage() {
     assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 0);
 }
 
+/// Array reads retire their temporary container and key, including failed index evaluation.
+#[test]
+fn array_read_releases_temporary_operands_on_success_and_failure() {
+    for source in ["return [7][0];", "return [7][missingArrayIndex()];"] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
+        assert_eq!(result.is_err(), source.contains("missingArrayIndex"), "{source}");
+        let containers = values.values.iter().filter_map(|(id, value)| {
+            matches!(value, FakeValue::Array(_)).then_some(*id)
+        }).collect::<Vec<_>>();
+        assert_eq!(containers.len(), 1, "{source}");
+        assert_eq!(values.cell_owners[&containers[0]], 0, "{source}");
+        for (id, value) in &values.values {
+            if matches!(value, FakeValue::Int(0)) {
+                assert_eq!(values.cell_owners[id], 0, "index owner: {source}");
+            }
+        }
+    }
+}
+
 /// A pending return owns its source before finally mutates storage, and overrides release that owner.
 #[test]
 fn pending_return_survives_finally_storage_mutations_and_overrides() {
