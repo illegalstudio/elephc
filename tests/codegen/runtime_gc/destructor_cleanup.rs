@@ -10,7 +10,7 @@
 
 use crate::support::*;
 
-/// Repeated dynamic method dispatch does not consume the receiver's local owner.
+/// Repeated dynamic dispatch preserves receiver ownership and independently owns copied selector names.
 #[test]
 fn test_core_dynamic_method_loop_preserves_receiver_owner() {
     let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php

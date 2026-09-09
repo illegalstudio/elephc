@@ -191,7 +191,7 @@ pub(super) fn lower_dynamic_method_expr_call(
     let method = lower_expr(ctx, method);
     let method_type = ctx.builder.value_php_type(method.value);
     let method_name = ctx.declare_hidden_temp(method_type.clone());
-    ctx.store_local(&method_name, method, method_type, Some(expr.span));
+    store_value_into_temp(ctx, &method_name, method_type, method, expr.span);
     let method_expr = Expr::new(ExprKind::Variable(method_name), expr.span);
     let object_type = ctx.builder.value_php_type(object.value).codegen_repr();
     if !matches!(object_type, PhpType::Object(_))
@@ -286,4 +286,3 @@ pub(super) fn terminate_dynamic_method_call_on_null(
     );
     ctx.builder.terminate(Terminator::Unreachable);
 }
-

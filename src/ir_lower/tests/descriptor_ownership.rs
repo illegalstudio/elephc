@@ -186,7 +186,7 @@ fn normalized_descriptor_calls_use_owned_argument_boundaries_on_all_targets() {
     }
 }
 
-/// Dynamic receiver temporaries retain the caller's object and retire after each invocation.
+/// Dynamic calls retain receiver roots and copy borrowed method names into their owning temporaries.
 #[test]
 fn dynamic_method_calls_root_receiver_borrows_on_all_targets() {
     let source = r#"<?php
@@ -202,6 +202,13 @@ fn dynamic_method_calls_root_receiver_borrows_on_all_targets() {
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let function = module.functions.iter().find(|function| function.name == "invoke_dynamic_root").unwrap();
+        assert!(function.instructions.iter().any(|store| {
+            if store.op != Op::StoreLocal { return false; }
+            let Some(value) = function.value(store.operands[0]) else { return false; };
+            if value.php_type.codegen_repr() != crate::types::PhpType::Str { return false; }
+            let crate::ir::ValueDef::Instruction { inst, .. } = value.def else { return false; };
+            function.instruction(inst).is_some_and(|producer| producer.op == Op::Acquire)
+        }), "{target}: a borrowed selector cannot be stored as a second unretained owner");
         let store = function.instructions.iter().find(|inst| {
             inst.op == Op::StoreLocal && matches!(
                 function.value(inst.operands[0]).unwrap().php_type,
