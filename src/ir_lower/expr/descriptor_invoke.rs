@@ -338,14 +338,10 @@ pub(super) fn emit_callable_descriptor_invoke(
     span: Span,
 ) -> LoweredValue {
     let (callback, callback_owner) = root_owned_call_operand(ctx, callback, span);
-    // The backend borrows raw containers and owns its normalized copy. Keep the
-    // original in the caller's unwind inventory instead of leaving it only in SSA.
-    let (arg_container, container_owner) = match ctx.builder.value_php_type(arg_container.value).codegen_repr() {
-        PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            root_owned_call_operand(ctx, arg_container, span)
-        }
-        _ => (arg_container, None),
-    };
+    // The backend borrows this container and owns either its normalized copy
+    // or a separate retain of a prebuilt Mixed box. Root both raw and boxed
+    // owners so a throw cannot bypass their EIR retirement.
+    let (arg_container, container_owner) = root_owned_call_operand(ctx, arg_container, span);
     let result = ctx.emit_value(
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value],

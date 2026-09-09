@@ -5,7 +5,8 @@
 //! - Descriptor-backed array callback wrappers and extern callback trampolines.
 //!
 //! Key details:
-//! - The descriptor is borrowed; the argument box is consumed on normal and exceptional exits.
+//! - The argument box is consumed on normal and exceptional exits.
+//! - Separate entries distinguish borrowed descriptors from caller-transferred descriptor owners.
 //! - A local native handler keeps cleanup below the caller's exception boundary.
 //! - Slots are cleared before release so a cleanup throw cannot release an owner twice.
 
@@ -21,6 +22,7 @@ const ARGUMENTS: usize = 16;
 const RESULT: usize = 24;
 const PENDING: usize = 32;
 const PREVIOUS: usize = 40;
+const OWNED_DESCRIPTOR: usize = 48;
 
 /// Emits a consuming argument-container boundary using the descriptor's two-argument native ABI.
 /// Returns an owned Mixed cell, or rethrows only after releasing the arguments and interrupted result.
@@ -34,11 +36,11 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     let returned = "__rt_callable_owned_args_return";
 
     emitter.blank();
-    emitter.label_global("__rt_callable_invoke_owned_args");
+    emit_owned_args_entry(emitter, "__rt_callable_invoke_owned_args", false);
+    abi::emit_jump(emitter, "__rt_callable_owned_args_enter");
+    emit_owned_args_entry(emitter, "__rt_callable_invoke_owned_descriptor_args", true);
+    emitter.label("__rt_callable_owned_args_enter");
     // -- preserve inputs and install a boundary before entering the descriptor invoker --
-    abi::emit_frame_prologue(emitter, FRAME_SIZE);
-    abi::store_at_offset(emitter, descriptor_arg, DESCRIPTOR);
-    abi::store_at_offset(emitter, array_arg, ARGUMENTS);
     clear_slot(emitter, RESULT);
     clear_slot(emitter, PENDING);
     abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
@@ -57,6 +59,9 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     // -- release argument ownership before transferring a successful result --
     emitter.label(cleanup);
     release_mixed_slot(emitter, ARGUMENTS);
+    abi::load_at_offset(emitter, result, OWNED_DESCRIPTOR);
+    clear_slot(emitter, OWNED_DESCRIPTOR);
+    abi::emit_call_label(emitter, "__rt_callable_descriptor_release");
     abi::load_at_offset(emitter, result, PENDING);
     abi::emit_branch_if_int_result_zero(emitter, returned);
     release_mixed_slot(emitter, RESULT);
@@ -85,6 +90,20 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, result, PENDING);
     abi::emit_call_label(emitter, "__rt_exception_chain");
     abi::emit_jump(emitter, cleanup);
+}
+
+/// Saves both ABI inputs and records whether this entry consumes the descriptor owner.
+fn emit_owned_args_entry(emitter: &mut Emitter, label: &str, owns_descriptor: bool) {
+    emitter.label_global(label);
+    abi::emit_frame_prologue(emitter, FRAME_SIZE);
+    let descriptor = abi::int_arg_reg_name(emitter.target, 0);
+    abi::store_at_offset(emitter, descriptor, DESCRIPTOR);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENTS);
+    if owns_descriptor {
+        abi::store_at_offset(emitter, descriptor, OWNED_DESCRIPTOR);
+    } else {
+        clear_slot(emitter, OWNED_DESCRIPTOR);
+    }
 }
 
 /// Saves the enclosing handler, activation boundary, and diagnostics before publishing this record.
@@ -150,7 +169,7 @@ mod tests {
     #[test]
     fn owned_callback_args_are_cleaned_before_return_and_rethrow_on_all_targets() {
         assert_eq!(FRAME_SIZE % 16, 0);
-        assert!(HANDLER_OFFSET - TRY_HANDLER_SLOT_SIZE >= PREVIOUS);
+        assert!(HANDLER_OFFSET - TRY_HANDLER_SLOT_SIZE >= OWNED_DESCRIPTOR);
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
@@ -164,7 +183,9 @@ mod tests {
             assert!(setjmp < invoke && invoke < cleanup && cleanup < released && released < rethrow, "{name}: {asm}");
             assert_eq!(asm.matches("__rt_decref_mixed").count(), 2, "{name}");
             assert_eq!(asm.matches("__rt_exception_chain").count(), 2, "{name}");
-            for offset in [ARGUMENTS, RESULT] {
+            assert!(asm.contains("__rt_callable_invoke_owned_descriptor_args:"), "{name}");
+            assert_eq!(asm.matches("__rt_callable_descriptor_release").count(), 1, "{name}");
+            for offset in [ARGUMENTS, RESULT, OWNED_DESCRIPTOR] {
                 let clear = if target.arch == Arch::AArch64 {
                     format!("stur x10, [x29, #-{offset}]")
                 } else {

@@ -2377,24 +2377,15 @@ pub(super) fn emit_descriptor_reg_invoker_mixed_result_with_args(
     emit_missing_descriptor_invoker_fatal(ctx, op_name);
 
     ctx.emitter.label(&ready_label);
+    abi::emit_push_reg(ctx.emitter, descriptor_reg);
     emit_invoker_arg_mixed(ctx, visible_args)?;
-    if release_runtime_descriptor {
-        abi::emit_push_reg(ctx.emitter, descriptor_reg);
-    }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed Mixed argument array across descriptor register setup
+    abi::emit_load_temporary_stack_slot(ctx.emitter, descriptor_reg, 16);
     move_reg_to_arg(ctx, descriptor_reg, 0);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, 0);
-    callable_descriptor::emit_load_invoker_from_descriptor(
-        ctx.emitter,
-        invoker_reg,
-        descriptor_reg,
-    );
-    abi::emit_call_reg(ctx.emitter, invoker_reg);
-    release_invoker_arg_preserving_result(ctx);
-    if release_runtime_descriptor {
-        release_saved_runtime_descriptor_preserving_result(ctx);
-    }
+    emit_owned_descriptor_args_boundary(ctx, release_runtime_descriptor);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
 }
 
@@ -2444,7 +2435,7 @@ pub(super) fn emit_descriptor_reg_invoker_mixed_result_with_arg_container(
     )
 }
 
-/// Calls a descriptor invoker with a boxed Mixed argument created by EIR lowering.
+/// Calls a descriptor invoker with a separate retain of the caller-owned prebuilt Mixed box.
 fn emit_descriptor_reg_invoker_mixed_result_with_prebuilt_mixed_arg(
     ctx: &mut FunctionContext<'_>,
     descriptor_reg: &str,
@@ -2463,22 +2454,16 @@ fn emit_descriptor_reg_invoker_mixed_result_with_prebuilt_mixed_arg(
     emit_missing_descriptor_invoker_fatal(ctx, op_name);
 
     ctx.emitter.label(&ready_label);
-    if release_runtime_descriptor {
-        abi::emit_push_reg(ctx.emitter, descriptor_reg);
-    }
+    abi::emit_push_reg(ctx.emitter, descriptor_reg);
+    ctx.load_value_to_result(arg_mixed)?;
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_load_temporary_stack_slot(ctx.emitter, descriptor_reg, 16);
     move_reg_to_arg(ctx, descriptor_reg, 0);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    ctx.load_value_to_reg(arg_mixed, arg_reg)?;
-    callable_descriptor::emit_load_invoker_from_descriptor(
-        ctx.emitter,
-        invoker_reg,
-        descriptor_reg,
-    );
-    abi::emit_call_reg(ctx.emitter, invoker_reg);
-    if release_runtime_descriptor {
-        release_saved_runtime_descriptor_preserving_result(ctx);
-    }
-    release_prebuilt_invoker_arg_preserving_result(ctx, arg_mixed)?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, 0);
+    emit_owned_descriptor_args_boundary(ctx, release_runtime_descriptor);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
 }
 
@@ -2508,15 +2493,19 @@ fn emit_descriptor_reg_invoker_mixed_result_with_normalized_arg(
     move_reg_to_arg(ctx, descriptor_reg, 0);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, 0);
-    callable_descriptor::emit_load_invoker_from_descriptor(
-        ctx.emitter,
-        invoker_reg,
-        descriptor_reg,
-    );
-    abi::emit_call_reg(ctx.emitter, invoker_reg);
-    release_invoker_arg_preserving_result(ctx);
-    release_saved_descriptor_after_normalized_arg(ctx, release_runtime_descriptor);
+    emit_owned_descriptor_args_boundary(ctx, release_runtime_descriptor);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
+}
+
+/// Transfers normalized arguments and any temporary descriptor to the bounded invocation helper.
+fn emit_owned_descriptor_args_boundary(ctx: &mut FunctionContext<'_>, owns_descriptor: bool) {
+    let entry = if owns_descriptor {
+        "__rt_callable_invoke_owned_descriptor_args"
+    } else {
+        "__rt_callable_invoke_owned_args"
+    };
+    abi::emit_call_label(ctx.emitter, entry);
 }
 
 /// Returns the branch-ready label name for a descriptor invoker callsite.
@@ -2527,24 +2516,29 @@ fn descriptor_invoker_ready_label(ctx: &mut FunctionContext<'_>, op_name: &str) 
     ctx.next_label(&format!("{}_descriptor_invoker_ready", op_name))
 }
 
-/// Returns true when the argument container is already a temporary Mixed box.
+/// Recognizes a prebuilt Mixed box through identity-preserving lifetime retains.
 fn descriptor_arg_is_prebuilt_mixed_box(
     ctx: &FunctionContext<'_>,
-    arg_mixed: ValueId,
+    mut arg_mixed: ValueId,
 ) -> Result<bool> {
     if ctx.value_php_type(arg_mixed)?.codegen_repr() != PhpType::Mixed {
         return Ok(false);
     }
-    let Some(value_ref) = ctx.function.value(arg_mixed) else {
-        return Err(CodegenIrError::missing_entry("value", arg_mixed.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(false);
-    };
-    let Some(inst) = ctx.function.instruction(inst) else {
-        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
-    };
-    Ok(inst.op == Op::MixedBox)
+    loop {
+        let Some(value_ref) = ctx.function.value(arg_mixed) else {
+            return Err(CodegenIrError::missing_entry("value", arg_mixed.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let Some(inst) = ctx.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if inst.op != Op::Acquire {
+            return Ok(inst.op == Op::MixedBox);
+        }
+        arg_mixed = expect_operand(inst, 0)?;
+    }
 }
 
 /// Emits a normalized boxed Mixed argument container for descriptor invokers.
@@ -2637,18 +2631,6 @@ fn move_normalized_invoker_arg_to_result(ctx: &mut FunctionContext<'_>, source_r
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, source_reg)); // place the normalized invoker argument where the caller will preserve it
         }
-    }
-}
-
-/// Releases the descriptor saved while normalizing the argument container.
-fn release_saved_descriptor_after_normalized_arg(
-    ctx: &mut FunctionContext<'_>,
-    release_runtime_descriptor: bool,
-) {
-    if release_runtime_descriptor {
-        release_saved_runtime_descriptor_preserving_result(ctx);
-    } else {
-        abi::emit_release_temporary_stack(ctx.emitter, 16);
     }
 }
 
@@ -2807,27 +2789,6 @@ pub(super) fn release_invoker_arg_preserving_result(ctx: &mut FunctionContext<'_
     abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
-}
-
-/// Releases a prebuilt Mixed argument container while preserving the Mixed result.
-fn release_prebuilt_invoker_arg_preserving_result(
-    ctx: &mut FunctionContext<'_>,
-    arg_mixed: ValueId,
-) -> Result<()> {
-    abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
-    ctx.load_value_to_result(arg_mixed)?;
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    Ok(())
-}
-
-/// Releases the saved runtime descriptor while preserving the Mixed call result.
-fn release_saved_runtime_descriptor_preserving_result(ctx: &mut FunctionContext<'_>) {
-    abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    callable_descriptor::emit_release_current_descriptor(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 16);
 }
