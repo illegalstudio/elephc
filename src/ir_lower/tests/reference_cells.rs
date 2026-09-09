@@ -12,6 +12,36 @@ use crate::codegen::platform::Target;
 use crate::ir::{Effects, Immediate, LocalKind, Op};
 use std::path::Path;
 
+/// A binding first encountered inside a loop retires the owner retained by earlier iterations.
+#[test]
+fn repeated_reference_aliases_retire_the_previous_owner_on_every_target() {
+    let source = r#"<?php
+function repeatReferenceAlias(): void {
+    $value = 0;
+    for ($i = 0; $i < 5; $i++) { $alias = &$value; $alias = $i; }
+    echo $value, '|', $alias;
+}
+repeatReferenceAlias();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("repeatReferenceAlias")).unwrap();
+        let (retained, owner) = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+            if inst.op != Op::RetainLocalRefCell { return None; }
+            let Some(Immediate::LocalSlotPair { second, .. }) = inst.immediate else { return None; };
+            Some((index, second))
+        }).expect("the alias retains its own cell owner");
+        assert!(function.instructions[..retained].iter().any(|inst| {
+            inst.op == Op::ReleaseLocalRefCell && inst.immediate == Some(Immediate::LocalSlot(owner))
+        }), "{name}: loop aliases retire their previous owner before retaining another");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Rebinding a local to its own property retains the cell before retiring the old object slot.
 #[test]
 fn reference_rebinding_retires_the_previous_slot_owner_on_every_target() {

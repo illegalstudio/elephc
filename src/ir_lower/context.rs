@@ -2366,6 +2366,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_method_local(target);
         self.clear_reflection_arg_array_local(target);
         self.clear_fiber_start_sig(target);
+        // Declare the owner before retirement so the first syntactic binding also
+        // releases an alias left by a previous execution of this loop body.
+        let owner_pair = self.ref_cell_owner_slot(source).map(|source_owner| {
+            let target_owner = self.declare_ref_cell_owner(target, source_ty.clone());
+            (source_owner, target_owner)
+        });
         self.release_replaced_local_before_ref_alias(target, span);
         let source_slot = self.declare_local(source, source_ty.clone());
         let target_slot = self.declare_local(target, source_ty.clone());
@@ -2385,8 +2391,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         self.mark_ref_bound_local(target);
         self.initialized_slots.insert(target_slot);
-        if let Some(source_owner) = self.ref_cell_owner_slot(source) {
-            let target_owner = self.declare_ref_cell_owner(target, source_ty);
+        if let Some((source_owner, target_owner)) = owner_pair {
             self.emit_void(
                 Op::RetainLocalRefCell, Vec::new(),
                 Some(Immediate::LocalSlotPair { first: source_owner, second: target_owner }),
@@ -2490,8 +2495,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Releases storage currently owned by a local before rebinding it as a ref alias.
     fn release_replaced_local_before_ref_alias(&mut self, name: &str, span: Option<Span>) {
+        // Hidden owners start at zero but may hold a cell after a loop back-edge,
+        // even before this name has been marked ref-bound during AST lowering.
+        self.release_ref_cell_owner(name, span);
         if self.is_ref_bound_local(name) {
-            self.release_ref_cell_owner(name, span);
             return;
         }
         let Some(slot) = self.local_slots.get(name).copied() else {
