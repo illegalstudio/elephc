@@ -11,6 +11,118 @@
 use super::super::*;
 use super::support::*;
 
+/// Call completion and pre-invocation failures retire internal cells without releasing caller borrows.
+#[test]
+fn native_function_retires_bound_cell_owners_on_every_dispatch_exit() {
+    for exit in ["return", "array failure", "unsupported", "arity"] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let result = values.int(42).unwrap();
+        let owned = values.string("default").unwrap();
+        let caller = values.string("caller").unwrap();
+        let mut function = NativeFunction::new(
+            result.as_ptr().cast(), fake_native_return_descriptor, if exit == "arity" { 3 } else { 2 },
+        );
+        if exit == "unsupported" { function.set_bridge_supported(false); }
+        if exit == "array failure" { values.fail_array_set_call(0); }
+        let bound = BoundNativeFunctionArgs {
+            values: vec![owned, caller.borrowed()], ref_slots: Vec::new(),
+        };
+        let outcome = eval_native_function_with_values(function, bound, &mut context, &mut values);
+        assert_eq!(outcome.is_ok(), exit == "return", "{exit}");
+        assert_eq!(values.cell_owners[&(owned.as_ptr() as usize)], 0, "{exit}");
+        assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1, "{exit}");
+    }
+}
+
+/// Defaults and scalar coercions own their cells, including a default replaced during coercion.
+#[test]
+fn native_function_binding_releases_defaults_and_coercions_after_dispatch() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let result = values.int(42).unwrap();
+    let caller = values.string("7").unwrap();
+    let mut function = NativeFunction::new(result.as_ptr().cast(), fake_native_return_descriptor, 3);
+    assert!(function.set_param_type(0, EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)));
+    assert!(function.set_param_type(1, EvalParameterType::new(vec![EvalParameterTypeVariant::String], false)));
+    assert!(function.set_param_default(1, NativeCallableDefault::Int(8)));
+    assert!(function.set_param_default(2, NativeCallableDefault::String("default".into())));
+    let bound = bind_evaluated_native_function_args(
+        &function, vec![EvaluatedCallArg { name: None, value: caller, ref_target: None }],
+        &mut context, &mut values,
+    ).unwrap();
+    assert!(bound.values.iter().all(|value| !value.is_borrowed()));
+    let outcome = eval_native_function_with_values(function, bound, &mut context, &mut values).unwrap();
+    assert_eq!(outcome, result);
+    assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1);
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 2);
+}
+
+/// A later type rejection releases earlier coercions and defaults while caller operands remain live.
+#[test]
+fn native_function_binding_releases_partial_type_conversions() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let caller = values.string("7").unwrap();
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 2);
+    assert!(function.set_param_type(0, EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)));
+    assert!(function.set_param_type(1, EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false)));
+    assert!(function.set_param_default(1, NativeCallableDefault::String("not an array".into())));
+    let outcome = bind_evaluated_native_function_args(
+        &function, vec![EvaluatedCallArg { name: None, value: caller, ref_target: None }],
+        &mut context, &mut values,
+    );
+    assert!(matches!(outcome, Err(EvalStatus::RuntimeFatal)));
+    assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1);
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 1);
+}
+
+/// A failing later default does not strand cells allocated for earlier omitted parameters.
+#[test]
+fn native_function_binding_releases_partial_default_materialization() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 2);
+    assert!(function.set_param_default(0, NativeCallableDefault::String("first".into())));
+    assert!(function.set_param_default(1, NativeCallableDefault::Array(vec![
+        crate::context::NativeCallableArrayDefaultElement::positional(NativeCallableDefault::Int(1)),
+    ])));
+    values.fail_array_set_call(0);
+    let outcome = bind_evaluated_native_function_args(&function, Vec::new(), &mut context, &mut values);
+    assert!(matches!(outcome, Err(EvalStatus::UnsupportedConstruct)));
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+}
+
+/// Failed marker allocation rolls back both earlier slots and the current raw or boxed lease.
+#[test]
+fn native_function_staging_releases_partial_markers_and_payloads() {
+    for variant in [EvalParameterTypeVariant::String, EvalParameterTypeVariant::Array, EvalParameterTypeVariant::Mixed] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 2);
+        let mut arguments = Vec::new();
+        for position in 0..2 {
+            let value = if matches!(variant, EvalParameterTypeVariant::Array) {
+                values.array_new(0).unwrap()
+            } else { values.string("keep").unwrap() };
+            assert!(function.set_param_type(position, EvalParameterType::new(vec![variant.clone()], false)));
+            assert!(function.set_param_by_ref(position, true));
+            arguments.push(EvaluatedCallArg {
+                name: None, value,
+                ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: position.to_string() }),
+            });
+        }
+        let caller_values: Vec<_> = arguments.iter().map(|argument| argument.value).collect();
+        values.fail_invoker_marker_call = Some(1);
+        let outcome = bind_evaluated_native_function_args(&function, arguments, &mut context, &mut values);
+        assert!(matches!(outcome, Err(EvalStatus::RuntimeFatal)));
+        assert_eq!(values.invoker_marker_calls, 2);
+        for caller in caller_values { assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1); }
+        assert_eq!(values.cell_owners.values().sum::<usize>(), 2);
+    }
+}
+
 /// A failing cleanup still retires all subsequent raw and boxed staging owners.
 #[test]
 fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {

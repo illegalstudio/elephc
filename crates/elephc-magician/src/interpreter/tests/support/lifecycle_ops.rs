@@ -10,6 +10,14 @@
 use super::*;
 
 impl FakeOps {
+    /// Allocates reference markers with optional failure after earlier slots were staged.
+    pub(super) fn runtime_invoker_marker(&mut self, slot: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        let call = self.invoker_marker_calls;
+        self.invoker_marker_calls += 1;
+        if self.fail_invoker_marker_call == Some(call) { return Err(EvalStatus::RuntimeFatal); }
+        Ok(self.alloc(FakeValue::InvokerRefCell(slot)))
+    }
+
     /// Records fake releases without freeing handles needed for assertions.
     pub(super) fn runtime_release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         self.releases.push(value);

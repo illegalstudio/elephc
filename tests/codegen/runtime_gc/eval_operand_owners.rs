@@ -10,6 +10,45 @@
 
 use crate::support::*;
 
+/// Repeated native dispatch retires omitted defaults and newly coerced argument cells.
+#[test]
+fn test_core_eval_native_function_defaults_and_coercions_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeBinderDefaults(int $number, string $text = "default-value"): int {
+    return $number + strlen($text);
+}
+$source = 'for ($i = 0; $i < 3; $i++) { echo nativeBinderDefaults("2"), "|"; } // ' . $argc;
+eval($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "15|15|15|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Raw and boxed reference arguments release their invoker markers after publishing changes.
+#[test]
+fn test_core_eval_native_function_reference_markers_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeBinderReference(string &$text): void { $text .= "!"; }
+function nativeBinderMixedReference(mixed &$value): void { $value = "replaced"; }
+$source = '
+for ($i = 0; $i < 3; $i++) {
+    $text = str_repeat("x", 8);
+    nativeBinderReference($text);
+    echo strlen($text), ":";
+    nativeBinderMixedReference($text);
+    echo $text, "|";
+    unset($text);
+} // ' . $argc;
+eval($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "9:replaced|9:replaced|9:replaced|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Top-level eval replaces initial process-global boxes without leaking them or stealing local owners.
 #[test]
 fn test_core_eval_top_level_process_globals_retire_initial_storage() {

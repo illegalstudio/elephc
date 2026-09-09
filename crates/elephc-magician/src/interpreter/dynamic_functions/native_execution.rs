@@ -30,32 +30,43 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = invoke_native_function_with_staged_args(&function, &bound_args, context, values);
+    finish_eval_argument_values(result, bound_args.values, context, values)
+}
+
+/// Invokes the native descriptor while keeping binder-owned cells alive through writeback.
+fn invoke_native_function_with_staged_args(
+    function: &NativeFunction,
+    bound_args: &BoundNativeFunctionArgs,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if !function.bridge_supported() {
-        cleanup_native_function_ref_args(&bound_args, values)?;
+        cleanup_native_function_ref_args(bound_args, values)?;
         return Err(EvalStatus::RuntimeFatal);
     }
-    let variadic_index = native_function_variadic_index(&function);
+    let variadic_index = native_function_variadic_index(function);
     if variadic_index.is_none() && bound_args.values.len() != function.param_count() {
-        cleanup_native_function_ref_args(&bound_args, values)?;
+        cleanup_native_function_ref_args(bound_args, values)?;
         return Err(EvalStatus::RuntimeFatal);
     }
     if let Some(variadic_index) = variadic_index {
         if bound_args.values.len() < function.required_param_count().min(variadic_index) {
-            cleanup_native_function_ref_args(&bound_args, values)?;
+            cleanup_native_function_ref_args(bound_args, values)?;
             return Err(EvalStatus::RuntimeFatal);
         }
     }
-    let arg_array = match build_native_function_arg_array(&bound_args, values) {
+    let arg_array = match build_native_function_arg_array(bound_args, values) {
         Ok(arg_array) => arg_array,
         Err(status) => {
-            cleanup_native_function_ref_args(&bound_args, values)?;
+            cleanup_native_function_ref_args(bound_args, values)?;
             return Err(status);
         }
     };
     let result = unsafe { function.call(arg_array) };
     // Transfer a native exception before any cleanup can run another destructor.
     let result = values.native_call_result(result);
-    let writeback = write_back_native_function_ref_args(&bound_args, context, values);
+    let writeback = write_back_native_function_ref_args(bound_args, context, values);
     let result = match (result, writeback) {
         (Err(status), _) => Err(status),
         (Ok(value), Err(status)) => {

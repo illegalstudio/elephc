@@ -83,7 +83,7 @@ macro_rules! impl_fake_construction_raw_ops {
         &mut self,
         slot: *mut *mut crate::value::RuntimeCell,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Ok(self.alloc(FakeValue::InvokerRefCell(slot as usize)))
+        self.runtime_invoker_marker(slot as usize)
     }
     /// Creates a fake invoker-only raw by-reference marker.
     fn invoker_raw_ref_cell(
@@ -91,7 +91,7 @@ macro_rules! impl_fake_construction_raw_ops {
         slot: *mut std::ffi::c_void,
         _source_tag: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Ok(self.alloc(FakeValue::InvokerRefCell(slot as usize)))
+        self.runtime_invoker_marker(slot as usize)
     }
     /// Extracts one fake low payload word for raw by-reference staging.
     fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
