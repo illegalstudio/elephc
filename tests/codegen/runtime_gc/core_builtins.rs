@@ -471,19 +471,28 @@ echo eval($source);
     assert_eq!(compile_and_run(source), "after42");
 }
 
-/// Native and eval class-method inventories release temporary names on direct, CUF, and FCC paths.
+/// Native class-method inventories release temporary names on direct, CUF, and FCC paths.
 #[test]
 fn test_core_eval_class_method_results_release_temporary_cells() {
-    for target in ["\"NativeMethodOwners\"", "\"EvalMethodOwners\""] {
-        assert_core_eval_collection_cleanup_with_native(
-            "class NativeMethodOwners { public function first(): void {} public function second(): void {} }",
-            "class EvalMethodOwners { public function first(): void {} public function second(): void {} }
-             $methods = get_class_methods(...);",
-            &format!("$result = get_class_methods({target}); unset($result);
-                      $result = call_user_func(\"get_class_methods\", {target}); unset($result);
-                      $result = $methods({target}); unset($result);"),
-        );
-    }
+    assert_class_method_inventory_cleanup("\"NativeMethodOwners\"");
+}
+
+/// Eval-declared class inventories keep the same cleanup coverage in a separate CI timeout budget.
+#[test]
+fn test_core_eval_declared_class_method_results_release_temporary_cells() {
+    assert_class_method_inventory_cleanup("\"EvalMethodOwners\"");
+}
+
+/// Compares one and five inventory iterations for a single native or eval-declared class.
+fn assert_class_method_inventory_cleanup(target: &str) {
+    assert_core_eval_collection_cleanup_with_native(
+        "class NativeMethodOwners { public function first(): void {} public function second(): void {} }",
+        "class EvalMethodOwners { public function first(): void {} public function second(): void {} }
+         $methods = get_class_methods(...);",
+        &format!("$result = get_class_methods({target}); unset($result);
+                  $result = call_user_func(\"get_class_methods\", {target}); unset($result);
+                  $result = $methods({target}); unset($result);"),
+    );
 }
 
 /// Repeated caught builtin errors release constructor operands as well as the exception object.
@@ -594,7 +603,7 @@ fn test_core_aot_gc_status_first_class_snapshot_is_heap_clean() {
     assert_gc_status_call_cleanup("invokeCollectorStatus(gc_status(...))");
 }
 
-/// Returning a callable as Mixed keeps it alive after retiring the separate temporary argument.
+/// A returned Mixed callable remains invokable through CUF after retiring its temporary argument.
 #[test]
 fn test_core_first_class_callable_boxed_return_keeps_independent_owner() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -602,7 +611,7 @@ function boxCollectorCallable(callable $callback): mixed { return $callback; }
 function forwardCollectorCallable(callable $callback): callable { return $callback; }
 for ($i = 0; $i < 3; $i++) {
     $boxed = boxCollectorCallable(gc_status(...));
-    $snapshot = $boxed();
+    $snapshot = call_user_func($boxed);
     echo count($snapshot), ":";
     unset($snapshot, $boxed);
     $raw = forwardCollectorCallable(gc_status(...));
