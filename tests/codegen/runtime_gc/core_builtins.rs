@@ -570,23 +570,44 @@ fn test_core_eval_categorized_constants_release_nested_results() {
     );
 }
 
-/// Direct, returned, CUF, and first-class GC snapshots retire the raw hash beneath the result box.
+/// Direct GC snapshots retire the raw hash beneath the result box.
 #[test]
 fn test_core_aot_gc_status_box_owns_the_only_hash_reference() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
-function snapshotCollectorStatus(): mixed { return gc_status(); }
-function invokeCollectorStatus(callable $callback): mixed { return $callback(); }
-for ($i = 0; $i < 3; $i++) {
-    $direct = gc_status();
-    $snapshot = snapshotCollectorStatus();
-    $called = call_user_func("gc_status");
-    $firstClass = invokeCollectorStatus(gc_status(...));
-    echo count($direct), ":", count($snapshot), ":", count($called), ":", count($firstClass), "|";
-    unset($direct, $snapshot, $called, $firstClass);
+    assert_gc_status_call_cleanup("gc_status()");
 }
+
+/// Returning a GC snapshot from a native function transfers its box without another owner.
+#[test]
+fn test_core_aot_gc_status_returned_snapshot_is_heap_clean() {
+    assert_gc_status_call_cleanup("snapshotCollectorStatus()");
+}
+
+/// Positional call_user_func retires every returned collector snapshot.
+#[test]
+fn test_core_aot_gc_status_call_user_func_snapshot_is_heap_clean() {
+    assert_gc_status_call_cleanup("call_user_func(\"gc_status\")");
+}
+
+/// Descriptor invocation of a first-class GC callable balances its result ownership.
+#[test]
+fn test_core_aot_gc_status_first_class_snapshot_is_heap_clean() {
+    assert_gc_status_call_cleanup("invokeCollectorStatus(gc_status(...))");
+}
+
+/// Isolates each GC call surface so one ownership failure cannot mask another.
+fn assert_gc_status_call_cleanup(call: &str) {
+    let source = format!(r#"<?php
+function snapshotCollectorStatus(): mixed {{ return gc_status(); }}
+function invokeCollectorStatus(callable $callback): mixed {{ return $callback(); }}
+for ($i = 0; $i < 3; $i++) {{
+    $status = {call};
+    echo count($status), "|";
+    unset($status);
+}}
 "#);
+    let out = compile_and_run_with_heap_debug(&source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "12:12:12:12|".repeat(3), "{}", out.stderr);
+    assert_eq!(out.stdout, "12|".repeat(3), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
