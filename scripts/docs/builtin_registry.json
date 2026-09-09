@@ -15187,7 +15187,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "array_keys"
       ],

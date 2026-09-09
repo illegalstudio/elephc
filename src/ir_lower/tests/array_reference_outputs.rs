@@ -91,6 +91,10 @@ $hash = ["old" => 6];
 $argc > 0 && addKey($conditional);
 $argc > 0 && addKey($hash);
 echo implode(",", array_keys($conditional)), implode(",", array_keys($hash));
+$stringKeys = ["keep" => 1, "drop" => 2];
+$snapshot = $stringKeys;
+addKey($stringKeys);
+echo implode(",", array_keys($stringKeys)), implode(",", array_keys($snapshot));
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(

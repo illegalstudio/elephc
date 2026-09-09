@@ -14,19 +14,39 @@
 //!   `Array<Mixed>`, because the runtime key kind is only known once the box is opened. This
 //!   matches `count()`, which has always accepted `Mixed`. The backend unboxes and dispatches
 //!   on the runtime tag, raising PHP's `TypeError` when the box does not hold an array.
+//! - EIR resolves key storage from its actual operand after reference/call coercions.
+//!   Boxed receivers and promotable Mixed-element arrays need boxed int-or-string keys.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 
 use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
     contract: "array_keys",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayKeys,
-    ),
+    semantics: array_keys_semantics(),
+}
+
+/// Reconciles key result storage with the lowered source instead of stale checker-only precision.
+const fn array_keys_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayKeys);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Selects boxed keys for dynamic layouts and preserves concrete key storage when proven.
+fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
+    let key = match input.arg_types.first().map(PhpType::codegen_repr) {
+        Some(PhpType::Array(elem)) if elem.codegen_repr() != PhpType::Mixed => PhpType::Int,
+        Some(PhpType::AssocArray { key, .. }) => *key,
+        _ => PhpType::Mixed,
+    };
+    PhpType::Array(Box::new(key))
 }
 
 /// Returns the key-array type for an `array_keys` call.

@@ -10,6 +10,22 @@
 
 use crate::support::*;
 
+/// Key results retain their runtime types after a hash reference widens only one of two value copies.
+#[test]
+fn test_core_native_php_array_reference_output_preserves_snapshot_key_types() {
+    let source = r#"<?php
+function addNumericArrayKey(array &$items): void { $items[7] = 42; }
+$items = ["first" => 1, "second" => 2];
+$snapshot = $items;
+addNumericArrayKey($items);
+$keys = array_keys($items);
+$oldKeys = array_keys($snapshot);
+echo implode(",", $keys), ":", gettype($keys[2]), "|";
+echo implode(",", $oldKeys), ":", gettype($oldKeys[0]);
+"#;
+    assert_eq!(compile_and_run(source), "first,second,7:integer|first,second:string");
+}
+
 /// Reference iteration changes the property and its reference alias, never an earlier value copy.
 #[test]
 fn test_core_native_php_array_reference_property_iteration_preserves_value_copy() {
