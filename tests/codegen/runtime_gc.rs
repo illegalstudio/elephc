@@ -54,6 +54,7 @@ mod eval_closure_receivers;
 mod eval_argument_lifetimes;
 mod eval_operand_owners;
 mod eval_scope_writeback;
+mod unserialize_hydration_data;
 mod nested_property_defaults;
 #[path = "runtime_gc/growth.rs"]
 mod growth;

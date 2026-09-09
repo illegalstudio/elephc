@@ -381,10 +381,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.label("__rt_unser_obj_incomplete_x");
     emitter.instruction("mov rax, 32");                                         // class id, original class name, and opaque property hash
     emitter.instruction("call __rt_heap_alloc");                                // allocate the incomplete-object payload
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // materialize the full-width object heap marker before storing it
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    )); // materialize the full-width object heap marker before storing it
+    ));
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object header without an unencodable imm64 memory move
     emitter.instruction("mov rdi, rax");                                        // object handle allocator input
     emitter.instruction("call __rt_object_handle_acquire");                     // give the incomplete object a normal PHP handle
@@ -481,10 +481,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // persist the entry index
     emitter.instruction("jmp __rt_unser_obj_data_loop");                        // continue with the next entry
     emitter.label("__rt_unser_obj_data_done");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this receiver = first argument
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // $data assoc array (bare hash) = second argument
-    emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // reload the __unserialize target
-    emitter.instruction("call r10");                                            // call __unserialize($this, $data)
+    super::magic_call::emit_unserialize_magic_call(emitter);
     emitter.instruction("jmp __rt_unser_at_obj_box");                           // box the object (position is at the closing '}')
     emitter.label("__rt_unser_obj_default");
     emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // blocked objects own an opaque Mixed property hash

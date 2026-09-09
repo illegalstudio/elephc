@@ -35,8 +35,10 @@ mod context;
 mod decoder_aarch64;
 mod decoder_x86_64;
 mod diagnostics;
+mod magic_call;
 mod storage_aarch64;
 mod storage_x86_64;
+mod temporaries;
 mod validator_aarch64;
 mod validator_x86_64;
 
@@ -49,6 +51,7 @@ use crate::codegen_support::platform::Arch;
 /// or zero for malformed or unsupported wire data so the caller can produce PHP
 /// `false`. Its target ABI is documented by the decoder entry module.
 pub(crate) fn emit_unserialize(emitter: &mut Emitter) {
+    temporaries::emit_unserialize_temporaries(emitter);
     match emitter.target.arch {
         Arch::AArch64 => allowed_classes_aarch64::emit(emitter),
         Arch::X86_64 => allowed_classes_x86_64::emit(emitter),

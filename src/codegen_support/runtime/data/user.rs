@@ -565,6 +565,18 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Hydration hooks receive a parsed hash, while PHP array/Mixed parameters use boxed cells.
+    out.push_str(".globl _class_unserialize_data_boxed\n_class_unserialize_data_boxed:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let boxed = class_info_by_id.get(&class_id)
+                .and_then(|class_info| class_info.methods.get("__unserialize"))
+                .and_then(|signature| signature.params.first())
+                .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed);
+            out.push_str(&format!("    .quad {}\n", u8::from(boxed)));
+        }
+    }
+
     // Only emitted EIR initializers have entries. A class with no defaults can
     // still need a thunk to mark typed slots uninitialized after zeroing.
     out.push_str(".globl _class_propinit_ptrs\n_class_propinit_ptrs:\n");

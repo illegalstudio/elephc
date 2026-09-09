@@ -73,6 +73,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_unser_allowed_list_mixed", 8, target));
     out.push_str(&comm_directive("_unser_active", 8, target));
     out.push_str(&comm_directive("_unser_context", 8, target));
+    out.push_str(&comm_directive("_unser_temporaries", 8, target));
     out.push_str(".globl _unser_allowed_classes_key\n_unser_allowed_classes_key:\n    .ascii \"allowed_classes\"\n");
     out.push_str(&format!(
         ".globl _unser_options_type_prefix\n_unser_options_type_prefix:\n    .ascii {UNSER_OPTIONS_TYPE_PREFIX:?}\n"

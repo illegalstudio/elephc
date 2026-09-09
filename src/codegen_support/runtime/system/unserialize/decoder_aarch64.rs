@@ -498,10 +498,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #40]");                                   // persist the entry index
     emitter.instruction("b __rt_unser_obj_data_loop");                          // continue with the next entry
     emitter.label("__rt_unser_obj_data_done");
-    emitter.instruction("ldr x0, [sp, #24]");                                   // $this receiver = first argument
-    emitter.instruction("ldr x1, [sp, #80]");                                   // $data assoc array (bare hash) = second argument
-    emitter.instruction("ldr x10, [sp, #72]");                                  // reload the __unserialize target
-    emitter.instruction("blr x10");                                             // call __unserialize($this, $data)
+    super::magic_call::emit_unserialize_magic_call(emitter);
     emitter.instruction("b __rt_unser_at_obj_box");                             // box the object (position is at the closing '}')
     emitter.label("__rt_unser_obj_default");
     emitter.instruction("ldr x9, [sp, #80]");                                   // blocked objects own an opaque Mixed property hash
