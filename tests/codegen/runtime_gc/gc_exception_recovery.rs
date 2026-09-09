@@ -10,6 +10,32 @@
 
 use crate::support::*;
 
+/// Repeated Mixed-receiver getters retire every fresh string and array payload without leaking.
+#[test]
+fn test_core_mixed_throwable_getter_results_transfer_string_and_array_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function inspectMixedThrowableOwners(mixed $error): int {
+    $message = $error->getMessage();
+    $file = $error->getFile();
+    $trace = $error->getTrace();
+    $rendered = $error->__toString();
+    $empty = $error->getTraceAsString();
+    return strlen($message) + strlen($rendered) + count($trace)
+        + strlen($empty) + (strlen($file) > 0 ? 1 : 0);
+}
+$total = 0;
+for ($i = 0; $i < 12; $i++) {
+    $error = new Exception("payload");
+    $total += inspectMixedThrowableOwners($error);
+    unset($error);
+}
+echo $total;
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "180", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Eval inspects native compact exceptions through explicit getters and owns the returned previous.
 #[test]
 fn test_core_eval_native_throwable_getters_preserve_previous_after_outer_unset() {

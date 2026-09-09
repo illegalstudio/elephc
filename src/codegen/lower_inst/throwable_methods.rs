@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
+use crate::codegen_support::emit::Emitter;
 
 /// Returns true when a direct method call can be satisfied from the compact Throwable payload.
 ///
@@ -140,7 +141,8 @@ pub(super) fn lower_throwable_standard_method_loaded(
     object_reg: &str,
     method_name: &str,
 ) -> Result<()> {
-    let return_ty = match php_symbol_key(method_name).as_str() {
+    let method_key = php_symbol_key(method_name);
+    let return_ty = match method_key.as_str() {
         "getmessage" => lower_throwable_get_message(ctx, object_reg),
         "getcode" => lower_throwable_get_code(ctx, object_reg),
         "getfile" => lower_throwable_get_file(ctx),
@@ -158,9 +160,20 @@ pub(super) fn lower_throwable_standard_method_loaded(
         && matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed)
         && !matches!(return_ty.codegen_repr(), PhpType::Mixed)
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+        emit_box_throwable_method_result(ctx.emitter, &method_key, &return_ty.codegen_repr());
     }
     store_if_result(ctx, inst)
+}
+
+/// Transfers getter-owned payloads into Mixed while preserving the borrowed empty trace string.
+fn emit_box_throwable_method_result(emitter: &mut Emitter, method_key: &str, return_ty: &PhpType) {
+    if method_key == "gettraceasstring" {
+        emit_box_current_value_as_mixed(emitter, return_ty);
+    } else {
+        // String getters persist their payload and getTrace allocates its own array.
+        // Borrowed boxing would copy or retain those results without retiring the original owner.
+        emit_box_current_owned_value_as_mixed(emitter, return_ty);
+    }
 }
 
 /// Loads `Throwable::getMessage()` from payload offsets 8/16 and returns a caller-owned string copy.
@@ -329,5 +342,39 @@ pub(super) fn lower_throwable_get_previous(
         Ok(PhpType::Mixed)
     } else {
         Ok(object_ty)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Mixed getter results consume fresh strings and arrays on every supported target.
+    #[test]
+    fn throwable_getter_boxing_transfers_fresh_payload_owners_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for method in ["getmessage", "getfile", "__tostring"] {
+                let mut emitter = Emitter::new(target);
+                emit_box_throwable_method_result(&mut emitter, method, &PhpType::Str);
+                let asm = emitter.output();
+                assert!(asm.contains("__rt_heap_alloc"), "{name}: {method}");
+                assert!(!asm.contains("__rt_mixed_from_value"), "{name}: {method}");
+                assert!(!asm.contains("__rt_str_persist"), "{name}: {method}");
+            }
+            let mut emitter = Emitter::new(target);
+            emit_box_throwable_method_result(
+                &mut emitter, "gettrace", &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+            let asm = emitter.output();
+            let boxed = asm.find("__rt_mixed_from_value").unwrap();
+            let released = asm.find("__rt_decref_array").unwrap();
+            assert!(boxed < released, "{name}");
+
+            let mut emitter = Emitter::new(target);
+            emit_box_throwable_method_result(&mut emitter, "gettraceasstring", &PhpType::Str);
+            assert!(emitter.output().contains("__rt_mixed_from_value"), "{name}");
+        }
     }
 }
