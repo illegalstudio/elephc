@@ -20,10 +20,11 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
         return store_if_result(ctx, inst);
     }
     if let Some(descriptor) = first_class_callable_descriptor(ctx, &target, strict_php)? {
+        let owns_string_return = descriptor.owns_string_return;
         let invoker_label = descriptor
             .sig
             .as_ref()
-            .map(|sig| emit_runtime_callable_invoker_inline(ctx, sig, &[]));
+            .map(|sig| emit_runtime_callable_invoker_with_string_owner(ctx, sig, &[], owns_string_return));
         let descriptor_label = match descriptor.entry_label.as_deref() {
             Some(entry_label) => {
                 callable_descriptor::static_descriptor_with_optional_invoker_meta(
@@ -191,7 +192,10 @@ pub(super) fn emit_instance_method_first_class_callable(
     let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
     let entry_label =
         emit_instance_method_descriptor_entry_wrapper(ctx, &impl_class, &method_key, &sig)?;
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &sig, &captures);
+    let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
+        ctx.module, &impl_class, &method_key, false,
+    );
+    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &sig, &captures, owns_string_return);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,

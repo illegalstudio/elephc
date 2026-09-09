@@ -33,6 +33,8 @@ mod local_analysis;
 pub(crate) mod lower_inst;
 mod lower_term;
 mod runtime_callable_invoker;
+#[cfg(test)]
+pub(crate) use runtime_callable_invoker::function_returns_owned_string;
 mod runtime_metadata;
 mod shared_count_guard;
 mod shared_helper;

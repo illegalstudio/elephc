@@ -29,7 +29,8 @@ pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let visible_param_count = closure.params.len() - inst.operands.len();
     let signature = function_signature_from_eir_with_param_count(closure, visible_param_count);
     let captures = closure_capture_params_from_eir(closure, inst.operands.len());
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &signature, &captures);
+    let owns_string_return = crate::codegen::runtime_callable_invoker::function_returns_owned_string(closure);
+    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &signature, &captures, owns_string_return);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &function_symbol(&closure.name),
@@ -472,4 +473,3 @@ pub(super) fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     signature.declared_params.push(variadic_declared);
     signature.param_type_exprs.push(variadic_type_expr);
 }
-

@@ -15,7 +15,17 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
-    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
+    emit_runtime_callable_invoker_with_string_owner(ctx, sig, captures, false)
+}
+
+/// Emits an invoker whose result-copy policy follows the concrete callee's string ownership.
+pub(super) fn emit_runtime_callable_invoker_with_string_owner(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    owns_string_return: bool,
+) -> String {
+    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures, owns_string_return) {
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
@@ -24,6 +34,7 @@ pub(super) fn emit_runtime_callable_invoker_inline(
         label: &label,
         sig,
         captures,
+        owns_string_return,
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
     // enclosing function back before continuing it, or its tail lands in there.
@@ -33,7 +44,7 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, &label);
+        .cache_runtime_callable_invoker(sig, captures, owns_string_return, &label);
     label
 }
 

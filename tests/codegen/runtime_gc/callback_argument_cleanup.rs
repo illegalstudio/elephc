@@ -10,6 +10,34 @@
 
 use crate::support::*;
 
+/// Same-signature callable results keep borrowed inputs alive without duplicating owned concat returns.
+#[test]
+fn test_core_descriptor_owned_and_borrowed_string_results_do_not_share_copy_policy() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function owningStringResult(string $value): string { return $value . "!"; }
+function borrowedStringResult(string $value): string { return $value; }
+function exerciseStringResult(callable $callback): int {
+    $source = str_repeat("x", 24);
+    $length = 0;
+    for ($i = 0; $i < 12; $i++) {
+        $result = call_user_func_array($callback, [$source]);
+        $length += strlen($result);
+        unset($result);
+    }
+    echo strlen($source), ":";
+    return $length;
+}
+echo exerciseStringResult(owningStringResult(...)), "|";
+echo exerciseStringResult(borrowedStringResult(...)), "|";
+$suffix = "!";
+$closure = function(string $value) use ($suffix): string { return $value . $suffix; };
+echo exerciseStringResult($closure);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "24:300|24:288|24:300", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Named descriptor arguments retain one caller owner across successful and throwing invocations.
 #[test]
 fn test_core_named_descriptor_argument_owners_are_balanced() {

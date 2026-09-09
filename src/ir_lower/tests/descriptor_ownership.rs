@@ -9,6 +9,36 @@
 
 use crate::ir::Op;
 
+/// Ownership proofs distinguish persisted returns from borrowed parameters and mixed return paths.
+#[test]
+fn descriptor_string_return_ownership_requires_every_return_to_transfer_an_owner() {
+    let source = r#"<?php
+        function owned_return(string $value): string { return $value . "!"; }
+        function borrowed_return(string $value): string { return $value; }
+        function conditional_return(string $value, bool $copy): string {
+            if ($copy) { return $value . "!"; }
+            return $value;
+        }
+        function invoke_return(callable $callback, string $value): string {
+            return call_user_func($callback, $value);
+        }
+        echo invoke_return(owned_return(...), "a");
+        echo invoke_return(borrowed_return(...), "b");
+        echo conditional_return("c", $argc > 1);
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for (name, owned) in [("owned_return", true), ("borrowed_return", false), ("conditional_return", false)] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            assert_eq!(crate::codegen::function_returns_owned_string(function), owned, "{target}: {name}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Named argument boxes remain owned by EIR while the backend consumes an independent retain.
 #[test]
 fn named_descriptor_argument_boxes_have_scoped_caller_owners_on_all_targets() {

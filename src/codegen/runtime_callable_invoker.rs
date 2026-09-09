@@ -17,6 +17,10 @@
 
 mod argument_owners;
 mod owned_value_args;
+mod string_return;
+
+pub(crate) use string_return::function_returns_owned_string;
+pub(super) use string_return::method_returns_owned_string;
 
 use argument_owners::InvokerArgumentOwners;
 use crate::codegen::callable_descriptor;
@@ -87,6 +91,7 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) label: &'a str,
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
+    pub(super) owns_string_return: bool,
 }
 
 /// Minimal state needed by the descriptor invoker emitter.
@@ -94,15 +99,17 @@ struct InvokerEmitContext {
     label_prefix: String,
     label_counter: usize,
     argument_owners: InvokerArgumentOwners,
+    owns_string_return: bool,
 }
 
 impl InvokerEmitContext {
     /// Creates a fresh label context for one generated invoker body.
-    fn new(invoker_label: &str, argument_owners: InvokerArgumentOwners) -> Self {
+    fn new(invoker_label: &str, argument_owners: InvokerArgumentOwners, owns_string_return: bool) -> Self {
         Self {
             label_prefix: local_label_prefix(invoker_label),
             label_counter: 0,
             argument_owners,
+            owns_string_return,
         }
     }
 
@@ -157,7 +164,7 @@ fn emit_runtime_callable_invoker_impl(
     let escape_label = format!("{}_eval_escape", invoker.label);
     let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
-    let mut ctx = InvokerEmitContext::new(invoker.label, argument_owners);
+    let mut ctx = InvokerEmitContext::new(invoker.label, argument_owners, invoker.owns_string_return);
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -224,33 +231,11 @@ fn emit_runtime_callable_invoker_impl(
     }
 }
 
-/// Boxes the callable target's return value into the invoker's uniform Mixed result.
-///
-/// OWNERSHIP — a `Str` return is already OWNED by the time it reaches here, so the Mixed cell
-/// TAKES it rather than copying it. `call_target_with_pushed_args` runs
-/// `restore_concat_offset_after_nested_call`, which unconditionally calls `__rt_str_persist` for a
-/// `Str` return type, and every path that produces `ret_ty` returns `sig.return_type` — the same
-/// value that persist was keyed on (`emit_loaded_indexed_array_callback_call`,
-/// `emit_loaded_assoc_array_callback_call`, and `emit_loaded_mixed_array_callback_call`, which only
-/// forwards to those two). So `ret_ty == Str` here implies a fresh heap copy is live in the string
-/// return registers, owned by nobody.
-///
-/// Boxing that through `emit_box_current_value_as_mixed` used the BORROWED contract:
-/// `__rt_mixed_from_value` persists a SECOND copy for the cell
-/// (`src/codegen_support/runtime/arrays/mixed_from_value.rs`, `__rt_mixed_from_value_string`),
-/// leaving the first orphaned — one leaked heap block per invoked callable returning a string,
-/// which is what every closure / first-class-callable / `array_map` string-result call site was
-/// paying. `emit_box_current_owned_value_as_mixed` moves the pointer/length pair into a fresh cell
-/// instead.
-///
-/// This ELIDES AN ALLOCATION; it adds no release. The Mixed cell owned exactly one string payload
-/// before and owns exactly one now — the only change is WHICH copy it owns — so the number of
-/// frees `__rt_mixed_free_deep` performs is unchanged and no double free can be introduced.
-///
-/// Only `Str` is routed through the owning boxer ON PURPOSE. For a container or object return
-/// `emit_box_current_owned_value_as_mixed` would emit a decref of the original reference, and the
-/// invoker never took one — nothing persisted or retained a container on the way in, so releasing
-/// one here would free a reference the caller still holds.
+/// Boxes the target result into the invoker's uniform Mixed return cell.
+/// String results have one independent owner: either transferred by a proven
+/// owning callee or copied before the concat offset is restored. The cell takes
+/// that owner without persisting a second copy. Other result shapes retain the
+/// existing borrowed boxing contract.
 fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
     let repr = ret_ty.codegen_repr();
     if repr == PhpType::Str {
@@ -683,7 +668,7 @@ fn emit_loaded_indexed_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter, ctx.owns_string_return);
     sig.return_type.clone()
 }
 
@@ -797,7 +782,7 @@ fn emit_loaded_assoc_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter, ctx.owns_string_return);
     sig.return_type.clone()
 }
 
@@ -2126,12 +2111,13 @@ fn call_target_with_pushed_args(
     arg_types: &[PhpType],
     sig: &FunctionSig,
     emitter: &mut Emitter,
+    owns_string_return: bool,
 ) {
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
     save_concat_offset_before_nested_call(emitter);
     abi::emit_call_reg(emitter, call_reg);
-    restore_concat_offset_after_nested_call(emitter, &sig.return_type);
+    restore_concat_offset_after_nested_call(emitter, &sig.return_type, owns_string_return);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
 }
 
@@ -2146,8 +2132,8 @@ fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
 }
 
 /// Restores the concat offset after a nested callable target returns.
-fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &PhpType) {
-    if return_ty.codegen_repr() == PhpType::Str {
+fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &PhpType, owns_string_return: bool) {
+    if return_ty.codegen_repr() == PhpType::Str && !owns_string_return {
         abi::emit_call_label(emitter, "__rt_str_persist");
     }
     let scratch = abi::temp_int_reg(emitter.target);
@@ -2581,6 +2567,32 @@ mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
 
+    /// Identical signatures cannot share an invoker when their string-result owner contracts differ.
+    #[test]
+    fn invoker_cache_separates_owned_and_borrowed_string_returns() {
+        let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
+        let mut state = crate::codegen::shared_state::SharedCodegenState::default();
+        state.cache_runtime_callable_invoker(&sig, &[], false, "borrowed_result");
+        assert!(state.runtime_callable_invoker(&sig, &[], true).is_none());
+        state.cache_runtime_callable_invoker(&sig, &[], true, "owned_result");
+        assert_eq!(state.runtime_callable_invoker(&sig, &[], false).as_deref(), Some("borrowed_result"));
+        assert_eq!(state.runtime_callable_invoker(&sig, &[], true).as_deref(), Some("owned_result"));
+    }
+
+    /// Restoring concat state copies borrowed strings but leaves a transferred owner intact on every ABI.
+    #[test]
+    fn invoker_string_result_copy_respects_callee_ownership_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for owned in [false, true] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                restore_concat_offset_after_nested_call(&mut emitter, &PhpType::Str, owned);
+                let asm = emitter.output();
+                assert_eq!(asm.contains("__rt_str_persist"), !owned, "{name}: {owned}");
+                assert!(asm.contains("_concat_off"), "{name}: {owned}");
+            }
+        }
+    }
+
     /// Native and eval invokers both catch cleanup failures but preserve their distinct escape ABIs.
     #[test]
     fn invoker_exception_cleanup_covers_native_and_eval_calls_on_all_targets() {
@@ -2597,7 +2609,7 @@ mod tests {
             variadic: None,
             deprecation: None,
         };
-        let invoker = RuntimeCallableInvoker { label: "owned_invoker", sig: &sig, captures: &[] };
+        let invoker = RuntimeCallableInvoker { label: "owned_invoker", sig: &sig, captures: &[], owns_string_return: false };
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             for eval_boundary in [false, true] {

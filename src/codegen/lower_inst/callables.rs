@@ -28,6 +28,7 @@ use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
     emit_call_arg_temp_cleanups, emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
     emit_runtime_builtin_wrapper_inline, emit_runtime_callable_invoker_inline,
+    emit_runtime_callable_invoker_with_string_owner,
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
     materialize_direct_call_args, materialize_method_call_args_with_receiver_reg_and_refs,
@@ -835,7 +836,8 @@ fn runtime_user_function_descriptor_cases(
         let wrapper_sig =
             crate::types::callable_wrapper_sig(&function_signature_from_eir(function));
         let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
-        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &case_sig, &[]);
+        let owns_string_return = crate::codegen::runtime_callable_invoker::function_returns_owned_string(function);
+        let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &case_sig, &[], owns_string_return);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &function_symbol(&function.name),
@@ -1112,7 +1114,10 @@ fn runtime_instance_method_descriptor_template(
     let captures = vec![("receiver".to_string(), receiver_ty, false)];
     let entry_label =
         emit_instance_method_descriptor_entry_wrapper(ctx, impl_class, method_key, sig)?;
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, sig, &captures);
+    let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
+        ctx.module, impl_class, method_key, false,
+    );
+    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, sig, &captures, owns_string_return);
     let php_name = format!("{}::{}", class_name, method_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
@@ -1570,7 +1575,10 @@ fn runtime_static_method_descriptor_cases(
         ) else {
             continue;
         };
-        let invoker_label = emit_runtime_callable_invoker_inline(ctx, &wrapper_sig, &[]);
+        let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
+            ctx.module, &impl_class, &method_key, true,
+        );
+        let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &wrapper_sig, &[], owns_string_return);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &entry_label,

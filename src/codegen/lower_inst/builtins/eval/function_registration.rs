@@ -45,7 +45,7 @@ pub(super) fn register_eval_native_function(
     context_offset: usize,
     registration: &EvalNativeFunctionRegistration,
 ) -> Result<()> {
-    let invoker_label = emit_eval_native_function_invoker_inline(ctx, &registration.signature);
+    let invoker_label = emit_eval_native_function_invoker_inline(ctx, &registration.signature, &registration.name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &function_symbol(&registration.name),
@@ -167,6 +167,7 @@ pub(super) fn register_eval_native_function(
 pub(super) fn emit_eval_native_function_invoker_inline(
     ctx: &mut FunctionContext<'_>,
     sig: &FunctionSig,
+    name: &str,
 ) -> String {
     let label = ctx.next_global_label("eval_callable_invoker");
     let done_label = ctx.next_label("eval_callable_invoker_done");
@@ -175,6 +176,8 @@ pub(super) fn emit_eval_native_function_invoker_inline(
         label: &label,
         sig,
         captures: &captures,
+        owns_string_return: ctx.module.functions.iter().find(|function| function.name == name)
+            .is_some_and(crate::codegen::runtime_callable_invoker::function_returns_owned_string),
     };
     let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);

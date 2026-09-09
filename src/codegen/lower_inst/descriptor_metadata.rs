@@ -104,6 +104,7 @@ pub(super) struct FirstClassCallableDescriptor {
     pub(super) kind: u64,
     pub(super) sig: Option<FunctionSig>,
     pub(super) invocation: callable_descriptor::CallableDescriptorInvocation,
+    pub(super) owns_string_return: bool,
 }
 
 /// Returns static descriptor metadata for compile-time callable targets supported by EIR.
@@ -122,6 +123,7 @@ pub(super) fn first_class_callable_descriptor(
     if ctx.has_extern_function(target) {
         return Ok(Some(FirstClassCallableDescriptor {
             entry_label: Some(ctx.emitter.target.extern_symbol(target)),
+            owns_string_return: false,
             kind: callable_descriptor::CALLABLE_DESC_KIND_EXTERN,
             sig: None,
             invocation: callable_descriptor::CallableDescriptorInvocation::named(
@@ -136,6 +138,7 @@ pub(super) fn first_class_callable_descriptor(
     if let Some(callee) = ctx.callable_function_by_name(target) {
         return Ok(Some(FirstClassCallableDescriptor {
             entry_label: Some(function_symbol(&callee.name)),
+            owns_string_return: crate::codegen::runtime_callable_invoker::function_returns_owned_string(callee),
             kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
             sig: Some(function_signature_from_eir(callee)),
             invocation: callable_descriptor::CallableDescriptorInvocation::named(
@@ -166,6 +169,7 @@ pub(super) fn first_class_builtin_descriptor(
     if matches!(name.as_str(), "get_class_vars" | "get_class_methods") {
         return Ok(Some(FirstClassCallableDescriptor {
             entry_label: None,
+            owns_string_return: false,
             kind: callable_descriptor::CALLABLE_DESC_KIND_BUILTIN,
             sig: None,
             invocation: callable_descriptor::CallableDescriptorInvocation::named(
@@ -179,6 +183,7 @@ pub(super) fn first_class_builtin_descriptor(
         emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig, strict_php)?;
     Ok(Some(FirstClassCallableDescriptor {
         entry_label: Some(entry_label),
+        owns_string_return: false,
         kind: callable_descriptor::CALLABLE_DESC_KIND_BUILTIN,
         sig: Some(wrapper_sig),
         invocation: callable_descriptor::CallableDescriptorInvocation::named(
@@ -223,6 +228,9 @@ pub(super) fn first_class_static_method_descriptor(
     .ok()?;
     Some(FirstClassCallableDescriptor {
         entry_label: Some(entry_label),
+        owns_string_return: crate::codegen::runtime_callable_invoker::method_returns_owned_string(
+            ctx.module, impl_class, &method_key, true,
+        ),
         kind: callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
         sig: Some(wrapper_sig),
         invocation: callable_descriptor::CallableDescriptorInvocation::method(

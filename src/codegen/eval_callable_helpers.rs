@@ -374,8 +374,10 @@ fn eval_user_function_callable_cases(
     let mut cases = Vec::with_capacity(functions.len());
     for (name, sig) in functions {
         let case_sig = callable_wrapper_sig(&sig);
+        let owns_string_return = module.functions.iter().find(|function| function.name == name)
+            .is_some_and(super::runtime_callable_invoker::function_returns_owned_string);
         let invoker_label =
-            emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &[]);
+            emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &[], owns_string_return);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             data,
             &function_symbol(&name),
@@ -507,6 +509,7 @@ fn eval_instance_callable_cases(
         .map(
             |(class_name, class_id, method_name, method_key, impl_class, sig)| {
                 let case = receiver_bound_instance_method_case(
+                    module,
                     emitter,
                     data,
                     state,
@@ -578,8 +581,11 @@ fn eval_static_method_callable_cases(
                     class_id,
                 );
                 let php_name = format!("{}::{}", class_name, method_name);
+                let owns_string_return = super::runtime_callable_invoker::method_returns_owned_string(
+                    module, &impl_class, &method_key, true,
+                );
                 let invoker_label =
-                    emit_eval_runtime_callable_invoker_inline(emitter, data, state, &wrapper_sig, &[]);
+                    emit_eval_runtime_callable_invoker_inline(emitter, data, state, &wrapper_sig, &[], owns_string_return);
                 let descriptor_label =
                     callable_descriptor::static_descriptor_with_optional_invoker_meta(
                         data,
@@ -629,6 +635,7 @@ fn eval_eir_class_method_keys(module: &Module) -> HashSet<(String, String, bool)
 /// Builds a receiver-bound descriptor case for one public instance method.
 #[allow(clippy::too_many_arguments)]
 fn receiver_bound_instance_method_case(
+    module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
     state: &mut EvalCallableEmitState,
@@ -650,8 +657,11 @@ fn receiver_bound_instance_method_case(
         method_key,
         &case_sig,
     );
+    let owns_string_return = super::runtime_callable_invoker::method_returns_owned_string(
+        module, impl_class, method_key, false,
+    );
     let invoker_label =
-        emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &captures);
+        emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &captures, owns_string_return);
     let (kind, invocation_shape) = match shape {
         EvalInstanceCallableShape::ObjectInvoke => (
             callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
@@ -692,6 +702,7 @@ fn emit_eval_runtime_callable_invoker_inline(
     state: &mut EvalCallableEmitState,
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
+    owns_string_return: bool,
 ) -> String {
     let label = state.next_label("callable_invoker");
     let done_label = state.next_label("callable_invoker_done");
@@ -699,6 +710,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         label: &label,
         sig,
         captures,
+        owns_string_return,
     };
     let enclosing = emitter.current_text_section();
     abi::emit_jump(emitter, &done_label);
