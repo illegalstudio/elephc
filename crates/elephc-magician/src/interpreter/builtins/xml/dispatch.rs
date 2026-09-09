@@ -161,8 +161,9 @@ pub(in crate::interpreter) fn eval_builtin_xml_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_xml_require_bridge(name, context, values)?;
-    let evaluated = eval_call_arg_values(args, context, scope, values)?;
-    eval_xml_forward_evaluated(name, evaluated, context, values)
+    with_eval_call_arguments(args, context, scope, values, |evaluated, context, _, values| {
+        eval_xml_forward_evaluated(name, evaluated, context, values)
+    })
 }
 
 /// Evaluates positional expression hooks when registry dispatch is invoked directly; the
@@ -174,17 +175,8 @@ pub(in crate::interpreter) fn eval_builtin_xml_expr_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_xml_require_bridge(name, context, values)?;
-    let mut evaluated = Vec::with_capacity(args.len());
-    for arg in args {
-        let (value, ref_target) = eval_call_arg_value(arg, context, scope, values)?;
-        evaluated.push(EvaluatedCallArg {
-            name: None,
-            value,
-            ref_target,
-        });
-    }
-    eval_xml_forward_evaluated(name, evaluated, context, values)
+    let args = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+    eval_builtin_xml_call(name, &args, context, scope, values)
 }
 
 /// Evaluates an already-bound callable xml invocation by value.
