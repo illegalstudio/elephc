@@ -186,3 +186,14 @@ cell owner so replacement and disposal cannot consume the EIR operand owner.
 A nonempty-array regression covers repeated positional, named and method
 calls. Builds, test compilation and assembly-comment checks pass; executable
 results are still pending CI.
+
+### Packed callable array metadata
+
+The generic header-stamping helper omitted `PhpType::Callable`, leaving
+packed descriptor arrays tagged as integer arrays. Extracting one through a
+boxed PHP array therefore produced an integer and `array_map` rejected it.
+The same missing tag prevented existing descriptor-aware COW and deep-free
+paths from recognizing those children. Callable arrays now receive tag 10.
+All-target emitter assertions and a heap-debug static-descriptor/COW fixture
+cover the stamp and the retained late-bound called class. Existing returned
+closure and static-callable map fixtures remain CI gates.

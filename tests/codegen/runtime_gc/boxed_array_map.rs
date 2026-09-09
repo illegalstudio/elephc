@@ -34,6 +34,36 @@ echo $total;
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Returned static descriptors survive boxed-array COW and preserve their late-bound called class.
+#[test]
+fn test_core_php_array_map_static_descriptors_survive_boxed_array_cow() {
+    let source = r#"<?php
+class MapDescriptorBase {
+    public static function prefix(): string { return 'base'; }
+    public static function render(string $value): string { return static::prefix() . $value; }
+    public static function callbacks(): array { return [static::render(...)]; }
+}
+class MapDescriptorChild extends MapDescriptorBase {
+    public static function prefix(): string { return 'child'; }
+}
+for ($i = 0; $i < 3; $i++) {
+    $callbacks = MapDescriptorChild::callbacks();
+    $copy = $callbacks;
+    $copy[0] = MapDescriptorBase::render(...);
+    $callback = $callbacks[0];
+    unset($callbacks, $copy);
+    $mapped = array_map($callback, ['Ada']);
+    echo $mapped[0], '|';
+    unset($mapped, $callback);
+}
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "childAda|childAda|childAda|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), out.stdout);
+}
+
 /// Boxed string, method-pair, invokable and null callbacks preserve keys and independent array owners.
 #[test]
 fn test_core_php_array_map_boxed_callback_shapes_and_null_identity() {
