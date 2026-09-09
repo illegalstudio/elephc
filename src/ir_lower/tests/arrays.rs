@@ -232,6 +232,9 @@ echo count($owner->items), count(PhpArrayWrites::$shared);
         assert!(fetches.iter().all(|inst| inst.result_ownership == Ownership::Borrowed), "{name}");
         assert_eq!(instructions.iter().filter(|inst| inst.op == Op::MixedArrayAppend).count(), 2, "{name}");
         assert_eq!(instructions.iter().filter(|inst| inst.op == Op::MixedClone).count(), 2, "{name}");
+        // Typed receivers must also reach a supported emitter, including on both iOS targets.
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
 }
 
