@@ -10,6 +10,42 @@
 
 use crate::support::*;
 
+/// Positional strlen releases extracted strings and agrees with named and callable argument owners.
+#[test]
+fn test_core_eval_strlen_releases_extracted_and_callable_string_arguments() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function evalStringLengthOwners(string $source): void { eval($source); }
+$source = 'echo strlen(["key" => str_repeat("x", 48)]["key"]), ":";
+echo strlen(string: str_repeat("x", 48)), ":";
+echo call_user_func("strlen", str_repeat("x", 48)), ":";
+$length = strlen(...);
+echo $length(str_repeat("x", 48)), "|"; // ' . $argc;
+for ($i = 0; $i < 3; $i++) { evalStringLengthOwners($source); }
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "48:48:48:48|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested eval owns copied source bytes independently of temporaries or source-variable replacement.
+#[test]
+fn test_core_nested_eval_releases_source_operands_before_scope_mutation() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nestedEvalSourceOwners(string $source): void { eval($source); }
+$source = 'echo eval("return 17;"), ":";
+$nested = "return 23;";
+echo eval($nested), ":";
+$nested = "\$nested = \"\"; return 29;";
+echo eval($nested), "|"; // ' . $argc;
+for ($i = 0; $i < 3; $i++) { nestedEvalSourceOwners($source); }
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "17:23:29|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Returning an eval-local cell across a native function boundary outlives eval scope teardown.
 #[test]
 fn test_core_eval_returned_local_survives_native_scope_teardown() {

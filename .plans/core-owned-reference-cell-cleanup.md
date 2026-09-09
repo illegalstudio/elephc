@@ -14,7 +14,7 @@
 - [ ] Verify the complete reference-return matrix in CI, including exceptional epilogue cleanup.
 - [ ] Audit unresolved descriptor reference assignment, which previously interpreted a boxed result as a raw cell address.
 - [x] Complete build, static and generated-doc checks without running local tests.
-- [ ] Commit thematically, push `feat/core-align`, inspect CI on the exact new head.
+- [x] Commit thematically, push `feat/core-align`, inspect CI on the exact new head.
 
 ## Storage and graph contract
 
@@ -61,3 +61,9 @@ lowering rejection from the previous head no longer appears in that shard.
 Other PR failures remain independently open, including eval operand ownership,
 native/eval Throwable ownership and serialization. This plan does not declare
 those problems resolved.
+
+The managed-cell implementation was pushed as
+`b9f4475dd41e4298947c2cc190bbd753dd037b1c`. CI run `34399014138` was started
+on that exact head; its executable matrix was still pending at the first inspection.
+Local verification was limited to builds, test compilation, assembly-comment
+alignment and generated-doc audits. No local tests were executed.
