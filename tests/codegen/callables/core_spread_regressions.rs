@@ -9,6 +9,75 @@
 
 use crate::support::*;
 
+/// Declared array returns preserve sparse numeric keys and named arguments across direct/CUF/FCC calls.
+#[test]
+fn test_core_introspection_spread_boxed_return_keys_and_callables() {
+    let source = r#"<?php
+class ReturnedSpread { public int $bar = 7; public function m(): void {} }
+function returnedSpreadNames(string $name, bool $named): array {
+    if ($named) { return ['class' => $name]; }
+    return [42 => $name];
+}
+function returnedSpreadObject(): array { return ['object_or_class' => new ReturnedSpread()]; }
+$vars = get_class_vars(...);
+$methods = get_class_methods(...);
+echo get_class_vars(...returnedSpreadNames(ReturnedSpread::class, false))['bar'], ':';
+echo call_user_func('get_class_vars', ...returnedSpreadNames(ReturnedSpread::class, true))['bar'], ':';
+echo $vars(...returnedSpreadNames(ReturnedSpread::class, true))['bar'], ':';
+echo implode(',', $methods(...returnedSpreadObject()));
+"#;
+    assert_eq!(compile_and_run(source), "7:7:7:m");
+    assert_eq!(compile_and_run_tagged(source), "7:7:7:m");
+}
+
+/// Runtime key validation rejects unknown, repeated and out-of-order arguments without losing side effects.
+#[test]
+fn test_core_introspection_spread_boxed_named_errors_and_order() {
+    let out = compile_and_run(r#"<?php
+class RejectedSpread { public int $x = 1; }
+function returnedSpreadArgs(int $kind): array {
+    if ($kind === 0) { return ['unknown' => RejectedSpread::class]; }
+    if ($kind === 1) { return ['class' => RejectedSpread::class]; }
+    if ($kind === 2) { return ['class' => RejectedSpread::class, 7 => RejectedSpread::class]; }
+    return [];
+}
+function laterSpreadName(): string { echo 'side:'; return RejectedSpread::class; }
+try { get_class_vars(...returnedSpreadArgs(0)); } catch (Error $e) { echo 'unknown|'; }
+try { get_class_vars(...returnedSpreadArgs(1), ...returnedSpreadArgs(1)); }
+catch (Error $e) { echo 'duplicate|'; }
+try { get_class_vars(...returnedSpreadArgs(2)); } catch (Error $e) { echo 'order|'; }
+try { get_class_vars(...returnedSpreadArgs(1), class: laterSpreadName()); }
+catch (Error $e) { echo 'named|'; }
+echo get_class_vars(...returnedSpreadArgs(3), class: laterSpreadName())['x'];
+"#);
+    assert_eq!(out, "unknown|duplicate|order|side:named|side:1");
+}
+
+/// The shared builtin normalizer also binds reordered boxed names outside class introspection.
+#[test]
+fn test_core_introspection_spread_boxed_shared_parameter_binding() {
+    let out = compile_and_run(r#"<?php
+function boxedReorderedArgs(): array { return ['times' => 3, 'string' => 'ok']; }
+function boxedDefaultArgs(): array { return [27 => 'default']; }
+echo str_repeat(...boxedReorderedArgs()), '|', strlen(...boxedDefaultArgs());
+"#);
+    assert_eq!(out, "okokok|7");
+}
+
+/// Temporary unpack sources and copied parameter cells are released after repeated builtin calls.
+#[test]
+fn test_core_introspection_spread_boxed_sources_release_after_binding() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function freshSpreadString(int $value): array { return ['string' => 'value' . $value]; }
+$total = 0;
+for ($i = 0; $i < 20; $i++) { $total += strlen(...freshSpreadString($i)); }
+echo $total;
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "130", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Keeps each callable surface small enough for the per-test CI deadline in both representations.
 fn assert_mixed_spread_case(body: &str, expected: &str) {
     let source = format!(r#"<?php

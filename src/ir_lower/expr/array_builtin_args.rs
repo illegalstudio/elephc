@@ -78,6 +78,13 @@ pub(super) fn lower_builtin_call_args(
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
     let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
+    if argument_lowering == crate::builtins::semantics::BuiltinArgumentLowering::Standard {
+        if let Some(sig) = sig {
+            if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, name) {
+                return coerce_operands_to_params(ctx, sig, operands);
+            }
+        }
+    }
     if !crate::types::call_args::has_named_args(args)
         && argument_lowering != crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted
     {

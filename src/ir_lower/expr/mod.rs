@@ -60,6 +60,7 @@ mod array_builtin_args;
 mod builtin_special_args;
 mod call_arg_coercion;
 mod positional_spreads;
+mod dynamic_spreads;
 mod named_args;
 mod named_spreads;
 mod variadic_args;

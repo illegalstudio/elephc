@@ -20,6 +20,7 @@ mod array_implode;
 mod corpus;
 mod debug_info;
 mod descriptor_ownership;
+mod dynamic_spreads;
 mod effects;
 mod eval_ownership;
 mod exhaustive;

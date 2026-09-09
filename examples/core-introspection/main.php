@@ -24,6 +24,13 @@ class DisplaySettings {
 echo 'Stored defaults: ', implode(', ', array_keys(get_class_vars(DisplaySettings::class))), "\n";
 echo 'Public methods: ', implode(', ', get_class_methods(DisplaySettings::class)), "\n";
 
+// Returned PHP arrays can supply named arguments to a first-class builtin.
+function settings_introspection_args(): array {
+    return ['class' => DisplaySettings::class];
+}
+$readDefaults = get_class_vars(...);
+echo 'Theme via callable: ', $readDefaults(...settings_introspection_args())['theme'], "\n";
+
 // Introspection also accepts an object returned through the boxed eval boundary.
 $source = 'return new DisplaySettings();' . ' // ' . $argc;
 $settings = eval($source);
