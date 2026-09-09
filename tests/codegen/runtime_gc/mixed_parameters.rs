@@ -10,6 +10,29 @@
 
 use crate::support::*;
 
+/// Type-name queries retire boxed element reads without consuming the source parameter or its children.
+#[test]
+fn test_gettype_boxed_parameter_reads_release_temporary_cells() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function describeBoxedTypeNames(array $items): void {
+    echo gettype($items[0]), ":", \GETTYPE($items[1]), ":", gettype($items[2]), ":",
+        gettype($items[3]), ":", gettype($items[4]), ":", gettype($items[5]), ":",
+        gettype($items[6]), "|";
+    echo strlen($items[4]), ":", strlen($items[5]["nested"]), "|";
+}
+for ($i = 0; $i < 6; $i++) {
+    describeBoxedTypeNames([
+        $argc, 1.25, false, null, str_repeat("x", 24),
+        ["nested" => str_repeat("n", 16)], new stdClass()
+    ]);
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "integer:double:boolean:NULL:string:array:object|24:16|".repeat(6),
+        "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Native Mixed and untyped identity results outlive eval argument cells and preserve array COW.
 #[test]
 fn test_core_eval_native_mixed_parameter_results_own_their_cells() {

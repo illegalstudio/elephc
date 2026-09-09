@@ -2018,6 +2018,9 @@ impl RuntimeFnId {
         } else if matches!(
             self,
             RuntimeFnId::BaseConvert
+                // Type names live in static data, never in the inspected value. A possible
+                // alias would suppress cleanup of boxed array/property read temporaries.
+                | RuntimeFnId::Gettype
                 // `__rt_chunk_split` always writes into a reservation taken from
                 // `__rt_concat_reserve`, so the split result can never alias the subject or
                 // the separator. The default `MayAliasArguments` bucket kept an owned subject

@@ -638,6 +638,7 @@ mod tests {
         assert!(independent("htmlentities"));
         assert!(independent("implode"));
         assert!(independent("rawurldecode"));
+        assert!(independent("gettype"));
         assert!(!independent("__registry_probe_opt"));
         assert!(!independent("__not_a_real_builtin_xyz"));
     }

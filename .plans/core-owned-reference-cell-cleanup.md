@@ -406,3 +406,17 @@ structural coverage pins exactly two boxed backend operands. Build, test
 compilation, assembly-comment alignment, the complete generated-document
 workflow and diff hygiene pass. No generated files changed and no tests were
 executed locally. Runtime correctness and cleanup remain CI gates.
+
+### Type-name result ownership
+
+All gettype paths return a type-name literal from static data, but its default
+may-alias result contract suppressed release of owned Mixed read arguments.
+The typed runtime descriptor now marks this result independent. The existing
+scalar-builder regression has exactly three gettype reads and reports three
+leaked Mixed cells; executable confirmation of the corrected contract is
+still pending. New tests pin argument releases on all targets and exercise
+boxed scalar, string, nested-array and object reads with a clean-heap gate.
+
+Build, test compilation, generated-document audits and diff hygiene pass.
+The documentation skill regenerated the internal ownership description and
+registry entry. No tests were executed locally.

@@ -8,6 +8,34 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
+/// Static type-name results cannot keep an owned boxed read alive through argument-alias suppression.
+#[test]
+fn gettype_releases_boxed_read_arguments_on_all_targets() {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+    let source = r#"<?php
+function boxedTypeName(array $items): string { return gettype($items[0]); }
+echo boxedTypeName([$argc]);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|f| f.name == "boxedTypeName").unwrap();
+        let call = function.instructions.iter().find(|instruction| matches!(
+            instruction.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Gettype)))
+            | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                target: RuntimeFnId::Gettype, ..
+            }))
+        )).unwrap();
+        assert!(function.instructions.iter().any(|instruction| {
+            instruction.op == Op::Release && instruction.operands == [call.operands[0]]
+        }), "{target}: the inspected boxed read must be retired");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Regex literal callbacks use the same descriptor adapter as dynamic names on every target.
 #[test]
 fn regex_literal_callbacks_adapt_raw_match_arrays_on_all_targets() {
