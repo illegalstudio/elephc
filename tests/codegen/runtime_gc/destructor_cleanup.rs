@@ -10,6 +10,57 @@
 
 use crate::support::*;
 
+/// Repeated dynamic method dispatch does not consume the receiver's local owner.
+#[test]
+fn test_core_dynamic_method_loop_preserves_receiver_owner() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class KeptDynamicReceiver {
+    public static int $destroyed = 0;
+    public function ping(): void { echo "a"; }
+    public function pong(): void { echo "b"; }
+    public function __destruct() { self::$destroyed++; }
+}
+$receiver = new KeptDynamicReceiver();
+foreach (["ping", "pong", "ping"] as $method) { $receiver->$method(); }
+echo ":", KeptDynamicReceiver::$destroyed;
+unset($receiver);
+echo ":", KeptDynamicReceiver::$destroyed;
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "aba:0:1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A typed static property retains local objects independently across scope exit and widening.
+#[test]
+fn test_core_static_property_keeps_concrete_and_widened_local_objects_alive() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class PublishedLocalValue {
+    public int $number = 17;
+    public static int $released = 0;
+    public function __destruct() { self::$released++; }
+}
+class PublishedLocalHolder { public static PublishedLocalValue $value; }
+function publishConcreteLocal(): void {
+    $value = new PublishedLocalValue();
+    PublishedLocalHolder::$value = $value;
+}
+function publishWidenedLocal(): void {
+    $value = new PublishedLocalValue();
+    PublishedLocalHolder::$value = $value;
+    $value = 42;
+    echo $value, ":";
+}
+publishConcreteLocal();
+echo PublishedLocalHolder::$value->number, ":", PublishedLocalValue::$released, "|";
+publishWidenedLocal();
+echo PublishedLocalHolder::$value->number, ":", PublishedLocalValue::$released;
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "17:0|42:17:1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A caught element destructor observes a completed removal, with surviving hash entries intact.
 #[test]
 fn test_core_hash_unset_commits_removal_before_a_throwing_destructor() {

@@ -47,12 +47,18 @@ pub(super) fn lower_static_property_assign(
         }
         return;
     }
-    let value = if ctx.value_is_owning_temporary(value) {
+    let provisional_load = ctx.value_is_owned_unboxed_local_load(value.value);
+    let stored = if ctx.value_is_owning_temporary(value) && !provisional_load {
         value
     } else {
         crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
     };
-    store_static_property(ctx, receiver, property, value.value, span);
+    // A concrete local load can still be borrowed after final frame typing.
+    // Retain its published owner, then retire only an actual Mixed unbox owner.
+    if provisional_load {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    store_static_property(ctx, receiver, property, stored.value, span);
 }
 
 /// Returns true when codegen gives the static-property slot an independently retained value.

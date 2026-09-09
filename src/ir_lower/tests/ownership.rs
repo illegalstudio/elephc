@@ -10,6 +10,46 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Static properties acquire their own object owner even before final local storage is known.
+#[test]
+fn static_property_stores_preserve_concrete_and_widened_local_owners_on_all_targets() {
+    let source = r#"<?php
+        class StaticPublishedValue { public int $number = 17; }
+        class StaticPublishedHolder { public static StaticPublishedValue $value; }
+        function publish_concrete_owner(): void {
+            $value = new StaticPublishedValue();
+            StaticPublishedHolder::$value = $value;
+        }
+        function publish_widened_owner(): void {
+            $value = new StaticPublishedValue();
+            StaticPublishedHolder::$value = $value;
+            $value = 42;
+            echo $value;
+        }
+        publish_concrete_owner();
+        publish_widened_owner();
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for (name, widened) in [("publish_concrete_owner", false), ("publish_widened_owner", true)] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            let store = function.instructions.iter().find(|inst| inst.op == Op::StoreStaticProperty).unwrap();
+            let ValueDef::Instruction { inst, .. } = function.value(store.operands[0]).unwrap().def else {
+                panic!("{target}: static publication needs an acquired value");
+            };
+            let acquired = function.instruction(inst).unwrap();
+            assert_eq!(acquired.op, Op::Acquire, "{target}: {name}");
+            assert_eq!(function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands == acquired.operands
+            }), widened, "{target}: {name} must retire only the detached unbox owner");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Dynamic property stores retire concrete object temporaries after their boxes retain them.
 #[test]
 fn dynamic_property_stores_release_temporary_object_sources_on_all_targets() {

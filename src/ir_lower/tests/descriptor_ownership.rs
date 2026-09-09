@@ -9,6 +9,40 @@
 
 use crate::ir::Op;
 
+/// Dynamic receiver temporaries retain the caller's object and retire after each invocation.
+#[test]
+fn dynamic_method_calls_root_receiver_borrows_on_all_targets() {
+    let source = r#"<?php
+        class DynamicRootedReceiver { public function ping(): void { echo "p"; } }
+        function invoke_dynamic_root(DynamicRootedReceiver $receiver, string $method): void {
+            $receiver->$method();
+        }
+        invoke_dynamic_root(new DynamicRootedReceiver(), "ping");
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "invoke_dynamic_root").unwrap();
+        let store = function.instructions.iter().find(|inst| {
+            inst.op == Op::StoreLocal && matches!(
+                function.value(inst.operands[0]).unwrap().php_type,
+                crate::types::PhpType::Object(_)
+            )
+        }).expect("the receiver needs a frame root");
+        let crate::ir::ValueDef::Instruction { inst, .. } = function.value(store.operands[0]).unwrap().def else {
+            panic!("{target}: receiver root must be an acquired borrow");
+        };
+        assert_eq!(function.instruction(inst).unwrap().op, Op::Acquire, "{target}");
+        let invoke = function.instructions.iter().position(|inst| inst.op == Op::CallableDescriptorInvoke).unwrap();
+        assert!(function.instructions[invoke + 1..].iter().any(|inst| {
+            inst.op == Op::ReleaseLocalSlot && inst.immediate == store.immediate
+        }), "{target}: normal invocation must retire its receiver root");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Immediate callable and raw argument-container temporaries remain visible to frame unwinding.
 #[test]
 fn descriptor_invocations_root_and_retire_temporary_operands_on_all_targets() {

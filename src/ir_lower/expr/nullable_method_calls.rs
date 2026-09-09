@@ -168,9 +168,16 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let receiver_type = strip_void_from_union(ctx.builder.value_php_type(object.value));
+    let receiver_type = ctx.builder.value_php_type(object.value);
     let receiver_name = ctx.declare_hidden_temp(receiver_type.clone());
-    ctx.store_local(&receiver_name, object, receiver_type, Some(expr.span));
+    // The hidden slot is an owner, not a borrow of the caller's variable. Keep
+    // the source representation so boxed nullable receivers are not moved as raw objects.
+    let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, object, Some(expr.span));
+    ctx.store_local(&receiver_name, retained, receiver_type, Some(expr.span));
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+    }
+    let receiver_slot = ctx.local_slots[&receiver_name];
     let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);
     let callback = Expr::new(
         ExprKind::ArrayLiteral(vec![receiver, method.clone()]),
@@ -186,7 +193,9 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
         },
         expr.span,
     );
-    lower_expr(ctx, &call)
+    let result = lower_expr(ctx, &call);
+    retire_owned_call_operand(ctx, receiver_slot, expr.span);
+    result
 }
 
 /// Releases normalized call arguments that cannot be returned by this call.
