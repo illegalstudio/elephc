@@ -10,6 +10,8 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+mod live_blocks;
+
 /// Emits the `__rt_heap_debug_report` runtime helper for the current target.
 ///
 /// Generates target-specific assembly that prints a heap debug summary to stderr on
@@ -27,6 +29,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 ///
 /// Both targets emit a global `__rt_heap_debug_report` label that the runtime calls at exit.
 pub fn emit_heap_debug_report(emitter: &mut Emitter) {
+    live_blocks::emit_live_blocks(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emitter.blank();
         emitter.comment("--- runtime: heap_debug_report ---");
@@ -155,6 +158,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
         emitter.instruction("mov edi, 2");                                      // fd = stderr for the leak-summary newline terminator
         emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
         emitter.instruction("syscall");                                         // terminate the leak-summary line with a newline
+        crate::codegen_support::abi::emit_call_label(emitter, "__rt_heap_debug_live_blocks");
 
         emitter.label("__rt_heap_debug_report_done");
         emitter.instruction("add rsp, 40");                                     // release the temporary stack frame used for saved counters
@@ -278,6 +282,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1");                                          // newline length
     emitter.syscall(4);
 
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_heap_debug_live_blocks");
     emitter.label("__rt_heap_debug_report_done");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // tear down the heap-debug report frame

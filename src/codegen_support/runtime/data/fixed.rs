@@ -1417,6 +1417,10 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _heap_dbg_live_blocks_short_label\n_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
     out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
     out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _heap_dbg_block_offset\n_heap_dbg_block_offset:\n    .ascii \"HEAP DEBUG: live offset=\"\n");
+    out.push_str(".globl _heap_dbg_block_bytes\n_heap_dbg_block_bytes:\n    .ascii \" bytes=\"\n");
+    out.push_str(".globl _heap_dbg_block_kind\n_heap_dbg_block_kind:\n    .ascii \" kind=\"\n");
+    out.push_str(".globl _heap_dbg_block_refs\n_heap_dbg_block_refs:\n    .ascii \" refs=\"\n");
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     for (label, value) in [
         ("_bt_arg_unknown", "Unknown"),
