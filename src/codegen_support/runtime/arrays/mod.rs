@@ -24,6 +24,7 @@ mod array_diff_refcounted;
 mod array_diff_key;
 mod array_edge_key;
 mod array_ensure_unique;
+mod array_take_boxed;
 mod array_fill;
 mod array_fill_assoc;
 mod array_fill_keys;
@@ -283,6 +284,7 @@ pub use array_map_str::{emit_array_map_str, emit_array_map_str_owned};
 pub use array_merge::emit_array_merge;
 /// Emits key-preserving merges of borrowed packed or associative PHP arrays.
 pub use array_merge_boxed::emit_array_merge_boxed;
+pub use array_take_boxed::emit_array_take_boxed;
 /// Emit array merge-into helper.
 pub use array_merge_into::emit_array_merge_into;
 pub use array_merge_into_refcounted::emit_array_merge_into_refcounted;

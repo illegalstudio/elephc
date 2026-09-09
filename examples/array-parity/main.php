@@ -19,6 +19,15 @@ function printNewestFirst(array $events, bool $keepIds): void {
 printNewestFirst([10 => "opened", "note" => "reviewed", 40 => "closed"], true);
 printNewestFirst(["opened", "reviewed", "closed"], false);
 
+// --- remove queue endpoints without changing an earlier value snapshot ---
+function takeQueueEdges(array &$queue): void {
+    echo 'first: ', array_shift($queue), ', last: ', array_pop($queue), "\n";
+}
+$queue = ['opened', 'reviewed', 'closed'];
+$queueSnapshot = $queue;
+takeQueueEdges($queue);
+echo 'remaining: ', implode(', ', $queue), '; snapshot: ', implode(', ', $queueSnapshot), "\n";
+
 // --- callbacks preserve keys through the same PHP array boundary ---
 function labelEvents(array $events): array {
     return array_map(fn(mixed $event): string => "event:" . $event, $events);

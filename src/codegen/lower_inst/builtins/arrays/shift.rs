@@ -25,6 +25,9 @@ use super::super::super::{expect_operand, store_if_result};
 pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_shift", 1)?;
     let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        return super::boxed_take::lower_boxed_array_take(ctx, inst, array, true);
+    }
     let elem_ty = array_shift_element_type(ctx.value_php_type(array)?)?;
     require_array_shift_result_type(&inst.result_php_type.codegen_repr())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;

@@ -39,6 +39,7 @@ mod basic;
 mod boxed_map_callback;
 mod boxed_merge;
 mod boxed_reverse;
+mod boxed_take;
 mod filter;
 mod map_dispatch;
 mod map_results;

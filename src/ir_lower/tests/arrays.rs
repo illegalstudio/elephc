@@ -10,6 +10,31 @@
 
 use crate::ir::print_module;
 
+/// Boxed pop and shift publish separated receivers before removal on every supported target.
+#[test]
+fn php_array_pop_shift_use_boxed_receiver_helpers_on_every_target() {
+    use crate::codegen::platform::Target;
+    use std::path::Path;
+
+    let source = r#"<?php
+function takeArrayEdges(array &$items): void {
+    $pop = array_pop(...);
+    echo $pop($items), ':', array_shift(array: $items);
+}
+$items = [1, 2, 3];
+takeArrayEdges($items);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.matches("__rt_array_cell_ensure_unique").count() >= 2, "{name}");
+        assert!(assembly.matches("__rt_array_take_boxed").count() >= 2, "{name}");
+    }
+}
+
 /// Boxed callback resolution, null identity and descriptor cleanup are emitted for all supported ABIs.
 #[test]
 fn php_array_map_boxed_callbacks_use_owned_descriptor_envs_on_every_target() {
