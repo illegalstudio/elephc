@@ -207,8 +207,11 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_switch_stmt(expr, cases, context, scope, values)
         }
         EvalStmt::Throw(expr) => {
-            let thrown = eval_expr(expr, context, scope, values)?;
-            if values.type_tag(thrown)? != EVAL_TAG_OBJECT {
+            let thrown = eval_owned_expr(expr, context, scope, values)?;
+            let tag = values.type_tag(thrown);
+            if tag != Ok(EVAL_TAG_OBJECT) {
+                let _ = eval_release_value(context, values, thrown);
+                tag?;
                 return Err(EvalStatus::RuntimeFatal);
             }
             Ok(EvalControl::Throw(thrown))

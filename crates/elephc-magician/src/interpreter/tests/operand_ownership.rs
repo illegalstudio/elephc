@@ -11,6 +11,46 @@
 use super::super::*;
 use super::support::*;
 
+/// Throws retain storage reads before catches or finally blocks can replace the source binding.
+#[test]
+fn thrown_storage_values_keep_an_independent_control_owner() {
+    for source in [
+        "throw $error;",
+        "try { throw $error; } finally { unset($error); }",
+        "try { try { throw $error; } catch (Throwable $error) { throw $error; } } finally { unset($error); }",
+    ] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let original = values.new_object("Exception").unwrap();
+        scope.set("error", original, ScopeCellOwnership::Owned);
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let outcome = execute_program_outcome_with_context(
+            &mut context, &program, &mut scope, &mut values,
+        ).unwrap();
+        let EvalOutcome::Throwable(thrown) = outcome else { panic!("expected throw: {source}"); };
+        assert_eq!(thrown, original, "{source}");
+        assert!(!thrown.is_borrowed(), "{source}");
+        for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+        assert_eq!(values.cell_owners[&(original.as_ptr() as usize)], 1, "{source}");
+        values.release(thrown).unwrap();
+        assert_eq!(values.cell_owners[&(original.as_ptr() as usize)], 0, "{source}");
+    }
+}
+
+/// Rejecting a non-object throw retires its temporary value before propagating the fatal status.
+#[test]
+fn rejected_throw_releases_its_temporary_operand() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let program = parse_fragment(b"throw 42;").unwrap();
+    let result = execute_program_outcome_with_context(&mut context, &program, &mut scope, &mut values);
+    assert!(matches!(result, Err(EvalStatus::RuntimeFatal)));
+    assert_eq!(values.releases.len(), 1);
+    assert_eq!(values.cell_owners[&(values.releases[0].as_ptr() as usize)], 0);
+}
+
 /// Raw staging cleanup releases the current slot, not a stale original address consumed by native code.
 #[test]
 fn native_function_ref_staging_releases_only_its_current_owner() {

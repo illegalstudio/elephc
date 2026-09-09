@@ -10,6 +10,28 @@
 
 use crate::support::*;
 
+/// Eval rethrows retain their exception while catch rebinding and finally remove the source owner.
+#[test]
+fn test_core_eval_rethrow_survives_same_binding_catch_and_finally_unset() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function catchEvalRethrowOwner(string $source): void {
+    try { eval($source); }
+    catch (Exception $caught) { echo $caught->getMessage(), "|"; unset($caught); }
+}
+$source = '$error = new Exception("kept");
+try {
+    try { throw $error; }
+    catch (Throwable $error) { throw $error; }
+} finally { unset($error); } // ' . $argc;
+catchEvalRethrowOwner($source);
+catchEvalRethrowOwner($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "kept|kept|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Repeated Mixed-receiver getters retire every fresh string and array payload without leaking.
 #[test]
 fn test_core_mixed_throwable_getter_results_transfer_string_and_array_owners() {
