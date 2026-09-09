@@ -15,6 +15,7 @@ use crate::codegen::platform::Target;
 use crate::ir::{print_module, Terminator};
 
 mod arrays;
+mod array_reference_outputs;
 mod corpus;
 mod debug_info;
 mod descriptor_ownership;

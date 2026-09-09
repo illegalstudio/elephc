@@ -255,6 +255,9 @@ pub(crate) struct Checker {
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Caller locals converted to boxed PHP arrays by a validated by-reference call.
+    /// Scoped call sites keep recursive signature checking from changing another body's env.
+    pub php_array_reference_outputs: HashMap<(String, Span), HashSet<String>>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
     /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.

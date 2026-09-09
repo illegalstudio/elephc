@@ -363,6 +363,7 @@ impl Checker {
                             arg.span,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
+                        self.record_php_array_reference_output(arg, &declared_ty, &ty, span);
                     }
                     self.require_bound_param_arg_type(
                         &declared_ty,

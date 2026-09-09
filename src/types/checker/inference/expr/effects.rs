@@ -46,7 +46,7 @@ impl Checker {
         expr: &Expr,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        match &expr.kind {
+        let result = match &expr.kind {
             ExprKind::Variable(name) if self.eval_barrier_active && !env.contains_key(name) => {
                 env.insert(name.clone(), PhpType::Mixed);
                 Ok(PhpType::Mixed)
@@ -523,7 +523,11 @@ impl Checker {
                 Ok(ty)
             }
             _ => self.infer_type(expr, env),
+        };
+        if result.is_ok() {
+            self.apply_php_array_reference_outputs(expr.span, env);
         }
+        result
     }
 
     /// Infers effects for a language-construct operand without treating properties as reads.

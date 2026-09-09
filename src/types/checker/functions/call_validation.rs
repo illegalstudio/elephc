@@ -561,6 +561,7 @@ impl Checker {
                             arg.span,
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
+                        self.record_php_array_reference_output(arg, expected_ty, &actual_ty, span);
                     }
                     // `strict_types` applies to every declared parameter type, including the
                     // closure and first-class-callable surfaces that stay off the coercive

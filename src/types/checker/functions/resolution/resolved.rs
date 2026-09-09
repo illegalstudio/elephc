@@ -179,6 +179,7 @@ impl Checker {
                             arg.span,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
+                        self.record_php_array_reference_output(arg, expected_ty, &actual_ty, span);
                     }
                     // PHP's parameter binding only applies to a *declared* parameter type.
                     // An inferred parameter's "expected" type is just what earlier call sites
