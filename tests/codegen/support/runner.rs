@@ -10,6 +10,8 @@
 //!   avoiding source-mtime rebuilds and network access on test runners.
 //! - Translates typed runtime requirements through `LinkPlan` and supplies a test-only,
 //!   system-header-aligned build of the embedded PCRE2 shim.
+//! - Supplies the managed native curl chain and the managed native libxml2 artifact as
+//!   exact archives (`curl_native`, `xml_native`) whenever a fixture links those bridges.
 //! - Per-test assembly is fed to `as` over stdin so no intermediate `test.s`
 //!   file is written, which shaves ~1/3 of the file-system events the macOS
 //!   `syspolicyd` / on-access AV scans inspect during a full `cargo test`.
@@ -129,6 +131,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_curl",
         package: "elephc-curl",
         php_extensions: &["curl"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_xml",
+        package: "elephc-xml",
+        php_extensions: &["xml", "xmlwriter"],
     },
 ];
 
@@ -778,6 +785,142 @@ mod curl_native_link_order_tests {
 }
 
 #[cfg(test)]
+mod xml_native_link_order_tests {
+    use super::*;
+    use elephc::codegen::LinkRequirement;
+    use elephc::link_plan::{LinkItem, LinkOrigin};
+    use std::path::PathBuf;
+
+    /// A synthetic libxml2 artifact so ORDER is asserted without the machine having it.
+    fn fake_package() -> XmlNativePackage {
+        let library_dir = PathBuf::from("/cache/libxml2/lib");
+        XmlNativePackage {
+            archives: XML_NATIVE_ARCHIVES
+                .iter()
+                .map(|archive| library_dir.join(archive))
+                .collect(),
+            library_dir,
+        }
+    }
+
+    /// Returns the archive filenames a plan emits, in plan order.
+    fn archive_names(plan: &elephc::link_plan::LinkPlan) -> Vec<String> {
+        plan.items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::StaticArchive { path, .. } => {
+                    Some(path.file_name()?.to_string_lossy().into_owned())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The managed archives land AFTER the bridge and keep the catalog's shim-then-library
+    /// order, as exact `ManagedNative` items, never `-l` names.
+    #[test]
+    fn managed_libxml2_follows_the_bridge_shim_first() {
+        let mut plan = elephc::link_plan::LinkPlan::new();
+        plan.push(LinkItem::NamedLibrary {
+            name: "elephc_xml".to_string(),
+            origin: LinkOrigin::Bridge {
+                name: "elephc_xml".to_string(),
+            },
+        });
+        push_xml_native_archives(&mut plan, &fake_package(), Platform::Linux);
+
+        assert_eq!(
+            archive_names(&plan),
+            vec!["libelephc_libxml2_shim.a", "libxml2.a"]
+        );
+        let items = plan.items();
+        let bridge = items
+            .iter()
+            .position(|item| matches!(item, LinkItem::NamedLibrary { name, .. } if name == "elephc_xml"))
+            .unwrap();
+        let first_archive = items
+            .iter()
+            .position(|item| matches!(item, LinkItem::StaticArchive { .. }))
+            .unwrap();
+        assert!(bridge < first_archive, "{items:?}");
+        assert!(items.iter().all(|item| !matches!(
+            item,
+            LinkItem::StaticArchive { origin, .. } if !matches!(origin, LinkOrigin::ManagedNative { package } if package == "libxml2")
+        )));
+        assert!(items
+            .iter()
+            .any(|item| matches!(item, LinkItem::SearchPath(path) if path == &PathBuf::from("/cache/libxml2/lib"))));
+    }
+
+    /// `-liconv` mirrors the bridge table's `apple_libraries`: on macOS it trails every
+    /// archive (so `libxml2.a`'s iconv references resolve under a single scan); on Linux,
+    /// where glibc carries iconv and no `libiconv` exists to link, it is never emitted.
+    #[test]
+    fn apple_iconv_trails_the_archives_on_macos_only() {
+        let mut macos = elephc::link_plan::LinkPlan::new();
+        push_xml_native_archives(&mut macos, &fake_package(), Platform::MacOS);
+        let items = macos.items();
+        let iconv = items
+            .iter()
+            .position(|item| matches!(item, LinkItem::NamedLibrary { name, .. } if name == "iconv"))
+            .expect("macOS must name iconv");
+        let last_archive = items
+            .iter()
+            .rposition(|item| matches!(item, LinkItem::StaticArchive { .. }))
+            .unwrap();
+        assert!(iconv > last_archive, "{items:?}");
+
+        let mut linux = elephc::link_plan::LinkPlan::new();
+        push_xml_native_archives(&mut linux, &fake_package(), Platform::Linux);
+        assert!(!linux
+            .items()
+            .iter()
+            .any(|item| matches!(item, LinkItem::NamedLibrary { .. })));
+    }
+
+    /// Whatever else a fixture links, the managed package never re-enters the plan as a
+    /// `-lxml2` name: through the search path that could bind a system libxml2 (which does
+    /// not carry the shim) into a fixture whose purpose is proving the pinned build.
+    #[test]
+    fn managed_libxml2_is_never_a_named_library() {
+        let requirements = TestLinkRequirements::new(
+            vec!["elephc_xml".to_string()],
+            vec![
+                LinkRequirement::SystemLibrary("z".to_string()),
+                LinkRequirement::Bridge("elephc_phar"),
+            ],
+        );
+        let plan = test_link_plan(&requirements, &[], &[]);
+        for item in plan.items() {
+            if let LinkItem::NamedLibrary { name, .. } = item {
+                assert_ne!(name, "xml2", "managed native package leaked in as -lxml2");
+            }
+        }
+        // With the artifact installed the archives are present, in order, after the bridge —
+        // the very paths `xml_native_archives()` reports; without it the plan simply carries
+        // no managed item (the fixture would have skipped).
+        match xml_native_archives() {
+            Some(archives) => {
+                assert_eq!(
+                    archive_names(&plan),
+                    vec!["libelephc_libxml2_shim.a", "libxml2.a"]
+                );
+                let planned: Vec<&Path> = plan
+                    .items()
+                    .iter()
+                    .filter_map(|item| match item {
+                        LinkItem::StaticArchive { path, .. } => Some(path.as_path()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(planned, archives.iter().map(PathBuf::as_path).collect::<Vec<_>>());
+            }
+            None => assert!(archive_names(&plan).is_empty(), "{:?}", plan.items()),
+        }
+    }
+}
+
+#[cfg(test)]
 mod bridge_staticlib_dir_tests {
     use super::*;
 
@@ -1032,6 +1175,7 @@ fn test_link_plan(
 
     let mut plan = LinkPlan::new();
     let mut named = std::collections::HashSet::new();
+    let mut xml_pushed = false;
     for library in &requirements.checker_libraries {
         if library == "System" || !named.insert(library.clone()) {
             continue;
@@ -1063,6 +1207,16 @@ fn test_link_plan(
                     if named.insert(library.to_string()) {
                         plan.push(LinkItem::named_runtime(library));
                     }
+                }
+            }
+            elephc::codegen::LinkRequirement::NativePackage("libxml2") => {
+                // Reached only if a future runtime requirement names the package
+                // directly; today `elephc_xml` arrives as a checker library (the
+                // prelude's extern block) and the block after this loop provides it.
+                // Providing it here too keeps the "unknown package" panic below honest
+                // without linking the archives twice.
+                if !xml_pushed {
+                    xml_pushed = push_xml_native_if_available(&mut plan);
                 }
             }
             elephc::codegen::LinkRequirement::NativePackage(package) => {
@@ -1101,6 +1255,15 @@ fn test_link_plan(
                 }
             }
         }
+    }
+    // Same shape for the xml bridge: `elephc_xml`'s parser is libxml2, reached through
+    // the Elephc-owned shim the managed `libxml2` package archives beside `libxml2.a`.
+    // The production path splices that package in from `pipeline::backend`; the harness
+    // reads the same durable cache structurally (see `super::xml_native`). A fixture
+    // whose artifact is missing skips (or, under `ELEPHC_TEST_REQUIRE_XML_NATIVE`,
+    // panics) before it ever reaches this point.
+    if named.contains("elephc_xml") && !xml_pushed {
+        push_xml_native_if_available(&mut plan);
     }
     for path in extra_link_paths {
         plan.push(LinkItem::SearchPath(path.as_str().into()));
@@ -1141,6 +1304,52 @@ fn push_curl_native_archives(
     for package in packages {
         for archive in &package.archives {
             plan.push(LinkItem::managed_archive(archive, package.name));
+        }
+    }
+}
+
+/// Appends the managed native libxml2 artifact for the harness target when it is
+/// installed, returning whether anything was pushed.
+fn push_xml_native_if_available(plan: &mut elephc::link_plan::LinkPlan) -> bool {
+    match xml_native_package() {
+        Some(package) => {
+            push_xml_native_archives(plan, package, target().platform);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Appends the managed native libxml2 artifact as EXACT ARCHIVES — the Elephc-owned shim
+/// first, `libxml2.a` second — after everything already in `plan`, plus the Apple-only
+/// `-liconv` that mirrors the bridge's `apple_libraries` in `src/linker/bridges.rs`.
+///
+/// Exact paths rather than `-l` names, and no deduping against the `named` set, for the
+/// reason `push_curl_native_archives` documents at length: a `-l` name competes with every
+/// other named library in the plan (and could bind a system libxml2, which does not even
+/// carry the shim), while an absolute path can neither be suppressed nor mis-resolved.
+///
+/// The order is the contract. GNU ld scans each archive once, left to right, resolving
+/// only what is undefined at that moment: `libelephc_xml.a` (already in the plan as the
+/// bridge) references the shim's `elephc_libxml2_v1_*` entry points, the shim references
+/// `xml*` symbols, and `libxml2.a` references `iconv_open`/`iconv`/`iconv_close` — which
+/// glibc satisfies from libc, and which Apple's SDK satisfies only from the separate
+/// `libiconv.tbd` named here AFTER the archives. Apple's ld64 would accept any order; the
+/// Linux CI shards would not.
+fn push_xml_native_archives(
+    plan: &mut elephc::link_plan::LinkPlan,
+    package: &XmlNativePackage,
+    platform: Platform,
+) {
+    use elephc::link_plan::LinkItem;
+
+    plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+    for archive in &package.archives {
+        plan.push(LinkItem::managed_archive(archive, XML_NATIVE_PACKAGE));
+    }
+    if platform == Platform::MacOS {
+        for library in XML_APPLE_LIBRARIES {
+            plan.push(LinkItem::named_runtime(*library));
         }
     }
 }

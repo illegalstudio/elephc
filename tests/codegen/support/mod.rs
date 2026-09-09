@@ -38,8 +38,10 @@ mod platform;
 mod runner;
 mod compiler;
 mod curl_native;
+mod native_cache;
 mod native_projects;
 mod projects;
+pub(crate) mod xml_native;
 
 pub(crate) use platform::*;
 pub(crate) use runner::*;
@@ -47,3 +49,10 @@ pub(crate) use compiler::*;
 pub(crate) use curl_native::*;
 pub(crate) use native_projects::*;
 pub(crate) use projects::*;
+// Named rather than globbed: `xml_native::available()` would otherwise collide with
+// `curl_native::available()` under two `*` imports. Reach it as
+// `support::xml_native::available()`.
+pub(crate) use xml_native::{
+    skip_without_xml_native, xml_native_archives, xml_native_package, XmlNativePackage,
+    XML_APPLE_LIBRARIES, XML_NATIVE_ARCHIVES, XML_NATIVE_PACKAGE,
+};

@@ -67,6 +67,7 @@ fn check_source_with_defines_and_options(
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
@@ -85,6 +86,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
@@ -296,6 +298,11 @@ mod mysqli;
 /// wrappers' argument contracts.
 #[path = "error_tests/curl.rs"]
 mod curl;
+
+/// `ext/xml` / `ext/xmlwriter` prelude diagnostics: `XMLParser`'s object model, the
+/// wrappers' argument contracts and `xml_parse_into_struct()`'s output requirements.
+#[path = "error_tests/xml.rs"]
+mod xml;
 
 // --- Iterator-related errors ---
 

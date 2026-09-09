@@ -62,6 +62,7 @@ mod pdo_mysql;
 mod pdo_pgsql;
 mod image;
 mod pcntl;
+mod xml;
 mod arrays;
 mod calendar;
 mod call_counters;
