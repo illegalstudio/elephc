@@ -356,6 +356,18 @@ released. Even when the destructor throws, that final owner must still be consum
 the runtime release preserves the pending exception and collects any further child
 destructor exceptions before returning to eval.
 
+Native local synchronization gives the eval scope an independent snapshot owner.
+Reload acquires the replacement, publishes it into raw or reference-cell storage,
+then releases the displaced native owner, including unchanged cells and missing
+entries. By-value parameters that eval can replace own their initial frame values;
+by-reference parameters continue to use the caller's storage. String reloads
+persist exactly once, including casts that initially return scratch bytes.
+
+A callable parameter returned as `Mixed` receives a separate boxed descriptor
+reference. The caller must still retire a temporary callable argument after the
+call, even when the return-alias summary is conservative. Returning a raw
+`callable` keeps the separate transfer rules for that representation.
+
 The runtime routine `__rt_heap_alloc`:
 
 1. **Probe the segregated small bins** — requests up to 64 bytes first check `_heap_small_bins` (`<=8`, `<=16`, `<=32`, `<=64`) and reuse a cached block from the smallest fitting class available.
