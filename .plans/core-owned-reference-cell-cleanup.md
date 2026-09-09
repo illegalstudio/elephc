@@ -285,3 +285,16 @@ fixtures must now pass through the runtime validation rather than fail early.
 CI on `0071912c1` still reports independent failures, including the newly
 reachable middle-default constructor leak (five blocks, 224 bytes), generic
 array builtin validation, native/eval exceptions and hydration ownership.
+
+### Splice reference regression follows the boxed array contract
+
+Linux x86_64 shard 5 on `0071912c1` fails an old test because a declared-array
+reference splice now compiles instead of producing the historical raw-array
+promotion diagnostic. The test keeps that int-to-string replacement and now
+asserts its runtime output, inserted value type, unchanged COW alias and clean
+heap. This does not claim runtime success from compilation alone; the stronger
+behavioral assertion remains a CI gate. Test compilation and diff hygiene pass.
+
+A fresh `git fetch origin` confirms that `origin/main` remains
+`b068c2b7d27627b9b6ce451dbbc2e71faba3f7d8`, already an ancestor of this branch.
+No further rebase or history rewrite is needed at this checkpoint.
