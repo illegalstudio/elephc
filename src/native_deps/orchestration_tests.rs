@@ -132,12 +132,13 @@ fn fixture_version(cache: &CacheLayout) -> &'static PackageVersion {
     let compressed = builder.into_inner().unwrap().finish().unwrap();
     let sha256 = format!("{:x}", Sha256::digest(&compressed));
     let sha256: &'static str = Box::leak(sha256.into_boxed_str());
+    let source = super::super::catalog::SourceArchive { https_url: "https://example.invalid/fixture.tar.gz", sha256, exact_size: compressed.len() as u64, body_limit: 1024 * 1024 };
     fs::create_dir_all(&cache.sources).unwrap();
-    fs::write(cache.source_path(sha256), &compressed).unwrap();
+    fs::write(cache.source_path(sha256, source.format().unwrap()), &compressed).unwrap();
     let target: &'static str = Target::detect_host().as_str();
     Box::leak(Box::new(PackageVersion {
         version: "1.0",
-        source: super::super::catalog::SourceArchive { https_url: "https://example.invalid/fixture.tar.gz", sha256, exact_size: compressed.len() as u64, body_limit: 1024 * 1024 },
+        source,
         recipe_revision: 1,
         dependencies: &[], supported_targets: Box::leak(vec![target].into_boxed_slice()),
         ordered_link_outputs: &["lib/libfixture.a"], retained_headers: &["include/fixture.h"], provides: &["fixture"],

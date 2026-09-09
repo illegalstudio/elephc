@@ -20,6 +20,44 @@ pub struct SourceArchive {
     pub body_limit: u64,
 }
 
+/// Compressed tar flavour of one catalog source, derived from the trusted URL's suffix.
+///
+/// The format is explicit rather than sniffed from the downloaded bytes so the cache file name,
+/// the decompressor, and the recipe all agree on what the verified SHA-256 identifies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArchiveFormat {
+    /// gzip-compressed tar (`.tar.gz`), inflated by flate2's pure-Rust backend.
+    TarGz,
+    /// xz-compressed tar (`.tar.xz`), inflated by the pure-Rust `lzma-rs` decoder.
+    TarXz,
+}
+
+impl ArchiveFormat {
+    /// Returns the URL suffix and content-addressed cache extension of this format.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::TarGz => "tar.gz",
+            Self::TarXz => "tar.xz",
+        }
+    }
+}
+
+impl SourceArchive {
+    /// Derives the archive format from the catalog URL suffix, failing closed on any other suffix
+    /// so an unrecognised container can never reach the extractor.
+    pub fn format(&self) -> Result<ArchiveFormat, NativeError> {
+        [ArchiveFormat::TarGz, ArchiveFormat::TarXz]
+            .into_iter()
+            .find(|format| self.https_url.ends_with(&format!(".{}", format.extension())))
+            .ok_or_else(|| {
+                NativeError::new(
+                    NativeErrorKind::Catalog,
+                    format!("catalog source URL '{}' has no supported archive suffix (.tar.gz, .tar.xz)", self.https_url),
+                )
+            })
+    }
+}
+
 /// One immutable version and recipe in the trusted catalog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PackageVersion {
@@ -119,6 +157,28 @@ const LIBSSH2_HEADERS: &[&str] = &[
     "include/libssh2.h",
     "include/libssh2_publickey.h",
     "include/libssh2_sftp.h",
+];
+/// The xml bridge's link inputs, shim first: `libelephc_libxml2_shim.a` reaches into libxml2's
+/// parser-context and entity structs on the bridge's behalf, so it must precede `libxml2.a`.
+const LIBXML2_ARCHIVES: &[&str] = &["lib/libelephc_libxml2_shim.a", "lib/libxml2.a"];
+/// Every public libxml2 2.15.3 header: the 45 static `include/libxml/*.h` files shipped in the
+/// release tarball plus `xmlversion.h`, which `configure` generates from `xmlversion.h.in` into
+/// the build tree (see `recipes/libxml2.rs`). Retained in full, not just the parser subset the
+/// shim includes, because the set is the installed interface future extensions (xmlwriter,
+/// xmlreader, XPath, DOM) compile against.
+const LIBXML2_HEADERS: &[&str] = &[
+    "include/libxml/HTMLparser.h", "include/libxml/HTMLtree.h", "include/libxml/SAX.h", "include/libxml/SAX2.h",
+    "include/libxml/c14n.h", "include/libxml/catalog.h", "include/libxml/chvalid.h", "include/libxml/debugXML.h",
+    "include/libxml/dict.h", "include/libxml/encoding.h", "include/libxml/entities.h", "include/libxml/globals.h",
+    "include/libxml/hash.h", "include/libxml/list.h", "include/libxml/nanoftp.h", "include/libxml/nanohttp.h",
+    "include/libxml/parser.h", "include/libxml/parserInternals.h", "include/libxml/pattern.h", "include/libxml/relaxng.h",
+    "include/libxml/schemasInternals.h", "include/libxml/schematron.h", "include/libxml/threads.h", "include/libxml/tree.h",
+    "include/libxml/uri.h", "include/libxml/valid.h", "include/libxml/xinclude.h", "include/libxml/xlink.h",
+    "include/libxml/xmlIO.h", "include/libxml/xmlautomata.h", "include/libxml/xmlerror.h", "include/libxml/xmlexports.h",
+    "include/libxml/xmlmemory.h", "include/libxml/xmlmodule.h", "include/libxml/xmlreader.h", "include/libxml/xmlregexp.h",
+    "include/libxml/xmlsave.h", "include/libxml/xmlschemas.h", "include/libxml/xmlschemastypes.h", "include/libxml/xmlstring.h",
+    "include/libxml/xmlunicode.h", "include/libxml/xmlversion.h", "include/libxml/xmlwriter.h", "include/libxml/xpath.h",
+    "include/libxml/xpathInternals.h", "include/libxml/xpointer.h",
 ];
 const CURL_ARCHIVES: &[&str] = &["lib/libcurl.a"];
 const CURL_HEADERS: &[&str] = &[
@@ -247,6 +307,25 @@ const CURL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: CURL_HEADERS,
     provides: &["curl"],
 }];
+/// The XML parser behind the `elephc_xml` bridge (`xml_*` push parser, XMLWriter). The first
+/// catalog source published only as `.tar.xz`, which is why the archive format is explicit.
+/// Built with the platform's iconv and without zlib, ICU, Python, readline, or dynamic modules,
+/// so it has no catalog dependencies and links against nothing the bridge does not already pull in.
+const LIBXML2_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "2.15.3",
+    source: SourceArchive {
+        https_url: "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.3.tar.xz",
+        sha256: "78262a6e7ac170d6528ebfe2efccdf220191a5af6a6cd61ea4a9a9a5042c7a07",
+        exact_size: 3_152_452,
+        body_limit: 16 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: LIBXML2_ARCHIVES,
+    retained_headers: LIBXML2_HEADERS,
+    provides: &["libxml2"],
+}];
 const PACKAGES: &[PackageSpec] = &[
     PackageSpec {
         name: "pcre2",
@@ -277,6 +356,11 @@ const PACKAGES: &[PackageSpec] = &[
         name: "curl",
         default_version: "8.21.0",
         versions: CURL_VERSIONS,
+    },
+    PackageSpec {
+        name: "libxml2",
+        default_version: "2.15.3",
+        versions: LIBXML2_VERSIONS,
     },
 ];
 
@@ -386,7 +470,7 @@ mod tests {
         assert!(package("libfoo")
             .unwrap_err()
             .to_string()
-            .contains("known packages: pcre2, zlib, openssl, nghttp2, libssh2, curl"));
+            .contains("known packages: pcre2, zlib, openssl, nghttp2, libssh2, curl, libxml2"));
         assert!(version("pcre2", Some("10.46")).is_err());
     }
 
@@ -449,6 +533,54 @@ mod tests {
         assert_eq!(version.recipe_revision, 2);
         assert_eq!(version.dependencies, &["openssl", "zlib"]);
         assert_eq!(version.supported_targets, TARGETS);
+    }
+
+    /// Verifies the official libxml2 source identity, the shim-first static archive contract, and
+    /// the complete public header set (45 shipped plus the generated `xmlversion.h`). libxml2 is
+    /// the first `.tar.xz` source, so the derived archive format is pinned here too.
+    #[test]
+    fn libxml2_catalog_snapshot_is_exact() {
+        let version = version("libxml2", None).expect("catalogue entry");
+        assert_eq!(version.version, "2.15.3");
+        assert_eq!(version.source.exact_size, 3_152_452);
+        assert_eq!(
+            version.source.sha256,
+            "78262a6e7ac170d6528ebfe2efccdf220191a5af6a6cd61ea4a9a9a5042c7a07"
+        );
+        assert_eq!(version.source.format().unwrap(), ArchiveFormat::TarXz);
+        assert_eq!(version.ordered_link_outputs, LIBXML2_ARCHIVES);
+        assert_eq!(
+            version.ordered_link_outputs,
+            &["lib/libelephc_libxml2_shim.a", "lib/libxml2.a"]
+        );
+        assert_eq!(version.retained_headers, LIBXML2_HEADERS);
+        assert_eq!(version.retained_headers.len(), 46);
+        assert!(version.retained_headers.contains(&"include/libxml/parser.h"));
+        assert!(version.retained_headers.contains(&"include/libxml/xmlversion.h"));
+        assert!(version.retained_headers.contains(&"include/libxml/xmlwriter.h"));
+        assert!(version.retained_headers.iter().all(|header| header.starts_with("include/libxml/") && header.ends_with(".h")));
+        assert_eq!(version.recipe_revision, 1);
+        assert!(version.dependencies.is_empty());
+        assert_eq!(version.supported_targets, TARGETS);
+    }
+
+    /// Verifies every catalogued source carries a recognised archive suffix, so the cache name and
+    /// the decompressor are always derivable, and that the derivation itself fails closed.
+    #[test]
+    fn every_catalog_source_has_a_supported_archive_format() {
+        for package in packages() {
+            for version in package.versions {
+                let format = version.source.format().unwrap_or_else(|error| {
+                    panic!("{} {}: {error}", package.name, version.version)
+                });
+                assert!(version.source.https_url.ends_with(format.extension()));
+            }
+        }
+        assert_eq!(version("zlib", None).unwrap().source.format().unwrap(), ArchiveFormat::TarGz);
+        let unknown = SourceArchive { https_url: "https://example.invalid/source.zip", sha256: "", exact_size: 0, body_limit: 0 };
+        let error = unknown.format().unwrap_err();
+        assert_eq!(error.kind, NativeErrorKind::Catalog);
+        assert!(error.to_string().contains("no supported archive suffix"));
     }
 
     /// Verifies the official curl source identity, static archive contract, and the transitive

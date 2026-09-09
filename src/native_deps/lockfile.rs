@@ -269,6 +269,20 @@ mod tests {
         lock.validate_current(&manifest).unwrap();
     }
 
+    /// Verifies the committed xml example lock — the first project declaring libxml2, the
+    /// catalog's first `.tar.xz` source — matches the current catalog for every target.
+    #[test]
+    fn xml_example_lock_matches_current_catalog() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let manifest = ManifestDocument::load(&root.join("examples/xml/elephc.toml")).unwrap();
+        let lock = NativeLock::load(&root.join("examples/xml/elephc.lock")).unwrap();
+        lock.validate_current(&manifest).unwrap();
+        let package = lock.package("libxml2").expect("libxml2 is locked");
+        assert_eq!(package.version, "2.15.3");
+        assert!(package.source.url.ends_with(".tar.xz"));
+        assert_eq!(package.target[0].archives, ["lib/libelephc_libxml2_shim.a", "lib/libxml2.a"]);
+    }
+
     /// Verifies every stale catalog dimension and unknown field fails closed.
     #[test]
     fn stale_or_extended_lock_is_rejected() {

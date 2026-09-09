@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
 
+use super::catalog::ArchiveFormat;
 use super::error::{NativeError, NativeErrorKind};
 use super::project::lexical_absolute;
 use super::util::{sha256_bytes, unique_sibling};
@@ -78,9 +79,10 @@ impl CacheLayout {
         Ok(Self { sources: root.join("sources"), artifacts: root.join("artifacts"), locks: root.join("locks"), root })
     }
 
-    /// Returns the content-addressed source archive path.
-    pub fn source_path(&self, sha256: &str) -> PathBuf {
-        self.sources.join(format!("{sha256}.tar.gz"))
+    /// Returns the content-addressed source archive path, suffixed with the catalogued container
+    /// format so the extractor never has to sniff what the digest identifies.
+    pub fn source_path(&self, sha256: &str, format: ArchiveFormat) -> PathBuf {
+        self.sources.join(format!("{sha256}.{}", format.extension()))
     }
 
     /// Returns the exact ABI/toolchain-qualified final artifact directory.
@@ -258,6 +260,15 @@ mod tests {
         let xdg = CacheLayout::from_values(cwd, None, Some(std::ffi::OsStr::new("/xdg")), Some(std::ffi::OsStr::new("/home/u"))).unwrap();
         assert_eq!(xdg.root, Path::new("/xdg/elephc/native"));
         assert!(CacheLayout::from_values(cwd, None, None, None).is_err());
+    }
+
+    /// Verifies cached sources are keyed by digest AND container format, so a gzip and an xz
+    /// source can never be mistaken for one another by name.
+    #[test]
+    fn source_paths_carry_the_archive_format() {
+        let cache = CacheLayout::from_values(Path::new("/"), Some(std::ffi::OsStr::new("/cache")), None, None).unwrap();
+        assert_eq!(cache.source_path("abc", ArchiveFormat::TarGz), Path::new("/cache/sources/abc.tar.gz"));
+        assert_eq!(cache.source_path("abc", ArchiveFormat::TarXz), Path::new("/cache/sources/abc.tar.xz"));
     }
 
     /// Verifies GNU/musl and toolchain fingerprints occupy distinct artifact paths.

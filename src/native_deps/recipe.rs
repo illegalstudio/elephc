@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::{curl, libssh2, nghttp2, openssl, pcre2, zlib};
+use super::recipes::{curl, libssh2, libxml2, nghttp2, openssl, pcre2, zlib};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -48,6 +48,7 @@ enum BuiltInRecipe {
     Nghttp2,
     Libssh2,
     Curl,
+    Libxml2,
 }
 
 /// Resolves a package and immutable recipe revision to its built-in executor.
@@ -59,6 +60,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
         ("libssh2", 2) => Some(BuiltInRecipe::Libssh2),
         ("curl", 4) => Some(BuiltInRecipe::Curl),
+        ("libxml2", 1) => Some(BuiltInRecipe::Libxml2),
         _ => None,
     }
 }
@@ -73,6 +75,7 @@ impl RecipeRunner for CuratedRecipes {
             Some(BuiltInRecipe::Nghttp2) => nghttp2::build(request),
             Some(BuiltInRecipe::Libssh2) => libssh2::build(request),
             Some(BuiltInRecipe::Curl) => curl::build(request),
+            Some(BuiltInRecipe::Libxml2) => libxml2::build(request),
             None => Err(NativeError::new(
                 NativeErrorKind::Build,
                 format!(
@@ -130,6 +133,18 @@ mod tests {
             built_in_recipe("curl", 4).is_some(),
             "missing built-in recipe for curl revision 4"
         );
+    }
+
+    /// Verifies the dispatcher recognizes libxml2 by its exact catalog recipe revision,
+    /// independent of the catalog walk above, so it fails closed even if the catalog entry is
+    /// ever present without its recipe.
+    #[test]
+    fn libxml2_recipe_revision_has_dispatcher() {
+        assert!(
+            built_in_recipe("libxml2", 1).is_some(),
+            "missing built-in recipe for libxml2 revision 1"
+        );
+        assert!(built_in_recipe("libxml2", 2).is_none());
     }
 
     /// Verifies the HTTP/1.1-only curl build (revision 1, no nghttp2/libssh2 and a wall of

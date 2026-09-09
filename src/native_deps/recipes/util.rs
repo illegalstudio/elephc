@@ -2,7 +2,8 @@
 //! Shares filesystem validation and retained-output copying across curated native recipes.
 //!
 //! Called from:
-//! - `crate::native_deps::recipes::pcre2` and `crate::native_deps::recipes::zlib`.
+//! - Every curated recipe under `crate::native_deps::recipes` (pcre2, zlib, openssl, nghttp2,
+//!   libssh2, curl, libxml2).
 //!
 //! Key details:
 //! - Rejects empty, symlinked, or non-regular files while preserving package-specific diagnostics.

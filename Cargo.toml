@@ -72,6 +72,10 @@ flate2 = "1"
 # bzip2-rs is a PURE-RUST bzip2 decoder (no system libbz2, no C toolchain) used by
 # the compiler to decompress bzip2 phar:// entries at compile time. Decompress-only.
 bzip2-rs = "0.1"
+# lzma-rs is a PURE-RUST xz/LZMA decoder (no system liblzma, no C toolchain) used by
+# `elephc native` to unpack catalog sources published only as `.tar.xz` (libxml2).
+# Decompress-only: the crate has no encoder, which is exactly the surface needed.
+lzma-rs = "0.3"
 elephc-phar = { path = "crates/elephc-phar" }
 elephc-probe = { path = "crates/elephc-probe" }
 # PCNTL's small rlib surface owns the target constant catalog shared by AOT and runtime eval;

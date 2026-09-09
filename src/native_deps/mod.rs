@@ -30,7 +30,7 @@ mod util;
 
 use std::path::Path;
 
-pub use catalog::{packages, PackageSpec, PackageVersion, SourceArchive};
+pub use catalog::{packages, ArchiveFormat, PackageSpec, PackageVersion, SourceArchive};
 pub use cli::{native_help, parse_native_args, NativeCommand, NativeOptions, NativeParseOutcome};
 pub use error::{NativeError, NativeErrorKind};
 pub use orchestration::NativeRunOutput;

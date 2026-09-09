@@ -1,0 +1,5 @@
+[native]
+schema = 1
+
+[native.dependencies]
+libxml2 = "2.15.3"

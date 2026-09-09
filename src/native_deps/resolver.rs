@@ -63,6 +63,18 @@ pub fn resolve_for_compilation(
     resolve_for_compilation_with(source, target, requirements, &cache, &SystemToolchains)
 }
 
+/// Names the PHP-visible surface a managed package serves, for the "<feature> support requires
+/// managed native package <name>" diagnostics: `pcre2` backs the regex builtins and `libxml2`
+/// the xml/xmlwriter extensions. A package without a surface of its own (the curl chain, zlib)
+/// is reported by its package name.
+fn feature_label(package: &str) -> &str {
+    match package {
+        "pcre2" => "regex",
+        "libxml2" => "xml",
+        _ => package,
+    }
+}
+
 /// Pure read-only resolver with injected cache and toolchain identity for tests and integration.
 pub(crate) fn resolve_for_compilation_with(
     source: &Path,
@@ -75,7 +87,7 @@ pub(crate) fn resolve_for_compilation_with(
         return Ok(Vec::new());
     }
     let first_package = requirements[0].package_name();
-    let feature = if first_package == "pcre2" { "regex" } else { first_package };
+    let feature = feature_label(first_package);
     let search_root = source
         .parent()
         .and_then(|parent| std::fs::canonicalize(parent).ok())
@@ -322,6 +334,36 @@ mod tests {
         assert!(error.to_string().contains("elephc native add pcre2"));
         assert!(error.to_string().contains("project: not found"));
         assert!(error.to_string().contains("recovery: cd --"));
+        std::fs::remove_dir_all(fixture).unwrap();
+    }
+
+    /// Verifies the diagnostic names the PHP surface a package serves — regex for pcre2, xml
+    /// for libxml2 — and falls back to the package name for every other catalog package.
+    #[test]
+    fn feature_label_names_the_php_surface_or_the_package() {
+        assert_eq!(feature_label("libxml2"), "xml");
+        assert_eq!(feature_label("pcre2"), "regex");
+        for package in ["curl", "libssh2", "nghttp2", "openssl", "zlib", "unknown"] {
+            assert_eq!(feature_label(package), package, "{package} has no surface of its own");
+        }
+    }
+
+    /// Verifies an xml-style requirement without a manifest is reported as xml support, with
+    /// the libxml2 recovery, through the same path the regex diagnostic takes.
+    #[test]
+    fn missing_project_for_libxml2_names_xml_support() {
+        struct PanicToolchains;
+        impl ToolchainProvider for PanicToolchains {
+            /// Fails the test if project discovery does not stop first.
+            fn resolve(&self, _target: Target) -> Result<super::super::toolchain::NativeToolchain, NativeError> { panic!("toolchain should not be queried") }
+        }
+        let cache = CacheLayout::from_values(Path::new("/"), Some(std::ffi::OsStr::new("/missing-cache")), None, None).unwrap();
+        let fixture = std::env::temp_dir().join(format!("elephc-no-project-xml-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&fixture);
+        std::fs::create_dir_all(&fixture).unwrap();
+        let error = resolve_for_compilation_with(&fixture.join("main.php"), Target::detect_host(), &[NativeRequirement::package("libxml2")], &cache, &PanicToolchains).unwrap_err();
+        assert!(error.to_string().contains("xml support requires managed native package libxml2"), "{error}");
+        assert!(error.to_string().contains("elephc native add libxml2"), "{error}");
         std::fs::remove_dir_all(fixture).unwrap();
     }
 

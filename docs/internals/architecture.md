@@ -225,7 +225,7 @@ src/
 │   ├── doctor.rs              Read-only project/artifact/cache-size diagnostics
 │   ├── prune.rs               Explicit stale-fingerprint and abandoned-staging cleanup
 │   ├── resolver.rs            Read-only compile requirement to exact archive resolution
-│   └── recipes/               Reviewed PCRE2, zlib, OpenSSL, nghttp2, libssh2, and curl source-build recipes
+│   └── recipes/               Reviewed PCRE2, zlib, OpenSSL, nghttp2, libssh2, curl, and libxml2 source-build recipes
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects

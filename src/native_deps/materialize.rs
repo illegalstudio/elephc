@@ -15,7 +15,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::codegen_support::platform::Target;
 
-use super::archive::extract_tar_gz;
+use super::archive::extract_archive;
 use super::cache::{publish_artifact, remove_exact_node, ArtifactKey, CacheLayout};
 use super::catalog::{self, PackageVersion};
 use super::download::{ensure_source, Downloader};
@@ -172,7 +172,8 @@ pub(super) fn materialize_package(
         return Ok(final_path);
     }
 
-    let source_path = cache.source_path(version.source.sha256);
+    let format = version.source.format()?;
+    let source_path = cache.source_path(version.source.sha256, format);
     {
         let _source_lock =
             cache.lock(&cache.source_lock_path(version.source.sha256), "download-source")?;
@@ -188,7 +189,7 @@ pub(super) fn materialize_package(
         .map_err(|error| NativeError::io("create artifact staging", &staging, error))?;
     let result = (|| {
         let extracted = staging.join(".source");
-        extract_tar_gz(&source_path, &extracted)?;
+        extract_archive(&source_path, format, &extracted)?;
         recipes.build(&RecipeRequest {
             package,
             version,
