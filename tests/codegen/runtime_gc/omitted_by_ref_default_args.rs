@@ -150,6 +150,37 @@ main();
     );
 }
 
+/// Boxed array defaults have independent owners for positional, named and instance-method calls.
+#[test]
+fn test_core_omitted_by_ref_nonempty_array_defaults_keep_independent_owners() {
+    let source = r#"<?php
+function defaultArrayOwner(int $value, array &$out = [10]): int {
+    $out[] = $value;
+    return count($out);
+}
+class DefaultArrayOwner {
+    public function update(int $value, array &$out = [20]): int {
+        $out[] = $value;
+        return count($out);
+    }
+}
+$object = new DefaultArrayOwner();
+$total = 0;
+for ($i = 0; $i < 3; $i++) {
+    $total += defaultArrayOwner($i);
+    $total += defaultArrayOwner(value: $i);
+    $total += $object->update($i);
+}
+unset($object);
+echo $total;
+"#;
+    assert_balanced(source, "18");
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "18", "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// BEHAVIOUR, not just balance: the callee really does see the declared default through the
 /// discarded cell, and passing the argument still writes back into the caller's variable.
 /// A cell that was silently zeroed (or shared between calls) would pass a leak test and fail

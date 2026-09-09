@@ -255,6 +255,13 @@ pub(super) fn plan_ref_arg_writebacks(
         if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
             continue;
         }
+        if array_element_address_source(ctx, *value)?.is_none()
+            && local_ref_arg_source(ctx, *value).is_err()
+        {
+            // Omitted defaults have no caller location. The temporary-cell planner owns
+            // their conversion and disposal, so there is no scalar/container writeback.
+            continue;
+        }
         reject_unsupported_mixed_ref_writeback_source(&source_ty)?;
         let source = local_ref_arg_source(ctx, *value)?;
         writebacks.push(RefArgWriteback {
@@ -349,6 +356,11 @@ pub(super) fn emit_ref_arg_cell_block(
     for (index, cell) in temp_cells.iter_mut().enumerate() {
         let source_ty = ctx.load_value_to_result(cell.source_value)?;
         coerce_ref_cell_store_value(ctx, &source_ty, &cell.cell_ty)?;
+        if source_ty.codegen_repr() == cell.cell_ty.codegen_repr() {
+            // EIR still owns the default operand. The mutable cell needs its own retain
+            // because the callee can replace it before EIR retires that original owner.
+            abi::emit_incref_if_refcounted(ctx.emitter, &cell.cell_ty);
+        }
         abi::emit_push_result_value(ctx.emitter, &cell.cell_ty);
         // A push writes ONE word for every representation except `Str`/`TaggedScalar`, so
         // the cell's second word is whatever the stack happened to hold. The heap path this

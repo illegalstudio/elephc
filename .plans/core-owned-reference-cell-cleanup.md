@@ -174,3 +174,15 @@ duplicate and uninitialized names still require filtered counts and PHP
 diagnostics, and recursive encoding should consume a selected-property
 snapshot. Ancestor-private-name lookup and property references also remain
 explicit audit items. No full serialization-parity claim is made.
+
+### Omitted reference defaults after the array ABI change
+
+On `b537d5e0e`, Linux x86_64 shard 4 rejects an omitted `array &$out = []`
+before code generation: the Mixed writeback planner tries to narrow an
+`Array(Never)` default back into a caller variable that does not exist.
+Non-lvalue operands now bypass that writeback plan and use the existing
+temporary-cell path. Same-representation defaults acquire an independent
+cell owner so replacement and disposal cannot consume the EIR operand owner.
+A nonempty-array regression covers repeated positional, named and method
+calls. Builds, test compilation and assembly-comment checks pass; executable
+results are still pending CI.
