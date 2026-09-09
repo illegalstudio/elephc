@@ -375,3 +375,18 @@ enabled and disabled. Build, test compilation, generated-document audits and
 diff hygiene pass; no local tests were run and generated docs are unchanged.
 Executable confirmation remains pending. A fresh fetch still finds main at
 `b068c2b7d27627b9b6ce451dbbc2e71faba3f7d8`, already included in this branch.
+
+### Regex callback argument adaptation
+
+The literal-string callback fast path passed the regex runtime's raw match
+array straight into a PHP function expecting a boxed declared-array argument.
+All string callbacks now use the existing descriptor adapter, as first-class
+callables already do. Runtime feature detection retains the invoker even for
+literal callback names. Regression fixtures cover literal, propagated-string
+and first-class callbacks, plus descriptor emission on all five targets.
+
+Build, test compilation, assembly-comment alignment and diff hygiene pass.
+No local tests were executed. The crash regression remains subject to CI.
+CI on `7b9199d65` no longer reports the isolated parameter-shadow throw leak
+or the discarded invalid-spread failure in their Linux x86_64 shards, but
+other array, callback and native/eval ownership failures remain open.

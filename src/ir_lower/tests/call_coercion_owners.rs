@@ -8,6 +8,24 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
+/// Regex literal callbacks use the same descriptor adapter as dynamic names on every target.
+#[test]
+fn regex_literal_callbacks_adapt_raw_match_arrays_on_all_targets() {
+    let source = r#"<?php
+function literalRegexArray(array $matches): string { return "M" . count($matches); }
+echo preg_replace_callback('/[A-Z]/', 'literalRegexArray', 'AB');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("preg_replace_descriptor_callback_wrapper"), "{target}");
+        assert!(asm.contains("__rt_callable_invoke"), "{target}");
+    }
+}
+
 /// Cleanup follows the final local representation without making borrowed string loads transferable.
 #[test]
 fn widened_string_consumers_release_only_detached_loads_on_all_targets() {

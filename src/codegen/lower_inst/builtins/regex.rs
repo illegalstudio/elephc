@@ -7,8 +7,8 @@
 //!
 //! Key details:
 //! - `preg_match()` captures currently support direct local `$matches` variables.
-//! - `preg_replace_callback()` supports static string callbacks and descriptor-backed
-//!   callable values through a regex-specific callback wrapper.
+//! - Every `preg_replace_callback()` callback uses the descriptor ABI adapter, including
+//!   literal names whose PHP array parameter has boxed storage.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
 
 use crate::codegen::platform::Arch;
@@ -16,7 +16,6 @@ use crate::codegen::{abi, callable_descriptor};
 use crate::codegen::{CodegenIrError, Result};
 use crate::codegen_support::DeferredCallbackWrapper;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
-use crate::names::function_symbol;
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -97,7 +96,7 @@ pub(crate) fn lower_preg_replace(ctx: &mut FunctionContext<'_>, inst: &Instructi
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_replace_callback(pattern, callback, subject)` through supported direct callbacks.
+/// Lowers `preg_replace_callback(pattern, callback, subject)` through the descriptor callback adapter.
 pub(crate) fn lower_preg_replace_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -154,7 +153,6 @@ impl PregReplaceCallbackTarget {
 
 /// Descriptor environment source used by the regex callback wrapper.
 enum PregReplaceCallbackEnv {
-    None,
     Descriptor(ValueId),
     RuntimeString(ValueId),
     CallableArray {
@@ -167,7 +165,6 @@ impl PregReplaceCallbackEnv {
     /// Reserves the stack environment expected by the deferred regex callback wrapper.
     fn reserve(&self, ctx: &mut FunctionContext<'_>, strict_php: bool) -> Result<usize> {
         match self {
-            Self::None => Ok(0),
             Self::Descriptor(callback) => reserve_descriptor_callback_env(ctx, *callback),
             Self::RuntimeString(callback) => {
                 reserve_runtime_string_descriptor_callback_env(ctx, *callback, strict_php)
@@ -203,12 +200,6 @@ fn preg_replace_callback_target(
     ctx: &mut FunctionContext<'_>,
     callback: ValueId,
 ) -> Result<PregReplaceCallbackTarget> {
-    if let Some(entry_label) = static_string_callback_entry(ctx, callback)? {
-        return Ok(PregReplaceCallbackTarget {
-            entry_label,
-            env: PregReplaceCallbackEnv::None,
-        });
-    }
     let callback_ty = ctx.raw_value_php_type(callback)?;
     let callback_codegen_ty = callback_ty.codegen_repr();
     match callback_codegen_ty {
@@ -258,23 +249,6 @@ fn preg_replace_callback_target(
         value_ref.ir_type,
         source_op
     )))
-}
-
-/// Resolves a literal string callback to a module-local function entry.
-fn static_string_callback_entry(
-    ctx: &FunctionContext<'_>,
-    callback: ValueId,
-) -> Result<Option<String>> {
-    let Some(callback_name) = maybe_const_string_operand(ctx, callback)? else {
-        return Ok(None);
-    };
-    let Some(function_name) = ctx
-        .callable_function_by_name(&callback_name)
-        .map(|function| function.name.to_string())
-    else {
-        return Ok(None);
-    };
-    Ok(Some(function_symbol(&function_name)))
 }
 
 /// Emits a descriptor callback wrapper that adapts regex matches to callable descriptors.
@@ -520,28 +494,6 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
         }
     }
     Ok(())
-}
-
-/// Returns a string literal value when `value` is defined by a `ConstStr` instruction.
-fn maybe_const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<String>> {
-    let Some(inst_ref) = value_source_instruction(ctx, value)? else {
-        return Ok(None);
-    };
-    if inst_ref.op != Op::ConstStr {
-        return Ok(None);
-    }
-    let Some(Immediate::Data(data)) = inst_ref.immediate else {
-        return Err(CodegenIrError::invalid_module(
-            "preg_replace_callback callback string literal has no data id",
-        ));
-    };
-    ctx.module
-        .data
-        .strings
-        .get(data.as_raw() as usize)
-        .cloned()
-        .map(Some)
-        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
 
 /// Returns the instruction that defines an SSA value, when it has one.
