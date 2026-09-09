@@ -657,6 +657,11 @@ fn compile_and_run_capture_with_optional_regex(
 // Uses the default 8_388_608-byte heap and enables heap_debug during codegen.
 /// Provides the Compile and run with heap debug helper used by the compiler module.
 pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
+    compile_and_run_with_heap_debug_and_asm(source).0
+}
+
+/// Returns the exact user assembly with a heap-debug fixture's output for target-specific CI diagnostics.
+pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramOutput, String) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -676,7 +681,7 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
     );
 
     let _ = fs::remove_dir_all(&dir);
-    output
+    (output, user_asm)
 }
 
 // Parses GC statistics from stderr output produced when gc_stats is enabled.

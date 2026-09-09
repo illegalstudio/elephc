@@ -13,7 +13,7 @@ use crate::support::*;
 /// Repeated dynamic method dispatch does not consume the receiver's local owner.
 #[test]
 fn test_core_dynamic_method_loop_preserves_receiver_owner() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 class KeptDynamicReceiver {
     public static int $destroyed = 0;
     public function ping(): void { echo "a"; }
@@ -26,7 +26,7 @@ echo ":", KeptDynamicReceiver::$destroyed;
 unset($receiver);
 echo ":", KeptDynamicReceiver::$destroyed;
 "#);
-    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert!(out.success, "stdout={:?}\nstderr={}\nGenerated user assembly:\n{}", out.stdout, out.stderr, asm);
     assert_eq!(out.stdout, "aba:0:1", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
