@@ -11,21 +11,36 @@ use super::*;
 
 /// Collects PHP-visible locals that the current conservative scope sync can round-trip.
 pub(super) fn eval_sync_locals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncLocal> {
-    ctx.function
-        .locals
-        .iter()
+    eval_sync_function_locals(ctx.function)
+        .into_iter()
+        .filter(|local| !local_uses_eval_global_sync(ctx, Some(&local.name)))
+        .collect()
+}
+
+/// Maps PHP parameter names to their active COW shadows, never exposing incoming ABI duplicates.
+fn eval_sync_function_locals(function: &Function) -> Vec<EvalSyncLocal> {
+    let shadows = function.locals.iter()
         .filter(|local| local.kind == LocalKind::PhpLocal)
-        .filter(|local| !local_uses_eval_global_sync(ctx, local.name.as_deref()))
+        .filter_map(|local| local.name.as_deref()?.strip_suffix("#cow"))
+        .collect::<BTreeSet<_>>();
+    function.locals.iter()
+        .filter(|local| local.kind == LocalKind::PhpLocal)
         .filter_map(|local| {
-            let name = local.name.clone()?;
+            let stored_name = local.name.as_deref()?;
+            // `privatize_container_param` leaves the ABI slot in place and redirects PHP reads
+            // and writes to `name#cow`. Eval must use that same binding under the PHP name.
+            let name = if let Some(name) = stored_name.strip_suffix("#cow") {
+                name
+            } else if shadows.contains(stored_name) {
+                return None;
+            } else {
+                stored_name
+            };
             let ty = local.php_type.codegen_repr();
             eval_sync_type_supported(&ty).then_some(EvalSyncLocal {
-                name,
-                slot: local.id,
-                ty,
+                name: name.to_string(), slot: local.id, ty,
             })
-        })
-        .collect()
+        }).collect()
 }
 
 /// Keeps only eval-sync locals whose PHP name appears in `names`.
@@ -289,5 +304,33 @@ pub(super) fn scope_set_flags_for_type(ty: &PhpType) -> i64 {
         0
     } else {
         EVAL_SCOPE_FLAG_OWNED
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eval_sync_function_locals;
+    use crate::ir::{Function, IrType, LocalKind};
+    use crate::types::PhpType;
+
+    /// The eval inventory exposes each PHP name once and selects its active COW slot.
+    #[test]
+    fn eval_inventory_uses_parameter_shadows_under_php_names() {
+        let mut function = Function::new("shadow_scope".to_string(), IrType::Void, PhpType::Void);
+        let mut expected = Vec::new();
+        for (name, ty) in [
+            ("value", PhpType::Mixed),
+            ("items", PhpType::Array(Box::new(PhpType::Mixed))),
+        ] {
+            let ir_type = IrType::from_php(&ty);
+            function.add_local(Some(name.to_string()), ir_type, ty.clone(), LocalKind::PhpLocal);
+            let shadow = function.add_local(Some(format!("{name}#cow")), ir_type, ty, LocalKind::PhpLocal);
+            expected.push((name.to_string(), shadow));
+        }
+        let text = function.add_local(Some("text".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        expected.push(("text".to_string(), text));
+        let actual = eval_sync_function_locals(&function).into_iter()
+            .map(|local| (local.name, local.slot)).collect::<Vec<_>>();
+        assert_eq!(actual, expected);
     }
 }

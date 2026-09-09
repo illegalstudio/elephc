@@ -56,6 +56,32 @@ unset($source, $value, $text);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Literal and opaque eval share the active array parameter shadow without exposing its internal name.
+#[test]
+fn test_core_eval_array_parameter_shadow_is_the_visible_php_binding() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function inspectArrayShadowOwners(array $items, string $source): void {
+    $items[0] = "native";
+    eval($source);
+    echo $items[0], "|";
+    eval('$items[0] = "literal";');
+    echo $items[0], "|";
+}
+$items = ["caller"];
+$source = 'echo $items[0], "|";
+$items[0] = "dynamic";
+$locals = get_defined_vars();
+echo array_key_exists("items#cow", $locals) ? "exposed|" : "hidden|";
+unset($locals); // ' . $argc;
+inspectArrayShadowOwners($items, $source);
+echo $items[0];
+unset($items, $source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "native|hidden|dynamic|literal|caller", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Independent scope snapshots protect aliased native reference cells during sequential reload.
 #[test]
 fn test_core_eval_local_reload_keeps_aliased_reference_payloads_alive() {
@@ -64,7 +90,8 @@ function reloadAliasedOwners(mixed &$first, mixed &$second, string $source): voi
     eval($source);
     echo strlen($first), ":", strlen($second), "|";
 }
-$value = str_repeat("a", 8);
+function initialAliasedOwner(): mixed { return str_repeat("a", 8); }
+$value = initialAliasedOwner();
 $source = '$first = str_repeat("b", 48); $second = $first; // ' . $argc;
 reloadAliasedOwners($value, $value, $source);
 reloadAliasedOwners($value, $value, $source);

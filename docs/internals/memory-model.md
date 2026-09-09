@@ -357,6 +357,8 @@ the runtime release preserves the pending exception and collects any further chi
 destructor exceptions before returning to eval.
 
 Native local synchronization gives the eval scope an independent snapshot owner.
+Container and Mixed parameters expose their active copy-on-write shadow under the
+PHP parameter name, not the inactive ABI entry slot or the internal `#cow` name.
 Reload acquires the replacement, publishes it into raw or reference-cell storage,
 then releases the displaced native owner, including unchanged cells and missing
 entries. By-value parameters that eval can replace own their initial frame values;
