@@ -517,6 +517,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    emit_main_static_property_cleanup(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
     abi::emit_call_label(ctx.emitter, "__rt_diag_reset");
     // The exact root brackets every PHP callback that shutdown can invoke:
@@ -546,6 +547,48 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
+}
+
+/// Retires class static owners once, finishing every property before propagating a destructor throw.
+fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>) {
+    let properties = super::runtime_metadata::refcounted_static_properties(ctx.module);
+    if properties.is_empty() { return; }
+    for (symbol, php_type) in properties {
+        let ty = php_type.codegen_repr();
+        let done = ctx.next_label("static_property_cleanup_done");
+        let result = abi::int_result_reg(ctx.emitter);
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        ctx.emitter.comment(&format!("epilogue cleanup static property {symbol}"));
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, &symbol, 8);
+        abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {result}, {scratch}"));   // distinguish uninitialized typed storage from a live owner
+                ctx.emitter.instruction(&format!("b.eq {done}"));               // skip properties that never acquired an owner
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {result}, {scratch}"));   // distinguish uninitialized typed storage from a live owner
+                ctx.emitter.instruction(&format!("je {done}"));                 // skip properties that never acquired an owner
+            }
+        }
+        if ty == PhpType::Str {
+            abi::emit_load_symbol_to_reg(ctx.emitter, result, &symbol, 0);
+        } else {
+            abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
+        }
+        ctx.emitter.comment("retire the static property before invoking its destructor");
+        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+        abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &symbol, 8);
+        if ty == PhpType::Str {
+            abi::emit_unary_cleanup_preserving_exception(ctx.emitter, "__rt_heap_free_safe", result);
+        } else {
+            abi::emit_decref_preserving_exception(ctx.emitter, &ty);
+        }
+        ctx.emitter.label(&done);
+    }
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
 }
 
 /// Releases initialized function static locals before process-exit diagnostics.

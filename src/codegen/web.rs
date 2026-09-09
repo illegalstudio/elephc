@@ -30,7 +30,8 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::ir::Module;
-use crate::names::{ir_global_symbol, static_property_symbol};
+use crate::names::ir_global_symbol;
+use super::runtime_metadata::refcounted_static_properties;
 use crate::superglobals;
 use crate::types::PhpType;
 
@@ -349,38 +350,4 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
 fn emit_concat_offset_reset(emitter: &mut Emitter) {
     emitter.comment("reset the concat-buffer write offset for the next request");
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
-}
-
-/// Returns `(storage_symbol, php_type)` for every refcounted static class
-/// property that the handler body initializes, enumerated exactly like
-/// `emit_static_property_initializers` so the reset stays in lockstep with what
-/// gets re-initialized each request. Non-refcounted properties are excluded:
-/// their re-run initializer simply overwrites the scalar, with nothing to free.
-fn refcounted_static_properties(module: &Module) -> Vec<(String, PhpType)> {
-    let mut class_names = super::runtime_referenced_class_names(module)
-        .into_iter()
-        .collect::<Vec<_>>();
-    class_names.sort();
-    let mut props = Vec::new();
-    for class_name in class_names {
-        let Some(class_info) = module.class_infos.get(&class_name) else {
-            continue;
-        };
-        for (property, php_type) in &class_info.static_properties {
-            let declaring_class = class_info
-                .static_property_declaring_classes
-                .get(property)
-                .map(String::as_str)
-                .unwrap_or(class_name.as_str());
-            if declaring_class != class_name {
-                continue;
-            }
-            let ty = php_type.codegen_repr();
-            if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
-                continue;
-            }
-            props.push((static_property_symbol(&class_name, property), php_type.clone()));
-        }
-    }
-    props
 }

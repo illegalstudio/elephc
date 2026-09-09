@@ -9,6 +9,34 @@
 
 use super::*;
 
+/// Shutdown frees inherited static strings, containers, objects, and captured callbacks exactly once.
+#[test]
+fn test_class_static_properties_release_last_owners_at_shutdown() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ShutdownStaticPayload { public function __destruct() { echo "D"; } }
+class ShutdownStaticOwner {
+    public static string $text = "";
+    public static string $uninitialized;
+    public static mixed $list = null;
+    public static mixed $map = null;
+    public static mixed $object = null;
+    public static mixed $callback = null;
+}
+class ShutdownStaticChild extends ShutdownStaticOwner {}
+ShutdownStaticChild::$text = str_repeat("s", 32);
+ShutdownStaticChild::$list = [str_repeat("l", 32)];
+ShutdownStaticChild::$map = ["key" => str_repeat("m", 32)];
+ShutdownStaticChild::$object = new ShutdownStaticPayload();
+$capture = str_repeat("c", 32);
+ShutdownStaticChild::$callback = static function () use ($capture): void { echo $capture; };
+unset($capture);
+echo isset(ShutdownStaticChild::$uninitialized) ? "bad" : "ready";
+"#);
+    assert!(out.success, "stdout: {} stderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "readyD", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Checked increments of a typed static integer retire every intermediate Mixed cell.
 #[test]
 fn test_static_integer_increment_releases_checked_boxes() {

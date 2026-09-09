@@ -20,6 +20,7 @@ mod debug_info;
 mod effects;
 mod exhaustive;
 mod ownership;
+mod static_properties;
 mod throwable_constructors;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
