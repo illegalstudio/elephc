@@ -10,6 +10,30 @@
 
 use crate::support::*;
 
+/// Eval inspects native compact exceptions through explicit getters and owns the returned previous.
+#[test]
+fn test_core_eval_native_throwable_getters_preserve_previous_after_outer_unset() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function throwNativeGetterChain(): void {
+    throw new RuntimeException("outer", 23, new Exception("previous", 5));
+}
+$source = 'try { throwNativeGetterChain(); }
+catch (RuntimeException $error) {
+    echo "caught|", $error->getMessage(), ":", $error->getCode(), "|";
+    $previous = $error->getPrevious();
+    unset($error);
+    echo $previous->getMessage(), ":", $previous->getCode(), ":";
+    echo $previous->getPrevious() === null ? "end" : "unexpected";
+    unset($previous);
+}' . ' // ' . $argc;
+eval($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|outer:23|previous:5:end", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A native caller retains eval's boxed previous link after releasing the outer exception.
 #[test]
 fn test_core_eval_throwable_previous_survives_outer_release() {

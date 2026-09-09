@@ -10,6 +10,32 @@
 use super::*;
 use crate::ir::{Effects, Immediate, IrHeapKind, IrType, RuntimeCallTarget};
 
+/// Every eval bridge owns a nullable previous result before handing it back across the native ABI.
+#[test]
+fn compact_throwable_eval_previous_getter_boxes_both_return_arms_on_all_targets() {
+    let source = r#"<?php
+function throwEvalGetterException(): void { throw new RuntimeException("native"); }
+$source = 'try { throwEvalGetterException(); } catch (RuntimeException $error) {
+    echo $error->getPrevious() === null ? "end" : "previous";
+}' . ' // ' . $argc;
+eval($source);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let start = assembly.find("__elephc_eval_builtin_throwable_getprevious:").unwrap();
+        let body = &assembly[start..];
+        let lookup = body.find("__rt_throwable_previous").unwrap();
+        let object_box = body.find("__rt_mixed_from_value").unwrap();
+        let null = body.find("__elephc_eval_builtin_throwable_previous_null:").unwrap();
+        assert!(lookup < object_box && object_box < null, "{name}");
+        assert!(body[null..].contains("__rt_mixed_from_value"), "{name}");
+    }
+}
+
 /// Both constructor roots remain emitted and use normalized boxed previous operands on all targets.
 #[test]
 fn inherited_throwable_constructors_have_layout_aware_bodies() {

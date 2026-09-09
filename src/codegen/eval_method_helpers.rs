@@ -94,6 +94,7 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
 ];
 const BUILTIN_THROWABLE_GET_MESSAGE_LABEL: &str = "__elephc_eval_builtin_throwable_getmessage";
 const BUILTIN_THROWABLE_GET_CODE_LABEL: &str = "__elephc_eval_builtin_throwable_getcode";
+const BUILTIN_THROWABLE_GET_PREVIOUS_LABEL: &str = "__elephc_eval_builtin_throwable_getprevious";
 const METHOD_HELPER_BASE_FRAME_SIZE: usize = 80;
 const METHOD_HELPER_HANDLER_OFFSET: usize = METHOD_HELPER_BASE_FRAME_SIZE;
 const METHOD_HELPER_FRAME_SIZE: usize = METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
@@ -912,6 +913,9 @@ fn emit_aarch64_builtin_throwable_method_dispatch(
             "getcode",
             BUILTIN_THROWABLE_GET_CODE_LABEL,
         );
+        emit_aarch64_builtin_throwable_method_name_branch(
+            module, emitter, data, "getprevious", BUILTIN_THROWABLE_GET_PREVIOUS_LABEL,
+        );
         emitter.label(&next_label);
     }
 }
@@ -943,6 +947,9 @@ fn emit_x86_64_builtin_throwable_method_dispatch(
             data,
             "getcode",
             BUILTIN_THROWABLE_GET_CODE_LABEL,
+        );
+        emit_x86_64_builtin_throwable_method_name_branch(
+            module, emitter, data, "getprevious", BUILTIN_THROWABLE_GET_PREVIOUS_LABEL,
         );
         emitter.label(&next_label);
     }
@@ -1211,6 +1218,7 @@ fn emit_aarch64_builtin_throwable_method_bodies(
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
     emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable code as a Mixed integer
     emitter.instruction(&format!("b {}", done_label));                          // return the boxed Throwable method result
+    emit_builtin_throwable_previous_body(module, emitter, done_label, fail_label);
 }
 
 /// Emits x86_64 bodies for compact Throwable methods used by eval.
@@ -1237,6 +1245,35 @@ fn emit_x86_64_builtin_throwable_method_bodies(
     emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer
     emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable code as a Mixed integer
     emitter.instruction(&format!("jmp {}", done_label));                        // return the boxed Throwable method result
+    emit_builtin_throwable_previous_body(module, emitter, done_label, fail_label);
+}
+
+/// Boxes a borrowed previous link independently so retiring the outer exception cannot invalidate it.
+fn emit_builtin_throwable_previous_body(
+    module: &Module,
+    emitter: &mut Emitter,
+    done_label: &str,
+    fail_label: &str,
+) {
+    let null_label = "__elephc_eval_builtin_throwable_previous_null";
+    emitter.label(BUILTIN_THROWABLE_GET_PREVIOUS_LABEL);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+            emitter.instruction("ldr x0, [sp, #16]");                           // borrow the compact outer exception for previous-link lookup
+        }
+        Arch::X86_64 => {
+            emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+            emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // borrow the compact outer exception for previous-link lookup
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_throwable_previous");
+    abi::emit_branch_if_int_result_zero(emitter, null_label);
+    emit_box_current_value_as_mixed(emitter, &PhpType::Object("Throwable".to_string()));
+    abi::emit_jump(emitter, done_label);
+    emitter.label(null_label);
+    emit_box_current_value_as_mixed(emitter, &PhpType::Void);
+    abi::emit_jump(emitter, done_label);
 }
 
 /// Emits ARM64 zero-argument validation for compact Throwable eval methods.
