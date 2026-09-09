@@ -231,6 +231,9 @@ pub(super) fn flush_eval_global_scope(
     globals: &[EvalSyncGlobal],
 ) -> Result<()> {
     for global in globals {
+        if main_eval_local_supplies_global(ctx, &global.name) {
+            continue;
+        }
         load_global_to_result(ctx, global);
         if !matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &global.ty);
@@ -245,6 +248,9 @@ pub(super) fn flush_eval_global_scope(
 /// Flushes global-backed variables into the local eval scope for scope-read EIR AOT.
 pub(super) fn flush_eval_globals_to_local_scope(ctx: &mut FunctionContext<'_>, globals: &[EvalSyncGlobal]) {
     for global in globals {
+        if main_eval_local_supplies_global(ctx, &global.name) {
+            continue;
+        }
         load_global_to_result(ctx, global);
         if !matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &global.ty);
@@ -253,6 +259,17 @@ pub(super) fn flush_eval_globals_to_local_scope(ctx: &mut FunctionContext<'_>, g
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
         emit_eval_scope_set_name(ctx, &global.name, scope_set_flags_for_type(&global.ty));
     }
+}
+
+/// Keeps top-level local process values authoritative when local and global eval scopes are shared.
+fn main_eval_local_supplies_global(ctx: &FunctionContext<'_>, name: &str) -> bool {
+    ctx.is_main
+        && !main_name_uses_eval_global_scope(ctx, name)
+        && ctx.function.locals.iter().any(|local| {
+            local.kind == LocalKind::PhpLocal
+                && local.name.as_deref() == Some(name)
+                && eval_sync_type_supported(&local.php_type.codegen_repr())
+        })
 }
 
 /// Loads a program-global symbol into result registers using its inferred type.

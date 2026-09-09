@@ -14,7 +14,8 @@ use crate::support::*;
 #[test]
 fn test_core_eval_top_level_process_globals_retire_initial_storage() {
     let out = compile_and_run_with_heap_debug(r#"<?php
-$source = 'echo $argc > 0 && count($argv) === $argc ? "ready|" : "bad|"; // ' . $argc;
+$argc += 7;
+$source = 'echo count($argv) + 7 === $argc ? "ready|" : "bad|"; // ' . $argc;
 eval($source);
 eval($source);
 unset($source);
@@ -29,6 +30,7 @@ echo "done";
 #[test]
 fn test_core_eval_global_reload_balances_replacements_and_identical_cells() {
     let out = compile_and_run_with_heap_debug(r#"<?php
+$payload = "";
 function seedReloadGlobal(): void { global $payload; $payload = str_repeat("a", 48); }
 function runReloadGlobal(string $source): void { eval($source); }
 seedReloadGlobal();
