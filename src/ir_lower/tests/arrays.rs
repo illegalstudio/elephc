@@ -10,6 +10,38 @@
 
 use crate::ir::print_module;
 
+/// Generic array spreads use an owned hash boundary instead of raw array operations on boxed cells.
+#[test]
+fn php_array_literal_spreads_use_typed_hash_boundary_on_every_target() {
+    use crate::codegen::platform::Target;
+    use std::path::Path;
+
+    let source = r#"<?php
+function spreadPhpArray(array $items): array { return [0, ...$items, "tail"]; }
+class SpreadPhpArraySource {
+    public function none(): array { return []; }
+    public function combined(): array { $local = []; return [...$local, ...$this->none()]; }
+}
+$spread = function(array $items, mixed $tail) { return [...$items, $tail]; };
+echo count(spreadPhpArray([$argc]));
+echo count($spread(["key" => $argc], "last"));
+echo count((new SpreadPhpArraySource())->combined());
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let ir = print_module(&module);
+        assert!(ir.contains("array.unpack_to_hash"), "{name}: {ir}");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains("__rt_mixed_clone"), "{name}");
+        assert!(assembly.contains("__rt_mixed_cell_promote_to_hash"), "{name}");
+        assert!(assembly.contains("__rt_hash_spread"), "{name}");
+        assert!(assembly.contains("__rt_decref_mixed"), "{name}");
+    }
+}
+
 /// Boxed pop and shift publish separated receivers before removal on every supported target.
 #[test]
 fn php_array_pop_shift_use_boxed_receiver_helpers_on_every_target() {

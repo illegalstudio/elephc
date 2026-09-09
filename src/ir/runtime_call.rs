@@ -61,6 +61,9 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Borrows a boxed PHP array and returns an independently owned hash for literal unpacking.
+    /// Rejects non-array values without mutating the original cell or its payload.
+    ArrayUnpackToHash,
     /// Promotes an indexed-array payload stored in a boxed Mixed cell to a
     /// Mixed-entry hash and installs the new payload back into that same cell.
     MixedCellPromoteToHash(ArrayKeySort),
@@ -98,7 +101,8 @@ impl RuntimeCallTarget {
                 max_operands: Some(2),
             }),
             RuntimeCallTarget::MixedCellPromoteToHash(_)
-            | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_) => {
+            | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
+            | RuntimeCallTarget::ArrayUnpackToHash => {
                 Some(RuntimeCallSignature::Fixed {
                     parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                     result: IrType::Heap(IrHeapKind::Hash),
@@ -127,6 +131,7 @@ impl RuntimeCallTarget {
         match self {
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
                 "array.mixed_cell_promote_to_hash_ksort"
             }

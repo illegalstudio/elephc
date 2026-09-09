@@ -197,3 +197,26 @@ paths from recognizing those children. Callable arrays now receive tag 10.
 All-target emitter assertions and a heap-debug static-descriptor/COW fixture
 cover the stamp and the retained late-bound called class. Existing returned
 closure and static-callable map fixtures remain CI gates.
+
+### Boxed literal spread boundary
+
+On `9e0a0994a`, Linux ARM64 shard 4 still rejects a declared-array method
+spread with `Heap(Array)` versus `Heap(Mixed)` in EIR validation. Literal
+unpacking now converts boxed arrays through an explicitly typed, independently
+owned hash result. Raw packed-to-hash promotion receives a dedicated owner
+because that operation consumes its input. Checker, closure return inference,
+and literal storage selection all account for possible associative keys.
+
+Boxed validation happens before later element side effects. Existing scoped
+operand-owner records retain prepared items across subsequent evaluation and
+retire them on same-frame catches. New fixtures cover packed/hash/empty sources,
+closure returns, key order, COW, repeated temporary cleanup and failure order.
+The all-target structural fixture covers the typed runtime boundary and emitter
+symbols. Local validation comprises `cargo build`, `cargo check --tests`,
+assembly-comment checks and the complete generated-builtin-doc workflow only.
+No local tests were executed; the executable and structural fixtures await CI.
+
+The same ARM64 shard no longer reports the omitted-reference-default and sleep
+serialization failures. Shards 3 and 9 still report callback-array validation,
+boxed implode cleanup, unshift/sort validation and list-unpack leaks. These
+remain open independently of the spread correction.

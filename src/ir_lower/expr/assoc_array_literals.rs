@@ -38,7 +38,7 @@ pub(super) fn assoc_array_literal_type_from_spreads(
     let mut value_ty = PhpType::Never;
     for item in items {
         let next = match &item.kind {
-            ExprKind::Spread(inner) => match infer_expr_type_syntactic(inner).codegen_repr() {
+            ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
                 PhpType::Array(elem) => elem.codegen_repr(),
                 PhpType::AssocArray { value, .. } => value.codegen_repr(),
                 _ => PhpType::Mixed,
@@ -270,4 +270,3 @@ pub(super) fn nullsafe_method_call_expr_type_for_ir(
 pub(crate) fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
-

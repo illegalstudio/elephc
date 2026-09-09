@@ -23,35 +23,82 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
         let array_ty = array_literal_type_for_ir(ctx, items, expr);
         return lower_array_literal_without_spread(ctx, items, expr, array_ty);
     }
-    // Spread-containing literals: lower every item value in source order first so PHP-visible side
-    // effects happen in order, then inspect each spread source's actual IR type to decide whether
-    // the destination must be associative (hash) storage. Dest allocation is pure, so emitting it
-    // after source evaluation preserves observable behavior.
+    // Validate boxed spreads as they are evaluated, before later element side effects.
+    // Root owned items across subsequent evaluation and allocate the destination only once
+    // every spread has a valid concrete container layout.
     let mut lowered: Vec<SpreadItem> = Vec::with_capacity(items.len());
+    let mut roots = Vec::new();
     let mut any_assoc_spread = false;
     for item in items {
         match &item.kind {
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
+                let source = if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {
+                    lower_boxed_array_spread_source(ctx, source, item.span)
+                } else {
+                    source
+                };
                 if matches!(
                     ctx.builder.value_php_type(source.value).codegen_repr(),
-                    PhpType::AssocArray { .. }
+                    PhpType::AssocArray { .. } | PhpType::Mixed
                 ) {
                     any_assoc_spread = true;
                 }
+                let source = root_array_literal_item(ctx, source, item.span, &mut roots);
                 lowered.push(SpreadItem::Spread(source));
             }
             _ => {
                 let value = lower_expr(ctx, item);
+                let value = root_array_literal_item(ctx, value, item.span, &mut roots);
                 lowered.push(SpreadItem::Element(value));
             }
         }
     }
-    if any_assoc_spread {
+    let result = if any_assoc_spread {
         lower_array_literal_as_hash_from_lowered(ctx, items, &lowered, expr)
     } else {
         lower_array_literal_as_indexed_from_lowered(ctx, items, &lowered, expr)
+    };
+    for slot in roots.into_iter().rev() {
+        retire_owned_call_operand(ctx, slot, expr.span);
     }
+    result
+}
+
+/// Roots owned literal items across later evaluation and lends their stable slot value to insertion.
+fn root_array_literal_item(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+    roots: &mut Vec<crate::ir::LocalSlotId>,
+) -> LoweredValue {
+    let (rooted, owner) = root_owned_call_operand(ctx, value, span);
+    let Some(slot) = owner else { return rooted; };
+    roots.push(slot);
+    let php_type = ctx.builder.value_php_type(rooted.value);
+    let value = ctx.builder.emit_load_local(slot, rooted.ir_type, php_type);
+    LoweredValue { value, ir_type: ctx.builder.value_type(value) }
+}
+
+/// Validates and copies a boxed spread without leaving its expression owner live after a throw.
+fn lower_boxed_array_spread_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let (source, owner) = root_owned_call_operand(ctx, source, span);
+    let result = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ArrayUnpackToHash)),
+        PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    if let Some(slot) = owner {
+        retire_owned_call_operand(ctx, slot, span);
+    }
+    result
 }
 
 /// Lowers an indexed array literal using a contextual element storage type.
@@ -225,9 +272,12 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     let spread_source = if source_is_hash {
         source
     } else {
+        // ArrayToHash consumes its input owner. Keep the original source alive for its
+        // caller, whether it is a borrowed local or an owning expression temporary.
+        let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
         let promoted = ctx.emit_value(
             Op::ArrayToHash,
-            vec![source.value],
+            vec![retained.value],
             None,
             PhpType::AssocArray {
                 key: Box::new(PhpType::Int),
@@ -250,6 +300,9 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     );
     if ctx.value_is_owning_temporary(spread_source) {
         crate::ir_lower::ownership::release_if_owned(ctx, spread_source, Some(span));
+    }
+    if spread_source.value != source.value && ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
 }
 
@@ -374,7 +427,7 @@ pub(super) fn release_value_after_retaining_insert(
     }
 }
 
-/// Returns the indexed-array type that the EIR backend can faithfully materialize.
+/// Returns literal storage, allowing hash keys when a spread can contain associative entries.
 pub(crate) fn array_literal_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     items: &[Expr],
@@ -382,6 +435,14 @@ pub(crate) fn array_literal_type_for_ir(
 ) -> PhpType {
     if items.is_empty() {
         return fallback_expr_type(expr);
+    }
+    if items.iter().any(|item| {
+        matches!(&item.kind, ExprKind::Spread(inner) if matches!(
+            array_literal_element_type_for_ir(ctx, inner).codegen_repr(),
+            PhpType::AssocArray { .. } | PhpType::Mixed
+        ))
+    }) {
+        return assoc_array_literal_type_from_spreads(ctx, items, expr);
     }
     let mut elem_ty = array_literal_element_type_for_ir(ctx, &items[0]);
     for item in items.iter().skip(1) {
@@ -410,6 +471,7 @@ pub(super) fn array_literal_element_type_for_ir(
                 PhpType::Void | PhpType::Never => PhpType::Mixed,
                 other => other,
             },
+            PhpType::AssocArray { value, .. } => value.codegen_repr(),
             _ => PhpType::Mixed,
         },
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, item).codegen_repr(),
@@ -490,4 +552,3 @@ pub(crate) fn ir_array_storage_type(php_type: PhpType) -> PhpType {
 pub(crate) fn merge_ir_indexed_element_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
-

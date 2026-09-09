@@ -174,8 +174,8 @@ impl Checker {
                         &elem.kind,
                         ExprKind::Spread(inner)
                             if matches!(
-                                self.infer_type(inner, env),
-                                Ok(PhpType::AssocArray { .. })
+                                self.infer_type(inner, env).map(|ty| ty.codegen_repr()),
+                                Ok(PhpType::AssocArray { .. } | PhpType::Mixed)
                             )
                     )
                 }) {

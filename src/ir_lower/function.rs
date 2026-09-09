@@ -1823,7 +1823,7 @@ fn direct_closure_return_type(
 /// the property's declared type, so a `fn &() => $o->items` closure returns the array type
 /// rather than the syntactic integer default. An array literal built out of those same
 /// variables resolves its element/value slots the same way (see
-/// `direct_closure_return_array_element_type`).
+/// `direct_closure_return_array_type`).
 fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
@@ -1841,13 +1841,13 @@ fn direct_closure_return_expr_type(
     // closure signature instead of the syntactic integer default.
     if let ExprKind::ArrayLiteral(items) = &expr.kind {
         if !items.is_empty() {
-            return PhpType::Array(Box::new(direct_closure_return_array_element_type(
+            return direct_closure_return_array_type(
                 items,
                 captures,
                 params,
                 classes,
                 builtin_call_types,
-            )));
+            );
         }
     }
     if let ExprKind::ArrayLiteralAssoc(pairs) = &expr.kind {
@@ -1916,8 +1916,8 @@ fn direct_closure_return_expr_type(
     crate::types::checker::infer_expr_type_syntactic(expr)
 }
 
-/// Returns the EIR storage element type for an indexed array literal returned directly
-/// from a closure, resolving every item against the closure's captures and parameters.
+/// Returns literal storage for a closure return, resolving elements and spread keys
+/// against the closure's captures and parameters.
 ///
 /// This mirrors `crate::ir_lower::expr::array_literal_type_for_ir`, which types the very
 /// same literal while lowering the body from `LoweringContext::local_types`. The two must
@@ -1927,7 +1927,7 @@ fn direct_closure_return_expr_type(
 /// { return [$a, $b]; }` called as `(1, "z")` produced `[1, 0]`. The syntactic fallback used
 /// before this helper existed types every unrecognized item `int`, which also mis-stamped
 /// `string`, `float`, `bool`, and `array` parameters.
-fn direct_closure_return_array_element_type(
+fn direct_closure_return_array_type(
     items: &[crate::parser::ast::Expr],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
@@ -1935,7 +1935,15 @@ fn direct_closure_return_array_element_type(
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 ) -> PhpType {
     let mut elem_ty = PhpType::Never;
+    let mut has_hash_spread = false;
     for item in items {
+        if let ExprKind::Spread(inner) = &item.kind {
+            has_hash_spread |= matches!(
+                direct_closure_return_expr_type(inner, captures, params, classes, builtin_call_types)
+                    .codegen_repr(),
+                PhpType::AssocArray { .. } | PhpType::Mixed
+            );
+        }
         elem_ty = crate::ir_lower::expr::merge_ir_indexed_element_type(
             elem_ty,
             direct_closure_return_array_item_type(
@@ -1947,7 +1955,11 @@ fn direct_closure_return_array_element_type(
             ),
         );
     }
-    elem_ty
+    if has_hash_spread {
+        PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(elem_ty) }
+    } else {
+        PhpType::Array(Box::new(elem_ty))
+    }
 }
 
 /// Returns the EIR storage element type contributed by one indexed array-literal item.
@@ -1975,6 +1987,7 @@ fn direct_closure_return_array_item_type(
                 PhpType::Void | PhpType::Never => PhpType::Mixed,
                 other => other,
             },
+            PhpType::AssocArray { value, .. } => value.codegen_repr(),
             _ => PhpType::Mixed,
         };
     }
