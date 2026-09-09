@@ -1478,11 +1478,12 @@ echo implode(',', $o->x);
 }
 
 /// Regression for issue #642: the separated container must be published back into the PROPERTY
-/// slot, on every supported target. Publishing is the whole fix — a split whose result is not
+/// slot, on every supported target. A split whose result is not
 /// written back leaves the loop iterating a container the property does not own, which is how
 /// the property ended up freed. The assertion is structural: inside the `prop_get_for_write`
-/// block the slot is read, the copy-on-write helper runs, and the result is stored back to that
-/// same slot, in that order. Run under `ELEPHC_TEST_TARGET` to cover the non-host architectures.
+/// block the boxed slot is read, its zval is cloned, the old owner is released, and the result
+/// is stored back to that same slot, in that order. Run under `ELEPHC_TEST_TARGET` to cover
+/// the non-host architectures. The declared PHP array property uses Mixed storage.
 #[test]
 fn test_regression_642_prop_get_for_write_publishes_split_into_property_slot() {
     let dir = make_cli_test_dir("elephc_prop_get_for_write_publish");
@@ -1511,13 +1512,13 @@ foreach ($o->x as &$v) { $v = $v * 2; }
     let (slot_load, slot_store) = match target().arch {
         Arch::AArch64 => ("ldr x0, [x9, #8]", "str x0, [x9, #8]"),
         Arch::X86_64 => (
-            "mov rdi, QWORD PTR [r11 + 8]",
+            "mov rax, QWORD PTR [r11 + 8]",
             "mov QWORD PTR [r11 + 8], rax",
         ),
     };
     let call = match target().arch {
-        Arch::AArch64 => "bl __rt_array_ensure_unique",
-        Arch::X86_64 => "call __rt_array_ensure_unique",
+        Arch::AArch64 => "bl __rt_mixed_clone",
+        Arch::X86_64 => "call __rt_mixed_clone",
     };
     let load_pos = body
         .find(slot_load)
@@ -1525,12 +1526,15 @@ foreach ($o->x as &$v) { $v = $v * 2; }
     let call_pos = body
         .find(call)
         .unwrap_or_else(|| panic!("missing copy-on-write split `{call}` in:\n{body}"));
+    let release_pos = body
+        .find("__rt_decref_mixed")
+        .unwrap_or_else(|| panic!("missing old property zval release in:\n{body}"));
     let store_pos = body
         .find(slot_store)
         .unwrap_or_else(|| panic!("missing slot republish `{slot_store}` in:\n{body}"));
     assert!(
-        load_pos < call_pos && call_pos < store_pos,
-        "expected slot load -> split -> slot republish, got:\n{body}"
+        load_pos < call_pos && call_pos < release_pos && release_pos < store_pos,
+        "expected slot load -> clone -> old owner release -> slot republish, got:\n{body}"
     );
 }
 
