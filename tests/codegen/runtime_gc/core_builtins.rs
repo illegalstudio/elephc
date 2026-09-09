@@ -570,6 +570,26 @@ fn test_core_eval_categorized_constants_release_nested_results() {
     );
 }
 
+/// Direct, returned, CUF, and first-class GC snapshots retire the raw hash beneath the result box.
+#[test]
+fn test_core_aot_gc_status_box_owns_the_only_hash_reference() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function snapshotCollectorStatus(): mixed { return gc_status(); }
+function invokeCollectorStatus(callable $callback): mixed { return $callback(); }
+for ($i = 0; $i < 3; $i++) {
+    $direct = gc_status();
+    $snapshot = snapshotCollectorStatus();
+    $called = call_user_func("gc_status");
+    $firstClass = invokeCollectorStatus(gc_status(...));
+    echo count($direct), ":", count($snapshot), ":", count($called), ":", count($firstClass), "|";
+    unset($direct, $snapshot, $called, $firstClass);
+}
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "12:12:12:12|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Declaration inventories, frame inventories, and GC status free their nested temporary cells.
 #[test]
 fn test_core_eval_metadata_collections_release_each_result() {

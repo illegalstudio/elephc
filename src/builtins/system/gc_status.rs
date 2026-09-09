@@ -92,14 +92,23 @@ fn lower(
         insert_status_entry(ctx, hash.value, key, value, call.span);
     }
 
-    Ok(ctx.emit_value(
+    let result = ctx.emit_value(
         Op::MixedBox,
         vec![hash.value],
         None,
         call.result_type.clone(),
         Op::MixedBox.default_effects(),
         Some(call.span),
-    ))
+    );
+    // MixedBox retains its payload, so only the returned box should keep the hash alive.
+    ctx.emit_void(
+        Op::Release,
+        vec![hash.value],
+        None,
+        Op::Release.default_effects(),
+        Some(call.span),
+    );
+    Ok(result)
 }
 
 /// Emits one dynamic scalar collector metric.
