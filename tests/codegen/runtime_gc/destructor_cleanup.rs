@@ -273,7 +273,7 @@ for ($i = 0; $i < 3; $i++) {
 /// Every container finishes sibling cleanup and preserves both exceptions before freeing its storage.
 #[test]
 fn test_core_throwing_destructors_release_objects_arrays_hashes_and_callable_captures() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 class ThrowingCleanupChild {
     public string $message;
     public string $buffer;
@@ -330,5 +330,6 @@ echo gc_collect_cycles() > 0 ? "collected" : "suppressed";
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "chain|chain|chain|chain|unprotected|collected", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nGenerated user assembly:\n{}", out.stderr, asm);
 }

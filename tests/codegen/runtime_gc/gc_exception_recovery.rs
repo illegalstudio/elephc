@@ -39,7 +39,7 @@ echo $total;
 /// Eval inspects native compact exceptions through explicit getters and owns the returned previous.
 #[test]
 fn test_core_eval_native_throwable_getters_preserve_previous_after_outer_unset() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 function throwNativeGetterChain(): void {
     throw new RuntimeException("outer", 23, new Exception("previous", 5));
 }
@@ -57,13 +57,14 @@ unset($source);
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "caught|outer:23|previous:5:end", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nGenerated user assembly:\n{}", out.stderr, asm);
 }
 
 /// A native caller retains eval's boxed previous link after releasing the outer exception.
 #[test]
 fn test_core_eval_throwable_previous_survives_outer_release() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 function checkEvalPreviousOwner(string $source): void {
     try { eval($source); }
     catch (Exception $outer) {
@@ -84,7 +85,8 @@ unset($source);
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "inner:13|inner:13|", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nGenerated user assembly:\n{}", out.stderr, asm);
 }
 
 /// Native exceptions caught and rethrown by opaque eval balance both ownership transfers.
