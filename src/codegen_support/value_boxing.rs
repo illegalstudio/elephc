@@ -8,6 +8,7 @@
 //! Key details:
 //! - Tag values and payload register conventions must match `__rt_mixed_from_value`.
 //! - Owned boxing paths transfer or release references without double-freeing payloads.
+//! - Mixed-element indexed arrays may contain promoted hash storage, so boxing probes their kind.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
@@ -64,7 +65,10 @@ pub(crate) fn emit_box_runtime_payload_as_mixed(
 pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Mixed | PhpType::Union(_) => {}
-        PhpType::Iterable => emit_box_iterable_as_mixed(emitter),
+        PhpType::Iterable => emit_box_dynamic_container_as_mixed(emitter, 4),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
+            emit_box_dynamic_container_as_mixed(emitter, 3);
+        }
         PhpType::TaggedScalar => match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("mov x9, x0");                              // stage the tagged scalar payload while the tag moves into the helper tag register
@@ -273,8 +277,8 @@ fn emit_box_current_owned_refcounted_as_mixed_for_container(emitter: &mut Emitte
     }
 }
 
-/// Boxes an iterable by probing its concrete heap kind and mapping it to a Mixed tag.
-fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
+/// Boxes a dynamically shaped container, accepting arrays through kind 3 and iterables through kind 4.
+fn emit_box_dynamic_container_as_mixed(emitter: &mut Emitter, maximum_kind: u8) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("str x0, [sp, #-16]!");                         // preserve the iterable heap pointer while probing its concrete heap kind
@@ -282,7 +286,7 @@ fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
             emitter.instruction("mov x9, x0");                                  // keep the heap kind available for tag normalization
             emitter.instruction("cmp x0, #2");                                  // is the heap kind at least the indexed-array tag?
             emitter.instruction("cset x10, hs");                                // record whether the iterable is in the supported heap-backed range lower bound
-            emitter.instruction("cmp x0, #4");                                  // is the heap kind no greater than the object tag?
+            emitter.instruction(&format!("cmp x0, #{}", maximum_kind));         // restrict dynamic containers to the declared array or iterable family
             emitter.instruction("cset x11, ls");                                // record whether the iterable is in the supported heap-backed range upper bound
             emitter.instruction("and x10, x10, x11");                           // combine the lower and upper bound checks into one predicate
             emitter.instruction("add x9, x9, #2");                              // map heap kind 2/3/4 to mixed tag 4/5/6
@@ -299,7 +303,7 @@ fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
             emitter.instruction("mov r10, rax");                                // keep the heap kind available for tag normalization
             emitter.instruction("cmp rax, 2");                                  // is the heap kind at least the indexed-array tag?
             emitter.instruction("setae r11b");                                  // record whether the iterable is in the supported heap-backed range lower bound
-            emitter.instruction("cmp rax, 4");                                  // is the heap kind no greater than the object tag?
+            emitter.instruction(&format!("cmp rax, {}", maximum_kind));         // restrict dynamic containers to the declared array or iterable family
             emitter.instruction("setbe dl");                                    // record whether the iterable is in the supported heap-backed range upper bound
             emitter.instruction("and dl, r11b");                                // combine the lower and upper bound checks into one predicate byte
             emitter.instruction("add r10, 2");                                  // map heap kind 2/3/4 to mixed tag 4/5/6
@@ -309,6 +313,36 @@ fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
             abi::emit_pop_reg(emitter, "rdi");                                   // restore the iterable heap pointer as the mixed payload low word
             emitter.instruction("xor rsi, rsi");                                // iterable payloads do not use a high payload word
             emitter.instruction("call __rt_mixed_from_value");                  // retain the concrete heap payload and return an owned mixed cell
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Mixed-element array boxing preserves runtime hash promotion without accepting object storage.
+    #[test]
+    fn mixed_element_array_boxing_uses_the_actual_container_kind() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for owned in [false, true] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                let ty = PhpType::Array(Box::new(PhpType::Mixed));
+                if owned {
+                    emit_box_current_owned_value_as_mixed(&mut emitter, &ty);
+                } else {
+                    emit_box_current_value_as_mixed(&mut emitter, &ty);
+                }
+                let asm = emitter.output();
+                assert!(asm.contains("__rt_heap_kind"), "{name}, owned={owned}");
+                let guard = if name == "linux-x86_64" { "cmp rax, 3" } else { "cmp x0, #3" };
+                assert!(asm.contains(guard), "{name}, owned={owned}");
+                assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}");
+            }
+            let mut scalar_array = Emitter::new(Target::parse(name).unwrap());
+            emit_box_current_value_as_mixed(&mut scalar_array, &PhpType::Array(Box::new(PhpType::Int)));
+            assert!(!scalar_array.output().contains("__rt_heap_kind"), "{name}");
         }
     }
 }
