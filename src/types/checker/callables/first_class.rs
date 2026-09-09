@@ -277,11 +277,13 @@ impl Checker {
                 if crate::name_resolver::is_builtin_function(name.as_str()) {
                     return Ok(base_sig);
                 }
-                let normalized_args =
-                    self.normalize_named_call_args(&base_sig, args, span, "first-class callable", env)?;
+                let plan = self.plan_named_call_args(&base_sig, args, span, "first-class callable", env)?;
+                let defaults = plan.default_argument_mask();
+                let normalized_args = plan.normalized_args();
                 self.check_function_call_pre_normalized(
                     name.as_str(),
                     &normalized_args,
+                    &defaults,
                     span,
                     env,
                 )?;

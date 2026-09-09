@@ -285,16 +285,9 @@ impl Checker {
                     &format!("Undefined method: {}::{}", interface_name, method),
                 )
             })?;
-        let normalized_args = self.normalize_named_call_args(
-            &sig,
-            args,
-            expr.span,
-            &format!("Method {}::{}", interface_name, method),
-            env,
-        )?;
         self.check_user_declared_call(
             &sig,
-            &normalized_args,
+            args,
             expr.span,
             env,
             &format!("Method {}::{}", interface_name, method),
@@ -434,7 +427,7 @@ impl Checker {
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!("Method {}::{}", class_name, method),
@@ -443,7 +436,7 @@ impl Checker {
                 } else {
                     self.check_user_declared_call(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!("Method {}::{}", class_name, method),
@@ -466,7 +459,7 @@ impl Checker {
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
-                        &normalized_args,
+                        &magic_args,
                         expr.span,
                         env,
                         &format!("Method {}::__call", class_name),
@@ -925,7 +918,7 @@ impl Checker {
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!("Static method {}::{}", class_name, method),
@@ -934,7 +927,7 @@ impl Checker {
                 } else {
                     self.check_user_declared_call(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!("Static method {}::{}", class_name, method),
@@ -994,7 +987,7 @@ impl Checker {
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!(
@@ -1008,7 +1001,7 @@ impl Checker {
                 } else {
                     self.check_user_declared_call(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!(

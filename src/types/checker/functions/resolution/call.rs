@@ -121,13 +121,15 @@ impl Checker {
             }
             let mut effective_sig =
                 Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
-            let normalized_args = self.normalize_named_call_args(
+            let plan = self.plan_named_call_args(
                 &effective_sig,
                 args,
                 span,
                 &format!("Function '{}'", name),
                 caller_env,
             )?;
+            let defaults = plan.default_argument_mask();
+            let normalized_args = plan.normalized_args();
             if self.respecialize_resolved_function_params_if_needed(
                 name,
                 &normalized_args,
@@ -144,6 +146,7 @@ impl Checker {
                 &sig,
                 &effective_sig,
                 &normalized_args,
+                &defaults,
                 span,
                 caller_env,
             );
@@ -229,13 +232,15 @@ impl Checker {
             variadic: decl.variadic.clone(),
             deprecation: None,
         };
-        let normalized_args = self.normalize_named_call_args(
+        let plan = self.plan_named_call_args(
             &normalization_sig,
             args,
             span,
             &format!("Function '{}'", name),
             caller_env,
         )?;
+        let defaults = plan.default_argument_mask();
+        let normalized_args = plan.normalized_args();
         let args = normalized_args.as_slice();
         let effective_arg_count = args
             .iter()
@@ -310,6 +315,8 @@ impl Checker {
                 }
                 arg_idx = decl.params.len();
             } else if arg_idx < decl.params.len() {
+                let supplied_reference = decl.ref_params.get(arg_idx).copied().unwrap_or(false)
+                    && !defaults.get(arg_idx).copied().unwrap_or(false);
                 if ty == PhpType::Callable {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
                         self.callable_param_sigs.insert(
@@ -326,7 +333,7 @@ impl Checker {
                         );
                     }
                 }
-                if decl.ref_params.get(arg_idx).copied().unwrap_or(false) {
+                if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -356,7 +363,7 @@ impl Checker {
                         decl.span,
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
-                    if decl.ref_params.get(arg_idx).copied().unwrap_or(false) {
+                    if supplied_reference {
                         self.require_boxed_by_ref_storage(
                             &declared_ty,
                             &ty,
@@ -373,7 +380,7 @@ impl Checker {
                         caller_env,
                         &format!("Function '{}' parameter ${}", name, param_name),
                         Some((name, decl.params[arg_idx].as_str())),
-                        decl.ref_params.get(arg_idx).copied().unwrap_or(false),
+                        supplied_reference,
                     )?;
                     let specialized_ty =
                         Self::specialize_generic_array_param_hint(&declared_ty, &ty);

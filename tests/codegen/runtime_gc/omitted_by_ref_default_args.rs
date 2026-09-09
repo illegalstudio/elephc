@@ -181,6 +181,43 @@ echo $total;
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
+/// Named calls may skip a reference default before a supplied parameter on every resolved call surface.
+#[test]
+fn test_core_named_calls_skip_middle_reference_defaults() {
+    let source = r#"<?php
+echo namedDefaultMiddle(value: 1), "|";
+function namedDefaultMiddle(array &$out = [10], int $value = 0): int {
+    $out[] = $value;
+    return count($out);
+}
+class NamedDefaultMiddle {
+    public function __construct(array &$out = [20], int $value = 0) {
+        $out[] = $value;
+        echo count($out), "|";
+    }
+    public function update(array &$out = [30], int $value = 0): int {
+        $out[] = $value;
+        return count($out);
+    }
+    public static function make(array &$out = [40], int $value = 0): int {
+        $out[] = $value;
+        return count($out);
+    }
+}
+$object = new NamedDefaultMiddle(value: 2);
+echo $object->update(value: 3), "|", NamedDefaultMiddle::make(value: 4), "|";
+$callback = namedDefaultMiddle(...);
+echo $callback(value: 5), "|";
+$actual = [60];
+echo namedDefaultMiddle(value: 7, out: $actual), ":", $actual[1];
+unset($actual, $callback, $object);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "2|2|2|2|2|2:7", "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// BEHAVIOUR, not just balance: the callee really does see the declared default through the
 /// discarded cell, and passing the argument still writes back into the caller's variable.
 /// A cell that was silently zeroed (or shared between calls) would pass a leak test and fail

@@ -20,10 +20,13 @@ impl Checker {
     ///
     /// Used by variant-group resolution and other paths that have a pre-resolved
     /// signature and do not need re-specialization or deprecation warnings.
+    /// `default_args` preserves the planner's distinction between declaration defaults
+    /// and explicit caller arguments, which alone require a by-reference lvalue.
     pub(crate) fn check_function_call_pre_normalized(
         &mut self,
         name: &str,
         normalized_args: &[Expr],
+        default_args: &[bool],
         span: crate::span::Span,
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
@@ -38,6 +41,7 @@ impl Checker {
             &sig,
             &effective_sig,
             normalized_args,
+            default_args,
             span,
             caller_env,
         )
@@ -46,6 +50,7 @@ impl Checker {
     /// Validates a resolved, normalized function call against its effective
     /// signature: arity constraints, by-ref argument validation, and type
     /// compatibility for each argument position (regular and variadic).
+    /// Default-backed slots bind temporary cells instead of aliasing caller storage.
     ///
     /// Does **not** re-specialize or check deprecation — those are handled by
     /// the caller before dispatching here. Returns the signature's return type
@@ -56,6 +61,7 @@ impl Checker {
         sig: &FunctionSig,
         effective_sig: &FunctionSig,
         args: &[Expr],
+        default_args: &[bool],
         span: crate::span::Span,
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
@@ -137,12 +143,9 @@ impl Checker {
                 continue;
             }
             if param_idx < regular_param_count {
-                if effective_sig
-                    .ref_params
-                    .get(param_idx)
-                    .copied()
-                    .unwrap_or(false)
-                {
+                let supplied_reference = effective_sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                    && !default_args.get(param_idx).copied().unwrap_or(false);
+                if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -167,11 +170,7 @@ impl Checker {
                         .get(param_idx)
                         .copied()
                         .unwrap_or(false)
-                        && effective_sig
-                            .ref_params
-                            .get(param_idx)
-                            .copied()
-                            .unwrap_or(false)
+                        && supplied_reference
                     {
                         self.require_boxed_by_ref_storage(
                             expected_ty,
@@ -199,7 +198,7 @@ impl Checker {
                             caller_env,
                             &format!("Function '{}' parameter ${}", name, param_name),
                             Some((name, param_name.as_str())),
-                            effective_sig.ref_params.get(param_idx).copied().unwrap_or(false),
+                            supplied_reference,
                         )?;
                     } else {
                         self.require_compatible_arg_type(

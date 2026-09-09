@@ -220,3 +220,23 @@ The same ARM64 shard no longer reports the omitted-reference-default and sleep
 serialization failures. Shards 3 and 9 still report callback-array validation,
 boxed implode cleanup, unshift/sort validation and list-unpack leaks. These
 remain open independently of the spread correction.
+
+### Named default provenance and reflection fixture
+
+The new nonempty reference-default fixture on `9e0a0994a` exposed a separate
+checker failure in Linux x86_64 shard 2 (job `102667135178`): named argument
+normalization inserted `[10]` and then treated it as an explicit by-reference
+argument. Call validation now retains the shared planner's default-slot mask.
+Resolved/forward functions and known callables skip caller-lvalue and writeback
+requirements only for actual declaration defaults. Methods and constructors
+pass original source arguments to that validator instead of losing provenance
+through a second normalization. Explicit literals, even equal to a default,
+still fail by-reference validation. The matrix includes omitted middle slots,
+constructors, methods, static methods, first-class calls and explicit writeback.
+
+The reflection fixture now narrows `getType()` with `instanceof
+ReflectionUnionType` before calling `getTypes()`. The checker contract includes
+named, union, intersection and null type objects, not just unions. Its expected
+class and member counts remain unchanged; a non-union result takes an explicitly
+failing output branch. This is a fixture correction, not a relaxation of the
+method checker or a production reflection implementation change.

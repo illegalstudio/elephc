@@ -111,6 +111,13 @@ pub(crate) enum CallArgPlanError {
 }
 
 impl CallArgPlan {
+    /// Marks normalized regular slots supplied by a declaration default, not by caller storage.
+    pub(crate) fn default_argument_mask(&self) -> Vec<bool> {
+        self.regular_args.iter()
+            .map(|arg| matches!(arg, PlannedRegularArg::Default(_)))
+            .collect()
+    }
+
     /// Returns `true` if any source argument used the spread (`...`) operator.
     pub(crate) fn has_spread_args(&self) -> bool {
         self.source_args
@@ -378,6 +385,26 @@ mod tests {
                 Span::dummy(),
             ),
         ]
+    }
+
+    /// Default provenance is positional metadata, even when caller literals equal declaration defaults.
+    #[test]
+    fn default_argument_mask_distinguishes_supplied_literals() {
+        let sig = sig_with_defaults(vec![
+            Some(Expr::int_lit(1)), Some(Expr::int_lit(2)), Some(Expr::int_lit(3)),
+        ]);
+        let named = |name: &str, value| Expr::new(
+            ExprKind::NamedArg { name: name.to_string(), value: Box::new(Expr::int_lit(value)) },
+            Span::dummy(),
+        );
+        let plan = super::super::planner::plan_call_args(
+            &sig, &[named("b", 2)], Span::dummy(), false, true,
+        ).expect("omitted defaults should be planned");
+        assert_eq!(plan.default_argument_mask(), vec![true, false, true]);
+        let explicit = super::super::planner::plan_call_args(
+            &sig, &[named("b", 2), named("a", 1), named("c", 3)], Span::dummy(), false, true,
+        ).expect("explicit equal literals should remain source arguments");
+        assert_eq!(explicit.default_argument_mask(), vec![false, false, false]);
     }
 
     /// Implements the `normalized_args_skip_default_guard_when_spread_check_guarantees_slot`

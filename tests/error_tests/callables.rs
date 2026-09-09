@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// Declaration defaults do not permit explicit literal arguments to bind by reference.
+#[test]
+fn test_error_named_reference_defaults_still_reject_supplied_literals() {
+    for source in [
+        "<?php function f(int &$out = 7, int $value = 0): void {} f(value: 1, out: 7);",
+        "<?php function f(array &$out = [10], int $value = 0): void {} f(value: 1, out: [10]);",
+        "<?php function f(array &$out = [10], int $value = 0): void {} $f = f(...); $f(value: 1, out: [10]);",
+        "<?php class C { public function f(array &$out = [10], int $value = 0): void {} } $c = new C(); $c->f(value: 1, out: [10]);",
+        "<?php class C { public static function f(array &$out = [10], int $value = 0): void {} } C::f(value: 1, out: [10]);",
+        "<?php class C { public function __construct(array &$out = [10], int $value = 0) {} } new C(value: 1, out: [10]);",
+    ] {
+        expect_error(source, "parameter $out must be passed a variable");
+    }
+}
+
 /// Runtime unpack support does not relax the arity of concrete introspection calls.
 #[test]
 fn test_error_core_introspection_concrete_arity() {

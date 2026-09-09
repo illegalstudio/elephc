@@ -200,8 +200,20 @@ impl Checker {
         callee_desc: &str,
         env: &TypeEnv,
     ) -> Result<Vec<Expr>, CompileError> {
+        Ok(self.plan_named_call_args(sig, args, span, callee_desc, env)?.normalized_args())
+    }
+
+    /// Retains default-slot provenance while applying user-call named and spread argument rules.
+    pub(crate) fn plan_named_call_args(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+        env: &TypeEnv,
+    ) -> Result<call_args::CallArgPlan, CompileError> {
         let allow_unknown_named_variadic = !crate::func_args::sig_collects_surplus_args(sig);
-        self.normalize_call_args(
+        self.plan_call_args(
             sig,
             args,
             span,
@@ -222,31 +234,6 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<call_args::CallArgPlan, CompileError> {
         self.plan_call_args(sig, args, span, callee_desc, true, false, env)
-    }
-
-    /// Shared argument normalization for both user-defined and builtin calls. Delegates to the
-    /// shared call-argument planner and converts planner errors to `CompileError`.
-    fn normalize_call_args(
-        &self,
-        sig: &FunctionSig,
-        args: &[Expr],
-        span: crate::span::Span,
-        callee_desc: &str,
-        trim_trailing_defaults: bool,
-        allow_unknown_named_variadic: bool,
-        env: &TypeEnv,
-    ) -> Result<Vec<Expr>, CompileError> {
-        Ok(self
-            .plan_call_args(
-                sig,
-                args,
-                span,
-                callee_desc,
-                trim_trailing_defaults,
-                allow_unknown_named_variadic,
-                env,
-            )?
-            .normalized_args())
     }
 
     /// Produces the shared planner result and maps semantic planning errors to checker diagnostics.
@@ -463,7 +450,9 @@ impl Checker {
         allow_by_ref_spread: bool,
         coercive_param_binding: bool,
     ) -> Result<PhpType, CompileError> {
-        let normalized_args = self.normalize_named_call_args(sig, args, span, callee_desc, caller_env)?;
+        let plan = self.plan_named_call_args(sig, args, span, callee_desc, caller_env)?;
+        let defaults = plan.default_argument_mask();
+        let normalized_args = plan.normalized_args();
         let args = normalized_args.as_slice();
         let effective_arg_count = args
             .iter()
@@ -532,7 +521,9 @@ impl Checker {
                 continue;
             }
             if param_idx < regular_param_count {
-                if sig.ref_params.get(param_idx).copied().unwrap_or(false) {
+                let supplied_reference = sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                    && !defaults.get(param_idx).copied().unwrap_or(false);
+                if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -553,7 +544,7 @@ impl Checker {
                 }
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
                     if sig.declared_params.get(param_idx).copied().unwrap_or(false)
-                        && sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                        && supplied_reference
                     {
                         self.require_boxed_by_ref_storage(
                             expected_ty,
@@ -587,7 +578,7 @@ impl Checker {
                             caller_env,
                             &format!("{} parameter ${}", callee_desc, param_name),
                             None,
-                            sig.ref_params.get(param_idx).copied().unwrap_or(false),
+                            supplied_reference,
                         )?;
                     } else {
                         self.require_compatible_arg_type(
