@@ -11,6 +11,26 @@
 use super::super::*;
 use super::support::*;
 
+/// An eval return owns its cell independently of the activation scope kept for native reload.
+#[test]
+fn program_return_retains_borrowed_scope_storage() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let stored = values.string("kept").unwrap();
+    scope.set("value", stored, ScopeCellOwnership::Owned);
+    let program = parse_fragment(b"return $value;").unwrap();
+    let outcome = execute_program_outcome_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    let EvalOutcome::Value(returned) = outcome else { panic!("expected returned value"); };
+    assert_eq!(returned, stored);
+    assert!(!returned.is_borrowed());
+    assert_eq!(values.cell_owners[&(stored.as_ptr() as usize)], 2);
+    for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+    assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 1);
+    values.release(returned).unwrap();
+    assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 0);
+}
+
 /// Throws retain storage reads before catches or finally blocks can replace the source binding.
 #[test]
 fn thrown_storage_values_keep_an_independent_control_owner() {

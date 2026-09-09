@@ -125,8 +125,14 @@ pub fn execute_program_outcome_with_context(
 ) -> Result<EvalOutcome, EvalStatus> {
     match execute_statements(program.statements(), context, scope, values) {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
-        Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
-        Ok(EvalControl::Throw(result)) => Ok(EvalOutcome::Throwable(result)),
+        Ok(EvalControl::Return(result)) => {
+            let result = if result.is_borrowed() { values.retain(result)? } else { result };
+            Ok(EvalOutcome::Value(result))
+        }
+        Ok(EvalControl::Throw(result)) => {
+            let result = if result.is_borrowed() { values.retain(result)? } else { result };
+            Ok(EvalOutcome::Throwable(result))
+        }
         Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
