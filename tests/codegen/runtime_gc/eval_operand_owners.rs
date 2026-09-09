@@ -36,7 +36,7 @@ function evalArrayReadOwners(string $source): void { eval($source); }
 $source = 'echo strlen(["key" => str_repeat("x", 48)]["key"]), ":";
 echo gc_status()["protected"] ? "protected" : "ready", "|";
 $items = [10, 20];
-echo $items[($items = []) ? 0 : 1], "|"; // ' . $argc;
+echo $items[eval("\$items = []; return 1;")], "|"; // ' . $argc;
 for ($i = 0; $i < 3; $i++) { evalArrayReadOwners($source); }
 unset($source);
 "#);
