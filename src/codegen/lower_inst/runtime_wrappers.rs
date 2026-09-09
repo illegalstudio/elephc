@@ -253,6 +253,13 @@ impl crate::builtins::semantics::BuiltinLoweringContext
         effects: crate::ir::Effects,
         span: Option<crate::span::Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        // Synthetic wrappers bypass AST lowering's final ownership analysis.
+        // Allocation primitives still transfer their fresh owner to their consumer.
+        let ownership = if matches!(op, Op::MixedBox | Op::ArrayNew | Op::HashNew) {
+            Ownership::Owned
+        } else {
+            Ownership::for_php_type(&php_type)
+        };
         let value = self
             .builder
             .emit_with_effects(
@@ -261,7 +268,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext
                 immediate,
                 wrapper_value_ir_type(&php_type),
                 php_type.clone(),
-                Ownership::for_php_type(&php_type),
+                ownership,
                 effects,
                 span,
             )
@@ -404,5 +411,32 @@ pub(super) fn wrapper_value_ir_type(php_type: &PhpType) -> IrType {
     match php_type.codegen_repr() {
         PhpType::Void | PhpType::Never => IrType::I64,
         other => IrType::from_php(&other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GC wrappers transfer all fresh cells instead of retaining them again at each hash insert.
+    #[test]
+    fn gc_status_callable_wrapper_marks_all_allocations_owned() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let sig = crate::builtins::registry::first_class_callable_sig("gc_status").unwrap();
+            let wrapper = build_runtime_call_wrapper_function(
+                &mut module, "gc_status_owner_probe", "gc_status", &sig,
+                RuntimeCallWrapperKind::Builtin { strict_php: false },
+            ).unwrap();
+            let allocations: Vec<_> = wrapper.instructions.iter()
+                .filter(|inst| matches!(inst.op, Op::HashNew | Op::MixedBox))
+                .collect();
+            assert_eq!(allocations.len(), 14, "{target}");
+            for allocation in allocations {
+                assert_eq!(allocation.result_ownership, Ownership::Owned, "{target}: {:?}", allocation.op);
+                assert_eq!(wrapper.value(allocation.result.unwrap()).unwrap().ownership, Ownership::Owned);
+            }
+            assert!(wrapper.instructions.iter().any(|inst| inst.op == Op::Release), "{target}");
+        }
     }
 }
