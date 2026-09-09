@@ -529,6 +529,12 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         return Ok(!values.is_null(value)?);
     };
     let Some(class) = context.dynamic_object_class(identity) else {
+        // Native typed slots represent unset with an initialization marker.
+        // Their ordinary getter deliberately rejects that state, while isset
+        // must return false without attempting the read.
+        if !values.property_is_initialized(object, property_name)? {
+            return Ok(false);
+        }
         let value = values.property_get(object, property_name)?;
         return Ok(!values.is_null(value)?);
     };

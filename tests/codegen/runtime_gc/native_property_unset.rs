@@ -10,6 +10,28 @@
 
 use crate::support::*;
 
+/// Opaque eval probes uninitialized native slots without going through the rejecting getter.
+#[test]
+fn test_core_eval_native_isset_skips_uninitialized_and_unset_property_reads() {
+    let source = r#"<?php
+class NativeIssetState { public ?int $value; }
+function probeNativeIssetState(string $source): void {
+    $holder = new NativeIssetState();
+    eval($source);
+}
+$source = 'echo isset($holder->value) ? "bad|" : "initial|";
+$holder->value = 0;
+echo isset($holder->value) ? "zero|" : "bad|";
+$holder->value = null;
+echo isset($holder->value) ? "bad|" : "null|";
+unset($holder->value);
+echo isset($holder->value) ? "bad|" : "unset|";
+echo empty($holder->value) ? "empty" : "bad";' . ' // ' . $argc;
+probeNativeIssetState($source);
+"#;
+    assert_eq!(compile_and_run(source), "initial|zero|null|unset|empty");
+}
+
 /// Eval-declared throwing destructors release their object and fields before the catch resumes.
 #[test]
 fn test_core_eval_dynamic_destructor_throw_consumes_last_owner() {
