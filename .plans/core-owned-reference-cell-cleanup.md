@@ -130,3 +130,29 @@ destructor exceptions. Completed concat output is restored after cleanup.
 Regression fixtures cover both layouts, shared properties, invalid dynamic
 returns, nested throws and destructor throws. Their executable results are
 pending CI. `__sleep()` still needs the corresponding names-array adaptation.
+
+### Rebase onto the XML main merge
+
+The branch was rebased onto `b068c2b7d27627b9b6ce451dbbc2e71faba3f7d8`,
+which includes PR #913. Shared support totals retain XML's 64 contracts,
+including its 10 registry lowerings and 54 prelude routes, alongside Core.
+The generated documentation was rebuilt from the combined catalog; its
+audits report 999 public contracts and 443 non-registry backend routes.
+
+The new XML eval dispatcher referenced the superseded unleased argument
+evaluator. Both source-level and positional-hook calls now use the shared
+owned-argument boundary, preserving reference writeback and exceptional
+cleanup. A no-libxml2 regression covers dynamic string operands in direct
+and named XML calls rejected with TypeError. Compilation and documentation
+audits pass; executable verification remains delegated to CI.
+
+### Reference-return exception boundary identified
+
+The `89491f41d` failing reference-return assembly contains the callee's owner
+lease and cleanup callback, but main has no try handler around the call.
+AST `stmt_effect` classified every `RefAssign` as non-throwing and discarded
+its source effects, allowing catch pruning before EIR lowering. Reference
+assignment now includes the source effects and conservatively accounts for
+throwing/global-mutating destruction of the replaced target. Structural
+optimizer regressions retain catch/finally for both call and variable sources.
+The existing heap-debug callee-cleanup regression remains the executable gate.

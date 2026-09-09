@@ -10,6 +10,30 @@
 
 use super::*;
 
+/// Reference source calls and implicit target destruction both preserve catch and finally clauses.
+#[test]
+fn test_effect_analysis_preserves_reference_assignment_exception_boundaries() {
+    for assignment in ["$alias = &source();", "$alias = &$value;"] {
+        let source = format!(
+            "<?php try {{ {assignment} }} catch (Exception $error) {{ echo 'caught'; }} finally {{ echo 'done'; }}"
+        );
+        let tokens = crate::lexer::tokenize(&source).unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let StmtKind::Try { try_body, .. } = &program[0].kind else { panic!("expected try fixture"); };
+        let effect = stmt_effect(&try_body[0]);
+        assert!(effect.may_throw && effect.has_side_effects && effect.writes_globals);
+        for optimized in [
+            prune_constant_control_flow(program.clone()),
+            eliminate_dead_code(program),
+        ] {
+            assert!(optimized.iter().any(|statement| matches!(
+                &statement.kind,
+                StmtKind::Try { catches, finally_body: Some(_), .. } if !catches.is_empty()
+            )), "{assignment}: {optimized:?}");
+        }
+    }
+}
+
 /// Destructor callbacks keep collection observable and preserve its catch and finally clauses.
 #[test]
 fn test_effect_analysis_preserves_collection_exception_boundaries() {

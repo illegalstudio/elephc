@@ -79,7 +79,12 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::StaticPropertyAssign { value, .. } => {
             expr_effect(value).with_side_effects()
         }
-        StmtKind::RefAssign { .. } => Effect::PURE.with_side_effects(),
+        // The source can call PHP or resolve a property, and rebinding can retire a target
+        // whose destructor throws or changes globals. Keep the enclosing exception boundary.
+        StmtKind::RefAssign { source, .. } => expr_effect(source)
+            .with_side_effects()
+            .with_may_throw()
+            .with_writes_globals(),
         StmtKind::ArrayPush { value, .. } | StmtKind::StaticPropertyArrayPush { value, .. } => {
             expr_effect(value).with_side_effects().with_may_throw()
         }
