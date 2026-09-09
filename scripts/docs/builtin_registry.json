@@ -67182,7 +67182,28 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt",
+          "blocking_io",
+          "network_io"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -73587,7 +73608,28 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt",
+          "blocking_io",
+          "network_io"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",

@@ -1004,6 +1004,9 @@ impl RuntimeFnId {
                     | crate::ir::Effects::MAY_THROW.bits()
                     | crate::ir::Effects::MAY_FATAL.bits(),
             ),
+            // Object string conversions and cleanup destructors may execute arbitrary
+            // PHP. Unused joins must still run, and their callbacks can mutate globals.
+            RuntimeFnId::Implode => crate::ir::Effects::all(),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
@@ -1066,7 +1069,6 @@ impl RuntimeFnId {
             RuntimeFnId::Htmlspecialchars |
             RuntimeFnId::Hexdec |
             RuntimeFnId::Hypot |
-            RuntimeFnId::Implode |
             RuntimeFnId::InetNtop |
             RuntimeFnId::InetPton |
             RuntimeFnId::Ip2long |

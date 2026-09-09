@@ -15,9 +15,11 @@ use std::path::Path;
 #[test]
 fn boxed_array_implode_normalization_is_owned_on_all_targets() {
     let source = r#"<?php
+class JoinedObjectValue { public function __toString(): string { return "owned"; } }
 function joinBoxedArray(array $items): string { return implode(",", $items); }
 function joinOneBoxedArray(array $items): string { return join($items); }
 echo joinBoxedArray(["a" => 42]), joinOneBoxedArray([true, false]);
+echo joinBoxedArray(["object" => new JoinedObjectValue()]);
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(

@@ -45,6 +45,7 @@ mod str_ends_with;
 mod str_replace;
 mod explode;
 mod implode;
+mod implode_cast;
 mod implode_bool;
 mod implode_int;
 mod ucwords;

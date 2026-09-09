@@ -102,3 +102,55 @@ echo implode(",", JoinedElementStore::$items);
 "#;
     assert_eq!(compile_and_run(source), "1,2|kept");
 }
+
+/// Object hooks may reenter join rendering without overwriting the outer prefix or glue.
+#[test]
+fn test_core_php_array_implode_object_hook_preserves_prefix_and_owned_results() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedJoinedValue {
+    public function __toString(): string {
+        $nested = implode("-", ["inner", "value"]);
+        return $nested;
+    }
+}
+class InheritedJoinedValue extends NestedJoinedValue {}
+function joinObjects(array $items): string { return implode(":", $items); }
+for ($i = 0; $i < 10; $i++) {
+    $result = joinObjects(["before", new InheritedJoinedValue(), "after"]);
+    if ($result !== "before:inner-value:after") { echo "bad"; }
+    unset($result);
+}
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A non-stringable object must throw a catchable Error instead of silently contributing empty bytes.
+#[test]
+fn test_core_php_array_implode_non_stringable_object_throws_error() {
+    let source = r#"<?php
+class NonStringableJoinedValue {}
+function joinInvalidObject(array $items): string { return implode(",", $items); }
+try { echo joinInvalidObject([new NonStringableJoinedValue()]); }
+catch (Error $error) { echo "invalid|"; }
+echo joinInvalidObject(["kept"]);
+"#;
+    assert_eq!(compile_and_run(source), "invalid|kept");
+}
+
+/// Array-to-string warning handlers can render nested joins without corrupting the outer prefix.
+#[test]
+fn test_core_php_array_implode_warning_handler_preserves_prefix() {
+    let source = r#"<?php
+set_error_handler(function(int $level, string $message): bool {
+    echo implode(",", ["warn", "handled"]), "|";
+    return true;
+});
+function joinWarningArray(array $items): string { return implode(":", $items); }
+echo joinWarningArray([1, ["nested"], 2]);
+restore_error_handler();
+"#;
+    assert_eq!(compile_and_run(source), "warn,handled|1:Array:2");
+}
