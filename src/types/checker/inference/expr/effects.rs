@@ -261,12 +261,33 @@ impl Checker {
                         crate::types::checker::builtins::contextual_callback_arg_positions(
                             builtin_name,
                         );
+                    // The table is in parameter positions; a named argument fills the
+                    // parameter it names, wherever it sits in the call, so
+                    // `xml_set_character_data_handler(handler: fn(...) => ..., parser: $p)`
+                    // skips the closure at source index 0 too.
+                    let contextual_sig = if contextual_callbacks.is_empty() {
+                        None
+                    } else {
+                        crate::types::signatures::builtin_call_sig(builtin_name)
+                    };
                     for (idx, arg) in expanded_args.iter().enumerate() {
-                        if contextual_callbacks.contains(&idx) {
+                        let param_idx = match &arg.kind {
+                            ExprKind::NamedArg { name, .. } => contextual_sig
+                                .as_ref()
+                                .and_then(|sig| {
+                                    sig.params.iter().position(|(param, _)| {
+                                        param.trim_start_matches('$') == name.trim_start_matches('$')
+                                    })
+                                })
+                                .unwrap_or(idx),
+                            _ => idx,
+                        };
+                        if contextual_callbacks.contains(&param_idx) {
                             continue;
                         }
                         if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
                             || pcntl_output_type(builtin_name, arg, idx).is_some()
+                            || xml_struct_output_type(builtin_name, arg, idx).is_some()
                             || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
                                 && is_openssl_encrypt_tag_arg(arg, idx))
                         {
@@ -295,6 +316,11 @@ impl Checker {
                 }
                 for (idx, arg) in expanded_args.iter().enumerate() {
                     if let Some(output_ty) = pcntl_output_type(builtin_name, arg, idx) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), output_ty);
+                        }
+                    }
+                    if let Some(output_ty) = xml_struct_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), output_ty);
                         }
@@ -686,6 +712,26 @@ fn pcntl_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType>
             value: Box::new(PhpType::Mixed),
         }),
         "old_signals" => Some(PhpType::Array(Box::new(PhpType::Int))),
+        _ => None,
+    }
+}
+
+/// Returns the post-call type of an `xml_parse_into_struct()` write-only output argument:
+/// `$values` (the tag structures) and `$index` (positions by tag name) are boxed arrays
+/// handed over by the xml prelude, so both are `mixed` after the call.
+fn xml_struct_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType> {
+    if php_symbol_key(builtin) != "xml_parse_into_struct" {
+        return None;
+    }
+    let parameter = match &arg.kind {
+        ExprKind::NamedArg { name, .. } => php_symbol_key(name),
+        _ => ["parser", "data", "values", "index"]
+            .get(index)
+            .copied()?
+            .to_string(),
+    };
+    match parameter.as_str() {
+        "values" | "index" => Some(PhpType::Mixed),
         _ => None,
     }
 }

@@ -182,6 +182,9 @@ pub enum BuiltinArgumentLowering {
     /// the receiver and the replacement, which is why it is a registry-owned strategy rather
     /// than a per-argument rule.
     ArraySplice,
+    /// Type an unannotated `xml_set_*_handler()` closure's parameters from the SAX event
+    /// it receives, so the EIR closure signature matches what the checker hook validated.
+    XmlHandlerSetter,
     /// Bind the receiver to its hidden internal-array-pointer cursor slot.
     ///
     /// PHP's `key`/`current`/`next`/`prev`/`reset`/`end` read and move a per-array
@@ -296,6 +299,32 @@ pub trait BuiltinLoweringContext {
         effects: Effects,
         span: Option<Span>,
     ) -> LoweredBuiltinValue;
+
+    /// Emits a direct call to a PHP function declared by the program (or an injected
+    /// prelude) under its canonical lowercase name. The operands must already have the
+    /// callee's parameter representations: this is the composition primitive for a
+    /// builtin whose semantics live in prelude-declared PHP, not a coercing call.
+    fn emit_user_call(
+        &mut self,
+        name: &str,
+        operands: Vec<ValueId>,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> LoweredBuiltinValue;
+
+    /// Assigns `value` (typed `php_type`) to the PHP variable that `operand` was loaded
+    /// from, with ordinary assignment ownership — PHP's write-only by-reference output
+    /// semantics. Every variable storage kind is recognized (frame local, `static`,
+    /// `global`, reference cell, extern global, eval scope); the store is routed by that
+    /// kind. Returns false, emitting nothing, when the operand is not a variable load (a
+    /// literal, a property read, or an omitted argument's materialized default).
+    fn store_operand_local(
+        &mut self,
+        operand: ValueId,
+        value: ValueId,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> bool;
 }
 
 /// Normalized builtin call consumed by backend-neutral EIR lowering.

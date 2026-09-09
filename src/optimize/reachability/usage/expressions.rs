@@ -219,6 +219,11 @@ impl Scanner<'_> {
                 false,
             ));
         }
+        // The xml registry builtins' EIR lowerings call the xml prelude's helpers directly;
+        // the same rule keeps those edges next to that lowering contract.
+        for helper in crate::builtins::xml::prelude_helpers_for(&key) {
+            self.record_callable(helper);
+        }
         let normalized = self.normalized_function_arguments(&key, args);
         let first = normalized.first().map(unwrap_named_arg);
         match key.as_str() {

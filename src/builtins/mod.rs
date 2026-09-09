@@ -28,5 +28,6 @@ mod spl;
 mod pointers;
 mod system;
 mod types;
+pub(crate) mod xml;
 #[cfg(test)]
 mod parity_tests;

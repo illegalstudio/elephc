@@ -3294,6 +3294,81 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
             value: lowered.value,
         }
     }
+
+    /// Emits a direct `Op::Call` to a declared PHP function through the ordinary user-call
+    /// path, with the conservative user-call effect set.
+    fn emit_user_call(
+        &mut self,
+        name: &str,
+        operands: Vec<ValueId>,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let data = self.intern_function_name(name);
+        let lowered = LoweringContext::emit_value(
+            self,
+            Op::Call,
+            operands,
+            Some(Immediate::Data(data)),
+            php_type,
+            crate::ir_lower::effects_lookup::user_call_effects(name),
+            span,
+        );
+        crate::builtins::semantics::LoweredBuiltinValue {
+            value: lowered.value,
+        }
+    }
+
+    /// Resolves the operand back to the variable it was loaded from and stores through
+    /// `store_local`, which routes by storage kind (frame slot, `static`, `global`,
+    /// reference cell, extern global, eval scope), so the variable is (re)declared at the
+    /// output type and the previous occupant is released exactly like a source-level
+    /// assignment.
+    fn store_operand_local(
+        &mut self,
+        operand: ValueId,
+        value: ValueId,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> bool {
+        let Some(name) = self.operand_local_name(operand) else {
+            return false;
+        };
+        let lowered = LoweredValue {
+            value,
+            ir_type: value_ir_type(&php_type),
+        };
+        self.store_local(&name, lowered, php_type, span);
+        true
+    }
+}
+
+impl LoweringContext<'_, '_> {
+    /// Returns the PHP variable an operand was loaded from, for every load shape
+    /// `load_local` emits, or `None` for any other value (a literal, a call result, a
+    /// property read).
+    ///
+    /// Frame, `static` and reference-cell loads carry their `LocalSlot`, which maps back
+    /// to the name through `local_slots`; `global`, extern-global and eval-scope loads
+    /// carry the interned `GlobalName`, which maps back through the module data pool.
+    fn operand_local_name(&self, operand: ValueId) -> Option<String> {
+        let inst = self.builder.value_defining_instruction(operand)?;
+        match (inst.op, &inst.immediate) {
+            (
+                Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell,
+                Some(Immediate::LocalSlot(slot)),
+            ) => self
+                .local_slots
+                .iter()
+                .find(|(_, candidate)| *candidate == slot)
+                .map(|(name, _)| name.clone()),
+            (
+                Op::LoadGlobal | Op::ExternGlobalLoad | Op::EvalScopeGet,
+                Some(Immediate::GlobalName(data)),
+            ) => self.data.global_names.get(data.as_raw() as usize).cloned(),
+            _ => None,
+        }
+    }
 }
 
 /// Returns true for addressable local kinds whose `StoreLocal` overwrites owned storage.

@@ -130,6 +130,9 @@ pub(super) fn lower_builtin_call_args(
         {
             lower_array_splice_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::XmlHandlerSetter => {
+            lower_xml_handler_setter_call(ctx, &canonical, sig, args)
+        }
         _ if !crate::types::call_args::has_named_args(args)
             && !args.iter().any(is_spread_arg) =>
         {

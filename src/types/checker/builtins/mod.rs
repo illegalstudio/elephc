@@ -10,6 +10,7 @@
 
 pub(crate) mod arrays;
 mod callables;
+pub(crate) use callables::callback_dummy_arg_for_type;
 pub(crate) mod catalog;
 pub(crate) mod io;
 mod language_constructs;

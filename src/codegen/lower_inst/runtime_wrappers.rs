@@ -269,6 +269,40 @@ impl crate::builtins::semantics::BuiltinLoweringContext
             span,
         )
     }
+
+    /// A synthetic wrapper has no function-name pool to intern a callee into, and no
+    /// registry builtin that composes user calls admits a runtime-selected callable
+    /// (`BuiltinCallablePolicy::StaticOnly`), so this is never reached; it answers a
+    /// null constant rather than a call so a future policy change fails visibly in tests
+    /// instead of emitting an unresolved symbol.
+    fn emit_user_call(
+        &mut self,
+        _name: &str,
+        _operands: Vec<ValueId>,
+        php_type: PhpType,
+        span: Option<crate::span::Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        self.emit_value(
+            Op::ConstNull,
+            Vec::new(),
+            None,
+            php_type,
+            Op::ConstNull.default_effects(),
+            span,
+        )
+    }
+
+    /// A wrapper's operands are its own parameters, never a caller's locals, so there is
+    /// no by-reference output to write; the composing builtin reports the failure.
+    fn store_operand_local(
+        &mut self,
+        _operand: ValueId,
+        _value: ValueId,
+        _php_type: PhpType,
+        _span: Option<crate::span::Span>,
+    ) -> bool {
+        false
+    }
 }
 
 /// Converts callable signature params into EIR function params with matching ABI/local slots.

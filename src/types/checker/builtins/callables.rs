@@ -160,6 +160,18 @@ pub(crate) fn contextual_callback_arg_positions(builtin_name: &str) -> &'static 
         | "array_walk" | "array_walk_recursive" | "preg_replace_callback" | "uasort"
         | "uksort" | "usort" => &[1],
         "array_udiff" | "array_uintersect" => &[2],
+        // The xml handler setters type an unannotated handler closure from the SAX event it
+        // receives (`crate::builtins::xml::handler_setters`); `xml_set_element_handler()`
+        // takes the start and end handlers, the other eight take one handler.
+        "xml_set_element_handler" => &[1, 2],
+        "xml_set_character_data_handler"
+        | "xml_set_processing_instruction_handler"
+        | "xml_set_default_handler"
+        | "xml_set_unparsed_entity_decl_handler"
+        | "xml_set_notation_decl_handler"
+        | "xml_set_external_entity_ref_handler"
+        | "xml_set_start_namespace_decl_handler"
+        | "xml_set_end_namespace_decl_handler" => &[1],
         _ => &[],
     }
 }
@@ -184,7 +196,7 @@ fn contextual_callback_param_type(ty: &PhpType) -> PhpType {
 /// Opaque `Mixed`/`Never` elements use the bottom type so a declared callback contract is
 /// not rejected against information the array type does not contain. Known compound types
 /// retain their real type and therefore still receive normal compatibility validation.
-fn callback_dummy_arg_for_type(
+pub(crate) fn callback_dummy_arg_for_type(
     ty: &PhpType,
     index: usize,
     span: crate::span::Span,
