@@ -70,7 +70,71 @@ catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error);
 unset($values);
 echo joinThrowingArray([0 => 10, 2 => 30]);
 "#;
-    assert_eq!(compile_and_run(source), "cast|dropped|10,30");
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "cast|dropped|10,30", "{}", out.stderr);
+}
+
+/// Direct joins isolate conversion unwinding from the extra by-value PHP array call boundary.
+#[test]
+fn test_core_implode_direct_throw_releases_element_object() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class DirectThrowingJoinElement {
+    public function __toString(): string { throw new RuntimeException("cast"); }
+    public function __destruct() { echo "dropped|"; }
+}
+$values = ["object" => new DirectThrowingJoinElement(), "tail" => 1];
+try { echo implode(",", $values); }
+catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
+unset($values);
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "cast|dropped|done", "{}", out.stderr);
+}
+
+/// Throwing after binding an array parameter must retire its shadow without retaining child objects.
+#[test]
+fn test_core_php_array_throw_releases_parameter_shadow_without_join() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowingArrayBoundaryElement {
+    public function __destruct() { echo "dropped|"; }
+}
+function throwAfterArrayBinding(array $items): void {
+    echo count($items), ":";
+    throw new RuntimeException("bound");
+}
+$values = ["object" => new ThrowingArrayBoundaryElement()];
+try { throwAfterArrayBinding($values); }
+catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
+unset($values);
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1:bound|dropped|done", "{}", out.stderr);
+}
+
+/// Returning a fresh join or placing it before a call in a concat must not leak a duplicate string.
+#[test]
+fn test_core_php_array_implode_return_and_concat_transfer_owned_strings() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function ownedJoin(array $items): string { return implode(",", $items); }
+function joinSuffix(int $value): string { return "tail" . $value; }
+function ownedJoinConcat(array $items, int $value): string {
+    return implode(",", $items) . joinSuffix($value);
+}
+$sum = 0;
+for ($i = 0; $i < 30; $i++) {
+    $joined = ownedJoin([1, 2]);
+    $combined = ownedJoinConcat([3, 4], $argc);
+    $sum += strlen($joined) + strlen($combined);
+    unset($joined, $combined);
+}
+echo $sum;
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "330", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Invalid dynamic inputs throw before reading a container header and do not poison later joins.

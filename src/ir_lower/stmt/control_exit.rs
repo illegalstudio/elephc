@@ -104,12 +104,15 @@ pub(super) fn acquire_returned_this(
 }
 
 /// Copies scratch-backed string results before they cross a function boundary.
+/// Already-owned results transfer directly instead of leaking an unnecessary duplicate.
 pub(super) fn persist_scratch_return_string(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if value.ir_type != IrType::Str {
+    if value.ir_type != IrType::Str
+        || ctx.builder.value_ownership(value.value) == Ownership::Owned
+    {
         return value;
     }
     let Some(op) = ctx.builder.value_defining_op(value.value) else {

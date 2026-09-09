@@ -11,6 +11,35 @@ use crate::codegen::platform::Target;
 use crate::ir::{Immediate, Op, Ownership, RuntimeCallTarget, RuntimeFnId};
 use std::path::Path;
 
+/// Fresh joins transfer their string owner without redundant scratch persistence at return or concat.
+#[test]
+fn owned_implode_results_are_not_persisted_again_at_string_boundaries() {
+    let module = super::lower_source(r#"<?php
+function joinOwnedResult(array $items): string { return implode(",", $items); }
+function renderedTail(int $value): string { return "tail" . $value; }
+function joinOwnedConcat(array $items, int $value): string {
+    return implode(",", $items) . renderedTail($value);
+}
+echo joinOwnedResult([1, 2]), joinOwnedConcat([3, 4], $argc);
+"#);
+    let mut observed = 0;
+    for function in &module.functions {
+        for instruction in &function.instructions {
+            if !matches!(instruction.immediate,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Implode))))
+            {
+                continue;
+            }
+            observed += 1;
+            let joined = instruction.result.unwrap();
+            assert_eq!(instruction.result_ownership, Ownership::Owned);
+            assert!(!function.instructions.iter().any(|use_inst|
+                use_inst.op == Op::StrPersist && use_inst.operands == [joined]), "{}", function.name);
+        }
+    }
+    assert_eq!(observed, 2);
+}
+
 /// Declared-array joins emit normalization, exception owners and string persistence on every ABI.
 #[test]
 fn boxed_array_implode_normalization_is_owned_on_all_targets() {
