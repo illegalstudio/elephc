@@ -80,8 +80,9 @@ pub(super) fn eval_sync_globals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncGlobal
             })
         })
         .collect::<Vec<_>>();
-    push_eval_process_superglobal(&mut globals, "argc", PhpType::Int);
-    push_eval_process_superglobal(&mut globals, "argv", PhpType::Array(Box::new(PhpType::Str)));
+    // Process globals share ordinary global Mixed storage, including their entry-point initializers.
+    push_eval_process_superglobal(&mut globals, "argc", PhpType::Mixed);
+    push_eval_process_superglobal(&mut globals, "argv", PhpType::Mixed);
     globals
 }
 
