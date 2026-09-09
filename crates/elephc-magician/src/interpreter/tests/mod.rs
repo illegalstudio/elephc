@@ -69,6 +69,7 @@ mod functions_namespaces;
 mod method_arguments;
 mod native_scope;
 mod operand_ownership;
+mod native_ref_cleanup;
 mod static_members;
 mod support;
 mod trait_adaptations;

@@ -16,6 +16,9 @@ impl FakeOps {
         if let Some(owners) = self.cell_owners.get_mut(&(value.as_ptr() as usize)) {
             *owners = owners.saturating_sub(1);
         }
+        if self.fail_release_call == Some(self.releases.len() - 1) {
+            return Err(EvalStatus::UncaughtThrowable);
+        }
         Ok(())
     }
     /// Records a retained lease while preserving fake cell identity.

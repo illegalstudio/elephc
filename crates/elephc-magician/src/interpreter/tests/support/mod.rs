@@ -94,6 +94,8 @@ pub(super) struct FakeOps {
     pub(super) object_classes: HashMap<usize, String>,
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
+    /// Zero-based release call that consumes its owner but reports an injected cleanup exception.
+    pub(super) fail_release_call: Option<usize>,
     pub(super) retains: Vec<RuntimeCellHandle>,
     /// Explicit cell owners only; fake containers do not model native heap payload refcounts.
     pub(super) cell_owners: HashMap<usize, usize>,
