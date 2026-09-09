@@ -10,6 +10,39 @@
 
 use crate::ir::print_module;
 
+/// Boxed callback resolution, null identity and descriptor cleanup are emitted for all supported ABIs.
+#[test]
+fn php_array_map_boxed_callbacks_use_owned_descriptor_envs_on_every_target() {
+    use crate::codegen::platform::Target;
+    use std::path::Path;
+
+    let source = r#"<?php
+function callbacksForMap(string $prefix): array {
+    return [function(string $name) use ($prefix): string { return $prefix . $name; }];
+}
+function mapDynamicCallback(mixed $callback, array $items): array {
+    return array_map($callback, $items);
+}
+$callbacks = callbacksForMap("old");
+$callback = $callbacks[0];
+echo array_map($callback, ["Ada"])[0];
+echo mapDynamicCallback(null, ["key" => "kept"])["key"];
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains("__rt_cleanup_call_operand_descriptor"), "{name}");
+        assert!(assembly.contains("__rt_array_map_boxed"), "{name}");
+        assert!(assembly.contains("array_map_null_callback"), "{name}");
+        assert!(assembly.contains("array_map(): Argument #1 ($callback) must be a valid callback or null"), "{name}");
+        let env = if name == "linux-x86_64" { "lea rdx, [rsp + 48]" } else { "add x2, x2, #48" };
+        assert!(assembly.contains(env), "{name}: descriptor environment excludes its cleanup record");
+    }
+}
+
 /// Rebinding declared arrays keeps boxed storage for later native reads and reference writeback.
 #[test]
 fn php_array_reassignment_keeps_the_declared_storage_contract() {

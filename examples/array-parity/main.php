@@ -25,6 +25,16 @@ function labelEvents(array $events): array {
 }
 echo implode(", ", labelEvents([10 => "opened", "note" => "reviewed"])), "\n";
 
+// --- keep captured formatters in a returned PHP array ---
+function eventFormatters(string $prefix): array {
+    return [function(string $event) use ($prefix): string { return $prefix . $event; }];
+}
+$formatters = eventFormatters("audit:");
+$formatter = $formatters[0];
+unset($formatters);
+echo implode(", ", array_map($formatter, ["opened", "reviewed"])), "\n";
+unset($formatter);
+
 // --- merge list entries and named settings through PHP array parameters ---
 function mergeEventSettings(array $defaults, array $overrides): array {
     return array_merge($defaults, $overrides);

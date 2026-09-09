@@ -15368,7 +15368,7 @@
           "default": null,
           "name": "callback",
           "optional": false,
-          "type": "callable"
+          "type": "?callable"
         },
         {
           "by_ref": false,

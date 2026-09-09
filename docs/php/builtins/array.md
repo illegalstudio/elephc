@@ -31,7 +31,7 @@ sidebar:
 | [`array_key_first()`](./array/array_key_first.md) | `(array $array): mixed` | `mixed` | ✓ | — |
 | [`array_key_last()`](./array/array_key_last.md) | `(array $array): mixed` | `mixed` | ✓ | — |
 | [`array_keys()`](./array/array_keys.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_map()`](./array/array_map.md) | `(callable $callback, array $array, ...$arrays): array` | `array` | ✓ | ✓ |
+| [`array_map()`](./array/array_map.md) | `(?callable $callback, array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_merge()`](./array/array_merge.md) | `(...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_merge_recursive()`](./array/array_merge_recursive.md) | `(...$arrays): array` | `array` | ✓ | — |
 | [`array_multisort()`](./array/array_multisort.md) | `(array $array1, int $array2): bool` | `bool` | ✓ | — |

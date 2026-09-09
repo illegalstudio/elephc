@@ -10,6 +10,106 @@
 
 use crate::support::*;
 
+/// A callback extracted from a returned PHP array retains captures after the array owner disappears.
+#[test]
+fn test_core_php_array_map_extracted_callback_retains_captures() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function returnedMapCallbacks(string $prefix): array {
+    $callback = function(string $name) use ($prefix): string { return $prefix . $name; };
+    return [$callback];
+}
+$total = 0;
+for ($i = 0; $i < 20; $i++) {
+    $callbacks = returnedMapCallbacks("old");
+    $callback = $callbacks[0];
+    unset($callbacks);
+    $mapped = array_map($callback, ["Ada"]);
+    $total += strlen($mapped[0]);
+    unset($mapped, $callback);
+}
+echo $total;
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "120", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Boxed string, method-pair, invokable and null callbacks preserve keys and independent array owners.
+#[test]
+fn test_core_php_array_map_boxed_callback_shapes_and_null_identity() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function namedBoxedMap(string $name): string { return "name:" . $name; }
+class BoxedMapReceiver {
+    public function render(string $name): string { return "method:" . $name; }
+    public function __invoke(string $name): string { return "invoke:" . $name; }
+}
+function mapBoxedCallback(mixed $callback, array $items): array {
+    return array_map($callback, $items);
+}
+$source = ["key" => "Ada"];
+$receiver = new BoxedMapReceiver();
+$named = mapBoxedCallback("namedBoxedMap", $source);
+$method = mapBoxedCallback([$receiver, "render"], $source);
+$invoked = mapBoxedCallback($receiver, $source);
+$identity = mapBoxedCallback(null, $source);
+$direct = array_map(null, ["direct"]);
+echo $named["key"], "|", $method["key"], "|", $invoked["key"], "|", $direct[0], "|";
+$identity["key"] = "changed";
+echo $source["key"], ":", $identity["key"];
+unset($source, $receiver, $named, $method, $invoked, $identity, $direct);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "name:Ada|method:Ada|invoke:Ada|direct|Ada:changed", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Invalid boxed callbacks throw catchable TypeErrors before reading slots or invoking the map loop.
+#[test]
+fn test_core_php_array_map_invalid_boxed_callbacks_are_catchable() {
+    let out = compile_and_run(r#"<?php
+class InvalidBoxedMapReceiver {
+    public function render(string $value): string { return $value; }
+}
+function rejectBoxedMapCallback(mixed $callback): void {
+    try { $mapped = array_map($callback, ["value"]); echo "missed|"; }
+    catch (TypeError $error) { echo "invalid|"; unset($error); }
+}
+rejectBoxedMapCallback(42);
+rejectBoxedMapCallback("missingBoxedMapFunction");
+rejectBoxedMapCallback([]);
+rejectBoxedMapCallback([1, 2]);
+rejectBoxedMapCallback([new InvalidBoxedMapReceiver(), "missing"]);
+rejectBoxedMapCallback(new InvalidBoxedMapReceiver());
+echo "done";
+"#);
+    assert_eq!(out, "invalid|invalid|invalid|invalid|invalid|invalid|done");
+}
+
+/// Throwing boxed callbacks retire their temporary descriptor lease before the captured object dies.
+#[test]
+fn test_core_php_array_map_throw_releases_boxed_callback_lease() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowingBoxedMapCapture {
+    public int $value = 7;
+    public function __destruct() { echo "dropped|"; }
+}
+function invokeThrowingBoxedMap(mixed $callback, array $items): void {
+    try { $mapped = array_map($callback, $items); }
+    catch (RuntimeException $error) { echo "caught|"; unset($error); }
+}
+$object = new ThrowingBoxedMapCapture();
+$callback = function(mixed $value) use ($object): mixed {
+    echo $object->value, ":";
+    throw new RuntimeException("map");
+};
+invokeThrowingBoxedMap($callback, ["key" => 1]);
+unset($callback, $object);
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "7:caught|dropped|done", "{}", out.stderr);
+}
+
 /// Boxed mapping accepts packed, sparse, associative, and empty arrays with descriptor callbacks.
 #[test]
 fn test_core_php_array_map_layouts_and_keys() {

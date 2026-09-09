@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_map(callable $callback, array $array, ...$arrays): array
+function array_map(?callable $callback, array $array, ...$arrays): array
 ```
 
 ## What the type checker enforces

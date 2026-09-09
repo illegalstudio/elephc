@@ -8,13 +8,13 @@ sidebar:
 ## array_map()
 
 ```php
-function array_map(callable $callback, array $array, ...$arrays): array
+function array_map(?callable $callback, array $array, ...$arrays): array
 ```
 
 Applies a callback to the elements of an array.
 
 **Parameters**:
-- `$callback` (`callable`)
+- `$callback` (`?callable`)
 - `$array` (`array`)
 - `...$arrays` — variadic: collects excess arguments into `$arrays`.
 

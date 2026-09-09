@@ -352,6 +352,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
         op_name,
         retain_existing_descriptor,
         None,
+        None,
     )
 }
 
@@ -369,6 +370,19 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_string_type_erro
         op_name,
         retain_existing_descriptor,
         Some(message),
+        None,
+    )
+}
+
+/// Acquires a boxed callback descriptor and throws the supplied TypeError on every invalid shape.
+pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_type_error(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+    message: &'static str,
+) -> Result<()> {
+    emit_runtime_mixed_callable_descriptor_value_impl(
+        ctx, callable, op_name, true, Some(message), Some(message),
     )
 }
 
@@ -379,6 +393,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     op_name: &str,
     retain_existing_descriptor: bool,
     string_type_error: Option<&'static str>,
+    invalid_type_error: Option<&'static str>,
 ) -> Result<()> {
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
     let invokable_targets = instance_targets
@@ -454,7 +469,9 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
 
     if let Some(array_label) = &array_label {
         ctx.emitter.label(array_label);
-        emit_mixed_callable_array_selector_slots(ctx, &CallableArraySource::BoxedArray(callable))?;
+        emit_mixed_callable_array_selector_slots_with_error(
+            ctx, &CallableArraySource::BoxedArray(callable), invalid_type_error,
+        )?;
         let selected_label = ctx.next_label("mixed_callable_value_array_done");
         for target in &instance_targets {
             let next_label = ctx.next_label("mixed_callable_value_array_instance_next");
@@ -474,7 +491,11 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             abi::emit_jump(ctx.emitter, &selected_label);
             ctx.emitter.label(&next_label);
         }
-        emit_runtime_callable_array_no_match_abort(ctx);
+        if let Some(message) = invalid_type_error {
+            super::exceptions::emit_type_error(ctx, message);
+        } else {
+            emit_runtime_callable_array_no_match_abort(ctx);
+        }
         ctx.emitter.label(&selected_label);
         abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
         abi::emit_jump(ctx.emitter, &done_label);
@@ -510,14 +531,22 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             abi::emit_jump(ctx.emitter, &selected_label);
             ctx.emitter.label(&next_label);
         }
-        emit_mixed_callable_not_callable_fatal(ctx, op_name);
+        if let Some(message) = invalid_type_error {
+            super::exceptions::emit_type_error(ctx, message);
+        } else {
+            emit_mixed_callable_not_callable_fatal(ctx, op_name);
+        }
         ctx.emitter.label(&selected_label);
         abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
     ctx.emitter.label(&fatal_label);
-    emit_mixed_callable_not_callable_fatal(ctx, op_name);
+    if let Some(message) = invalid_type_error {
+        super::exceptions::emit_type_error(ctx, message);
+    } else {
+        emit_mixed_callable_not_callable_fatal(ctx, op_name);
+    }
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -1668,7 +1697,16 @@ fn emit_mixed_callable_array_selector_slots(
     ctx: &mut FunctionContext<'_>,
     source: &CallableArraySource,
 ) -> Result<()> {
-    emit_require_mixed_callable_array_pair(ctx, source)?;
+    emit_mixed_callable_array_selector_slots_with_error(ctx, source, None)
+}
+
+/// Reads callable-array selectors while preserving a builtin's catchable validation policy.
+fn emit_mixed_callable_array_selector_slots_with_error(
+    ctx: &mut FunctionContext<'_>,
+    source: &CallableArraySource,
+    type_error: Option<&'static str>,
+) -> Result<()> {
+    emit_require_mixed_callable_array_pair(ctx, source, type_error)?;
     match source {
         CallableArraySource::RawArray(callable) if value_is_array_literal(ctx, *callable) => {
             ctx.emitter.comment("runtime callable-array literal mixed selector");
@@ -1681,7 +1719,7 @@ fn emit_mixed_callable_array_selector_slots(
         }
     }
     if matches!(source, CallableArraySource::BoxedArray(_)) {
-        return emit_boxed_callable_array_selector_slots(ctx, source);
+        return emit_boxed_callable_array_selector_slots(ctx, source, type_error);
     }
     emit_unbox_mixed_callable_array_slot(ctx, source, 0)?;
     emit_push_mixed_unbox_payload(ctx);
@@ -1699,6 +1737,7 @@ fn emit_mixed_callable_array_selector_slots(
 fn emit_boxed_callable_array_selector_slots(
     ctx: &mut FunctionContext<'_>,
     source: &CallableArraySource,
+    type_error: Option<&'static str>,
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let stamp_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -1726,7 +1765,7 @@ fn emit_boxed_callable_array_selector_slots(
             ctx.emitter.instruction(&format!("je {}", string_label));           // synthesize string-tagged selectors from typed slots
         }
     }
-    emit_runtime_callable_array_no_match_abort(ctx);
+    emit_callable_array_shape_error(ctx, type_error);
 
     ctx.emitter.label(&mixed_label);
     emit_unbox_mixed_callable_array_slot(ctx, source, 0)?;
@@ -1877,10 +1916,11 @@ fn emit_load_callable_array_base(
 fn emit_require_mixed_callable_array_pair(
     ctx: &mut FunctionContext<'_>,
     source: &CallableArraySource,
+    type_error: Option<&'static str>,
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     emit_load_callable_array_base(ctx, source, array_reg)?;
-    emit_require_callable_array_pair_in_reg(ctx, array_reg);
+    emit_require_callable_array_pair_in_reg(ctx, array_reg, type_error);
     Ok(())
 }
 
@@ -1892,12 +1932,16 @@ fn emit_require_string_callable_array_pair(
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(callable, array_reg)?;
-    emit_require_callable_array_pair_in_reg(ctx, array_reg);
+    emit_require_callable_array_pair_in_reg(ctx, array_reg, None);
     Ok(())
 }
 
 /// Emits the target-aware length check for a loaded indexed-array pointer.
-fn emit_require_callable_array_pair_in_reg(ctx: &mut FunctionContext<'_>, array_reg: &str) {
+fn emit_require_callable_array_pair_in_reg(
+    ctx: &mut FunctionContext<'_>,
+    array_reg: &str,
+    type_error: Option<&'static str>,
+) {
     let valid_label = ctx.next_label("callable_array_pair_valid");
     let invalid_label = ctx.next_label("callable_array_pair_invalid");
     match ctx.emitter.target.arch {
@@ -1916,8 +1960,17 @@ fn emit_require_callable_array_pair_in_reg(ctx: &mut FunctionContext<'_>, array_
         }
     }
     ctx.emitter.label(&invalid_label);
-    emit_runtime_callable_array_no_match_abort(ctx);
+    emit_callable_array_shape_error(ctx, type_error);
     ctx.emitter.label(&valid_label);
+}
+
+/// Uses a catchable builtin diagnostic for malformed pairs without changing legacy call behavior.
+fn emit_callable_array_shape_error(ctx: &mut FunctionContext<'_>, type_error: Option<&'static str>) {
+    if let Some(message) = type_error {
+        super::exceptions::emit_type_error(ctx, message);
+    } else {
+        emit_runtime_callable_array_no_match_abort(ctx);
+    }
 }
 
 /// Preserves the tag and payload returned by `__rt_mixed_unbox`.

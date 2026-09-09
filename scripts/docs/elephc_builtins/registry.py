@@ -339,7 +339,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'array_key_first': ['array'],
     'array_key_last': ['array'],
     'array_keys': ['array'],
-    'array_map': ['callable', 'array'],
+    'array_map': ['?callable', 'array'],
     'array_multisort': ['array', 'int'],
     'array_pad': ['array', 'int', 'mixed'],
     'array_pop': ['array'],

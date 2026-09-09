@@ -821,8 +821,8 @@ fn callback_descriptor_env_ownership(callback: &Expr) -> CallbackDescriptorEnvOw
 /// and returns the inferred return type. Handles `FirstClassCallable`, `Variable`,
 /// `StringLiteral`, and `resolve_expr_callable_sig` callback forms.
 ///
-/// Returns the callback's return type on success, or an error if the callback
-/// does not have a statically known callable signature.
+/// Returns the known result type, or Mixed for supported runtime callback dispatch.
+/// Unsupported callback forms still require a statically known signature.
 pub(crate) fn check_callback_builtin_call(
     checker: &mut Checker,
     callback: &Expr,
@@ -937,6 +937,17 @@ fn check_callback_builtin_call_in_engine_frame(
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
+    if label == "array_map() callback"
+        && matches!(callback_ty.codegen_repr(), PhpType::Mixed | PhpType::Callable | PhpType::Void)
+    {
+        // Boxed array reads erase callable signatures. The map runtime resolves
+        // these values and validates the selected target's argument contract.
+        checker.record_unresolved_callee_argument_aliases(callback_args);
+        for arg in callback_args {
+            checker.infer_type(arg, env)?;
+        }
+        return Ok(PhpType::Mixed);
+    }
     if callback_builtin_allows_runtime_string_descriptor(label) && callback_ty == PhpType::Str {
         for arg in callback_args {
             checker.infer_type(arg, env)?;
