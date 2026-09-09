@@ -133,7 +133,7 @@ unset($source);
 /// Native exceptions caught and rethrown by opaque eval balance both ownership transfers.
 #[test]
 fn test_core_throwable_native_eval_round_trip_releases_both_box_owners() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 function throwNativePreviousOwner(): void { throw new RuntimeException("inner", 13); }
 function checkNativeEvalPreviousOwner(string $source): void {
     try { eval($source); }
@@ -152,7 +152,67 @@ unset($source);
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "inner:13|inner:13|", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nGenerated user assembly:\n{}", out.stderr, asm);
+}
+
+/// Catching a native exception entirely within eval must retire the exported box and raw object.
+#[test]
+fn test_core_native_throwable_caught_in_eval_releases_its_exported_owner() {
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+function throwNativeCaughtOwner(): void { throw new RuntimeException("inner", 13); }
+function catchNativeOwnerInsideEval(string $source): void { eval($source); }
+$source = 'try { throwNativeCaughtOwner(); }
+catch (RuntimeException $inner) { echo $inner->getMessage(), ":", $inner->getCode(), "|"; unset($inner); } // ' . $argc;
+catchNativeOwnerInsideEval($source);
+catchNativeOwnerInsideEval($source);
+unset($source);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "inner:13|inner:13|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nGenerated user assembly:\n{}", out.stderr, asm);
+}
+
+/// Rethrowing the same native exception through eval must not leave the catch binding as an owner.
+#[test]
+fn test_core_native_throwable_rethrown_by_eval_releases_the_catch_binding() {
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+function throwNativeRethrownOwner(): void { throw new RuntimeException("inner", 13); }
+function catchRethrownEvalOwner(string $source): void {
+    try { eval($source); }
+    catch (RuntimeException $caught) { echo $caught->getMessage(), ":", $caught->getCode(), "|"; unset($caught); }
+}
+$source = 'try { throwNativeRethrownOwner(); } catch (RuntimeException $inner) { throw $inner; } // ' . $argc;
+catchRethrownEvalOwner($source);
+catchRethrownEvalOwner($source);
+unset($source);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "inner:13|inner:13|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nGenerated user assembly:\n{}", out.stderr, asm);
+}
+
+/// Releasing an eval wrapper must retire its native previous exception without reading getPrevious.
+#[test]
+fn test_core_native_throwable_wrapped_by_eval_releases_unread_previous() {
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+function throwNativeWrappedOwner(): void { throw new RuntimeException("inner", 13); }
+function catchWrappedEvalOwner(string $source): void {
+    try { eval($source); }
+    catch (Exception $caught) { echo $caught->getMessage(), ":", $caught->getCode(), "|"; unset($caught); }
+}
+$source = 'try { throwNativeWrappedOwner(); }
+catch (RuntimeException $inner) { throw new Exception("outer", 7, $inner); } // ' . $argc;
+catchWrappedEvalOwner($source);
+catchWrappedEvalOwner($source);
+unset($source);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "outer:7|outer:7|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nGenerated user assembly:\n{}", out.stderr, asm);
 }
 
 const DECLARATIONS: &str = r#"
