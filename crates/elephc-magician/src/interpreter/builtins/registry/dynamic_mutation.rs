@@ -76,6 +76,12 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
                 values,
             )?)
         }
+        // `xml_parse_into_struct()` writes `$values` / `$index` back through the captured
+        // targets; the whole surface routes here so `$f(...)`, first-class callables and
+        // `call_user_func_array()` with `&$refs` keep them (the by-value dispatcher has none).
+        _ if eval_xml_builtin_name(name) => {
+            Some(eval_xml_evaluated_call(name, evaluated_args, context, values)?)
+        }
         _ => return Ok(None),
     };
     Ok(result)

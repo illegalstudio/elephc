@@ -33,6 +33,7 @@ mod builtins_raw_memory;
 mod builtins_readline;
 mod builtins_reflection_functions;
 mod builtins_scalars;
+mod builtins_xml;
 mod builtins_spl_autoload;
 mod builtins_stream_contexts;
 mod builtins_stream_extensions;

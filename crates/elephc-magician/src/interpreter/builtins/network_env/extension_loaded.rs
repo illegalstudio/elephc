@@ -56,17 +56,32 @@ pub(in crate::interpreter) fn eval_builtin_extension_loaded(
         return Err(EvalStatus::RuntimeFatal);
     };
     let extension = eval_expr(extension, context, scope, values)?;
-    eval_extension_loaded_result(extension, values)
+    eval_extension_loaded_result(extension, context, values)
 }
 
 /// Reports whether an already-evaluated extension name is in the known extension set.
 pub(in crate::interpreter) fn eval_extension_loaded_result(
     extension: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let name = values.string_bytes(extension)?;
     let name = String::from_utf8_lossy(&name);
-    values.bool_value(eval_extension_is_loaded(name.as_ref()))
+    values.bool_value(eval_extension_is_loaded_in(name.as_ref(), context))
+}
+
+/// `eval_extension_is_loaded` plus the one answer that depends on the HOST program:
+/// `xml` / `xmlwriter` are loaded exactly when the compiled program registered the xml
+/// prelude's functions into this eval context, i.e. when it linked `elephc_xml`. That
+/// keeps `extension_loaded('xml')` identical inside and outside `eval()` in one program.
+pub(in crate::interpreter) fn eval_extension_is_loaded_in(
+    name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    if name.eq_ignore_ascii_case("xml") || name.eq_ignore_ascii_case("xmlwriter") {
+        return context.native_function("xml_parser_create").is_some();
+    }
+    eval_extension_is_loaded(name)
 }
 
 /// Returns whether `name` is in eval's known extension set, compared case-insensitively.

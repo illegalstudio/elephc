@@ -57,6 +57,8 @@ pub(in crate::interpreter) enum EvalArea {
     Time,
     /// Scalar conversion and type-related builtins.
     Types,
+    /// `ext/xml` and `ext/xmlwriter` builtins, forwarded to the compiled xml prelude.
+    Xml,
 }
 
 impl EvalArea {
@@ -79,6 +81,7 @@ impl EvalArea {
             EvalArea::Symbols => "symbols",
             EvalArea::Time => "time",
             EvalArea::Types => "types",
+            EvalArea::Xml => "xml",
         }
     }
 }

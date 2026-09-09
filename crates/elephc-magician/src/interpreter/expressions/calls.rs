@@ -87,6 +87,11 @@ pub(in crate::interpreter) fn eval_call(
     if name.starts_with("pcntl_") && eval_php_visible_builtin_exists(name) {
         return eval_builtin_pcntl_call(name, args, context, scope, values);
     }
+    // The xml surface forwards to the host's compiled prelude; the source-level path keeps
+    // `xml_parse_into_struct()`'s by-reference outputs and named arguments intact.
+    if eval_xml_builtin_name(name) {
+        return eval_builtin_xml_call(name, args, context, scope, values);
+    }
     // `opcache_get_configuration` is prelude-provided on the native side (not a
     // catalog builtin), so eval dispatches it as a plain runtime handler rather than
     // through the PHP-visible builtin registry, keeping the two builtin sets in sync.
