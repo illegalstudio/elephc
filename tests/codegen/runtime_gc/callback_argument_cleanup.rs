@@ -10,6 +10,33 @@
 
 use crate::support::*;
 
+/// Concrete descriptor results release their boxes without clobbering float or string registers.
+#[test]
+fn test_core_descriptor_scalar_result_boxes_are_retired_after_conversion() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function scalarIntTarget(): int { return 7; }
+function scalarBoolTarget(): bool { return true; }
+function scalarFloatTarget(): float { return 1.5; }
+function scalarStringTarget(): string { return "ok"; }
+function scalarVoidTarget(): void {}
+function invokeScalarInt(callable $callback): int { return call_user_func($callback); }
+function invokeScalarBool(callable $callback): bool { return call_user_func($callback); }
+function invokeScalarFloat(callable $callback): float { return call_user_func($callback); }
+function invokeScalarString(callable $callback): string { return call_user_func($callback); }
+function invokeScalarVoid(callable $callback): void { call_user_func($callback); }
+for ($i = 0; $i < 3; $i++) {
+    echo invokeScalarInt(scalarIntTarget(...)), ":";
+    echo invokeScalarBool(scalarBoolTarget(...)) ? "yes:" : "no:";
+    echo invokeScalarFloat(scalarFloatTarget(...)), ":";
+    echo invokeScalarString(scalarStringTarget(...)), "|";
+    invokeScalarVoid(scalarVoidTarget(...));
+}
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "7:yes:1.5:ok|7:yes:1.5:ok|7:yes:1.5:ok|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A program referencing only the borrowed-descriptor invoker retains its shared runtime body.
 #[test]
 fn test_core_borrowed_descriptor_entry_survives_runtime_dead_stripping() {

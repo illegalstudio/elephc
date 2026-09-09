@@ -37,6 +37,7 @@ use super::{
 use crate::codegen::{CodegenIrError, Result};
 
 mod instance_expr;
+mod results;
 
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
 const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
@@ -2807,71 +2808,12 @@ fn store_descriptor_invoker_result(
     inst: &Instruction,
 ) -> Result<()> {
     let Some(result) = inst.result else {
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
         return Ok(());
     };
-    match ctx.value_php_type(result)?.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => ctx.store_result_value(result),
-        PhpType::Void | PhpType::Never => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-            ctx.store_result_value(result)
-        }
-        PhpType::Int => {
-            move_result_to_arg(ctx, 0);
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
-            ctx.store_result_value(result)
-        }
-        PhpType::Bool => {
-            move_result_to_arg(ctx, 0);
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
-            ctx.store_result_value(result)
-        }
-        PhpType::Float => {
-            move_result_to_arg(ctx, 0);
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
-            ctx.store_result_value(result)
-        }
-        PhpType::Str => {
-            move_result_to_arg(ctx, 0);
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-            ctx.store_result_value(result)
-        }
-        PhpType::TaggedScalar => store_descriptor_invoker_tagged_scalar_result(ctx, result),
-        other => Err(CodegenIrError::unsupported(format!(
-            "descriptor invoker result for PHP type {:?}",
-            other
-        ))),
-    }
-}
-
-/// Unboxes a Mixed descriptor result into the inline nullable-int result shape.
-fn store_descriptor_invoker_tagged_scalar_result(
-    ctx: &mut FunctionContext<'_>,
-    result: ValueId,
-) -> Result<()> {
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x9, x0");                              // preserve the unboxed Mixed tag before moving the payload
-            ctx.emitter.instruction("mov x0, x1");                              // place the unboxed nullable-int payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov x1, x9");                              // place the unboxed Mixed tag into the tagged-scalar tag register
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, rax");                            // preserve the unboxed Mixed tag before moving the payload
-            ctx.emitter.instruction("mov rax, rdi");                            // place the unboxed nullable-int payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov rdx, r10");                            // place the unboxed Mixed tag into the tagged-scalar tag register
-        }
-    }
+    let result_type = ctx.value_php_type(result)?.codegen_repr();
+    results::emit_unbox_owned_descriptor_result(ctx.emitter, &result_type)?;
     ctx.store_result_value(result)
-}
-
-/// Moves the current integer result register into an ABI argument register.
-fn move_result_to_arg(ctx: &mut FunctionContext<'_>, arg_index: usize) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    move_reg_to_arg(ctx, result_reg, arg_index);
 }
 
 /// Lowers `value |> $callable` through the callable descriptor's uniform invoker.
