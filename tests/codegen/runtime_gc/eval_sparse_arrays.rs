@@ -241,6 +241,28 @@ echo implode(",", $source);
     assert_eq!(compile_and_run(source), "old|0,key,1:old,new,tail|old");
 }
 
+/// Whole-array parameter replacement preserves boxed reads, returns, and reference writeback.
+#[test]
+fn test_core_native_php_array_reassignment_preserves_declared_storage() {
+    let source = r#"<?php
+function replaceArrayValue(array $items): array {
+    $items = ["A", "B"];
+    echo implode(",", $items), "|";
+    return $items;
+}
+function replaceArrayReference(array &$items): void {
+    $items = ["C", "D"];
+    echo implode(",", $items), "|";
+}
+$original = [1, 2];
+$items = replaceArrayValue($original);
+echo implode(",", $items), "|";
+replaceArrayReference($items);
+echo implode(",", $items), "|", implode(",", $original);
+"#;
+    assert_eq!(compile_and_run(source), "A,B|A,B|C,D|C,D|1,2");
+}
+
 /// Native PHP array properties accept append and string keys without mutating copied values.
 #[test]
 fn test_core_native_php_array_property_writes_preserve_copies() {

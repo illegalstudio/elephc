@@ -182,6 +182,10 @@ pub(super) fn contextualize_local_assignment(
         ctx.local_type(name)
     };
     let contextual_repr = contextual_ty.codegen_repr();
+    if contextual_ty.is_php_array() {
+        let converted = coerce_typed_assign_value(ctx, lowered, &contextual_ty, span);
+        return (converted, contextual_ty);
+    }
     let has_loop_contract = local_has_loop_storage_contract(ctx, name, &contextual_ty);
 
     // A first assignment precedes the loop whose contract was computed from the final checker

@@ -10,6 +10,40 @@
 
 use crate::ir::print_module;
 
+/// Rebinding declared arrays keeps boxed storage for later native reads and reference writeback.
+#[test]
+fn php_array_reassignment_keeps_the_declared_storage_contract() {
+    use crate::codegen::platform::Target;
+    use crate::ir::Op;
+    use crate::types::PhpType;
+    use std::path::Path;
+
+    let source = r#"<?php
+function replaceArrayValue(array $items): array {
+    $items = ["A", "B"];
+    return $items;
+}
+function replaceArrayReference(array &$items): void { $items = ["C", "D"]; }
+$items = replaceArrayValue([$argc]);
+replaceArrayReference($items);
+echo implode(",", $items);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| {
+            function.name.as_str() == "replaceArrayReference"
+        }).expect("reference function");
+        let store = function.instructions.iter().find(|inst| inst.op == Op::StoreRefCell)
+            .expect("boxed reference store");
+        assert_eq!(store.result_php_type.codegen_repr(), PhpType::Mixed, "{name}");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedBox), "{name}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Native declared-array removal reaches the rooted boxed storage path on all supported ABIs.
 #[test]
 fn php_array_unset_uses_installed_sparse_storage_on_every_target() {
