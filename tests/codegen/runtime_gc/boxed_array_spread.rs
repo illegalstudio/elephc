@@ -81,6 +81,27 @@ copyBoxedSpread(["key" => "original"]);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Mixed operands dispatch packed and hash layouts without consuming the caller's owner.
+#[test]
+fn test_core_mixed_array_spread_keeps_runtime_keys_and_source_owner() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function copyMixedSpread(mixed $items): array { return [...$items]; }
+$packed = [str_repeat("p", 24)];
+$named = ["key" => str_repeat("n", 24)];
+for ($i = 0; $i < 4; $i++) {
+    $a = copyMixedSpread($packed);
+    $b = copyMixedSpread($named);
+    echo implode(",", array_keys($a)), ":", implode(",", array_keys($b)), "|";
+    unset($a, $b);
+}
+echo $packed[0], ":", $named["key"];
+unset($packed, $named);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}{}:{}", "0:key|".repeat(4), "p".repeat(24), "n".repeat(24)), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A dynamic non-array spread throws a catchable Error instead of dereferencing an invalid payload.
 #[test]
 fn test_core_boxed_array_spread_rejects_scalar_values() {

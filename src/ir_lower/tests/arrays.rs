@@ -59,12 +59,14 @@ fn php_array_literal_spreads_use_typed_hash_boundary_on_every_target() {
 
     let source = r#"<?php
 function spreadPhpArray(array $items): array { return [0, ...$items, "tail"]; }
+function spreadMixedArray(mixed $items): array { return [...$items]; }
 class SpreadPhpArraySource {
     public function none(): array { return []; }
     public function combined(): array { $local = []; return [...$local, ...$this->none()]; }
 }
 $spread = function(array $items, mixed $tail) { return [...$items, $tail]; };
 echo count(spreadPhpArray([$argc]));
+echo count(spreadMixedArray(["key" => $argc]));
 echo count($spread(["key" => $argc], "last"));
 echo count((new SpreadPhpArraySource())->combined());
 "#;

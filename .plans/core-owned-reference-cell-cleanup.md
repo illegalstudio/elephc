@@ -269,3 +269,19 @@ direct, call_user_func and first-class invocations with surviving aliases.
 Build and test compilation pass. The builtin documentation regeneration and
 all three audits pass without generated changes. No local tests were run;
 the list-unpack regression and new ownership fixture remain executable CI gates.
+
+### Mixed spread validation reaches the runtime boundary
+
+On `0071912c1`, Linux x86_64 shard 4 is green. Shard 10 instead rejects the
+new dynamic invalid-spread fixtures during checking: `Spread(Mixed)` was
+still rejected even though literal storage inference and EIR lowering support
+the checked boxed boundary. The checker now admits Mixed operands, retaining
+the diagnostic for statically non-array operands. All-target emitter coverage
+also includes a Mixed parameter; a new heap fixture checks packed/hash keys
+and caller-owner survival. The existing scalar rejection and throw-order
+fixtures must now pass through the runtime validation rather than fail early.
+
+`cargo check --tests` and `git diff --check` pass without running tests locally.
+CI on `0071912c1` still reports independent failures, including the newly
+reachable middle-default constructor leak (five blocks, 224 bytes), generic
+array builtin validation, native/eval exceptions and hydration ownership.
