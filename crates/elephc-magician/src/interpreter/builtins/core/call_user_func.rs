@@ -38,27 +38,14 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func(
             _ => unreachable!("literal func-args callback was canonicalized"),
         };
     }
-    let release_callback = eval_call_user_func_callback_expr_is_temporary(&args[0]);
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    for (index, arg) in args.iter().enumerate() {
-        let value = match eval_expr(arg, context, scope, values) {
-            Ok(value) => value,
-            Err(status) => {
-                if index > 0 && release_callback {
-                    values.release(evaluated_args[0])?;
-                }
-                return Err(status);
-            }
-        };
-        evaluated_args.push(value);
-    }
-    let callback = evaluated_args[0];
-    let result =
-        eval_call_user_func_with_values_from_scope(evaluated_args, Some(scope), context, values);
-    if release_callback {
-        values.release(callback)?;
-    }
-    result
+    let operands = args.iter().collect::<Vec<_>>();
+    with_eval_operands(&operands, context, scope, values, |args, context, scope, values| {
+        let borrowed = args.iter().map(|value| value.borrowed()).collect();
+        let result = eval_call_user_func_with_values_from_scope(borrowed, Some(scope), context, values)?;
+        // A callback may return an argument borrow. Acquire the result before the
+        // operand leases retire, just as ordinary evaluated call arguments do.
+        if result.is_borrowed() { values.retain(result) } else { Ok(result) }
+    })
 }
 
 /// Dispatches `call_user_func` after its callback and arguments are already evaluated.
@@ -68,11 +55,4 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_call_user_func_with_values_from_scope(evaluated_args, None, context, values)
-}
-
-/// Returns whether a `call_user_func*` callback expression allocates a temporary cell.
-pub(in crate::interpreter) fn eval_call_user_func_callback_expr_is_temporary(
-    callback: &EvalExpr,
-) -> bool {
-    matches!(callback, EvalExpr::Const(_))
 }

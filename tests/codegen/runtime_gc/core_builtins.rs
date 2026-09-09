@@ -497,6 +497,19 @@ fn test_core_eval_builtin_error_construction_releases_temporary_cells() {
     );
 }
 
+/// CUF string arguments and returned aliases retire after both successful calls and caught failures.
+#[test]
+fn test_core_eval_call_user_func_operands_release_after_success_and_throw() {
+    assert_core_eval_collection_cleanup(
+        "function ownedCufIdentity($value) { return $value; }",
+        "$result = call_user_func(\"ownedCufIdentity\", \"temporary\");
+         if ($result !== \"temporary\") { echo \"bad\"; } unset($result);
+         $result = call_user_func(\"strlen\", \"temporary\"); unset($result);
+         try { call_user_func(\"get_class_methods\", \"MissingCufOwner\"); }
+         catch (TypeError $error) { unset($error); }",
+    );
+}
+
 /// Compares deep cleanup after repeated eval results, without allocating loop-control temporaries.
 fn assert_core_eval_collection_cleanup(setup: &str, body: &str) {
     assert_core_eval_collection_cleanup_with_native("", setup, body);
