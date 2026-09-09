@@ -156,13 +156,11 @@ pub(in crate::interpreter) fn eval_indexed_string_array_result(
     names: &[String],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(names.len())?;
+    let mut result = super::collection_builder::EvalArrayBuilder::indexed(values, names.len())?;
     for (index, name) in names.iter().enumerate() {
-        let key = values.int(index as i64)?;
-        let value = values.string(name)?;
-        result = values.array_set(result, key, value)?;
+        result.index(index, |values| values.string(name))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Borrows a runtime string array and releases temporary keys and element owners after decoding.

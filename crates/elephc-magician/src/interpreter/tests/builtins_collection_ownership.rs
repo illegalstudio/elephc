@@ -12,6 +12,52 @@ use super::super::*;
 use super::support::*;
 use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
+/// Builtin exceptions own their object but release constructor arguments, including failed construction.
+#[test]
+fn builtin_throwable_construction_releases_argument_owners() {
+    for class in ["Error", "FiberError", "TypeError", "ValueError", "DivisionByZeroError", "RuntimeException", "KnownFailingConstructor"] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let result: Result<(), _> = eval_throw_builtin_exception(class, "message", &mut context, &mut values);
+        let thrown = context.take_pending_throw();
+        if class == "KnownFailingConstructor" {
+            assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+            assert!(thrown.is_none());
+        } else {
+            assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+            assert!(thrown.is_some());
+        }
+        assert_eq!(values.values.len(), 3, "{class}");
+        for id in values.values.keys() {
+            let count = values.releases.iter().filter(|cell| cell.as_ptr() as usize == *id).count();
+            assert_eq!(count, usize::from(thrown.is_none_or(|cell| cell.as_ptr() as usize != *id)), "{class}");
+        }
+    }
+}
+
+/// Class-method result construction releases keys and names, including a partially filled array on failure.
+#[test]
+fn metadata_array_builder_releases_temporary_and_unfinished_owners() {
+    for fail in [false, true] {
+        let mut values = FakeOps::default();
+        if fail { values.fail_array_set_call(1); }
+        let names = vec!["first".to_string(), "second".to_string()];
+        let result = crate::interpreter::builtins::eval_indexed_string_array_result(&names, &mut values);
+        let returned = if fail {
+            assert_eq!(result, Err(EvalStatus::UnsupportedConstruct));
+            None
+        } else {
+            let result = result.unwrap();
+            assert!(matches!(values.get(result), FakeValue::Array(entries) if entries.len() == 2));
+            Some(result)
+        };
+        for id in values.values.keys() {
+            let count = values.releases.iter().filter(|cell| cell.as_ptr() as usize == *id).count();
+            assert_eq!(count, usize::from(returned.is_none_or(|cell| cell.as_ptr() as usize != *id)));
+        }
+    }
+}
+
 /// Metadata decoding releases its keys and fetched cells on both success and invalid UTF-8.
 #[test]
 fn metadata_array_decoder_releases_temporary_owners() {

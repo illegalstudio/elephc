@@ -79,7 +79,10 @@ pub(in crate::interpreter) fn eval_get_class_vars_result(
     if eval_class_relation_name_exists(&class_name, context, values)? {
         return eval_runtime_class_vars_result(&class_name, context, values);
     }
-    Err(EvalStatus::RuntimeFatal)
+    eval_throw_type_error(
+        &format!("get_class_vars(): Argument #1 ($class) must be a valid class name, {class_name} given"),
+        context, values,
+    )
 }
 
 /// Builds `get_class_vars()` for an eval-declared class or enum.

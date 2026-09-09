@@ -66,10 +66,29 @@ pub(in crate::interpreter) fn eval_get_class_methods_result(
     let [target] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    let tag = values.type_tag(*target)?;
+    if !matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_STRING) {
+        let given = match tag {
+            EVAL_TAG_INT => "int",
+            EVAL_TAG_FLOAT => "float",
+            EVAL_TAG_BOOL => "bool",
+            EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+            EVAL_TAG_NULL => "null",
+            EVAL_TAG_RESOURCE => "resource",
+            _ => "object",
+        };
+        return eval_throw_type_error(
+            &format!("get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, {given} given"),
+            context, values,
+        );
+    }
     let (class_name, target_is_object) =
         eval_class_metadata_target_name(*target, context, values)?;
     if !target_is_object && !eval_class_relation_name_exists(&class_name, context, values)? {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_type_error(
+            "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, string given",
+            context, values,
+        );
     }
     let names = eval_class_method_names_for_scope(&class_name, context, values)?;
     eval_indexed_string_array_result(&names, values)

@@ -9,6 +9,37 @@
 
 use crate::support::*;
 
+/// Invalid class-introspection arguments remain catchable through opaque eval, CUF, CUFA, and FCC.
+#[test]
+fn test_core_eval_class_introspection_type_errors_are_catchable() {
+    let methods_error = "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, string given";
+    let vars_error = "get_class_vars(): Argument #1 ($class) must be a valid class name, MissingReviewClass given";
+    let mut body = "$methods = get_class_methods(...); $vars = get_class_vars(...);".to_string();
+    let mut expected = String::new();
+    for (call, error) in [
+        ("get_class_methods(\"MissingReviewClass\")", methods_error),
+        ("call_user_func(\"get_class_methods\", \"MissingReviewClass\")", methods_error),
+        ("call_user_func_array(\"get_class_methods\", [\"MissingReviewClass\"])", methods_error),
+        ("$methods(\"MissingReviewClass\")", methods_error),
+        ("get_class_vars(\"MissingReviewClass\")", vars_error),
+        ("call_user_func(\"get_class_vars\", \"MissingReviewClass\")", vars_error),
+        ("call_user_func_array(\"get_class_vars\", [\"class\" => \"MissingReviewClass\"])", vars_error),
+        ("$vars(\"MissingReviewClass\")", vars_error),
+    ] {
+        body.push_str(&format!("try {{ {call}; }} catch (TypeError $error) {{ echo $error->getMessage(), \"|\"; unset($error); }}"));
+        expected.push_str(error);
+        expected.push('|');
+    }
+    for (argument, given) in [("42", "int"), ("2.5", "float"), ("true", "bool"), ("null", "null"), ("[]", "array"), ("[\"key\" => 1]", "array")] {
+        body.push_str(&format!("try {{ \\GET_CLASS_METHODS({argument}); }} catch (TypeError $error) {{ echo $error->getMessage(), \"|\"; unset($error); }}"));
+        expected.push_str(&format!("get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, {given} given|"));
+    }
+    let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("<?php $source = '{quoted}' . ' // ' . $argc; eval($source); echo 'alive';");
+    expected.push_str("alive");
+    assert_eq!(compile_and_run(&source), expected);
+}
+
 /// Compact method-name data preserves spelling/order and returns independently writable arrays.
 #[test]
 fn test_core_class_methods_compact_results_have_independent_storage() {

@@ -471,6 +471,32 @@ echo eval($source);
     assert_eq!(compile_and_run(source), "after42");
 }
 
+/// Native and eval class-method inventories release temporary names on direct, CUF, and FCC paths.
+#[test]
+fn test_core_eval_class_method_results_release_temporary_cells() {
+    for target in ["\"NativeMethodOwners\"", "\"EvalMethodOwners\""] {
+        assert_core_eval_collection_cleanup_with_native(
+            "class NativeMethodOwners { public function first(): void {} public function second(): void {} }",
+            "class EvalMethodOwners { public function first(): void {} public function second(): void {} }
+             $methods = get_class_methods(...);",
+            &format!("$result = get_class_methods({target}); unset($result);
+                      $result = call_user_func(\"get_class_methods\", {target}); unset($result);
+                      $result = $methods({target}); unset($result);"),
+        );
+    }
+}
+
+/// Repeated caught builtin errors release constructor operands as well as the exception object.
+#[test]
+fn test_core_eval_builtin_error_construction_releases_temporary_cells() {
+    assert_core_eval_collection_cleanup(
+        "",
+        "try { trigger_error(\"invalid\", 2); } catch (ValueError $error) { unset($error); }
+         try { get_class_methods(\"MissingMethodOwner\"); } catch (TypeError $error) { unset($error); }
+         try { get_class_vars(\"MissingVarsOwner\"); } catch (TypeError $error) { unset($error); }",
+    );
+}
+
 /// Compares deep cleanup after repeated eval results, without allocating loop-control temporaries.
 fn assert_core_eval_collection_cleanup(setup: &str, body: &str) {
     assert_core_eval_collection_cleanup_with_native("", setup, body);
