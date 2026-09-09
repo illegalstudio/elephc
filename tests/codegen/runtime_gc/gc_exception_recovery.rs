@@ -10,6 +10,25 @@
 
 use crate::support::*;
 
+/// A native exception thrown inside an eval catch must execute, and may be overridden by, finally.
+#[test]
+fn test_core_eval_finally_runs_after_native_throw_from_catch() {
+    let source = r#"<?php
+function throwFromEvalCatch(): void { throw new Exception("second"); }
+$source = 'try {
+    try { throw new Exception("first"); }
+    catch (Exception $first) { throwFromEvalCatch(); }
+    finally { echo "finally|"; }
+} catch (Exception $second) { echo $second->getMessage(), "|"; } // ' . $argc;
+eval($source);
+$override = 'try { throw new Exception("first"); }
+catch (Exception $first) { throwFromEvalCatch(); }
+finally { echo "override|"; return 7; } // ' . $argc;
+echo eval($override);
+"#;
+    assert_eq!(compile_and_run(source), "finally|second|override|7");
+}
+
 /// Eval rethrows retain their exception while catch rebinding and finally remove the source owner.
 #[test]
 fn test_core_eval_rethrow_survives_same_binding_catch_and_finally_unset() {

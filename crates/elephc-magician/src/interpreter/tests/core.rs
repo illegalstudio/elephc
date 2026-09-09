@@ -10,6 +10,43 @@
 use super::super::*;
 use super::support::*;
 
+/// A nested eval throw from a catch still runs finally before reaching an outer catch.
+#[test]
+fn execute_program_runs_finally_after_catch_calls_throwing_eval() {
+    let program = parse_fragment(br#"
+try {
+    try { throw new Exception("first"); }
+    catch (Throwable $first) { eval('throw new Exception("second");'); }
+    finally { echo "finally|"; }
+} catch (Throwable $second) { return 2; }
+"#).expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute nested throw");
+    assert_eq!(values.output, "finally|");
+    assert_eq!(values.get(result), FakeValue::Int(2));
+    assert!(context.take_pending_throw().is_none());
+}
+
+/// Returning from finally consumes the pending nested-eval throw instead of bypassing the finalizer.
+#[test]
+fn execute_program_finally_return_overrides_throw_from_catch_call() {
+    let program = parse_fragment(br#"
+try { throw new Exception("first"); }
+catch (Throwable $first) { eval('throw new Exception("second");'); }
+finally { return 3; }
+"#).expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("finally overrides the catch call's throw");
+    assert_eq!(values.get(result), FakeValue::Int(3));
+    assert!(context.take_pending_throw().is_none());
+}
+
 /// Verifies assignment writes a named scope entry and return reads it back.
 #[test]
 fn execute_program_stores_and_returns_scope_value() {
