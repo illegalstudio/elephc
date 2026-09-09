@@ -367,6 +367,9 @@ pub(super) fn reflection_method_return_type_metadata(
 
 /// Converts a normalized non-union parameter type into a simple `ReflectionNamedType`.
 pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionNamedTypeMetadata> {
+    if ty.is_php_array() {
+        return Some(reflection_builtin_named_type("array", false));
+    }
     match ty {
         PhpType::Int => Some(reflection_builtin_named_type("int", false)),
         PhpType::Float => Some(reflection_builtin_named_type("float", false)),
@@ -401,19 +404,24 @@ pub(super) fn reflection_union_or_nullable_type_metadata(
     members: &[PhpType],
 ) -> Option<ReflectionParameterTypeMetadata> {
     let allows_null = members.iter().any(|member| matches!(member, PhpType::Void));
-    let non_null_members = members
+    let mut types = Vec::<ReflectionNamedTypeMetadata>::new();
+    for member in members
         .iter()
         .filter(|member| !matches!(member, PhpType::Void))
-        .collect::<Vec<_>>();
-    if non_null_members.len() == 1 {
-        let mut metadata = reflection_named_type_metadata(non_null_members[0])?;
+    {
+        let metadata = reflection_named_type_metadata(member)?;
+        // Packed and keyed storage are one PHP type, including inside nullable/wider unions.
+        if !types.iter().any(|existing| {
+            existing.name == metadata.name && existing.is_builtin == metadata.is_builtin
+        }) {
+            types.push(metadata);
+        }
+    }
+    if types.len() == 1 {
+        let mut metadata = types.pop()?;
         metadata.allows_null = allows_null;
         return Some(ReflectionParameterTypeMetadata::Named(metadata));
     }
-    let types = non_null_members
-        .into_iter()
-        .map(reflection_named_type_metadata)
-        .collect::<Option<Vec<_>>>()?;
     (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Union(
         ReflectionUnionTypeMetadata { types, allows_null },
     ))
