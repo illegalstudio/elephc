@@ -18,7 +18,8 @@ function replaceMixedReferenceOwner(mixed &$value): void {
     $value = "replaced";
     $value = $value;
 }
-$value = null;
+function initialMixedReferenceOwner(): mixed { return null; }
+$value = initialMixedReferenceOwner();
 for ($i = 0; $i < 3; $i++) {
     replaceMixedReferenceOwner($value);
     echo $value, "|";
