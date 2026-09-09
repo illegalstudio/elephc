@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **819 / 2169** (38%), classes **140 / 329** (43%), constants **1066 / 3180** (34%).
+Overall coverage: functions **883 / 2169** (41%), classes **142 / 329** (43%), constants **1094 / 3180** (34%).
 
 ## Coverage by PHP module
 
@@ -77,9 +77,9 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `tidy` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 161 · 0% |
 | `tokenizer` | 0 / 2 · 0% | 0 / 1 · 0% | 0 / 154 · 0% |
 | `uri` | — | 0 / 9 · 0% | — |
-| `xml` | 0 / 22 · 0% | 0 / 1 · 0% | 0 / 28 · 0% |
+| [`xml`](./xml.md#functions) | 22 / 22 · 100% | 1 / 1 · 100% | 28 / 28 · 100% |
 | `xmlreader` | — | 0 / 1 · 0% | — |
-| `xmlwriter` | 0 / 42 · 0% | 0 / 1 · 0% | — |
+| [`xmlwriter`](./xml.md#functions) | 42 / 42 · 100% | 1 / 1 · 100% | — |
 | `xsl` | — | 0 / 1 · 0% | 0 / 14 · 0% |
 | [`zend opcache`](./opcache.md#functions) | 8 / 8 · 100% | — | — |
 | `zip` | 0 / 10 · 0% | 0 / 1 · 0% | — |
@@ -156,6 +156,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [iconv](./iconv.md) ([PHP](https://www.php.net/manual/en/book.iconv.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
 | [PCNTL](./pcntl.md) ([PHP](https://www.php.net/manual/en/book.pcntl.php)) | ✅ Supported | Target-aware Unix process control; auto-linked or forced with --with-pcntl |
+| [XML](./xml.md) ([PHP](https://www.php.net/manual/en/book.xml.php)) | ✅ Supported | ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the surface is complete, with the runtime's per-handler-invocation heap cost documented under Runtime limits in docs/php/xml.md |
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |

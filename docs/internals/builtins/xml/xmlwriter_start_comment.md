@@ -1,0 +1,48 @@
+---
+title: "xmlwriter_start_comment() — internals"
+description: "Compiler internals for xmlwriter_start_comment(): lowering path, type checks, and runtime helpers."
+sidebar:
+  order: 953
+---
+
+## `xmlwriter_start_comment()` — internals
+
+## Where it lives
+
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:988](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L988) (`xmlwriter_start_comment`)
+- **Function symbol**: `xmlwriter_start_comment()`
+
+
+### Lowering notes
+
+- Implemented by the compiler-injected xml prelude.
+
+## Semantic descriptor
+
+Shared contract implemented by an injected elephc-PHP prelude.
+
+## EIR and runtime boundary
+
+_Implemented by an injected elephc-PHP prelude._
+
+## Signature summary
+
+```php
+function xmlwriter_start_comment(mixed $writer): bool
+```
+
+## What the type checker enforces
+
+- **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_comment.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_comment.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-language-surface`.
+- **Dispatch hooks**: `direct`, `values`
+
+## Cross-references
+
+- [User reference for `xmlwriter_start_comment()`](../../../php/builtins/xml/xmlwriter_start_comment.md)
