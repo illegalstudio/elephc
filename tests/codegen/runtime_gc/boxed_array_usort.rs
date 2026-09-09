@@ -124,9 +124,10 @@ unset($bag);
 
 /// Checks ordinary and tagged execution while requiring balanced heap ownership on the native path.
 fn assert_clean_sort(source: &str, expected: &str) {
-    let out = compile_and_run_with_heap_debug(source);
-    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\nGenerated user assembly:\n{}", out.stdout, out.stderr, asm);
     assert_eq!(out.stdout, expected, "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nGenerated user assembly:\n{}", out.stderr, asm);
     assert_eq!(compile_and_run_tagged(source), expected);
 }

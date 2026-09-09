@@ -954,6 +954,17 @@ fn check_callback_builtin_call_in_engine_frame(
         }
         return Ok(PhpType::Mixed);
     }
+    if matches!(label, "usort() callback" | "uksort() callback" | "uasort() callback")
+        && callback_ty.codegen_repr() == PhpType::Callable
+    {
+        // Sort emitters already invoke descriptors and validate their selected
+        // targets at runtime. A callable-returning factory may have no static
+        // signature, including when evaluating it always throws.
+        for arg in callback_args {
+            checker.infer_type(arg, env)?;
+        }
+        return Ok(PhpType::Mixed);
+    }
 
     Err(CompileError::new(
         callback.span,
