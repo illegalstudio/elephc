@@ -35,6 +35,7 @@ use std::collections::HashSet;
 mod constants;
 mod nullsafe_chain;
 mod ref_place_args;
+mod boxed_user_sort;
 mod scalar_literals;
 mod numeric_binary;
 mod string_concat;

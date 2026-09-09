@@ -198,7 +198,7 @@ fn is_candidate_place_shape(arg: &Expr) -> bool {
 /// Only the shapes this module can read and write back are resolved — locals, `$this`,
 /// declared instance properties, declared static properties, and elements of those. Anything
 /// else returns `None`, which keeps the call on its pre-existing lowering path.
-fn static_place_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
+pub(super) fn static_place_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
     match &expr.kind {
         ExprKind::Variable(name) => {
             if ctx.has_local_slot(name) {

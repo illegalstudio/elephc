@@ -628,9 +628,6 @@ pub(super) fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: 
 /// handles and boxed `Mixed` cells (each a single 8-byte payload) are sortable;
 /// the comparator decides the ordering and receives each element through an ABI
 /// adapter when the runtime slot type differs from its declared parameters.
-/// String elements are rejected here exactly as before — their multi-word
-/// descriptors are not permuted by the 8-byte slot sorter — so they keep
-/// producing a clear unsupported-feature error rather than a corrupt sort.
 /// String elements are 16-byte `[ptr][len]` descriptors, so they are routed to
 /// the dedicated `__rt_usort_str` slot permuter instead; only `usort` accepts
 /// them because it is the sort that renumbers keys, which an indexed array

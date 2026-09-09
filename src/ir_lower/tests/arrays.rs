@@ -260,6 +260,33 @@ echo implode(',', array_keys($items));
     }
 }
 
+/// Boxed user sorts use a private working array and an exception finalizer on every target.
+#[test]
+fn boxed_usort_publishes_private_arrays_on_every_target() {
+    use crate::codegen::platform::Target;
+    use std::path::Path;
+
+    let source = r#"<?php
+class TargetSortBag { public array $items = ['b' => 2, 'a' => 1]; }
+function targetBoxedSort(array &$items): void { usort($items, fn(int $a, int $b): int => $a <=> $b); }
+$bag = new TargetSortBag();
+$items = [2, 1];
+targetBoxedSort($items);
+usort($bag->items, fn(int $a, int $b): int => $b <=> $a);
+echo implode(',', $bag->items);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains("__rt_usort"), "{name}");
+        assert!(assembly.contains("__rt_array_ensure_unique"), "{name}");
+        assert!(assembly.contains("usort(): Argument #1 ($array) must be of type array"), "{name}");
+    }
+}
+
 /// Boxed property push validates and separates its receiver before appending on every target.
 #[test]
 fn boxed_array_push_properties_publish_separated_cells_on_every_target() {

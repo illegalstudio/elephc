@@ -54,6 +54,11 @@ pub(super) fn lower_static_callable_call(
             {
                 return Some(value);
             }
+            if let Some(value) =
+                boxed_user_sort::lower_boxed_usort(ctx, &function_name, callback_args, expr)
+            {
+                return Some(value);
+            }
             let sig = call_signature(
                 ctx,
                 &function_name,

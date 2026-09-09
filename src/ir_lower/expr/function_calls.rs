@@ -43,6 +43,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_dynamic_call_user_func_array(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = boxed_user_sort::lower_boxed_usort(ctx, canonical, args, expr) {
+        return value;
+    }
     // A mutating builtin whose by-reference array argument is a property, static property, or
     // container element is rewritten to `$tmp = <place>; f($tmp, ...); <place> = $tmp;` before
     // any builtin fast path runs, so the rewritten call reaches the local-variable
