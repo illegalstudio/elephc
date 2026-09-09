@@ -122,7 +122,7 @@ pub fn emit_unary_cleanup_preserving_exception(emitter: &mut Emitter, entry: &st
 }
 
 /// Selects the unary release helper for one concrete or boxed heap representation.
-fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
+pub(crate) fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
     match ty {
         PhpType::Mixed | PhpType::Union(_) => Some("__rt_decref_mixed"),
         PhpType::Array(_) => Some("__rt_decref_array"),
@@ -224,11 +224,11 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // test whether the integer result is zero
                 "test {}, {}",
                 int_result_reg(emitter),
                 int_result_reg(emitter)
-            )); // test whether the coerced integer truthiness result is zero
+            ));
             emitter.instruction(&format!("je {}", label));                      // branch when the coerced integer truthiness result is zero
         }
     }
@@ -248,11 +248,11 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // test whether the integer result is nonzero
                 "test {}, {}",
                 int_result_reg(emitter),
                 int_result_reg(emitter)
-            )); // test whether the coerced integer truthiness result is non-zero
+            ));
             emitter.instruction(&format!("jne {}", label));                     // branch when the coerced integer truthiness result is non-zero
         }
     }
@@ -349,24 +349,21 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
                 let uval = value as u64;
                 emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); // seed the low 16 bits of the wider immediate value
                 if (uval >> 16) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 16-31 of the wider immediate value
+                    emitter.instruction(&format!(                               // patch bits 16-31 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #16",
                         reg,
                         (uval >> 16) & 0xFFFF
                     ));
                 }
                 if (uval >> 32) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 32-47 of the wider immediate value
+                    emitter.instruction(&format!(                               // patch bits 32-47 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #32",
                         reg,
                         (uval >> 32) & 0xFFFF
                     ));
                 }
                 if (uval >> 48) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 48-63 of the wider immediate value
+                    emitter.instruction(&format!(                               // patch bits 48-63 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #48",
                         reg,
                         (uval >> 48) & 0xFFFF

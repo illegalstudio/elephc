@@ -33,7 +33,10 @@ pub use calls::{
     emit_store_to_sp, emit_temporary_stack_address, materialize_outgoing_args,
     materialize_outgoing_c_abi_args, outgoing_call_stack_pad_bytes,
 };
-pub(crate) use call_operand_scope::{emit_pop_call_operand_owner, emit_push_call_operand_owner};
+pub(crate) use call_operand_scope::{
+    emit_link_call_operand_owner_at_stack, emit_pop_call_operand_owner,
+    emit_push_call_operand_owner, emit_unlink_call_operand_owner_at_stack,
+};
 pub use frame::{
     emit_frame_prologue, emit_frame_restore, emit_frame_slot_address, emit_load_from_address,
     emit_teardown_call_alignment,
@@ -69,3 +72,4 @@ pub use values::{
     emit_release_local_ref_cell, emit_release_local_ref_cell_preserving_exception,
     emit_store, emit_unary_cleanup_preserving_exception, emit_write_stdout,
 };
+pub(crate) use values::refcount_release_helper;

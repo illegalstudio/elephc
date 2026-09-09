@@ -13,11 +13,12 @@ use super::*;
 pub(super) fn store_mixed_scope_cell_to_local(
     ctx: &mut FunctionContext<'_>,
     local: &EvalSyncLocal,
+    pending_throw: Option<usize>,
 ) -> Result<()> {
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-            replace_owned_eval_local(ctx, local)?;
+            replace_owned_eval_local(ctx, local, pending_throw)?;
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
@@ -35,7 +36,7 @@ pub(super) fn store_mixed_scope_cell_to_local(
             let string = ctx.next_label("eval_reload_string_payload");
             let persist = ctx.next_label("eval_reload_persist_string");
             abi::emit_owned_mixed_string(ctx.emitter, &string, &persist);
-            replace_owned_eval_local(ctx, local)?;
+            replace_owned_eval_local(ctx, local, pending_throw)?;
         }
         PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
             // Objects, arrays, and hashes are heap pointers boxed in the
@@ -49,7 +50,7 @@ pub(super) fn store_mixed_scope_cell_to_local(
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed heap pointer into the local-store result register
             abi::emit_incref_if_refcounted(ctx.emitter, &local.ty);
-            replace_owned_eval_local(ctx, local)?;
+            replace_owned_eval_local(ctx, local, pending_throw)?;
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -65,6 +66,7 @@ pub(super) fn store_mixed_scope_cell_to_local(
 pub(super) fn store_mixed_scope_cell_to_global(
     ctx: &mut FunctionContext<'_>,
     global: &EvalSyncGlobal,
+    pending_throw: Option<usize>,
 ) -> Result<()> {
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
@@ -72,7 +74,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
     match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
@@ -90,7 +92,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
             let string = ctx.next_label("eval_reload_global_string_payload");
             let persist = ctx.next_label("eval_reload_global_persist_string");
             abi::emit_owned_mixed_string(ctx.emitter, &string, &persist);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -102,7 +104,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed array payload into the ABI result register
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -119,6 +121,7 @@ fn replace_owned_eval_global(
     emitter: &mut crate::codegen_support::emit::Emitter,
     symbol: &str,
     ty: &PhpType,
+    pending_throw: Option<usize>,
 ) {
     emitter.comment("publish eval global replacement before retiring the previous owner");
     abi::emit_push_result_value(emitter, ty);
@@ -135,16 +138,16 @@ fn replace_owned_eval_global(
     // Only the retired pointer is needed for release, including a string's first saved word.
     abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 0);
     abi::emit_release_temporary_stack(emitter, 32);
-    if *ty == PhpType::Str {
-        abi::emit_call_label(emitter, "__rt_heap_free_safe");
-    } else {
-        abi::emit_decref_if_refcounted(emitter, ty);
-    }
+    retire_eval_replacement_owner(emitter, ty, pending_throw);
     emitter.comment("eval global replacement owns its native payload");
 }
 
 /// Publishes an acquired replacement before releasing the old raw or reference-cell payload.
-fn replace_owned_eval_local(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) -> Result<()> {
+fn replace_owned_eval_local(
+    ctx: &mut FunctionContext<'_>,
+    local: &EvalSyncLocal,
+    pending_throw: Option<usize>,
+) -> Result<()> {
     let ty = local.ty.codegen_repr();
     ctx.emitter.comment("publish eval local replacement before retiring the previous owner");
     abi::emit_push_result_value(ctx.emitter, &ty);
@@ -157,12 +160,33 @@ fn replace_owned_eval_local(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal
     if ty == PhpType::Str {
         let (ptr, _) = abi::string_result_regs(ctx.emitter);
         abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), ptr);
-        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    } else {
-        abi::emit_decref_if_refcounted(ctx.emitter, &ty);
     }
+    retire_eval_replacement_owner(ctx.emitter, &ty, pending_throw);
     ctx.emitter.comment("eval local replacement owns its native payload");
     Ok(())
+}
+
+/// Retires one published replacement's old owner without interrupting guarded scope writeback.
+pub(super) fn retire_eval_replacement_owner(
+    emitter: &mut crate::codegen_support::emit::Emitter,
+    ty: &PhpType,
+    pending_throw: Option<usize>,
+) {
+    let entry = if *ty == PhpType::Str {
+        Some("__rt_heap_free_safe")
+    } else {
+        abi::refcount_release_helper(ty)
+    };
+    let Some(entry) = entry else { return; };
+    if let Some(offset) = pending_throw {
+        let payload = abi::int_arg_reg_name(emitter.target, 1);
+        abi::emit_reg_move(emitter, payload, abi::int_result_reg(emitter));
+        abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), entry);
+        abi::emit_temporary_stack_address(emitter, abi::int_arg_reg_name(emitter.target, 2), offset);
+        abi::emit_call_label(emitter, "__rt_cleanup_invoke");
+    } else {
+        abi::emit_call_label(emitter, entry);
+    }
 }
 
 /// Restores a heap pointer or string pair from a saved eval replacement operand.
@@ -180,12 +204,13 @@ fn load_saved_eval_local_result(ctx: &mut FunctionContext<'_>, ty: &PhpType, off
 pub(super) fn store_missing_scope_entry_to_local(
     ctx: &mut FunctionContext<'_>,
     local: &EvalSyncLocal,
+    pending_throw: Option<usize>,
 ) -> Result<()> {
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
             let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol);
-            replace_owned_eval_local(ctx, local)?;
+            replace_owned_eval_local(ctx, local, pending_throw)?;
         }
         PhpType::Int | PhpType::Bool => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -200,13 +225,13 @@ pub(super) fn store_missing_scope_entry_to_local(
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-            replace_owned_eval_local(ctx, local)?;
+            replace_owned_eval_local(ctx, local, pending_throw)?;
         }
         PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
             // Heap-pointer locals fall back to the null pointer when eval
             // removed the entry, matching the object fallback.
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            replace_owned_eval_local(ctx, local)?;
+            replace_owned_eval_local(ctx, local, pending_throw)?;
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -222,6 +247,7 @@ pub(super) fn store_missing_scope_entry_to_local(
 pub(super) fn store_missing_scope_entry_to_global(
     ctx: &mut FunctionContext<'_>,
     global: &EvalSyncGlobal,
+    pending_throw: Option<usize>,
 ) -> Result<()> {
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
@@ -230,7 +256,7 @@ pub(super) fn store_missing_scope_entry_to_global(
         PhpType::Mixed | PhpType::Union(_) => {
             let symbol_name = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol_name);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
         }
         PhpType::Int => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -249,11 +275,11 @@ pub(super) fn store_missing_scope_entry_to_global(
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty, pending_throw);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -271,6 +297,33 @@ mod tests {
     use crate::codegen_support::{emit::Emitter, platform::Target};
     use crate::types::PhpType;
 
+    /// Guarded writeback routes every retired heap representation through the non-escaping boundary.
+    #[test]
+    fn eval_global_replacement_accumulates_cleanup_throws_on_all_targets() {
+        let cases = [
+            PhpType::Mixed, PhpType::Str, PhpType::Object("Exception".into()),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
+        ];
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for ty in &cases {
+                let mut emitter = Emitter::new(Target::parse(target).unwrap());
+                replace_owned_eval_global(&mut emitter, "_eval_guarded_reload_global", ty, Some(88));
+                let asm = emitter.output();
+                let publication = asm.rfind("_eval_guarded_reload_global").unwrap();
+                let cleanup = asm.find("__rt_cleanup_invoke").unwrap();
+                assert!(publication < cleanup, "{target}: {ty}: {asm}");
+                let pending = if target == "linux-x86_64" {
+                    "lea rdx, [rsp + 88]"
+                } else {
+                    "add x2, sp, #88"
+                };
+                assert!(asm.contains(pending), "{target}: {asm}");
+                assert!(!asm.contains("__rt_throw_current"), "{target}: {asm}");
+            }
+        }
+    }
+
     /// Every supported target publishes global replacements before releasing the old typed owner.
     #[test]
     fn eval_global_replacement_retires_all_heap_storage_types_after_publication() {
@@ -283,7 +336,7 @@ mod tests {
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             for (ty, release) in &cases {
                 let mut emitter = Emitter::new(Target::parse(target).unwrap());
-                replace_owned_eval_global(&mut emitter, "_eval_reload_test_global", ty);
+                replace_owned_eval_global(&mut emitter, "_eval_reload_test_global", ty, None);
                 let asm = emitter.output();
                 let publication = asm.rfind("_eval_reload_test_global").unwrap();
                 let cleanup = asm.find(release).unwrap();

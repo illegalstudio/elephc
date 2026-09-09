@@ -10,6 +10,40 @@
 
 use crate::ir::{Immediate, Op, Ownership};
 
+/// Every ABI publishes eval scope writes before propagating an exception, with bounded cleanup.
+#[test]
+fn eval_throw_writeback_is_bounded_before_unwinding_on_all_targets() {
+    let source = r#"<?php
+function catchReloadedEval(string $source): void {
+    global $marker;
+    $local = "before";
+    try { eval($source); }
+    catch (Throwable $error) { echo $local, $marker, $error->getMessage(); }
+}
+$marker = "old";
+$source = '$local = "after"; $marker = "new"; throw new Exception("stop"); // ' . $argc;
+catchReloadedEval($source);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let (_, reload) = asm.split_once("reload eval scope before propagating its pending exception")
+            .expect("runtime eval scope reload");
+        let (reload, finish) = reload.split_once("finish guarded eval scope writeback")
+            .expect("guarded scope completion");
+        assert!(reload.contains("publish eval local replacement"), "{target}: {reload}");
+        assert!(reload.contains("publish eval global replacement"), "{target}: {reload}");
+        assert!(reload.contains("__rt_cleanup_invoke"), "{target}: {reload}");
+        let throw = finish.find("__rt_throw_current").expect("delayed native throw");
+        let restored = if target == "linux-x86_64" { "add rsp, 192" } else { "add sp, sp, #192" };
+        assert!(finish[..throw].contains(restored), "{target}: {finish}");
+        assert_eq!(finish[..throw].matches("detach temporary call operand owner").count(), 2, "{target}");
+    }
+}
+
 /// Eval reload retires displaced local owners through target-native stores and release helpers.
 #[test]
 fn eval_local_reload_releases_previous_owners_on_all_targets() {

@@ -9,6 +9,59 @@
 
 use super::*;
 
+/// Preserves an escaping eval Throwable while allowing committed scope changes to be reloaded.
+pub(super) fn prepare_eval_scope_reload(ctx: &mut FunctionContext<'_>) {
+    let thrown = ctx.next_label("eval_reload_captured_throwable");
+    let ready = ctx.next_label("eval_reload_scope_ready");
+    let result = abi::int_result_reg(ctx.emitter);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    abi::emit_store_to_sp(ctx.emitter, scratch, EVAL_RELOAD_THROWABLE_OFFSET);
+    emit_branch_if_eval_status(ctx, EVAL_STATUS_UNCAUGHT_THROWABLE, &thrown);
+    emit_eval_status_check(ctx);
+    abi::emit_jump(ctx.emitter, &ready);
+    ctx.emitter.label(&thrown);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, EVAL_RESULT_ERROR_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_to_sp(ctx.emitter, result, EVAL_RELOAD_THROWABLE_OFFSET);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    abi::emit_store_to_sp(ctx.emitter, scratch, EVAL_RESULT_ERROR_OFFSET);
+    ctx.emitter.label(&ready);
+}
+
+/// Roots both outcome owners if scope conversion itself throws before writeback can finish.
+pub(super) fn protect_eval_reload_owners(ctx: &mut FunctionContext<'_>) {
+    let address = abi::tertiary_scratch_reg(ctx.emitter);
+    for (owner, record) in [
+        (EVAL_RELOAD_THROWABLE_OFFSET, EVAL_RELOAD_THROW_OWNER_OFFSET),
+        (EVAL_TEMP_CELL_OFFSET, EVAL_RELOAD_VALUE_OWNER_OFFSET),
+    ] {
+        abi::emit_temporary_stack_address(ctx.emitter, address, owner);
+        abi::emit_link_call_operand_owner_at_stack(ctx.emitter, address, false, record);
+    }
+}
+
+/// Propagates an accumulated Throwable only after all synchronized locals and globals are current.
+pub(super) fn finish_eval_scope_reload(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.comment("finish guarded eval scope writeback");
+    abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, EVAL_RELOAD_VALUE_OWNER_OFFSET);
+    abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, EVAL_RELOAD_THROW_OWNER_OFFSET);
+    let done = ctx.next_label("eval_reload_without_throwable");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, EVAL_RELOAD_THROWABLE_OFFSET);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    // Cleanup can replace a successful eval return, so retire that otherwise-unobserved owner too.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, EVAL_TEMP_CELL_OFFSET);
+    scope_reload::retire_eval_replacement_owner(
+        ctx.emitter, &PhpType::Mixed, Some(EVAL_RELOAD_THROWABLE_OFFSET),
+    );
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, EVAL_RELOAD_THROWABLE_OFFSET);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result, "_exc_value", 0);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_BRIDGE_STACK_BYTES);
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+    ctx.emitter.label(&done);
+}
+
 /// Emits a fatal diagnostic when the eval bridge reports any non-zero status.
 pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
     let ok_label = ctx.next_label("eval_status_ok");
