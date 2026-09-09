@@ -257,15 +257,14 @@ fn emit_property_uninitialized_marker(
 /// Removes a dynamic property from the receiver's property hash (`unset($obj->name)`).
 ///
 /// The receiver stores its dynamic properties in a hash whose pointer lives at
-/// `hash_offset` — offset 8 for `stdClass`, just past the fixed slots for an
-/// `#[AllowDynamicProperties]` class. `__rt_hash_unset` copy-on-write splits the table,
-/// releases the removed key and the boxed `Mixed` value the entry owned, tombstones the
-/// slot so other probe chains survive, and returns the unique table pointer, which is
-/// stored back into the receiver. Removing an absent key is a no-op inside the helper,
-/// so `unset($obj->never_set)` and a repeated `unset()` both behave like PHP.
+/// `hash_offset`, offset 8 for `stdClass`, just past the fixed slots for an
+/// `#[AllowDynamicProperties]` class. The unique table is installed before `__rt_hash_unset`
+/// detaches the entry and releases its value. A destructor may replace the property table
+/// or throw, so no receiver storage is touched after the release helper returns.
+/// Removing an absent key is a no-op inside the helper.
 ///
 /// The receiver register is caller-saved, so it is parked on the temporary stack across
-/// the helper call and reloaded before the table pointer is stored back.
+/// the COW call and reloaded before the unique table pointer is stored back.
 fn lower_dynamic_prop_unset(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
@@ -280,22 +279,25 @@ fn lower_dynamic_prop_unset(
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("ldr x0, [{}, #{}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
+            abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            abi::emit_store_to_address(ctx.emitter, "x0", object_reg, hash_offset);
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
-            abi::emit_pop_reg(ctx.emitter, object_reg);
-            abi::emit_store_to_address(ctx.emitter, "x0", object_reg, hash_offset);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // load the receiver table before publishing a unique replacement
                 "mov rdi, QWORD PTR [{} + {}]",
                 object_reg, hash_offset
             ));                                                                 // load the dynamic-property hash pointer from the receiver
+            abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, hash_offset);
+            abi::emit_reg_move(ctx.emitter, "rdi", "rax");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
-            abi::emit_pop_reg(ctx.emitter, object_reg);
-            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, hash_offset);
         }
     }
     Ok(())

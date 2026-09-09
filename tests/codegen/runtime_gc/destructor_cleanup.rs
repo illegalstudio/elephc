@@ -10,6 +10,74 @@
 
 use crate::support::*;
 
+/// A caught element destructor observes a completed removal, with surviving hash entries intact.
+#[test]
+fn test_core_hash_unset_commits_removal_before_a_throwing_destructor() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RetiredHashElement {
+    public static int $calls = 0;
+    public function __destruct() { self::$calls++; throw new RuntimeException("removed"); }
+}
+$table = ["drop" => new RetiredHashElement(), "keep" => 41];
+try { unset($table["drop"]); }
+catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
+echo count($table), ":", $table["keep"], ":", RetiredHashElement::$calls, "|";
+echo array_key_exists("drop", $table) ? "present" : "absent";
+unset($table["drop"]);
+echo ":", RetiredHashElement::$calls;
+unset($table);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "removed|1:41:1|absent:1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Reentrant destructors see the removed property as absent and can reinstall it before throwing.
+#[test]
+fn test_core_dynamic_property_unset_preserves_reentrant_replacement_after_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReentrantUnsetValue {
+    public static stdClass $owner;
+    public function __destruct() {
+        echo isset(self::$owner->value) ? "present|" : "absent|";
+        self::$owner->value = 17;
+        self::$owner->next = "fresh";
+        throw new RuntimeException("replaced");
+    }
+}
+ReentrantUnsetValue::$owner = new stdClass();
+ReentrantUnsetValue::$owner->value = new ReentrantUnsetValue();
+try { unset(ReentrantUnsetValue::$owner->value); }
+catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
+echo ReentrantUnsetValue::$owner->value, ":", ReentrantUnsetValue::$owner->next;
+unset(ReentrantUnsetValue::$owner->value, ReentrantUnsetValue::$owner->next);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "absent|replaced|17:fresh", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Publishing the COW table before removal leaves the snapshot and its element owner unchanged.
+#[test]
+fn test_core_hash_unset_preserves_shared_snapshot_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class SharedUnsetValue {
+    public static int $calls = 0;
+    public function __destruct() { self::$calls++; }
+}
+$table = ["drop" => new SharedUnsetValue(), "keep" => 41];
+$snapshot = $table;
+unset($table["drop"]);
+echo count($table), ":", count($snapshot), ":", SharedUnsetValue::$calls, "|";
+unset($snapshot["drop"]);
+echo SharedUnsetValue::$calls, ":", $snapshot["keep"], ":", $table["keep"];
+unset($snapshot, $table);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1:2:0|1:41:41", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A destructor escaping an explicit unset cannot make frame unwinding release its retired owner again.
 #[test]
 fn test_core_unset_throwing_local_retires_owner_before_unwinding() {

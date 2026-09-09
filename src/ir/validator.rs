@@ -319,11 +319,7 @@ mod property_effect_tests {
                 );
                 let id = InstId::from_raw(0);
                 assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
-                instruction.effects = if physical {
-                    op.default_effects()
-                } else {
-                    op.default_effects() | Effects::ALLOC_HEAP
-                };
+                instruction.effects = expected ^ Effects::ALLOC_HEAP;
                 assert!(matches!(
                     validate_instruction_effects(id, &instruction),
                     Err(ValidationError::EffectMismatch { .. })
@@ -331,6 +327,16 @@ mod property_effect_tests {
                 instruction.effects = expected | Effects::OUTPUT;
                 assert!(validate_instruction_effects(id, &instruction).is_err());
             }
+        }
+    }
+
+    /// Unsetting a last-owner element can allocate COW storage and execute a throwing destructor.
+    #[test]
+    fn unset_effects_preserve_cow_and_destructor_boundaries() {
+        let required = Effects::READS_HEAP | Effects::WRITES_HEAP | Effects::ALLOC_HEAP
+            | Effects::REFCOUNT_OP | Effects::MAY_THROW | Effects::MAY_FATAL;
+        for op in [Op::HashUnset, Op::PropUnset] {
+            assert!(op.default_effects().contains(required), "{op:?}");
         }
     }
 }

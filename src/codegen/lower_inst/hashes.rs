@@ -326,11 +326,9 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 
 /// Lowers `unset($hash[$key])` for associative arrays through the shared hash-unset helper.
 ///
-/// Materializes the key into the hash ABI key registers, then calls `__rt_hash_unset`, which
-/// copy-on-write splits the table, removes the matching entry (releasing its owned key/value
-/// payloads), and returns the unique (possibly cloned) table pointer. That pointer is written
-/// back to the source SSA slot and array local, mirroring `lower_hash_set`. A missing key is a
-/// runtime no-op.
+/// Publishes a unique table before the removal can invoke a throwing or reentrant destructor.
+/// The runtime's returned pointer must not be written back after such a callback: PHP may have
+/// replaced the receiver meanwhile. A missing key remains a runtime no-op.
 pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
@@ -340,6 +338,11 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
     }
+    ctx.load_value_to_reg(hash, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+    ctx.store_result_value(hash)?;
+    receiver.store_back_value(ctx, hash)?;
+    ctx.writeback_global_array_source(hash)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             materialize_hash_key_aarch64(ctx, key)?;
@@ -356,8 +359,6 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
         }
     }
-    ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
     Ok(())
 }
 
