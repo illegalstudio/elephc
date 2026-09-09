@@ -10,6 +10,23 @@
 
 use crate::support::*;
 
+/// Reference iteration changes the property and its reference alias, never an earlier value copy.
+#[test]
+fn test_core_native_php_array_reference_property_iteration_preserves_value_copy() {
+    let source = r#"<?php
+class BoxedIterationProperty {
+    public array $items = [1, "two"];
+}
+$owner = new BoxedIterationProperty();
+$reference = &$owner->items;
+$snapshot = $owner->items;
+foreach ($owner->items as &$value) { $value = "v" . $value; }
+unset($value);
+echo implode(",", $owner->items), "|", implode(",", $reference), "|", implode(",", $snapshot);
+"#;
+    assert_eq!(compile_and_run(source), "v1,vtwo|v1,vtwo|1,two");
+}
+
 /// Every statically resolved call surface updates the caller's array key and value storage types.
 #[test]
 fn test_core_native_php_array_reference_output_call_surfaces() {

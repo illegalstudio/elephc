@@ -10,6 +10,41 @@
 use crate::codegen::platform::Target;
 use std::path::Path;
 
+/// Reference iteration detaches boxed property values before exposing a borrowed array source.
+#[test]
+fn php_array_property_reference_iteration_separates_cells_on_every_target() {
+    use crate::ir::{Op, Ownership};
+
+    let source = r#"<?php
+class PropertyArrayReference {
+    public array $packed = [1, 2];
+    public array $hash = ["a" => 1, "b" => 2];
+}
+$owner = new PropertyArrayReference();
+$packedRef = &$owner->packed;
+$hashRef = &$owner->hash;
+$packedCopy = $owner->packed;
+$hashCopy = $owner->hash;
+foreach ($owner->packed as &$value) { $value = $value * 2; }
+unset($value);
+foreach ($owner->hash as &$value) { $value = $value * 2; }
+unset($value);
+echo implode(",", $packedRef), implode(",", $packedCopy), implode(",", $hashRef), implode(",", $hashCopy);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let fetches = module.functions.iter().flat_map(|function| &function.instructions)
+            .filter(|instruction| instruction.op == Op::PropGetForWrite).collect::<Vec<_>>();
+        assert_eq!(fetches.len(), 2, "{name}");
+        assert!(fetches.iter().all(|instruction| instruction.result_ownership == Ownership::Borrowed), "{name}");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains("__rt_mixed_clone"), "{name}");
+    }
+}
+
 /// Destructuring a boxed array keeps its source alive across stores on every supported ABI.
 #[test]
 fn php_array_list_unpack_lowers_on_every_target() {

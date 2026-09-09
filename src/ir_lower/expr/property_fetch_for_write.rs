@@ -93,11 +93,12 @@ fn property_fetch_for_write_applies(
     }
     let property_ty =
         property_get_result_type(ctx, object_value.value, property, Op::PropGet, expr);
-    let property_ty = normalize_value_php_type(property_ty).codegen_repr();
+    let property_ty = normalize_value_php_type(property_ty);
     let supported = if mixed_root {
-        property_ty == PhpType::Mixed
+        property_ty.codegen_repr() == PhpType::Mixed
     } else {
-        matches!(property_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        property_ty.is_php_array()
+            || matches!(property_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
     };
     if !supported {
         return false;
@@ -144,7 +145,8 @@ fn property_is_splittable_container_slot(
     if mixed_root {
         slot_ty.codegen_repr() == PhpType::Mixed
     } else {
-        matches!(slot_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+        slot_ty.is_php_array()
+            || matches!(slot_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
     }
 }
 
