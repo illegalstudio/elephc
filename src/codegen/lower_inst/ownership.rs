@@ -18,6 +18,24 @@ use super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
+/// Publishes a temporary owner's frame slot above the current PHP catch boundary.
+pub(super) fn lower_push_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = super::expect_local_slot(inst)?;
+    let offset = ctx.local_offset(slot)?;
+    let callable = ctx.local_php_type(slot)?.codegen_repr() == PhpType::Callable;
+    let address = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_frame_slot_address(ctx.emitter, address, offset);
+    abi::emit_push_call_operand_owner(ctx.emitter, address, callable);
+    Ok(())
+}
+
+/// Removes the innermost operand scope before the owning slot is retired normally.
+pub(super) fn lower_pop_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::expect_local_slot(inst)?;
+    abi::emit_pop_call_operand_owner(ctx.emitter);
+    Ok(())
+}
+
 /// Lowers an ownership acquire by making the operand safe to store as a new owner.
 pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;

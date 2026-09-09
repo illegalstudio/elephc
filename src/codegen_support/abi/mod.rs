@@ -10,6 +10,7 @@
 
 mod bootstrap;
 mod calls;
+mod call_operand_scope;
 mod frame;
 mod registers;
 mod strings;
@@ -32,6 +33,7 @@ pub use calls::{
     emit_store_to_sp, emit_temporary_stack_address, materialize_outgoing_args,
     materialize_outgoing_c_abi_args, outgoing_call_stack_pad_bytes,
 };
+pub(crate) use call_operand_scope::{emit_pop_call_operand_owner, emit_push_call_operand_owner};
 pub use frame::{
     emit_frame_prologue, emit_frame_restore, emit_frame_slot_address, emit_load_from_address,
     emit_teardown_call_alignment,

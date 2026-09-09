@@ -500,6 +500,8 @@ pub enum Op {
     AliasLocalRefCell,
     ReleaseLocalRefCell,
     ReleaseLocalSlot,
+    PushCallOperandOwner,
+    PopCallOperandOwner,
     LoadGlobal,
     StoreGlobal,
     LoadStaticLocal,
@@ -899,6 +901,9 @@ impl Op {
             }
             // Retiring the slot can invoke an arbitrary PHP destructor after clearing its owner.
             ReleaseLocalSlot => E::all(),
+            PushCallOperandOwner | PopCallOperandOwner => {
+                E::READS_LOCAL | E::READS_GLOBAL | E::WRITES_GLOBAL
+            }
             LoadGlobal
             | LoadStaticProperty
             | StaticPropInitialized
@@ -1123,6 +1128,8 @@ impl Op {
             AliasLocalRefCell => "alias_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
             ReleaseLocalSlot => "release_local_slot",
+            PushCallOperandOwner => "push_call_operand_owner",
+            PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",

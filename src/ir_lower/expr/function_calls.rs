@@ -180,6 +180,8 @@ pub(super) fn emit_builtin_call_value(
 ) -> LoweredValue {
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
+            let mut operands = operands;
+            let roots = root_non_aliasing_callback_operands(ctx, def, &mut operands, &php_type, span);
             let lowered = crate::builtins::semantics::lower_registry_call(
                 ctx,
                 def,
@@ -214,9 +216,15 @@ pub(super) fn emit_builtin_call_value(
                     ReturnArgAlias::Unknown
                 }
             };
+            for (_, slot) in roots.iter().rev() {
+                retire_owned_call_operand(ctx, *slot, span);
+            }
+            let unrooted = operands.iter().enumerate()
+                .filter(|(index, _)| !roots.iter().any(|(root, _)| root == index))
+                .map(|(_, value)| *value).collect::<Vec<_>>();
             release_owned_call_arg_temporaries(
                 ctx,
-                &operands,
+                &unrooted,
                 Some(call.value),
                 &return_alias,
                 span,

@@ -9,6 +9,93 @@
 
 use crate::ir::Op;
 
+/// Named argument boxes remain owned by EIR while the backend consumes an independent retain.
+#[test]
+fn named_descriptor_argument_boxes_have_scoped_caller_owners_on_all_targets() {
+    let source = r#"<?php
+        function named_owned_target(int $value): int { return $value; }
+        function named_owned_invoke(callable $callback): mixed {
+            return call_user_func($callback, value: 17);
+        }
+        echo named_owned_invoke(named_owned_target(...));
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "named_owned_invoke").unwrap();
+        let invoke = function.instructions.iter().position(|inst| inst.op == Op::CallableDescriptorInvoke).unwrap();
+        let argument = function.instructions[invoke].operands[1];
+        assert_eq!(function.value(argument).unwrap().php_type, crate::types::PhpType::Mixed, "{target}");
+        let store = function.instructions[..invoke].iter().find(|inst| {
+            inst.op == Op::StoreLocal && inst.operands == [argument]
+        }).expect("named argument box needs a caller-owned root");
+        for (slice, expected) in [
+            (&function.instructions[..invoke], Op::PushCallOperandOwner),
+            (&function.instructions[invoke + 1..], Op::PopCallOperandOwner),
+            (&function.instructions[invoke + 1..], Op::ReleaseLocalSlot),
+        ] {
+            assert!(slice.iter().any(|inst| inst.op == expected && inst.immediate == store.immediate), "{target}: {expected:?}");
+        }
+        assert!(!function.instructions[invoke + 1..].iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [argument]
+        }), "{target}: only the root owns the original argument box after invocation");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_callable_invoke_owned_args"), "{target}");
+    }
+}
+
+/// Callback builtin inputs receive an unwind scope as well as normal-path slot retirement.
+#[test]
+fn callback_builtin_operands_have_unwind_scopes_on_all_targets() {
+    let source = r#"<?php
+        function callback_root_predicate(int $value): bool { return $value > 0; }
+        function invoke_callback_root(callable $callback): bool { return array_all([1, 2, 3], $callback); }
+        echo invoke_callback_root(callback_root_predicate(...));
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "invoke_callback_root").unwrap();
+        let push = function.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner).unwrap();
+        let pop = function.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner).unwrap();
+        assert!(push < pop, "{target}");
+        assert!(function.instructions[push + 1..pop].iter().any(|inst| inst.op == Op::RuntimeCall), "{target}");
+        assert!(function.instructions[pop + 1..].iter().any(|inst| {
+            inst.op == Op::ReleaseLocalSlot && inst.immediate == function.instructions[push].immediate
+        }), "{target}");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_cleanup_call_operand_owner"), "{target}");
+    }
+}
+
+/// Both borrowed and runtime-created descriptors use bounded cleanup for normalized arguments.
+#[test]
+fn normalized_descriptor_calls_use_owned_argument_boundaries_on_all_targets() {
+    let source = r#"<?php
+        class NormalizedDescriptorReceiver { public function ping(string $value): int { return 7; } }
+        function invoke_normalized_descriptor(callable $callback, NormalizedDescriptorReceiver $receiver, string $method): void {
+            $arguments = ["input"];
+            echo call_user_func_array($callback, $arguments);
+            echo call_user_func_array([$receiver, $method], $arguments);
+        }
+        $receiver = new NormalizedDescriptorReceiver();
+        invoke_normalized_descriptor($receiver->ping(...), $receiver, "ping");
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_callable_invoke_owned_args"), "{target}");
+        assert!(asm.contains("__rt_callable_invoke_owned_descriptor_args"), "{target}");
+    }
+}
+
 /// Dynamic receiver temporaries retain the caller's object and retire after each invocation.
 #[test]
 fn dynamic_method_calls_root_receiver_borrows_on_all_targets() {

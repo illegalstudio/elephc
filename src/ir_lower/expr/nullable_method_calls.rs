@@ -178,6 +178,7 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
         crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
     }
     let receiver_slot = ctx.local_slots[&receiver_name];
+    register_owned_call_operand(ctx, receiver_slot, expr.span);
     let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);
     let callback = Expr::new(
         ExprKind::ArrayLiteral(vec![receiver, method.clone()]),
