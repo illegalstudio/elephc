@@ -234,6 +234,8 @@ pub(super) fn lower_mixed_method_candidate_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &candidate.target)?;
+    // Candidate dispatch creates the same caller-owned coercion cells as concrete dispatch.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 

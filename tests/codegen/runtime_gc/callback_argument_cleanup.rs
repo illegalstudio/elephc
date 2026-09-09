@@ -1,5 +1,5 @@
 //! Purpose:
-//! Verifies descriptor callback argument owners are balanced on normal and exceptional returns.
+//! Verifies method and descriptor callback argument owners are balanced across call boundaries.
 //!
 //! Called from:
 //! - The runtime GC codegen integration suite on every executable target.
@@ -9,6 +9,58 @@
 //! - Predicates avoid allocating a partial mapped result, isolating the argument-array owner.
 
 use crate::support::*;
+
+/// Lexical calls retire boxed scalar/default arguments without disturbing by-reference writeback.
+#[test]
+fn test_core_parent_method_call_releases_boxed_arguments_and_preserves_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ParentArgumentOwners {
+    public function forward(mixed $value, ?Exception $previous = null): mixed { return $value; }
+    public function update(mixed $value, mixed &$output): mixed { $output = $value; return $value; }
+}
+class ChildArgumentOwners extends ParentArgumentOwners {
+    public function exercise(): void {
+        $value = parent::forward(41);
+        $output = 0;
+        $updated = parent::update(42, $output);
+        if ($value !== 41 || $updated !== 42 || $output !== 42) { echo "bad"; }
+    }
+}
+$owner = new ChildArgumentOwners();
+for ($i = 0; $i < 40; $i++) { $owner->exercise(); }
+unset($owner);
+echo "ok";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ok", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Mixed, nullable-interface and receiver-bound callable dispatch retire their argument boxes.
+#[test]
+fn test_core_indirect_method_calls_release_boxed_arguments() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+interface ArgumentOwnerInterface { public function forward(mixed $value): mixed; }
+class IndirectArgumentOwner implements ArgumentOwnerInterface {
+    public function forward(mixed $value): mixed { return $value; }
+}
+function callMixedArgumentOwner(mixed $owner): mixed { return $owner->forward(41); }
+function callNullableArgumentOwner(?ArgumentOwnerInterface $owner): mixed { return $owner->forward(42); }
+$owner = new IndirectArgumentOwner();
+for ($i = 0; $i < 40; $i++) {
+    $mixed = callMixedArgumentOwner($owner);
+    $nullable = callNullableArgumentOwner($owner);
+    $callable = ($owner->forward(...))(43);
+    if ($mixed !== 41 || $nullable !== 42 || $callable !== 43) { echo "bad"; }
+    unset($mixed, $nullable, $callable);
+}
+unset($owner);
+echo "ok";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ok", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
 
 /// Repeated callback throws release wrapper arguments and leave later descriptor calls usable.
 #[test]

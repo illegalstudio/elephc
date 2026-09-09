@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Method argument coercions use the shared cleanup plan; callers retire its block before
+//!   processing reference writebacks, whose addresses include the intervening cleanup bytes.
 //! - EVERY BY-REFERENCE ARGUMENT NEEDS AN ADDRESS, and there are four sources for one:
 //!   the caller local's own storage, an array element's slot, a caller-side stack cell that
 //!   is WRITTEN BACK into a scalar local afterwards (a scalar local passed to a `mixed`
@@ -26,7 +28,7 @@
 
 use super::*;
 
-/// Loads method call arguments for lexical `self::`/`parent::` instance calls using local `this`.
+/// Loads lexical instance-call arguments using local `this`, tracking coercion owners for cleanup.
 pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
     ctx: &mut FunctionContext<'_>,
     receiver_slot: LocalSlotId,
@@ -63,6 +65,11 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         lifetime,
     )?;
     emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
+    let cleanup_slots = plan_call_arg_temp_cleanups(
+        ctx, operands, visible_param_types, visible_ref_params, &[],
+    )?;
+    let cleanup_bytes = cleanup_slots.len() * 16;
+    abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -79,13 +86,12 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
                 arg_temp_bytes,
                 &ref_writebacks,
                 &ref_temp_cells,
-                0,
+                cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
-            ctx.load_value_to_result(*value)?;
-            let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            let cleanup = cleanup_slots.iter().find(|cleanup| cleanup.param_index == index);
+            let push_ty = materialize_plain_call_arg(ctx, *value, param_ty, cleanup, arg_temp_bytes)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[index + 1]);
@@ -94,13 +100,13 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
-        cleanup_slots: Vec::new(),
-        cleanup_bytes: 0,
+        cleanup_slots,
+        cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
     })
 }
 
-/// Loads method call arguments with by-reference parameter support for local operands.
+/// Loads a register receiver and method arguments, tracking coercion owners and reference cells.
 pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     ctx: &mut FunctionContext<'_>,
     receiver_reg: &str,
@@ -157,6 +163,9 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     }
     let mut no_writebacks: Vec<RefArgWriteback> = Vec::new();
     emit_ref_arg_cell_block(ctx, &mut no_writebacks, &mut ref_temp_cells)?;
+    let cleanup_slots = plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
+    let cleanup_bytes = cleanup_slots.len() * 16;
+    abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -179,13 +188,12 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
                 arg_temp_bytes,
                 &ref_writebacks,
                 &ref_temp_cells,
-                0,
+                cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
-            ctx.load_value_to_result(*value)?;
-            let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            let cleanup = cleanup_slots.iter().find(|cleanup| cleanup.param_index == param_index);
+            let push_ty = materialize_plain_call_arg(ctx, *value, param_ty, cleanup, arg_temp_bytes)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
@@ -194,8 +202,8 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
-        cleanup_slots: Vec::new(),
-        cleanup_bytes: 0,
+        cleanup_slots,
+        cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
     })
 }

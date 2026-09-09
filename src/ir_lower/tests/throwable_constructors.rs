@@ -10,6 +10,32 @@
 use super::*;
 use crate::ir::{Effects, Immediate, IrHeapKind, IrType, RuntimeCallTarget};
 
+/// Parent calls release their ABI-created nullable argument after return on every supported target.
+#[test]
+fn lexical_parent_call_retires_default_argument_box_on_all_targets() {
+    let source = r#"<?php
+class DefaultArgumentOwner {
+    public function accept(?Exception $previous = null): void {}
+}
+class DerivedArgumentOwner extends DefaultArgumentOwner {
+    public function exercise(): void { parent::accept(); }
+}
+$owner = new DerivedArgumentOwner();
+$owner->exercise();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let module = lower_source_at_for_target(source, Path::new("main.php"), Path::new("."), target);
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let symbol = crate::names::method_symbol("DefaultArgumentOwner", "accept");
+        let call = if target.arch == crate::codegen::platform::Arch::AArch64 { "bl" } else { "call" };
+        let (_, tail) = assembly.split_once(&format!("{call} {symbol}")).unwrap();
+        let until_return = tail.lines().take_while(|line| line.trim() != "ret").collect::<Vec<_>>().join("\n");
+        assert!(until_return.contains("__rt_decref_mixed"), "{name}: {until_return}");
+    }
+}
+
 /// Every eval bridge owns a nullable previous result before handing it back across the native ABI.
 #[test]
 fn compact_throwable_eval_previous_getter_boxes_both_return_arms_on_all_targets() {
