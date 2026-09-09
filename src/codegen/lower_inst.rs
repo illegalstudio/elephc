@@ -46,6 +46,7 @@ mod mixed_narrowing;
 mod externs;
 mod floats;
 mod hashes;
+mod offset_unset;
 mod iterators;
 mod objects;
 mod ownership;
@@ -278,6 +279,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
+        Op::OffsetUnset => offset_unset::lower_offset_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),
         Op::HashSpread => hashes::lower_hash_spread(ctx, &inst),

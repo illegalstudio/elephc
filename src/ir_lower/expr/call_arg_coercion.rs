@@ -142,7 +142,7 @@ pub(super) fn coerce_operands_to_params(
     operands
 }
 
-/// Widens local indexed-array storage before passing it to an `array<mixed>` ref parameter.
+/// Normalizes concrete local arrays to the storage required by their by-reference parameter.
 pub(super) fn lower_by_ref_array_arg_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -156,6 +156,14 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
     let ExprKind::Variable(name) = &arg.kind else {
         return None;
     };
+    if param_ty.is_php_array()
+        && matches!(ctx.local_type(name).codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+    {
+        let local = ctx.load_local(name, Some(arg.span));
+        let boxed = ctx.box_value_as_mixed(local, param_ty.clone(), Some(arg.span));
+        ctx.store_call_argument_local(name, boxed, param_ty.clone(), Some(arg.span));
+        return Some(ctx.load_local(name, Some(arg.span)).value);
+    }
     if !by_ref_array_arg_needs_mixed_storage(ctx, name, param_ty) {
         return None;
     }
@@ -189,10 +197,30 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
     let ExprKind::Variable(array_name) = &array.kind else {
         return None;
     };
-    let PhpType::Array(elem_ty) = ctx.local_type(array_name).codegen_repr() else {
+    let PhpType::Array(mut elem_ty) = ctx.local_type(array_name).codegen_repr() else {
         return None;
     };
     let (_, param_ty) = sig.params.get(index)?;
+    if param_ty.is_php_array() && elem_ty.codegen_repr() != PhpType::Mixed {
+        // The callee replaces a Mixed pointer through this element's actual slot, not a
+        // detached temporary. Widen the outer array's slots before exposing that address.
+        // Retaining the borrowed source lets the consuming conversion separate COW aliases.
+        let parent = ctx.load_local(array_name, Some(array.span));
+        let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, parent, Some(arg.span));
+        let boxed_parent_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let converted = ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![owned.value],
+            None,
+            boxed_parent_ty.clone(),
+            Op::ArrayToMixed.default_effects(),
+            Some(arg.span),
+        );
+        ctx.store_call_argument_local(
+            array_name, converted, boxed_parent_ty, Some(arg.span),
+        );
+        elem_ty = Box::new(PhpType::Mixed);
+    }
     let element_ty = match normalize_value_php_type(*elem_ty) {
         PhpType::Void => normalize_value_php_type(param_ty.codegen_repr()),
         other => other,

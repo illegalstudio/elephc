@@ -96,7 +96,7 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
-    let array_value = ctx.load_local(array, Some(span));
+    let array_value = load_array_local_for_write(ctx, array, span);
     let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
     let op = array_set_op(array_value.ir_type);
     // A literal string index always means a hash key, so promote the destination
@@ -265,4 +265,3 @@ pub(super) fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) 
         value: Box::new(assoc_value_ty),
     }
 }
-

@@ -147,7 +147,7 @@ fn collect_class_property_slots(
             property: property.clone(),
             visibility,
             offset: 8 + index * 16,
-            ty: ty.codegen_repr(),
+            ty: super::eval_argument_helpers::bridge_storage_type(ty),
             is_declared: class_info.property_slot_is_declared(index, property),
             is_hidden_shadow,
         });
@@ -1027,6 +1027,10 @@ fn emit_aarch64_store_property_slot(
     slot: &EvalPropertySlot,
     fail_label: &str,
 ) {
+    if slot.ty.is_php_array() {
+        emitter.instruction("ldr x0, [sp, #24]");                               // borrow the boxed array assignment before checking its PHP type
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
         PhpType::Bool => {
@@ -1079,6 +1083,10 @@ fn emit_x86_64_store_property_slot(
     slot: &EvalPropertySlot,
     fail_label: &str,
 ) {
+    if slot.ty.is_php_array() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                   // borrow the boxed array assignment before checking its PHP type
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
         PhpType::Bool => {

@@ -186,7 +186,7 @@ fn collect_class_constructor_slot(
     let supported =
         constructor_visibility_supported(visibility) && constructor_signature_supported(sig);
     let params = if supported {
-        sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect()
+        sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect()
     } else {
         Vec::new()
     };
@@ -1367,6 +1367,10 @@ fn emit_aarch64_cast_eval_arg(
     data: &mut DataSection,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
+    if param_ty.is_php_array() {
+        emitter.instruction("ldr x0, [x29, #-16]");                             // borrow the boxed argument before checking its PHP array constraint
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
@@ -1523,6 +1527,10 @@ fn emit_x86_64_cast_eval_arg(
     data: &mut DataSection,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
+    if param_ty.is_php_array() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // borrow the boxed argument before checking its PHP array constraint
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion

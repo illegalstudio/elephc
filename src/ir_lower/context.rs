@@ -1481,6 +1481,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
+        self.store_local_impl(name, value, php_type, span, true)
+    }
+
+    /// Replaces a call argument's representation without resetting its PHP internal array pointer.
+    /// Unlike consuming array conversions, boxing retains the old payload and needs normal cleanup.
+    pub(crate) fn store_call_argument_local(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        self.store_local_impl(name, value, php_type, span, false)
+    }
+
+    /// Stores a new local owner, optionally resetting the cursor for a PHP-visible assignment.
+    fn store_local_impl(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+        reset_array_cursor: bool,
+    ) -> LoweredValue {
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
         self.clear_reflection_function_local(name);
@@ -1503,7 +1527,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // Binding the variable to a different array gives it a different hashtable, and
         // PHP's internal pointer belongs to the hashtable: rewind the hidden cursor so
         // `$a = [1,2,3]; next($a); $a = [4,5,6];` leaves `key($a)` at `0` like PHP.
-        self.reset_array_pointer_cursor(name);
+        if reset_array_cursor {
+            self.reset_array_pointer_cursor(name);
+        }
         let previous_slot = self.local_slots.get(name).copied();
         let previous_type = self.local_type(name);
         let previous_kind = self
@@ -3562,7 +3588,7 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
 /// Converts parser-owned named type hints that represent PHP built-ins before falling back to objects.
 fn named_type_expr_to_php_type(name: &str) -> PhpType {
     match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
-        "array" => PhpType::Array(Box::new(PhpType::Mixed)),
+        "array" => PhpType::php_array(),
         "callable" => PhpType::Callable,
         "closure" => PhpType::Callable,
         "mixed" => PhpType::Mixed,

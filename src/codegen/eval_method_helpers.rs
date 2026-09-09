@@ -236,7 +236,7 @@ fn collect_class_method_slots(
             impl_class: impl_class.to_string(),
             visibility: visibility.clone(),
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
-            params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
+            params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
             return_ty: sig.return_type.codegen_repr(),
             is_hidden_shadow: false,
@@ -282,7 +282,7 @@ fn collect_hidden_private_ancestor_method_slots(
                 impl_class: impl_class.to_string(),
                 visibility: visibility.clone(),
                 allowed_scopes: visibility_scope_names(module, impl_class, visibility),
-                params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
+                params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
                 return_ty: sig.return_type.codegen_repr(),
                 is_hidden_shadow: true,
@@ -339,7 +339,7 @@ fn collect_class_static_method_slots(
             impl_class: impl_class.to_string(),
             visibility: visibility.clone(),
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
-            params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
+            params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
             return_ty: sig.return_type.codegen_repr(),
         });
@@ -1979,6 +1979,10 @@ fn emit_aarch64_cast_eval_arg(
     fail_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
+    if param_ty.is_php_array() {
+        emitter.instruction("ldr x0, [x29, #-16]");                             // borrow the boxed argument before checking its PHP array constraint
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
@@ -2146,6 +2150,10 @@ fn emit_x86_64_cast_eval_arg(
     callable_support: &EvalCallableDescriptorSupport,
     context_frame_offset: usize,
 ) {
+    if param_ty.is_php_array() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // borrow the boxed argument before checking its PHP array constraint
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion

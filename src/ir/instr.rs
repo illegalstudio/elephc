@@ -646,6 +646,7 @@ pub enum Op {
     ArrayGetMixedKeySilent,
     ArrayKeyExists,
     OffsetExists,
+    /// Removes an offset from a detached boxed PHP array cell, preserving sparse keys and aliases.
     OffsetUnset,
     ListUnpack,
     IterStart,
@@ -974,9 +975,9 @@ impl Op {
             }
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
-            HashUnset | PropUnset => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP
+            HashUnset | PropUnset | OffsetUnset => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP
                 | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArraySet | HashSet | ArrayPush | HashAppend | OffsetUnset | PropSet
+            ArraySet | HashSet | ArrayPush | HashAppend | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,

@@ -11,6 +11,9 @@
 
 use crate::support::*;
 
+#[path = "optimizer/boxed_array_snapshots.rs"]
+mod boxed_array_snapshots;
+
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;
 #[path = "optimizer/call_result_alias.rs"]

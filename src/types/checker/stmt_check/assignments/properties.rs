@@ -584,6 +584,9 @@ fn updated_array_property_push_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
+    if prop_ty.is_php_array() {
+        return Ok(prop_ty.clone());
+    }
     match prop_ty {
         PhpType::Array(elem_ty) => {
             if property_has_declared_type {
@@ -636,6 +639,9 @@ fn updated_array_property_assign_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
+    if prop_ty.is_php_array() {
+        return Ok(prop_ty.clone());
+    }
     match prop_ty {
         PhpType::Array(elem_ty) => {
             if !matches!(normalized_idx_ty, PhpType::Int)

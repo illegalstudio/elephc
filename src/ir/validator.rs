@@ -335,7 +335,7 @@ mod property_effect_tests {
     fn unset_effects_preserve_cow_and_destructor_boundaries() {
         let required = Effects::READS_HEAP | Effects::WRITES_HEAP | Effects::ALLOC_HEAP
             | Effects::REFCOUNT_OP | Effects::MAY_THROW | Effects::MAY_FATAL;
-        for op in [Op::HashUnset, Op::PropUnset] {
+        for op in [Op::HashUnset, Op::PropUnset, Op::OffsetUnset] {
             assert!(op.default_effects().contains(required), "{op:?}");
         }
     }
@@ -630,7 +630,7 @@ fn validate_opcode_rules(
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
-        MixedArrayAppend => {
+        MixedArrayAppend | OffsetUnset => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(
                 function,

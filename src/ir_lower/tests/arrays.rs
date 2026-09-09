@@ -10,6 +10,267 @@
 
 use crate::ir::print_module;
 
+/// Native declared-array removal reaches the rooted boxed storage path on all supported ABIs.
+#[test]
+fn php_array_unset_uses_installed_sparse_storage_on_every_target() {
+    use crate::codegen::platform::Target;
+    use crate::ir::{Effects, Op};
+    use std::path::Path;
+
+    let source = r#"<?php
+function removeDeclaredArrayOffset(array &$items): void { unset($items[1]); }
+$items = [10, 20, 30];
+removeDeclaredArrayOffset($items);
+echo count($items);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let operations = module.functions.iter().flat_map(|function| &function.instructions)
+            .filter(|instruction| instruction.op == Op::OffsetUnset).collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1, "{name}");
+        assert!(operations[0].effects.contains(Effects::MAY_THROW | Effects::ALLOC_HEAP));
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let promote = assembly.find("__rt_mixed_cell_promote_to_hash").unwrap();
+        let remove = assembly.find("__rt_hash_unset").unwrap();
+        assert!(promote < remove, "publish sparse storage before removal on {name}");
+    }
+}
+
+/// Declared PHP array sources reach boxed map traversal for direct and descriptor callbacks on all ABIs.
+#[test]
+fn php_array_map_uses_boxed_traversal_on_every_target() {
+    use crate::codegen::platform::Target;
+    use std::path::Path;
+
+    let source = r#"<?php
+function mapPhpArray(array $items, callable $callback): array { return array_map($callback, $items); }
+function directMapPhpArray(array $items): array { return array_map(fn(mixed $value): mixed => $value, $items); }
+function labelPhpArrayValue(mixed $value): string { return "v:" . $value; }
+echo count(mapPhpArray([$argc], labelPhpArrayValue(...)));
+echo count(directMapPhpArray(["key" => $argc]));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.matches("__rt_array_map_boxed").count() >= 2, "{name}");
+    }
+}
+
+/// Mixed/concrete operand pairs in either order and two boxed sources share the merge ABI on all targets.
+#[test]
+fn php_array_merge_uses_boxed_result_storage_on_every_target() {
+    use crate::codegen::platform::Target;
+    use crate::ir::{Immediate, RuntimeCallTarget, RuntimeFnId};
+    use crate::types::PhpType;
+    use std::path::Path;
+
+    let source = r#"<?php
+function appendPhpArray(array $items): array { return array_merge($items, ["tail"]); }
+function prependPhpArray(array $items): array { return array_merge(["head" => 1], $items); }
+function mergePhpArrays(array $left, array $right): array { return array_merge($left, $right); }
+echo count(appendPhpArray([$argc]));
+echo count(prependPhpArray(["key" => $argc]));
+echo count(mergePhpArrays([$argc], ["key" => $argc]));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let mut calls = 0;
+        for function in &module.functions {
+            for instruction in &function.instructions {
+                if matches!(instruction.immediate,
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayMerge)))
+                    | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::ArrayMerge, ..
+                    })))
+                {
+                    calls += 1;
+                    assert_eq!(instruction.result_php_type.codegen_repr(), PhpType::Mixed, "{name}");
+                }
+            }
+        }
+        assert_eq!(calls, 3, "{name}");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.matches("__rt_array_merge_boxed").count() >= 3, "{name}");
+    }
+}
+
+/// Runtime key-preservation flags on PHP array declarations use the boxed reversal ABI on all targets.
+#[test]
+fn php_array_reverse_uses_boxed_result_storage_on_every_target() {
+    use crate::codegen::platform::Target;
+    use crate::ir::{Immediate, RuntimeCallTarget, RuntimeFnId};
+    use crate::types::PhpType;
+    use std::path::Path;
+
+    let source = r#"<?php
+function reversePhpArray(array $items, bool $preserve): array {
+    return array_reverse($items, preserve_keys: $preserve);
+}
+echo count(reversePhpArray([$argc], $argc > 1));
+echo count(reversePhpArray(["key" => $argc], $argc > 1));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let mut calls = 0;
+        for function in &module.functions {
+            for instruction in &function.instructions {
+                if matches!(instruction.immediate,
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayReverse)))
+                    | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::ArrayReverse, ..
+                    })))
+                {
+                    calls += 1;
+                    assert_eq!(instruction.result_php_type.codegen_repr(), PhpType::Mixed, "{name}");
+                }
+            }
+        }
+        assert!(calls > 0, "{name}");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains("__rt_array_reverse_boxed"), "{name}");
+    }
+}
+
+/// Every target boxes nested array slots before passing their real addresses to array ref parameters.
+#[test]
+fn php_array_reference_elements_use_boxed_parent_slots_on_every_target() {
+    use crate::codegen::platform::Target;
+    use crate::ir::Op;
+    use crate::types::PhpType;
+    use std::path::Path;
+
+    let source = r#"<?php
+function mutateNestedPhpArray(array &$items): void { $items["key"] = 7; }
+$items = [[$argc]];
+mutateNestedPhpArray($items[0]);
+echo count($items[0]);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let mut addresses = 0;
+        for function in &module.functions {
+            for instruction in &function.instructions {
+                if instruction.op == Op::ArrayElemAddr {
+                    addresses += 1;
+                    assert_eq!(instruction.result_php_type, PhpType::Mixed, "{name}");
+                }
+            }
+        }
+        assert!(addresses > 0, "{name}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// Boxed PHP array value extraction reaches both physical layouts on all supported targets.
+#[test]
+fn php_array_values_emit_packed_and_hash_paths_for_every_target() {
+    use crate::codegen::platform::Target;
+    use std::path::Path;
+
+    let source = r#"<?php
+function projectPhpArray(array $items): array { return array_values($items); }
+echo count(projectPhpArray([$argc])), count(projectPhpArray(["key" => $argc]));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains("__rt_mixed_unbox"), "{name}");
+        assert!(assembly.contains("__rt_array_to_mixed"), "{name}");
+        assert!(assembly.contains("__rt_hash_iter_next"), "{name}");
+    }
+}
+
+/// Boxed array property writes separate storage and keep the property's cell borrowed on every ABI.
+#[test]
+fn php_array_property_mutations_use_borrowed_separated_cells() {
+    use crate::codegen::platform::Target;
+    use crate::ir::{Op, Ownership};
+    use std::path::Path;
+
+    let source = r#"<?php
+class PhpArrayWrites {
+    public array $items = [1];
+    public static array $shared = [2];
+    public function write(int $value): void {
+        $this->items[] = $value;
+        $this->items["key"] = $value;
+        self::$shared[] = $value;
+        self::$shared["key"] = $value;
+    }
+}
+$owner = new PhpArrayWrites();
+$owner->write($argc);
+echo count($owner->items), count(PhpArrayWrites::$shared);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let instructions = module.functions.iter().flat_map(|function| &function.instructions)
+            .collect::<Vec<_>>();
+        let fetches = instructions.iter().filter(|inst| inst.op == Op::PropGetForWrite)
+            .collect::<Vec<_>>();
+        assert_eq!(fetches.len(), 2, "{name}");
+        assert!(fetches.iter().all(|inst| inst.result_ownership == Ownership::Borrowed), "{name}");
+        assert_eq!(instructions.iter().filter(|inst| inst.op == Op::MixedArrayAppend).count(), 2, "{name}");
+        assert_eq!(instructions.iter().filter(|inst| inst.op == Op::MixedClone).count(), 2, "{name}");
+    }
+}
+
+/// PHP array declarations retain packed-or-hash boxed storage across defaults and call sites.
+#[test]
+fn php_array_declarations_share_boxed_parameter_property_and_return_storage() {
+    use crate::codegen::platform::Target;
+    use crate::types::PhpType;
+    use std::path::Path;
+
+    let source = r#"<?php
+class PhpArrayShape {
+    public array $items = [1, 2];
+    public static array $shared = [3, 4];
+    public function __construct(array $items) { $this->items = $items; }
+    public function replace(array $items): array { $this->items = $items; return $this->items; }
+}
+function keepPhpArray(array $items): array { return $items; }
+$owner = new PhpArrayShape([$argc]);
+echo count($owner->replace(keepPhpArray(["key" => $argc])));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let class = &module.class_infos["PhpArrayShape"];
+        for (_, ty) in class.properties.iter().chain(&class.static_properties) {
+            assert!(ty.is_php_array(), "{name}: {ty:?}");
+            assert_eq!(ty.codegen_repr(), PhpType::Mixed, "{name}");
+        }
+        for method in ["__construct", "replace"] {
+            assert!(class.methods[method].params[0].1.is_php_array(), "{name}:{method}");
+        }
+        assert!(class.methods["replace"].return_type.is_php_array(), "{name}");
+        let function = module.functions.iter().find(|function| function.name.eq_ignore_ascii_case("keepPhpArray")).unwrap();
+        assert!(function.params[0].php_type.is_php_array(), "{name}");
+    }
+}
+
 /// Class-method inventories use constant-size result construction EIR on all supported targets.
 #[test]
 fn class_method_inventory_does_not_expand_one_push_per_name() {

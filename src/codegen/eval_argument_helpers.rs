@@ -15,6 +15,30 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 use crate::intrinsics::IntrinsicCall;
 use crate::types::PhpType;
 
+/// Preserves the PHP array constraint while lowering all other bridge metadata to its ABI type.
+pub(super) fn bridge_storage_type(ty: &PhpType) -> PhpType {
+    if ty.is_php_array() { ty.clone() } else { ty.codegen_repr() }
+}
+
+/// Rejects non-array boxed inputs without transferring ownership or converting their storage.
+/// The borrowed cell enters in the integer result register; callers reload it after the tag check.
+pub(super) fn emit_require_php_array(emitter: &mut Emitter, fail_label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("bl __rt_mixed_unbox");                         // inspect the boxed argument without acquiring or consuming owners
+            emitter.instruction("sub x0, x0, #4");                              // map packed and hash tags to the contiguous range zero through one
+            emitter.instruction("cmp x0, #1");                                  // only PHP array payloads satisfy an array declaration
+            emitter.instruction(&format!("b.hi {fail_label}"));                 // reject scalar, null, callable, and object payloads
+        }
+        Arch::X86_64 => {
+            emitter.instruction("call __rt_mixed_unbox");                       // inspect the boxed argument without changing its ownership
+            emitter.instruction("sub rax, 4");                                  // map packed and hash tags to the contiguous range zero through one
+            emitter.instruction("cmp rax, 1");                                  // only PHP array payloads satisfy an array declaration
+            emitter.instruction(&format!("ja {fail_label}"));                   // reject scalar, null, callable, and object payloads
+        }
+    }
+}
+
 /// Borrows a normalized by-value string payload, returning false for non-string parameters.
 /// Magician applies PHP coercion before staging; its argument array roots the string for the call.
 /// Reference slots and object-field initialization must keep their separate owning conversion.
@@ -128,6 +152,31 @@ pub(super) fn emit_borrowed_argument(
 mod tests {
     use super::*;
     use crate::codegen::platform::Target;
+
+    /// Array guards preserve boxed metadata and reject every tag outside the two array layouts.
+    #[test]
+    fn php_array_bridge_guards_cover_every_supported_target() {
+        let array = PhpType::php_array();
+        assert_eq!(bridge_storage_type(&array), array);
+        assert_eq!(bridge_storage_type(&PhpType::Int), PhpType::Int);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_require_php_array(&mut emitter, "invalid_array");
+            let asm = emitter.output();
+            assert_eq!(asm.matches("__rt_mixed_unbox").count(), 1, "{name}");
+            assert!(!asm.contains("incref") && !asm.contains("decref"), "{name}");
+            if target.arch == Arch::AArch64 {
+                assert!(asm.contains("sub x0, x0, #4"), "{name}");
+                assert!(asm.contains("cmp x0, #1"), "{name}");
+                assert!(asm.contains("b.hi invalid_array"), "{name}");
+            } else {
+                assert!(asm.contains("sub rax, 4"), "{name}");
+                assert!(asm.contains("cmp rax, 1"), "{name}");
+                assert!(asm.contains("ja invalid_array"), "{name}");
+            }
+        }
+    }
 
     /// All targets borrow normalized strings without allocation and leave other parameter types alone.
     #[test]

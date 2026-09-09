@@ -89,13 +89,7 @@ pub(super) fn lower_nested_assign_parent(
     let ExprKind::ArrayAccess { array, index } = &expr.kind else {
         if let ExprKind::Variable(name) = &expr.kind {
             if ctx.local_type(name).codegen_repr() == PhpType::Mixed {
-                let original = ctx.load_local(name, Some(span));
-                let detached = ctx.emit_owned_value(
-                    Op::MixedClone, vec![original.value], None, PhpType::Mixed,
-                    Op::MixedClone.default_effects(), Some(span),
-                );
-                ctx.store_local(name, detached, PhpType::Mixed, Some(span));
-                return ctx.load_local(name, Some(span));
+                return load_array_local_for_write(ctx, name, span);
             }
         }
         if let ExprKind::PropertyAccess { object, property } = &expr.kind {

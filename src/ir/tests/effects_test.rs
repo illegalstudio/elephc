@@ -20,6 +20,17 @@ fn collection_effects_include_destructor_callbacks() {
     assert_eq!(crate::ir::GcControlOp::Enabled.effects(), Effects::READS_GLOBAL);
 }
 
+/// Boxed array projections read mutable storage, allocate owners, and may reject invalid runtime tags.
+#[test]
+fn array_projection_effects_preserve_heap_reads_and_failures() {
+    let required = Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::REFCOUNT_OP
+        | Effects::MAY_THROW | Effects::MAY_FATAL;
+    for target in [RuntimeFnId::ArrayMerge, RuntimeFnId::ArrayReverse, RuntimeFnId::ArrayValues] {
+        assert!(target.effects().contains(required), "{target:?}");
+        assert!(!target.effects().is_pure(), "{target:?}");
+    }
+}
+
 /// Warning-capable operations must not be reordered across state accessed by a user handler.
 #[test]
 fn warning_handlers_observe_and_mutate_program_state() {

@@ -204,6 +204,13 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        // The call lowering boxes PHP array locals before exposing their ref-cell address.
+        // This changes storage, not the declared values accepted by the reference parameter.
+        if expected_ty.is_php_array()
+            && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            return Ok(());
+        }
         if requires_by_ref_boxed_storage(expected_ty)
             && !supports_by_ref_boxed_storage(actual_ty)
         {

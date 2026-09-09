@@ -88,7 +88,7 @@ pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };
 pub(super) use array_write_storage::{
-    finish_indexed_array_local_write, prepare_indexed_array_local_write,
+    finish_indexed_array_local_write, load_array_local_for_write, prepare_indexed_array_local_write,
     ref_bound_mixed_indexed_array_write,
 };
 

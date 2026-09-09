@@ -120,6 +120,10 @@ impl Checker {
                     "closure" => Ok(PhpType::Callable),
                     "object" => Ok(PhpType::Object(String::new())),
                     "void" => Ok(PhpType::Void),
+                    // User PHP declarations accept packed and hash arrays without fixing their
+                    // storage from a default or the first caller. Compiler-synthesized methods
+                    // have explicit internal array ABIs and keep their existing storage type.
+                    "array" if span.line != 0 => Ok(PhpType::php_array()),
                     "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
                     // Relative class types only survive to this point when used outside a class
                     // body; inside a class they are rewritten to the enclosing class beforehand.
