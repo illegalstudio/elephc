@@ -10,6 +10,25 @@
 use crate::codegen::platform::Target;
 use std::path::Path;
 
+/// Destructuring a boxed array keeps its source alive across stores on every supported ABI.
+#[test]
+fn php_array_list_unpack_lowers_on_every_target() {
+    let source = r#"<?php
+function readBoxedRow(array $items): string {
+    [$items, $tail] = $items;
+    return $items . ":" . $tail;
+}
+echo readBoxedRow([1 => "second", 0 => "first"]);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Positional, named, callable, method and conditional reference calls preserve keyed output types.
 #[test]
 fn php_array_reference_outputs_lower_on_every_target() {

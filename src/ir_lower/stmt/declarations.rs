@@ -25,6 +25,12 @@ pub(super) fn lower_const_decl(ctx: &mut LoweringContext<'_, '_>, name: &str, va
 /// Lowers simple positional list destructuring into indexed reads plus local writes.
 pub(super) fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[String], value: &Expr, span: Span) {
     let source = lower_expr(ctx, value);
+    // A destination can replace the RHS local before later elements are read.
+    let source = if ctx.value_is_owning_temporary(source) {
+        source
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span))
+    };
     let item_type = list_unpack_item_type(ctx, source.value);
     let get_op = list_unpack_get_op(source.ir_type);
     for (index, var) in vars.iter().enumerate() {
@@ -47,6 +53,7 @@ pub(super) fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[Strin
         );
         ctx.store_local(var, item, item_type.clone(), Some(span));
     }
+    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
 }
 
 /// Emits the positional integer key used to read one list-unpack element.
@@ -139,4 +146,3 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
         Some(span),
     );
 }
-

@@ -997,9 +997,9 @@ pub(super) fn check_const_decl(
 
 /// Type-checks a list unpacking assignment (`[$a, $b, ...] = $arr`).
 ///
-/// Infers the right-hand side and accepts homogeneous indexed arrays or associative arrays.
-/// Indexed arrays propagate their element type, while associative values bind adaptively as
-/// `Mixed`. Returns an error for non-array types, including unresolved nullable unions.
+/// Infers the right-hand side and accepts concrete arrays or boxed PHP array values.
+/// Indexed arrays propagate their element type; keyed and dynamically boxed values bind as
+/// `Mixed`. Statically non-array types and unresolved nullable unions remain errors.
 pub(super) fn check_list_unpack(
     checker: &mut Checker,
     vars: &[String],
@@ -1007,7 +1007,7 @@ pub(super) fn check_list_unpack(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = match checker.infer_type(value, env) {
+    let arr_ty = match checker.infer_type_with_assignment_effects(value, env) {
         Ok(arr_ty) => arr_ty,
         Err(error) => {
             for var in vars {
@@ -1017,10 +1017,11 @@ pub(super) fn check_list_unpack(
         }
     };
     let unpack_ty = match &arr_ty {
+        ty if ty.is_php_array() => PhpType::Mixed,
         PhpType::Array(elem_ty) => *elem_ty.clone(),
         // Associative arrays can contain integer keys used by positional destructuring. Their
         // element type stays adaptive because hash values may be heterogeneous or absent.
-        PhpType::AssocArray { .. } => PhpType::Mixed,
+        PhpType::AssocArray { .. } | PhpType::Mixed => PhpType::Mixed,
         _ => {
             for var in vars {
                 poison_unbound_local(env, var);
