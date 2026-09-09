@@ -10,16 +10,16 @@
 use super::*;
 use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
-/// Returns the scalar callback element type for an indexed-array predicate/comparator builtin.
+/// Returns the single-word callback element type for indexed predicates and comparators.
 ///
 /// The `__rt_array_find_any_all` / `__rt_array_udiff_uintersect` runtimes load each element as a
-/// single 8-byte word and pass it in an integer argument register, so only `int`/`bool` indexed
-/// arrays are supported (float elements would need the float register file).
+/// single 8-byte word in an integer argument register. Integers, booleans, object pointers
+/// and Mixed-cell pointers share that ABI; strings and floats require different materialization.
 pub(super) fn predicate_callback_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
-            if matches!(elem, PhpType::Int | PhpType::Bool) {
+            if matches!(elem, PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Mixed) {
                 Ok(elem)
             } else {
                 Err(CodegenIrError::unsupported(format!(
@@ -485,4 +485,3 @@ pub(super) fn lower_in_array_with_mode(
     }
     Ok(())
 }
-

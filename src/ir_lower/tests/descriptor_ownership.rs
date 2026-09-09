@@ -9,6 +9,34 @@
 
 use crate::ir::Op;
 
+/// Callback roots preserve callable-array provenance and single-word object predicate arguments.
+#[test]
+fn retained_callback_arrays_and_object_predicates_lower_on_all_targets() {
+    let source = r#"<?php
+        class RootedCallbackTarget {
+            public function sum(int $carry, int $value): int { return $carry + $value; }
+            public static function sumStatic(int $carry, int $value): int { return $carry + $value; }
+        }
+        class RootedPredicateInput { public function __destruct() { echo "released"; } }
+        function rooted_predicate(RootedPredicateInput $value): bool { return true; }
+        $target = new RootedCallbackTarget();
+        $instance = [$target, "sum"];
+        $static = ["RootedCallbackTarget", "sumStatic"];
+        echo array_reduce([1, 2], $instance, 0), array_reduce([1, 2], $static, 0);
+        echo array_all([new RootedPredicateInput()], rooted_predicate(...));
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_array_reduce"), "{target}");
+        assert!(asm.contains("__rt_array_find_any_all"), "{target}");
+        assert!(asm.contains("__rt_cleanup_call_operand_owner"), "{target}");
+    }
+}
+
 /// Ownership proofs distinguish persisted returns from borrowed parameters and mixed return paths.
 #[test]
 fn descriptor_string_return_ownership_requires_every_return_to_transfer_an_owner() {
