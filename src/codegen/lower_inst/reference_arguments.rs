@@ -68,7 +68,7 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
     let cleanup_slots = plan_call_arg_temp_cleanups(
         ctx, operands, visible_param_types, visible_ref_params, &[],
     )?;
-    let cleanup_bytes = cleanup_slots.len() * 16;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
@@ -164,7 +164,7 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     let mut no_writebacks: Vec<RefArgWriteback> = Vec::new();
     emit_ref_arg_cell_block(ctx, &mut no_writebacks, &mut ref_temp_cells)?;
     let cleanup_slots = plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
-    let cleanup_bytes = cleanup_slots.len() * 16;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =

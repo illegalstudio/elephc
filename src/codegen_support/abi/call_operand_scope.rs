@@ -11,11 +11,11 @@
 use super::*;
 use crate::codegen_support::emit::Emitter;
 
-const RECORD_BYTES: usize = 48;
+pub(crate) const CALL_OPERAND_OWNER_RECORD_BYTES: usize = 48;
 
 /// Links a caller-owned slot into the cleanup chain without consuming its current payload.
 pub(crate) fn emit_push_call_operand_owner(emitter: &mut Emitter, owner_address: &str, callable: bool) {
-    emit_reserve_temporary_stack(emitter, RECORD_BYTES);
+    emit_reserve_temporary_stack(emitter, CALL_OPERAND_OWNER_RECORD_BYTES);
     emit_link_call_operand_owner_at_stack(emitter, owner_address, callable, 0);
 }
 
@@ -45,7 +45,7 @@ pub(crate) fn emit_link_call_operand_owner_at_stack(
 /// Detaches the innermost temporary record before normal-path owner retirement can throw.
 pub(crate) fn emit_pop_call_operand_owner(emitter: &mut Emitter) {
     emit_unlink_call_operand_owner_at_stack(emitter, 0);
-    emit_release_temporary_stack(emitter, RECORD_BYTES);
+    emit_release_temporary_stack(emitter, CALL_OPERAND_OWNER_RECORD_BYTES);
 }
 
 /// Unlinks an innermost record from preallocated storage without changing the temporary stack base.

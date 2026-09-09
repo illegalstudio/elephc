@@ -112,6 +112,7 @@ echo "done";
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "1:bound|dropped|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Returning a fresh join or placing it before a call in a concat must not leak a duplicate string.

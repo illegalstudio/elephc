@@ -37,7 +37,7 @@ pub(super) struct CallArgMaterialization {
     pub(super) borrowed_stack_arg_bytes: usize,
 }
 
-/// Caller-owned temporary argument that must be released after the call returns.
+/// Caller-owned coercion with an adjacent unwind record, retired on return or throw.
 pub(super) struct CallArgTempCleanup {
     pub(super) param_index: usize,
     pub(super) offset: usize,

@@ -320,3 +320,25 @@ array in addition to compiling its emitted body.
 builtin documentation workflow pass. The generators produce no documentation
 diff. No local tests were executed. Runtime and all-target structural results
 remain CI gates; CI `34415026947` on the preceding pushed head is still live.
+
+### Implicit call coercion unwind owners
+
+CI on `5970ca6a7` still leaks the boxed argument and its hash/object children
+when a declared-array callee throws without joining anything. The backend's
+implicit argument boxes had normal-return cleanup only, outside EIR local
+ownership. Each tracked coercion slot now includes a preallocated unwind
+record, published immediately after conversion and detached in reverse order
+before normal release. Direct, static and instance argument staging share the
+same layout, including offsets past reference cells and overflow arguments.
+
+The existing isolated throw test now also requires a clean heap. Added fixtures
+cover two coerced arrays, surviving aliases, overflow and float arguments,
+ordinary returns followed by a throw, and all five target record layouts.
+`cargo build`, `cargo check --tests`, assembly-comment alignment and diff hygiene
+pass. No local tests were executed; these behavioral assertions await CI.
+
+The preceding CI confirms that the strengthened splice fixture no longer fails.
+It does not confirm full recovery: the list-unpack string leak persists, the
+new scalar-header fixture exposes separate box leaks, and discarded invalid
+spread calls lose their expected exception. These remain open gates alongside
+the previously recorded callback, native/eval and hydration failures.

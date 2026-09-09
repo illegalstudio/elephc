@@ -175,7 +175,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
     } else {
         Vec::new()
     };
-    let cleanup_bytes = cleanup_slots.len() * 16;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     if cleanup_bytes > 0 {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     }
@@ -261,7 +261,7 @@ pub(super) fn materialize_static_method_call_args_with_refs(
     )?;
     emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
     let cleanup_slots = plan_call_arg_temp_cleanups(ctx, args, param_types, ref_params, &[])?;
-    let cleanup_bytes = cleanup_slots.len() * 16;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     if cleanup_bytes > 0 {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     }
