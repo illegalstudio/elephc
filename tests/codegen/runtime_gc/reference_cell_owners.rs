@@ -204,6 +204,36 @@ survivingReturnedProperty();
     assert_eq!(compile_and_run_tagged(source), "holder|4,5|done");
 }
 
+/// A finally return releases the cell lease from the abandoned return before transferring its own.
+#[test]
+fn test_core_finally_reference_return_retires_the_superseded_cell() {
+    let source = r#"<?php
+class FinallyReferenceHolder { public string $text = ''; }
+function &finallyReference(): string {
+    $first = new FinallyReferenceHolder();
+    $first->text = 'first';
+    try { return $first->text; }
+    finally {
+        unset($first);
+        $second = new FinallyReferenceHolder();
+        $second->text = 'second';
+        return $second->text;
+    }
+}
+$alias = &finallyReference();
+echo $alias, '|';
+unset($alias);
+$value = finallyReference();
+echo $value;
+unset($value);
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{}", out.stdout, out.stderr, asm);
+    assert_eq!(out.stdout, "second|second", "{}\n{}", out.stderr, asm);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{}", out.stderr, asm);
+    assert_eq!(compile_and_run_tagged(source), "second|second");
+}
+
 /// A retained property cell survives its object and releases its payload at the last alias.
 #[test]
 fn test_core_owned_property_reference_outlives_object() {

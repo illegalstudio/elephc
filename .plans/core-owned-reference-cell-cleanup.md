@@ -67,3 +67,28 @@ The managed-cell implementation was pushed as
 on that exact head; its executable matrix was still pending at the first inspection.
 Local verification was limited to builds, test compilation, assembly-comment
 alignment and generated-doc audits. No local tests were executed.
+
+### Follow-up evidence on 4e416c3c5 and pending verification
+
+Linux x86_64 shard 8 on `4e416c3c5` ran 500 tests with 499 passing. The boxed
+push property-owner leak no longer appeared. Throwing boxed usort instead
+terminated after printing `stop|`, on both Linux architectures. Its ownership
+gate remains open; the diagnostic now includes generated user assembly.
+The eval array-read/strlen temporary leak also stopped failing in shard 7.
+
+That head exposed three additional regressions: Apple assemblers rejected
+conditional branches to global reference-cell helpers; rebinding an object
+local to its own property did not retire the object; repeated reference
+binding inside a loop leaked four cell retains. The corresponding fixes are
+`768c9de48`, `745c5ed6e`, and `42f9d3292`. Test compilation and builds pass,
+but executable verification is still pending.
+
+`e136734ec` adds native/eval Throwable isolation controls. `b27528dfc` permits
+runtime sort callback descriptors without weakening non-callable validation.
+CI run `34402858366` is validating the latter exact head. Its predecessor was
+cancelled by the next push and is not evidence of a passing executable matrix.
+
+The additional finally-return fix retires a pending reference-return lease when
+finally overrides it. At this checkpoint it is committed locally while the
+current CI run finishes, to avoid cancelling the diagnostics needed for the
+unresolved failures.

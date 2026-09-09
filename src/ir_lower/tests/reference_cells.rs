@@ -108,6 +108,8 @@ consumeReturnedReference();
         let Some(Immediate::LocalSlot(owner)) = acquisition.immediate else { unreachable!(); };
         assert_eq!(callee.locals[owner.as_raw() as usize].kind, LocalKind::ReturnRefCell, "{name}");
         assert!(acquisition.effects.contains(Effects::REFCOUNT_OP | Effects::WRITES_LOCAL), "{name}");
+        assert!(acquisition.effects.contains(Effects::MAY_THROW),
+            "{name}: replacing a pending reference return can run a payload destructor");
         let caller = module.functions.iter()
             .find(|function| function.name.eq_ignore_ascii_case("consumeReturnedReference")).unwrap();
         assert!(caller.instructions.iter().filter(|inst| inst.op == Op::AdoptRefCellPtr).count() >= 3,

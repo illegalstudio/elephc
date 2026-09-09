@@ -189,7 +189,7 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
     Ok(())
 }
 
-/// Retains only genuine managed cell allocations before a reference return leaves its owner frame.
+/// Retains a returned managed cell and retires any return owner superseded by a finally clause.
 pub(super) fn lower_acquire_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let pointer = expect_operand(inst, 0)?;
     let owner = expect_local_slot(inst)?;
@@ -197,7 +197,12 @@ pub(super) fn lower_acquire_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instr
     ctx.load_value_to_reg(pointer, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
     abi::emit_call_label(ctx.emitter, "__rt_incref");
+    let previous = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, previous, owner_offset);
+    // Publish the retained replacement before retirement can run a throwing destructor.
     abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), owner_offset);
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), previous);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
     Ok(())
 }
 

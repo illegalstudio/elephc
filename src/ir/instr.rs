@@ -709,7 +709,7 @@ pub enum Op {
     BindRefCellPtr,
     /// Adopts a returned cell owner into an alias/owner slot pair without retaining it twice.
     AdoptRefCellPtr,
-    /// Retains a managed reference cell before its pointer crosses a function-return boundary.
+    /// Retains a managed reference cell for return, retiring a previous owner overridden by finally.
     AcquireRefCell,
     DynamicPropGet,
     DynamicPropSet,
@@ -981,7 +981,8 @@ impl Op {
             }
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr | AdoptRefCellPtr => E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
-            AcquireRefCell => E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
+            // Replacing a pending return can retire a payload with an arbitrary destructor.
+            AcquireRefCell => E::all(),
             HashUnset | PropUnset | OffsetUnset => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP
                 | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySet | HashSet | ArrayPush | HashAppend | PropSet
