@@ -10,6 +10,27 @@
 
 use crate::support::*;
 
+/// Global string stores transfer their acquired copy, including self-assignment and replacement.
+#[test]
+fn test_core_native_global_string_stores_transfer_persisted_payloads() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$payload = "";
+function replaceOwnedGlobalString(): void {
+    global $payload;
+    $payload = str_repeat("a", 48);
+    $payload = $payload;
+    echo strlen($payload), "|";
+    $payload = "done";
+}
+replaceOwnedGlobalString();
+replaceOwnedGlobalString();
+echo $payload;
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "48|48|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Repeated native dispatch retires omitted defaults and newly coerced argument cells.
 #[test]
 fn test_core_eval_native_function_defaults_and_coercions_are_heap_clean() {
