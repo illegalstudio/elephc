@@ -94,7 +94,7 @@ struct DynamicNewCandidate {
     property_count: usize,
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: Vec<usize>,
-    owned_reference_property_offsets: Vec<usize>,
+    owned_reference_property_offsets: Vec<(usize, PhpType)>,
     property_defaults: Vec<PropertyDefault>,
     constructor_impl: Option<ConstructorCallTarget>,
 }

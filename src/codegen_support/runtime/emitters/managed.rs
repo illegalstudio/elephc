@@ -18,6 +18,7 @@ use crate::codegen_support::RuntimeFeatures;
 pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);
+    super::super::reference_cells::emit_reference_cells(emitter);
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);
     arrays::emit_heap_debug_validate_free_list(emitter);

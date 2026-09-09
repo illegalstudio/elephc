@@ -115,7 +115,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // strings/raw blocks contribute no outgoing cycle edges
     emitter.instruction("cmp x15, #5");                                         // is this within the array/hash/object/mixed range?
-    emitter.instruction("b.hi __rt_gc_collect_cycles_count_next");              // ignore unknown/raw heap kinds
+    emitter.instruction("b.ls __rt_gc_collect_cycles_count_known");             // accept the existing container kind range
+    emitter.instruction("cmp x15, #7");                                         // also trace independently owned reference cells
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_reference");         // count the cell's typed payload edge
+    emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // ignore non-graph heap kinds
+    emitter.label("__rt_gc_collect_cycles_count_known");
     emitter.instruction("cmp x15, #2");                                         // is this an indexed array?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_array");             // scan array payload children
     emitter.instruction("cmp x15, #3");                                         // is this an associative array / hash?
@@ -123,6 +127,15 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, #5");                                         // is this a boxed mixed cell?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_mixed");             // scan the boxed mixed child pointer
     emitter.instruction("b __rt_gc_collect_cycles_count_object");               // remaining refcounted kind 4 is an object
+    emitter.label("__rt_gc_collect_cycles_count_reference");
+    emitter.instruction("ubfx x15, x14, #8, #7");                               // read the cell payload descriptor from its header
+    emitter.instruction("cmp x15, #4");                                         // scalar and string values cannot own a cyclic graph edge
+    emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // skip non-graph cell payloads
+    emitter.instruction("cmp x15, #7");                                         // only container and boxed payloads are collector nodes
+    emitter.instruction("b.hi __rt_gc_collect_cycles_count_next");              // ignore resource and callable scalar descriptors
+    emitter.instruction("ldr x0, [x12]");                                       // load the reference cell's contained graph child
+    emitter.instruction("bl __rt_gc_note_child_ref");                           // account for the cell's single payload ownership
+    emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // continue with the next heap node
 
     emitter.label("__rt_gc_collect_cycles_count_array");
     emitter.instruction("lsr x15, x14, #8");                                    // move the packed array value_type tag into the low bits
@@ -225,6 +238,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("mul x0, x15, x0");                                     // compute the byte offset for this property slot
     emitter.instruction("add x0, x0, #8");                                      // skip the leading class_id field
     emitter.instruction("ldrb w10, [x14, x15]");                                // load the compile-time property tag for this slot
+    emitter.instruction("cmp x10, #11");                                        // owned property references point to independent graph nodes
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count the object-to-cell ownership edge
     emitter.instruction("cmp x10, #4");                                         // is this a compile-time indexed-array property?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count nested array property pointers
     emitter.instruction("cmp x10, #5");                                         // is this a compile-time associative-array property?
@@ -287,7 +302,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_collect_cycles_root_next");               // strings/raw blocks are outside the cycle collector set
     emitter.instruction("cmp x14, #5");                                         // is this within the array/hash/object/mixed range?
-    emitter.instruction("b.hi __rt_gc_collect_cycles_root_next");               // ignore unknown/raw heap kinds
+    emitter.instruction("b.ls __rt_gc_collect_cycles_root_known");              // accept existing container candidates
+    emitter.instruction("cmp x14, #7");                                         // owned reference cells can have external local aliases
+    emitter.instruction("b.eq __rt_gc_collect_cycles_root_refcounted");         // compare cell owners against incoming object edges
+    emitter.instruction("b __rt_gc_collect_cycles_root_next");                  // skip non-graph heap kinds
+    emitter.label("__rt_gc_collect_cycles_root_known");
     emitter.instruction("cmp x14, #2");                                         // is this an indexed array candidate?
     emitter.instruction("b.ne __rt_gc_collect_cycles_root_refcounted");         // hashes/objects decide in their dedicated branches
     emitter.instruction("lsr x15, x13, #8");                                    // move the packed array value_type tag into the low bits
@@ -346,7 +365,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_collect_cycles_free_next");               // strings/raw blocks are outside the cycle collector set
     emitter.instruction("cmp x14, #5");                                         // is this within the array/hash/object/mixed range?
-    emitter.instruction("b.hi __rt_gc_collect_cycles_free_next");               // ignore unknown/raw heap kinds
+    emitter.instruction("b.ls __rt_gc_collect_cycles_free_known");              // accept existing container candidates
+    emitter.instruction("cmp x14, #7");                                         // owned reference cells are swept independently
+    emitter.instruction("b.eq __rt_gc_collect_cycles_free_refcounted");         // apply reachability to the cell node
+    emitter.instruction("b __rt_gc_collect_cycles_free_next");                  // skip non-graph heap kinds
+    emitter.label("__rt_gc_collect_cycles_free_known");
     emitter.instruction("cmp x14, #2");                                         // is this an indexed array candidate?
     emitter.instruction("b.ne __rt_gc_collect_cycles_free_refcounted");         // hashes/objects decide in their dedicated branches
     emitter.instruction("lsr x15, x13, #8");                                    // move the packed array value_type tag into the low bits
@@ -377,6 +400,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_hash");               // deep-free unreachable hashes
     emitter.instruction("cmp x14, #5");                                         // is this a boxed mixed cell?
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_mixed");              // deep-free unreachable mixed cells
+    emitter.instruction("cmp x14, #7");                                         // distinguish cell nodes from ordinary object storage
+    emitter.instruction("b.eq __rt_gc_collect_cycles_free_reference");          // retire an unreachable cell with its typed payload
     emitter.instruction("bl __rt_object_free_deep");                            // deep-free unreachable objects
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_array");
@@ -387,6 +412,9 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_mixed");
     emitter.instruction("bl __rt_mixed_free_deep");                             // deep-free the unreachable mixed graph node
+    emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // resume after releasing the Mixed node
+    emitter.label("__rt_gc_collect_cycles_free_reference");
+    emitter.instruction("bl __rt_reference_cell_free_deep");                    // free the unreachable reference cell without revisiting doomed children
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_next");
     emitter.instruction("add x9, x9, x11");                                     // advance by this block payload size

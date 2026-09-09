@@ -77,6 +77,8 @@ mod closure_calls;
 mod descriptor_calls;
 mod object_construction;
 mod property_access;
+mod reference_returns;
+use reference_returns::finish_reference_return_call;
 mod property_fetch_for_write;
 mod method_calls;
 mod reflection_class_calls;
@@ -193,6 +195,14 @@ pub(super) use static_method_calls::static_method_call_expr_type_for_ir;
 
 /// Lowers an expression and returns its EIR value.
 pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
+    ctx.expression_depth += 1;
+    let value = lower_expr_inner(ctx, expr);
+    ctx.expression_depth -= 1;
+    value
+}
+
+/// Dispatches one expression while its reference-call context remains distinct from nested operands.
+fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
     if let Some(value) = nullsafe_chain::lower(ctx, expr) {
         return value;
     }

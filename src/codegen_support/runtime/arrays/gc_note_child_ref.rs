@@ -53,10 +53,13 @@ pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
     emitter.instruction("and x13, x12, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_note_child_ref_done");                    // strings/raw buffers do not participate in cycle accounting
+    emitter.instruction("cmp x13, #7");                                         // owned reference cells participate in incoming-edge accounting
+    emitter.instruction("b.eq __rt_gc_note_child_ref_record");                  // count the cell owner rather than shortcutting its payload
     emitter.instruction("cmp x13, #5");                                         // include boxed Mixed nodes as well as arrays, hashes, and objects
     emitter.instruction("b.hi __rt_gc_note_child_ref_done");                    // ignore unknown/raw heap kinds
 
     // -- bump the transient incoming-edge counter stored in the high 32 bits of the kind word --
+    emitter.label("__rt_gc_note_child_ref_record");
     emitter.instruction("mov x14, #1");                                         // prepare a single incoming-edge increment
     emitter.instruction("lsl x14, x14, #32");                                   // move the increment into the high 32 bits
     emitter.instruction("add x12, x12, x14");                                   // add one heap-incoming edge to this child block

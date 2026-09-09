@@ -58,7 +58,10 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_mark_reachable_done");                    // strings/raw values are not traversed by cycle collection
     emitter.instruction("cmp x12, #5");                                         // is this within the array/hash/object/mixed range?
-    emitter.instruction("b.hi __rt_gc_mark_reachable_done");                    // unknown/raw heap kinds do not participate
+    emitter.instruction("b.ls __rt_gc_mark_reachable_known");                   // accept existing graph containers
+    emitter.instruction("cmp x12, #7");                                         // include independently owned reference cells
+    emitter.instruction("b.ne __rt_gc_mark_reachable_done");                    // other heap shapes have no traced children
+    emitter.label("__rt_gc_mark_reachable_known");
 
     // -- stop recursion when this node is already marked reachable --
     emitter.instruction("mov x13, #1");                                         // prepare a single-bit reachable mask
@@ -91,7 +94,18 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_mark_reachable_hash");                    // traverse hash children
     emitter.instruction("cmp x12, #5");                                         // is this a boxed mixed cell?
     emitter.instruction("b.eq __rt_gc_mark_reachable_mixed");                   // traverse the boxed mixed child if it is heap-backed
+    emitter.instruction("cmp x12, #7");                                         // cell nodes store a typed low-word child
+    emitter.instruction("b.eq __rt_gc_mark_reachable_reference");               // trace the reference payload without object metadata
     emitter.instruction("b __rt_gc_mark_reachable_object");                     // remaining refcounted kind 4 is an object
+    emitter.label("__rt_gc_mark_reachable_reference");
+    emitter.instruction("ubfx x12, x11, #8, #7");                               // read the reference cell payload shape
+    emitter.instruction("cmp x12, #4");                                         // scalar and string cell payloads cannot own graph edges
+    emitter.instruction("b.lo __rt_gc_mark_reachable_return");                  // the cell itself is marked and has no traced child
+    emitter.instruction("cmp x12, #7");                                         // only container and boxed children require tracing
+    emitter.instruction("b.hi __rt_gc_mark_reachable_return");                  // ignore non-graph payload descriptors
+    emitter.instruction("ldr x0, [x0]");                                        // follow the reference cell's single contained child
+    emitter.instruction("bl __rt_gc_mark_reachable");                           // mark the payload graph reachable through the alias
+    emitter.instruction("b __rt_gc_mark_reachable_return");                     // restore the cell traversal frame
 
     // -- array traversal: only arrays tagged with refcounted element payloads contain graph edges --
     emitter.label("__rt_gc_mark_reachable_array");
@@ -211,6 +225,8 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #8");                                    // skip the leading class_id field
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the descriptor pointer for this property slot
     emitter.instruction("ldrb w13, [x13, x9]");                                 // load the compile-time property tag
+    emitter.instruction("cmp x13, #11");                                        // owned property references are cell graph edges
+    emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // follow the object-to-cell ownership edge
     emitter.instruction("cmp x13, #4");                                         // is this a compile-time indexed-array property?
     emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into nested array properties
     emitter.instruction("cmp x13, #5");                                         // is this a compile-time associative-array property?
@@ -295,7 +311,10 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 2");                                          // is this at least an indexed array?
     emitter.instruction("jb __rt_gc_mark_reachable_done");                      // strings and raw buffers do not participate in cycle traversal
     emitter.instruction("cmp rcx, 5");                                          // is this within the array/hash/object/mixed range?
-    emitter.instruction("ja __rt_gc_mark_reachable_done");                      // unknown/raw heap kinds are ignored by the collector
+    emitter.instruction("jbe __rt_gc_mark_reachable_known");                    // accept existing graph containers
+    emitter.instruction("cmp rcx, 7");                                          // include independently owned reference cells
+    emitter.instruction("jne __rt_gc_mark_reachable_done");                     // other heap shapes have no traced children
+    emitter.label("__rt_gc_mark_reachable_known");
 
     // -- stop recursion when this node is already marked reachable --
     emitter.instruction("test r11, 0x10000");                                   // has the collector already marked this node reachable during the current pass?
@@ -317,7 +336,20 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_gc_mark_reachable_hash");                      // yes — traverse hash entry children
     emitter.instruction("cmp rcx, 5");                                          // is this a boxed mixed cell?
     emitter.instruction("je __rt_gc_mark_reachable_mixed");                     // yes — traverse the boxed child pointer if it is heap-backed
+    emitter.instruction("cmp rcx, 7");                                          // cell nodes store a typed low-word child
+    emitter.instruction("je __rt_gc_mark_reachable_reference");                 // trace the reference payload without object metadata
     emitter.instruction("jmp __rt_gc_mark_reachable_object");                   // the remaining refcounted heap kind is an object instance
+    emitter.label("__rt_gc_mark_reachable_reference");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the reference cell header
+    emitter.instruction("shr rcx, 8");                                          // position the payload descriptor
+    emitter.instruction("and ecx, 0x7f");                                       // discard collector flags and the heap marker
+    emitter.instruction("cmp rcx, 4");                                          // scalar and string cell payloads cannot own graph edges
+    emitter.instruction("jb __rt_gc_mark_reachable_return");                    // the cell itself is marked and has no traced child
+    emitter.instruction("cmp rcx, 7");                                          // only container and boxed children require tracing
+    emitter.instruction("ja __rt_gc_mark_reachable_return");                    // ignore non-graph payload descriptors
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // follow the reference cell's single contained child
+    emitter.instruction("call __rt_gc_mark_reachable");                         // mark the payload graph reachable through the alias
+    emitter.instruction("jmp __rt_gc_mark_reachable_return");                   // restore the cell traversal frame
 
     // -- array traversal: only arrays with refcounted element payloads contain graph edges --
     emitter.label("__rt_gc_mark_reachable_array");
@@ -427,6 +459,8 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, 8");                                           // skip the leading class_id field to reach the selected property slot
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the per-class descriptor pointer for the selected property slot
     emitter.instruction("movzx r9d, BYTE PTR [r9 + rcx]");                      // load the compile-time property tag for the selected object property
+    emitter.instruction("cmp r9, 11");                                          // owned property references are cell graph edges
+    emitter.instruction("je __rt_gc_mark_reachable_object_child");              // follow the object-to-cell ownership edge
     emitter.instruction("cmp r9, 4");                                           // is this property statically typed as an indexed array?
     emitter.instruction("je __rt_gc_mark_reachable_object_child");              // yes — recurse into the nested array property payload
     emitter.instruction("cmp r9, 5");                                           // is this property statically typed as an associative array?

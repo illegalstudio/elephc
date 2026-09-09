@@ -248,6 +248,8 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // objects always release through the uniform helper
     emitter.instruction("cmp x15, #7");                                         // is this a compile-time mixed property?
     emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // mixed payloads may or may not be heap-backed, but decref_any handles both safely
+    emitter.instruction("cmp x15, #11");                                        // owned property references hold managed cell pointers
+    emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // retire the object's cell owner through uniform dispatch
     emitter.instruction("cmp x15, #10");                                        // is this a compile-time callable descriptor property?
     emitter.instruction("b.eq __rt_object_free_deep_release_callable");         // callable descriptors require capture-aware release
     emitter.instruction("b __rt_object_free_deep_next");                        // scalars and nulls need no cleanup
@@ -498,6 +500,8 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("je __rt_object_free_deep_release_runtime");            // objects release through the uniform x86_64 decref_any helper
     emitter.instruction("cmp r8, 7");                                           // does the property hold a boxed mixed pointer?
     emitter.instruction("je __rt_object_free_deep_release_runtime");            // mixed cells release through the uniform x86_64 decref_any helper
+    emitter.instruction("cmp r8, 11");                                          // owned property references hold managed cell pointers
+    emitter.instruction("je __rt_object_free_deep_release_runtime");            // retire the object's cell owner through uniform dispatch
     emitter.instruction("cmp r8, 10");                                          // does the property hold a callable descriptor pointer?
     emitter.instruction("je __rt_object_free_deep_release_callable");           // callable descriptors require capture-aware release on x86_64
     emitter.instruction("jmp __rt_object_free_deep_next");                      // scalar, float, and null property slots need no heap cleanup

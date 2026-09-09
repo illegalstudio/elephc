@@ -119,6 +119,8 @@ pub(crate) struct LoweringSnapshot {
     array_conversions: HashMap<String, PhpType>,
     speculating: bool,
     closure_count: usize,
+    expression_depth: usize,
+    reference_call_context: Option<(usize, Option<PhpType>)>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -180,6 +182,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub local_slots: HashMap<String, LocalSlotId>,
     pub local_kinds: HashMap<String, LocalKind>,
     pub local_types: TypeEnv,
+    /// Nested expression depth separates a reference-assignment call from its argument calls.
+    pub(crate) expression_depth: usize,
+    /// Requested reference-call depth and the payload type recorded by the resolved callee.
+    pub(crate) reference_call_context: Option<(usize, Option<PhpType>)>,
     initialized_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
@@ -402,6 +408,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             pending_static_callable_result: None,
             closure_counter: 0,
             hidden_temp_counter: 0,
+            expression_depth: 0,
+            reference_call_context: None,
             write_operand_is_borrowed: false,
             eval_barrier_active: false,
             eval_executed: false,
@@ -442,6 +450,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             pending_static_callable_result: self.pending_static_callable_result.clone(),
             closure_counter: self.closure_counter,
             hidden_temp_counter: self.hidden_temp_counter,
+            expression_depth: self.expression_depth,
+            reference_call_context: self.reference_call_context.clone(),
             eval_barrier_active: self.eval_barrier_active,
             eval_executed: self.eval_executed,
             eval_scope_read_param: self.eval_scope_read_param.clone(),
@@ -479,6 +489,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.pending_static_callable_result = snapshot.pending_static_callable_result;
         self.closure_counter = snapshot.closure_counter;
         self.hidden_temp_counter = snapshot.hidden_temp_counter;
+        self.expression_depth = snapshot.expression_depth;
+        self.reference_call_context = snapshot.reference_call_context;
         self.eval_barrier_active = snapshot.eval_barrier_active;
         self.eval_executed = snapshot.eval_executed;
         self.eval_scope_read_param = snapshot.eval_scope_read_param;
@@ -2384,14 +2396,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
-    /// Binds `target` as a NON-owning reference alias to an already-materialized ref-cell
-    /// pointer (`cell_ptr`), e.g. the cell behind an object reference property (`$x = &$obj->prop`)
-    /// or returned by a by-reference call (`$x = &f()`). `value_type` is the PHP type the cell
-    /// holds, used to type the target and to dereference it on later loads/stores.
+    /// Binds `target` to a borrowed ref-cell pointer without acquiring allocation ownership.
+    /// `value_type` describes the cell payload for subsequent alias loads and stores.
     ///
     /// Unlike `alias_local_ref_cell`, no hidden owner slot is created and no `ReleaseLocalRefCell`
-    /// is emitted for `target` at scope exit: the cell is owned by the source (the object), so the
-    /// alias must not free it.
+    /// is emitted for `target` at scope exit. Managed properties and resolved reference-returning
+    /// calls instead use the owning or adopting bind helpers.
     pub(crate) fn bind_local_ref_cell_ptr(
         &mut self,
         target: &str,
@@ -2399,10 +2409,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value_type: PhpType,
         span: Option<Span>,
     ) {
-        self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, false, span);
+        self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, false, false, span);
     }
 
-    /// Retains a known heap-backed property cell so this alias survives its object's destruction.
+    /// Retains a property cell before replacing the target, which may own the source object.
     pub(crate) fn bind_owned_local_ref_cell_ptr(
         &mut self,
         target: &str,
@@ -2410,7 +2420,35 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value_type: PhpType,
         span: Option<Span>,
     ) {
-        self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, true, span);
+        let staged = self.declare_synthetic_php_local(value_type.clone());
+        self.bind_ref_cell_ptr_impl(&staged, cell_ptr, value_type, true, false, span);
+        self.alias_local_ref_cell(target, &staged, span);
+        self.release_ref_cell_owner(&staged, span);
+    }
+
+    /// Stages an owner transferred by a reference-returning callee without retaining it twice.
+    pub(crate) fn adopt_returned_ref_cell(
+        &mut self,
+        cell_ptr: LoweredValue,
+        value_type: PhpType,
+        span: Option<Span>,
+    ) -> String {
+        let staged = self.declare_synthetic_php_local(value_type.clone());
+        self.bind_ref_cell_ptr_impl(&staged, cell_ptr, value_type, true, true, span);
+        staged
+    }
+
+    /// Publishes a transferred reference owner only after the new cell is protected from rebinding.
+    pub(crate) fn bind_returned_ref_cell(
+        &mut self,
+        target: &str,
+        cell_ptr: LoweredValue,
+        value_type: PhpType,
+        span: Option<Span>,
+    ) {
+        let staged = self.adopt_returned_ref_cell(cell_ptr, value_type, span);
+        self.alias_local_ref_cell(target, &staged, span);
+        self.release_ref_cell_owner(&staged, span);
     }
 
     /// Binds a borrowed or owned cell, retiring the previous binding before publishing the new one.
@@ -2420,6 +2458,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         cell_ptr: LoweredValue,
         value_type: PhpType,
         owns_cell: bool,
+        adopts_cell: bool,
         span: Option<Span>,
     ) {
         self.clear_static_callable_local(target);
@@ -2434,14 +2473,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             Immediate::LocalSlot(target_slot)
         };
+        let op = if adopts_cell { Op::AdoptRefCellPtr } else { Op::BindRefCellPtr };
         self.builder.emit_with_effects(
-            Op::BindRefCellPtr,
+            op,
             vec![cell_ptr.value],
             Some(immediate),
             IrType::Void,
             value_type,
             Ownership::NonHeap,
-            Op::BindRefCellPtr.default_effects(),
+            op.default_effects(),
             span,
         );
         self.mark_ref_bound_local(target);

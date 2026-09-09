@@ -18,7 +18,7 @@ pub(super) fn initialize_owned_property_reference(
     let owns_cell = slot.is_reference && ctx.module.class_infos.get(&slot.class_name)
         .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
     if owns_cell {
-        emit_owned_reference_property_cell(ctx, base_reg, slot.offset);
+        emit_owned_reference_property_cell(ctx, base_reg, slot.offset, &slot.php_type);
     }
     owns_cell
 }

@@ -79,6 +79,8 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("str x14, [x11, x10]");                                 // store the property high word on the clone
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the property-tag descriptor pointer
     emitter.instruction("ldrb w14, [x11, x12]");                                // load the compile-time ownership tag for this slot
+    emitter.instruction("cmp x14, #11");                                        // owned property references require PHP reference-aware cloning
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_reference"); // share live aliases and separate singleton cells
     emitter.instruction("cmp x14, #1");                                         // does the slot hold an owned string payload?
     emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_string"); // string slots need an independent payload copy
     emitter.instruction("cmp x14, #4");                                         // does the slot hold a retained indexed-array payload?
@@ -90,6 +92,17 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, #7");                                         // does the slot hold a retained boxed Mixed payload?
     emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained Mixed slots need an extra owner reference
     emitter.instruction("b __elephc_eval_value_object_clone_shallow_next");     // scalar slots are copied without ownership changes
+    emitter.label("__elephc_eval_value_object_clone_shallow_reference");
+    emitter.instruction("str x12, [sp, #32]");                                  // preserve the property index across reference-cell cloning
+    emitter.instruction("str x10, [sp, #40]");                                  // preserve the high-word property offset
+    emitter.instruction("mov x0, x15");                                         // pass the owned reference cell to its clone helper
+    emitter.instruction("bl __rt_reference_cell_clone");                        // retain shared aliases or copy singleton cell storage
+    emitter.instruction("ldr x10, [sp, #40]");                                  // restore the high-word property offset
+    emitter.instruction("sub x10, x10, #8");                                    // locate the clone's cell pointer word
+    emitter.instruction("ldr x11, [sp, #8]");                                   // restore the cloned object pointer
+    emitter.instruction("str x0, [x11, x10]");                                  // replace the copied slot with its correctly owned cell
+    emitter.instruction("ldr x12, [sp, #32]");                                  // restore the property traversal index
+    emitter.instruction("b __elephc_eval_value_object_clone_shallow_next");     // continue after reference-aware slot cloning
 
     emitter.label("__elephc_eval_value_object_clone_shallow_string");
     emitter.instruction("str x12, [sp, #32]");                                  // preserve property index across string persistence

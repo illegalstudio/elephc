@@ -707,6 +707,10 @@ pub enum Op {
     /// Binds a local slot to a ref-cell pointer. A LocalSlot immediate borrows the cell;
     /// a LocalSlotPair gives the target and an owned cell slot, retaining the cell for scope cleanup.
     BindRefCellPtr,
+    /// Adopts a returned cell owner into an alias/owner slot pair without retaining it twice.
+    AdoptRefCellPtr,
+    /// Retains a managed reference cell before its pointer crosses a function-return boundary.
+    AcquireRefCell,
     DynamicPropGet,
     DynamicPropSet,
     NullsafePropGet,
@@ -976,7 +980,8 @@ impl Op {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
-            BindRefCellPtr => E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            BindRefCellPtr | AdoptRefCellPtr => E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
+            AcquireRefCell => E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             HashUnset | PropUnset | OffsetUnset => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP
                 | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySet | HashSet | ArrayPush | HashAppend | PropSet
@@ -1288,6 +1293,8 @@ impl Op {
             LoadPropRefCell => "load_prop_ref_cell",
             LoadArrayElemRefCell => "load_array_elem_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",
+            AdoptRefCellPtr => "adopt_ref_cell_ptr",
+            AcquireRefCell => "acquire_ref_cell",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropSet => "dynamic_prop_set",
             NullsafePropGet => "nullsafe_prop_get",

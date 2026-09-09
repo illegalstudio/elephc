@@ -373,7 +373,7 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
         LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
-        | ReleaseLocalRefCell
+        | ReleaseLocalRefCell | AcquireRefCell
         | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
@@ -381,7 +381,7 @@ fn validate_instruction_immediate(
         BindRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
             matches!(imm, Imm::LocalSlot(_) | Imm::LocalSlotPair { .. })
         }),
-        PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
+        PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
         EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
@@ -576,7 +576,7 @@ fn validate_opcode_rules(
             check_count(inst_id, inst, 0, "0")
         }
         StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty
-        | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr
+        | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr | AdoptRefCellPtr | AcquireRefCell
         | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue | PrintValue | WriteStdout
         | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn
         | PtrCheckNonnull => {

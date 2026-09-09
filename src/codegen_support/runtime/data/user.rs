@@ -1050,7 +1050,7 @@ pub(crate) fn emit_runtime_data_user(
                 }
                 let prop_name = &class_info.properties[i].0;
                 let tag = if class_info.property_slot_is_reference(i, prop_name) {
-                    0
+                    if class_info.owned_reference_properties.contains(prop_name) { 11 } else { 0 }
                 } else {
                     match prop_ty {
                         PhpType::Int => 0,

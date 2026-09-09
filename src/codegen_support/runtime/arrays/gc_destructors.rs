@@ -51,6 +51,11 @@ fn emit_scan_aarch64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction("cmp x13, #2");                                         // candidates start at indexed-array storage
     emitter.instruction(&format!("b.lo {next}"));                               // raw allocations and strings are not cycle candidates
     emitter.instruction("cmp x13, #5");                                         // candidates end at boxed Mixed storage
+    emitter.instruction(&format!("b.ls {loop_label}_known"));                   // preserve the existing container candidate range
+    emitter.instruction("cmp x13, #7");                                         // owned reference cells need pins during user destructors
+    emitter.instruction(&format!("b.eq {ready}"));                              // protect cell storage while callbacks inspect aliases
+    emitter.instruction(&format!("b {next}"));                                  // ignore other heap kinds
+    emitter.label(&format!("{loop_label}_known"));
     emitter.instruction(&format!("b.hi {next}"));                               // match the collector's supported graph-node kinds
     emitter.instruction("cmp x13, #2");                                         // indexed arrays require reference-bearing elements
     emitter.instruction(&format!("b.ne {ready}"));                              // hashes, objects, and Mixed cells are graph nodes
@@ -224,6 +229,11 @@ fn emit_scan_x86_64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction("cmp ecx, 2");                                          // graph candidates start at indexed arrays
     emitter.instruction(&format!("jb {next}"));                                 // raw storage and strings are not cycle candidates
     emitter.instruction("cmp ecx, 5");                                          // graph candidates end at boxed Mixed cells
+    emitter.instruction(&format!("jbe {loop_label}_known"));                    // preserve the existing container candidate range
+    emitter.instruction("cmp ecx, 7");                                          // owned reference cells need pins during user destructors
+    emitter.instruction(&format!("je {ready}"));                                // protect cell storage while callbacks inspect aliases
+    emitter.instruction(&format!("jmp {next}"));                                // ignore other heap kinds
+    emitter.label(&format!("{loop_label}_known"));
     emitter.instruction(&format!("ja {next}"));                                 // mirror the collector's candidate-kind range
     emitter.instruction("cmp ecx, 2");                                          // indexed arrays need reference-bearing element storage
     emitter.instruction(&format!("jne {ready}"));                               // other supported kinds already own graph edges

@@ -52,8 +52,11 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this a refcounted indexed array?
     emitter.instruction("b.lo __rt_decref_any_dispatch");                       // strings should still be freed immediately
+    emitter.instruction("cmp x13, #7");                                         // owned reference cells are collector graph nodes
+    emitter.instruction("b.eq __rt_decref_any_graph_child");                    // apply sweep suppression to reference cells
     emitter.instruction("cmp x13, #6");                                         // is this within the refcounted array/hash/object/mixed/throwable range?
     emitter.instruction("b.hi __rt_decref_any_dispatch");                       // raw/untyped blocks are not part of refcounted graph cleanup
+    emitter.label("__rt_decref_any_graph_child");
     emitter.instruction("mov x14, #1");                                         // prepare a single-bit reachable mask
     emitter.instruction("lsl x14, x14, #16");                                   // x14 = GC reachable bit in the kind word
     emitter.instruction("tst x11, x14");                                        // does this child stay reachable from an external root?
@@ -72,6 +75,8 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_decref_any_object");                         // release objects through __rt_decref_object
     emitter.instruction("cmp x11, #5");                                         // is this a boxed mixed value?
     emitter.instruction("b.eq __rt_decref_any_mixed");                          // release mixed cells through __rt_decref_mixed
+    emitter.instruction("cmp x11, #7");                                         // recognize independently owned reference cells
+    emitter.instruction("b.eq __rt_reference_cell_release");                    // release the cell through final-owner cleanup
     emitter.instruction("cmp x11, #6");                                         // is this a throwable object?
     emitter.instruction("b.eq __rt_decref_any_object");                         // release throwables through the object decref helper
     emitter.instruction("ret");                                                 // unknown/raw kinds need no release
@@ -132,6 +137,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_decref_any_dispatch");                         // release non-graph children through their ordinary helper
     emitter.instruction("cmp r11d, 5");                                         // the collector directly reclaims array, hash, object, and Mixed nodes
     emitter.instruction("jbe __rt_decref_any_done");                            // never decrement already reclaimed or independently pinned doomed nodes
+    emitter.instruction("cmp r11d, 7");                                         // owned reference cells are independently swept graph nodes
+    emitter.instruction("je __rt_decref_any_done");                             // leave doomed cell retirement to the collector
     emitter.label("__rt_decref_any_dispatch");
     emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for the concrete release dispatch
     emitter.instruction("cmp r10, 1");                                          // does this heap-backed payload own a persisted string buffer?
@@ -144,6 +151,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_decref_any_object");                           // objects release through the x86_64 object decref helper
     emitter.instruction("cmp r10, 5");                                          // does this heap-backed payload point at a boxed mixed cell?
     emitter.instruction("je __rt_decref_any_mixed");                            // mixed cells release through the x86_64 mixed decref helper
+    emitter.instruction("cmp r10, 7");                                          // recognize independently owned reference cells
+    emitter.instruction("je __rt_reference_cell_release");                      // release the cell through final-owner cleanup
     emitter.instruction("cmp r10, 6");                                          // does this heap-backed payload point at a throwable object (issue #448)?
     emitter.instruction("je __rt_decref_any_object");                           // throwables release through the x86_64 object decref helper like plain objects
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime

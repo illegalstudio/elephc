@@ -143,6 +143,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             .function(canonical)
             .cloned()
             .unwrap_or(ReturnArgAlias::Unknown);
+        let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
         release_owned_call_arg_temporaries_with_signature(
             ctx,
             &operands,

@@ -914,7 +914,12 @@ fn emit_ref_cell_owner_epilogue_cleanup_for(
     ctx: &mut FunctionContext<'_>,
     owners: Vec<(String, LocalSlotId, PhpType, usize)>,
 ) {
-    for (name, _, ty, offset) in owners {
+    for (name, slot, ty, offset) in owners {
+        if !ctx.unwinding_cleanup
+            && ctx.function.locals[slot.as_raw() as usize].kind == LocalKind::ReturnRefCell
+        {
+            continue;
+        }
         ctx.emitter
             .comment(&format!("epilogue cleanup ref-cell owner ${}", name));
         emit_ref_cell_owner_cleanup(ctx, offset, &ty);
@@ -958,7 +963,7 @@ fn ref_cell_owner_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId,
         .function
         .locals
         .iter()
-        .filter(|local| local.kind == LocalKind::RefCell)
+        .filter(|local| matches!(local.kind, LocalKind::RefCell | LocalKind::ReturnRefCell))
         .filter_map(|local| {
             let offset = ctx.local_offset(local.id).ok()?;
             let name = local
@@ -1175,7 +1180,11 @@ fn emit_function_local_epilogue_cleanup(
     {
         return;
     }
-    let return_ty = ctx.function.return_php_type.codegen_repr();
+    let return_ty = if ctx.function.flags.by_ref_return {
+        PhpType::Pointer(None)
+    } else {
+        ctx.function.return_php_type.codegen_repr()
+    };
     let preserves_return = !matches!(return_ty, PhpType::Void | PhpType::Never);
     if preserves_return {
         push_return_value(ctx, &return_ty);
@@ -1772,7 +1781,11 @@ fn emit_instr_exit(ctx: &mut FunctionContext<'_>) {
         return;
     };
     ctx.emitter.comment("instrument: exit (--instrument)");
-    let return_ty = ctx.function.return_php_type.codegen_repr();
+    let return_ty = if ctx.function.flags.by_ref_return {
+        PhpType::Pointer(None)
+    } else {
+        ctx.function.return_php_type.codegen_repr()
+    };
     let preserves_return = !matches!(return_ty, PhpType::Void | PhpType::Never);
     if preserves_return {
         push_return_value(ctx, &return_ty);
@@ -2009,6 +2022,12 @@ pub(super) fn emit_function_return_epilogue(
     skip_return_slot: Option<LocalSlotId>,
 ) {
     emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
+    for local in &ctx.function.locals {
+        if local.kind == LocalKind::ReturnRefCell {
+            let offset = ctx.local_offset(local.id).expect("return cell owner has frame storage");
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
+    }
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);

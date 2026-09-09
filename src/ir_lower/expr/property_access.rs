@@ -52,23 +52,30 @@ pub(crate) fn lower_ref_assign_property(
     );
     if owns_cell {
         ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
     } else {
         ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
     }
 }
 
 /// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a
-/// by-reference-returning callee. The call yields the cell pointer; the target shares it
-/// non-owning (the owner is the object property the callee returned a reference to).
+/// by-reference-returning callee. The caller adopts the transferred cell owner before rebinding.
 pub(crate) fn lower_ref_assign_call(
     ctx: &mut LoweringContext<'_, '_>,
     target: &str,
     source: &Expr,
     span: Span,
 ) {
+    let previous = ctx.reference_call_context.replace((ctx.expression_depth + 1, None));
     let cell_ptr = lower_expr(ctx, source);
-    let value_type = ctx.builder.value_php_type(cell_ptr.value);
-    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    let captured = ctx.reference_call_context.take().and_then(|(_, php_type)| php_type);
+    ctx.reference_call_context = previous;
+    if let Some(value_type) = captured {
+        ctx.bind_returned_ref_cell(target, cell_ptr, value_type, Some(span));
+    } else {
+        let value_type = ctx.builder.value_php_type(cell_ptr.value);
+        ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    }
 }
 
 /// Lowers `$target =& $arr[idx]`: promotes the indexed-array element's inline storage to a

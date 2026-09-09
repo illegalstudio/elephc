@@ -104,6 +104,8 @@ fn escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
                 | Op::AliasLocalRefCell
                 | Op::RetainLocalRefCell
                 | Op::BindRefCellPtr
+                | Op::AdoptRefCellPtr
+                | Op::AcquireRefCell
                 | Op::ReleaseLocalRefCell
                 | Op::ReleaseLocalSlot
                 | Op::PushCallOperandOwner

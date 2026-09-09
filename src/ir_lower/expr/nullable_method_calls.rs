@@ -144,6 +144,7 @@ pub(super) fn lower_method_call_with_receiver(
         Some(expr.span),
     );
     let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
     release_owned_call_arg_temporaries_with_signature(
         ctx,
         &arg_values,
@@ -237,7 +238,8 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
             // By-value returns from reference parameters also acquire or clone a separate owner.
             // Their result therefore cannot be an unretained alias of the caller's argument.
             let callee_owns = signature
-                .is_some_and(|signature| signature.returned_parameter_has_independent_owner(parameter_index));
+                .is_some_and(|signature| signature.by_ref_return
+                    || signature.returned_parameter_has_independent_owner(parameter_index));
             let independently_boxed = signature.is_some_and(|signature| {
                 call_arg_gets_independent_mixed_box(signature, parameter_index, &php_type)
             });

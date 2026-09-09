@@ -98,6 +98,7 @@ pub(super) fn lower_static_method_call(
         Some(expr.span),
     );
     let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
+    let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
     release_owned_call_arg_temporaries_with_signature(
         ctx,
         &operands,
@@ -422,4 +423,3 @@ pub(super) fn static_receiver_class_name(
         }
     }
 }
-

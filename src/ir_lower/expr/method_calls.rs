@@ -145,6 +145,7 @@ pub(super) fn lower_method_call(
         Some(expr.span),
     );
     let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
     release_owned_call_arg_temporaries_with_signature(
         ctx,
         &arg_values,

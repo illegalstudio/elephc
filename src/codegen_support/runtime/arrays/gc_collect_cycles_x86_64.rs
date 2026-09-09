@@ -96,7 +96,11 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 2");                                          // is this candidate at least an indexed array?
     emitter.instruction("jb __rt_gc_collect_cycles_root_next");                 // strings and raw buffers never participate in cycle collection
     emitter.instruction("cmp rcx, 5");                                          // is this candidate within the array/hash/object/mixed range?
-    emitter.instruction("ja __rt_gc_collect_cycles_root_next");                 // unknown/raw heap kinds are ignored by the collector
+    emitter.instruction("jbe __rt_gc_collect_cycles_root_known");               // accept existing container candidates
+    emitter.instruction("cmp rcx, 7");                                          // owned reference cells can have external local aliases
+    emitter.instruction("je __rt_gc_collect_cycles_root_candidate_ready");      // compare cell owners against incoming object edges
+    emitter.instruction("jmp __rt_gc_collect_cycles_root_next");                // skip non-graph heap kinds
+    emitter.label("__rt_gc_collect_cycles_root_known");
     emitter.instruction("cmp rcx, 2");                                          // is this candidate an indexed array?
     emitter.instruction("jne __rt_gc_collect_cycles_root_candidate_ready");     // hashes, objects, and mixed boxes remain collector candidates
     emitter.instruction("mov rdx, r11");                                        // preserve the full array kind word while unpacking the runtime array value_type tag
@@ -130,7 +134,11 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 2");                                          // is this source at least an indexed array?
     emitter.instruction("jb __rt_gc_collect_cycles_count_next");                // strings and raw buffers contribute no outgoing cycle edges
     emitter.instruction("cmp r10, 5");                                          // is this source within the array/hash/object/mixed range?
-    emitter.instruction("ja __rt_gc_collect_cycles_count_next");                // unknown/raw heap kinds are ignored by the collector
+    emitter.instruction("jbe __rt_gc_collect_cycles_count_known");              // accept the existing container kind range
+    emitter.instruction("cmp r10, 7");                                          // also trace independently owned reference cells
+    emitter.instruction("je __rt_gc_collect_cycles_count_reference");           // count the cell's typed payload edge
+    emitter.instruction("jmp __rt_gc_collect_cycles_count_next");               // ignore non-graph heap kinds
+    emitter.label("__rt_gc_collect_cycles_count_known");
     emitter.instruction("cmp r10, 2");                                          // is the source block an indexed array?
     emitter.instruction("je __rt_gc_collect_cycles_count_array");               // yes — scan array child slots
     emitter.instruction("cmp r10, 3");                                          // is the source block an associative array / hash?
@@ -138,6 +146,17 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 5");                                          // is the source block a boxed mixed cell?
     emitter.instruction("je __rt_gc_collect_cycles_count_mixed");               // yes — compare the boxed child pointer against the candidate
     emitter.instruction("jmp __rt_gc_collect_cycles_count_object");             // the remaining refcounted heap kind is an object instance
+    emitter.label("__rt_gc_collect_cycles_count_reference");
+    emitter.instruction("shr r9, 8");                                           // read the cell payload descriptor from its header
+    emitter.instruction("and r9d, 0x7f");                                       // discard collector flags and the heap marker
+    emitter.instruction("cmp r9, 4");                                           // scalar and string payloads cannot own cyclic graph edges
+    emitter.instruction("jb __rt_gc_collect_cycles_count_next");                // skip non-graph cell payloads
+    emitter.instruction("cmp r9, 7");                                           // only container and boxed payloads are collector nodes
+    emitter.instruction("ja __rt_gc_collect_cycles_count_next");                // ignore resource and callable scalar descriptors
+    emitter.instruction("cmp QWORD PTR [rdx + 16], rsi");                       // compare the cell's contained child with the root candidate
+    emitter.instruction("jne __rt_gc_collect_cycles_count_next");               // this cell owns a different child
+    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // count the cell's single payload ownership
+    emitter.instruction("jmp __rt_gc_collect_cycles_count_next");               // continue with the next heap node
 
     emitter.label("__rt_gc_collect_cycles_count_array");
     emitter.instruction("mov r10, r9");                                         // preserve the full array kind word while unpacking the runtime array value_type tag
@@ -241,6 +260,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, r10");                                         // preserve the logical property index while scaling it into a byte offset
     emitter.instruction("imul r8, 16");                                         // scale the property index by 16 bytes per object property slot
     emitter.instruction("add r8, 8");                                           // skip the leading class_id field to reach the selected property slot
+    emitter.instruction("cmp rcx, 11");                                         // owned property references point to independent graph nodes
+    emitter.instruction("je __rt_gc_collect_cycles_count_object_child");        // count the object-to-cell ownership edge
     emitter.instruction("cmp rcx, 4");                                          // is this property statically typed as an indexed array?
     emitter.instruction("je __rt_gc_collect_cycles_count_object_child");        // yes — compare the direct property child pointer against the current candidate
     emitter.instruction("cmp rcx, 5");                                          // is this property statically typed as an associative array?
@@ -312,7 +333,11 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 2");                                          // is this block at least an indexed array?
     emitter.instruction("jb __rt_gc_collect_cycles_free_next");                 // strings and raw buffers are outside the cycle collector set
     emitter.instruction("cmp rcx, 5");                                          // is this block within the array/hash/object/mixed range?
-    emitter.instruction("ja __rt_gc_collect_cycles_free_next");                 // unknown/raw heap kinds are ignored by the collector
+    emitter.instruction("jbe __rt_gc_collect_cycles_free_known");               // accept existing container candidates
+    emitter.instruction("cmp rcx, 7");                                          // owned reference cells are swept independently
+    emitter.instruction("je __rt_gc_collect_cycles_free_candidate_ready");      // apply reachability to the cell node
+    emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // skip non-graph heap kinds
+    emitter.label("__rt_gc_collect_cycles_free_known");
     emitter.instruction("cmp rcx, 2");                                          // is this block an indexed array?
     emitter.instruction("jne __rt_gc_collect_cycles_free_candidate_ready");     // hashes, objects, and mixed boxes remain collector candidates
     emitter.instruction("mov rdx, r11");                                        // preserve the full array kind word while unpacking the runtime array value_type tag
@@ -334,6 +359,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_gc_collect_cycles_free_hash");                 // yes — deep-free the unreachable hash and its owned entries
     emitter.instruction("cmp rcx, 5");                                          // is this unreachable node a boxed mixed cell?
     emitter.instruction("je __rt_gc_collect_cycles_free_mixed");                // yes — deep-free the unreachable mixed box and its boxed child
+    emitter.instruction("cmp rcx, 7");                                          // distinguish cell nodes from ordinary object storage
+    emitter.instruction("je __rt_gc_collect_cycles_free_reference");            // retire an unreachable cell with its typed payload
     emitter.instruction("call __rt_object_free_deep");                          // deep-free the remaining unreachable object node and its properties
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the object node
     emitter.label("__rt_gc_collect_cycles_free_array");
@@ -344,6 +371,9 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the hash node
     emitter.label("__rt_gc_collect_cycles_free_mixed");
     emitter.instruction("call __rt_mixed_free_deep");                           // deep-free the unreachable mixed box and its boxed child
+    emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // resume after releasing the Mixed node
+    emitter.label("__rt_gc_collect_cycles_free_reference");
+    emitter.instruction("call __rt_reference_cell_free_deep");                  // free the unreachable reference cell without revisiting doomed children
 
     emitter.label("__rt_gc_collect_cycles_free_next");
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // reload the next saved heap header after any deep free mutated allocator state

@@ -336,6 +336,25 @@ reentrant unwinding from consuming a retired scope or local owner twice.
 Promoted local reference cells follow the same rule: detach the owner before
 releasing the payload, contain any payload exception, and free the cell before
 propagating. This applies both to explicit retirement and function epilogues.
+Object-owned property reference cells use heap kind `7`, with their payload type
+in header bits `8..14`. Their two payload words remain the value's low word and
+its high word or string length. Class GC descriptor tag `11` identifies these
+owned cells; constructor-promoted borrowed reference addresses stay non-owning.
+Each alias owns the cell separately from the contained value. Rebinding acquires
+the new cell before retiring the previous local, which may own the source object.
+Cloning separates a singleton cell and shares one with live aliases, excluding
+temporary collector pins when making that decision.
+
+Resolved reference-returning callees retain a cell lease before local cleanup.
+The lease lives in a `ReturnRefCell` slot: normal return transfers it, while an
+exception during epilogue cleanup releases it. The caller either adopts the lease
+for reference assignment or acquires the contained value and retires the lease.
+Ordinary descriptor calls box the referenced value before releasing the cell.
+Cell-owner lookup validates allocation boundaries before adopting an unknown
+pointer, so borrowed frame and inline-array addresses never become heap owners.
+That lookup scans allocation headers after the fast kind/range rejection; known
+property aliases retain directly without this scan.
+
 Plain local overwrites and `unset()` also retire the previous slot owner before
 calling its release helper. The EIR retirement operation records that local
 mutation and the observable effects of a potentially throwing destructor.
@@ -825,9 +844,10 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 
 The runtime now includes a targeted collector for heap-backed `array`, associative-array/hash, and `object` graphs:
 
-- the allocator header carries a uniform heap-kind tag (`raw`, `string`, `array`, `hash`, `object`, `boxed mixed`, `throwable`)
+- the allocator header carries a uniform heap-kind tag (`raw`, `string`, `array`, `hash`, `object`, `boxed mixed`, `throwable`, `owned reference cell`)
 - indexed arrays pack their runtime `value_type` into the same kind word so the collector knows whether their elements can contain nested heap pointers
 - objects record runtime property tags/metadata, with `_class_gc_desc_*` tables as a compile-time fallback for property traversal; Generator frames are object-kind blocks with a custom deep-free branch keyed by `_generator_class_id`
+- owned property references form `object -> cell -> value` graph edges; a local cell alias therefore roots the referenced graph independently of the original object
 - mixed release paths use `__rt_decref_any`, so deep-free and GC walks can release nested strings/arrays/hashes/objects through one uniform dispatcher
 
 `__rt_gc_collect_cycles` is intentionally narrower than a full tracing GC: it ignores strings and raw helper buffers as candidates, clears transient marks, counts heap-only incoming edges, and marks externally reachable container/object blocks. An object-destructor phase pins graph candidates before running PHP, then repeats root analysis before freeing the unmarked remainder. Heap-kind bit 18 identifies an artificial pin, distinct from the persistent destructor-completion bit 17 and reachability bit 16. `_gc_collecting` suppresses recursive collection throughout these phases; `_gc_freeing_unreachable` suppresses decrements of doomed graph children only during the final sweep. Destructor-side writes therefore update real ownership normally. `_gc_pin_head` links C-allocated snapshot chunks outside the PHP heap. This remains a non-moving collector for structural cycles, not Zend collector-buffer parity.

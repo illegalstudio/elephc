@@ -12,6 +12,50 @@ use crate::codegen::platform::Target;
 use crate::ir::{Effects, Immediate, LocalKind, Op};
 use std::path::Path;
 
+/// Resolved returns lease their managed cells until the caller adopts or copies their values.
+#[test]
+fn reference_returns_transfer_cell_owners_on_every_target() {
+    let source = r#"<?php
+class ReturningReferenceOwner {
+    public string $text = 'value';
+    public function &reference(): string { return $this->text; }
+}
+function &createReturnedReference(): string {
+    $object = new ReturningReferenceOwner();
+    return $object->text;
+}
+function consumeReturnedReference(): void {
+    $alias = &createReturnedReference();
+    $copy = createReturnedReference();
+    $method = &(new ReturningReferenceOwner())->reference();
+    echo $alias, $copy, $method;
+}
+consumeReturnedReference();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let callee = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("createReturnedReference")).unwrap();
+        let acquisition = callee.instructions.iter().find(|inst| inst.op == Op::AcquireRefCell)
+            .expect("callee retains a returned property cell before destroying its local object");
+        let Some(Immediate::LocalSlot(owner)) = acquisition.immediate else { unreachable!(); };
+        assert_eq!(callee.locals[owner.as_raw() as usize].kind, LocalKind::ReturnRefCell, "{name}");
+        assert!(acquisition.effects.contains(Effects::REFCOUNT_OP | Effects::WRITES_LOCAL), "{name}");
+        let caller = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("consumeReturnedReference")).unwrap();
+        assert!(caller.instructions.iter().filter(|inst| inst.op == Op::AdoptRefCellPtr).count() >= 3,
+            "{name}: aliases and value copies consume the returned lease before argument cleanup");
+        assert!(caller.instructions.iter().any(|inst| inst.op == Op::LoadRefCell),
+            "{name}: ordinary calls read the referenced value, not the cell address");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains("__rt_reference_cell_owner"), "{name}");
+        assert!(assembly.contains("__rt_local_ref_cell_release"), "{name}");
+    }
+}
+
 /// Local aliases retain cells, and known object-owned property aliases carry dedicated owner slots.
 #[test]
 fn reference_alias_owners_are_explicit_on_every_target() {
@@ -25,6 +69,7 @@ function createReferenceOwners(): void {
     echo $last[0];
     $object = new ReferenceOwner();
     $property = &$object->items;
+    $copy = clone $object;
     echo $property[0];
 }
 createReferenceOwners();
@@ -48,5 +93,7 @@ createReferenceOwners();
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert!(assembly.contains("__rt_incref"), "{name}");
         assert!(assembly.contains("__rt_local_ref_cell_release"), "{name}");
+        assert!(assembly.contains("__rt_reference_cell_new"), "{name}: property cells have typed headers");
+        assert!(assembly.contains("__rt_reference_cell_clone"), "{name}: clone preserves reference ownership");
     }
 }

@@ -22,14 +22,18 @@ pub(super) fn lower_static_callable_call(
             let operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&function_name),
                 Some(expr.span),
-            ))
+            );
+            let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
+            release_owned_call_arg_temporaries_with_signature(ctx, &operands,
+                Some(call.value), &ReturnArgAlias::Unknown, sig.as_ref(), expr.span);
+            Some(call)
         }
         StaticCallableBinding::ExternFunction(function_name) => {
             let sig = ctx
@@ -85,18 +89,23 @@ pub(super) fn lower_static_callable_call(
             signature,
             captures,
         } => {
-            let mut operands = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            let arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            let mut operands = arg_values.clone();
             append_closure_capture_operands(&mut operands, &captures);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
             let data = ctx.intern_function_name(&name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
                 operands,
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&name),
                 Some(expr.span),
-            ))
+            );
+            let call = finish_reference_return_call(ctx, call, Some(&signature), expr.span);
+            release_owned_call_arg_temporaries_with_signature(ctx, &arg_values,
+                Some(call.value), &ReturnArgAlias::Unknown, Some(&signature), expr.span);
+            Some(call)
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
             Some(lower_static_method_call(ctx, &receiver, &method, callback_args, expr))

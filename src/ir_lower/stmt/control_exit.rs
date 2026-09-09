@@ -35,8 +35,8 @@ pub(super) fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
 pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, span: Span) {
     // A by-reference-returning function hands the caller the ref-cell pointer of the
     // returned property (`function &f() { return $obj->prop; }`), so `$x = &f()` aliases
-    // it. The cell pointer is materialized as the declared return type so the ABI return
-    // convention matches the caller's expectation for pointer-sized property types.
+    // it. Metadata retains the property's declared type for caller dereferencing;
+    // the reference-return ABI always transports the raw cell in the integer result register.
     if ctx.by_ref_return {
         if let Some(Expr { kind: ExprKind::PropertyAccess { object, property }, .. }) = value_expr {
             let object = lower_expr(ctx, object);
@@ -50,6 +50,11 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
                 Op::LoadPropRefCell.default_effects(),
                 Some(span),
             );
+            let owner = ctx.declare_local_with_kind("__eir_reference_return_owner",
+                PhpType::Pointer(None), crate::ir::LocalKind::ReturnRefCell);
+            ctx.emit_void(Op::AcquireRefCell, vec![cell_ptr.value], Some(Immediate::LocalSlot(owner)),
+                Op::AcquireRefCell.default_effects(), Some(span));
+            crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
             terminate_return(ctx, Some(cell_ptr.value));
             return;
         }
