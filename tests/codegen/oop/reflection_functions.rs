@@ -14,7 +14,7 @@
 
 use super::*;
 
-/// Packed-or-hash array storage reflects as one named PHP type, including nullable declarations.
+/// Packed-or-hash storage reflects as one PHP type, with composite type methods called after narrowing.
 #[test]
 fn test_reflection_function_array_storage_has_one_php_type() {
     let out = compile_and_run(
@@ -29,8 +29,20 @@ echo get_class($plain->getParameters()[0]->getType()), ":", $plain->getParameter
     ":", $plain->getReturnType(), "|";
 echo get_class($nullable->getParameters()[0]->getType()), ":", $nullable->getParameters()[0]->getType(),
     ":", $nullable->getReturnType(), "|";
-echo get_class($union->getParameters()[0]->getType()), ":", count($union->getParameters()[0]->getType()->getTypes()),
-    ":", count($union->getReturnType()->getTypes());
+$parameterType = $union->getParameters()[0]->getType();
+$returnType = $union->getReturnType();
+echo get_class($parameterType), ":";
+if ($parameterType instanceof ReflectionUnionType) {
+    echo count($parameterType->getTypes());
+} else {
+    echo "not-parameter-union";
+}
+echo ":";
+if ($returnType instanceof ReflectionUnionType) {
+    echo count($returnType->getTypes());
+} else {
+    echo "not-return-union";
+}
 "#,
     );
     assert_eq!(out, "ReflectionNamedType:array:array|ReflectionNamedType:?array:?array|ReflectionUnionType:2:2");
