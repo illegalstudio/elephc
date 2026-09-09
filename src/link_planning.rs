@@ -277,6 +277,79 @@ mod tests {
         assert_eq!(named, vec!["z", "bz2"]);
     }
 
+    /// The xml bridge is planned exactly like curl: the `elephc_xml` bridge is a named
+    /// input (forced by `--with-xml` or detected through the prelude's extern block), and
+    /// the managed `libxml2` package `pipeline::backend` splices in for it lands AFTER the
+    /// bridge as exact archives in the catalog's link order — the Elephc-owned shim first
+    /// (it references `xml*` symbols `libxml2.a` must then satisfy), the library second.
+    /// GNU ld scans once, left to right, so `bridge -> shim -> libxml2` is the only order
+    /// that links on Linux; ld64 would accept any.
+    #[test]
+    fn managed_libxml2_follows_the_xml_bridge_in_shim_then_library_order() {
+        let package = ResolvedNativePackage {
+            package: "libxml2".to_string(),
+            artifact_root: PathBuf::from("/cache/libxml2"),
+            archives: vec![
+                PathBuf::from("/cache/libxml2/lib/libelephc_libxml2_shim.a"),
+                PathBuf::from("/cache/libxml2/lib/libxml2.a"),
+            ],
+            system_libraries: Vec::new(),
+            frameworks: Vec::new(),
+        };
+        let forced = ["elephc_xml".to_string()];
+        let packages = [package];
+        let plan = build(LinkPlanningInputs {
+            user_libraries: &[],
+            user_search_paths: &[],
+            user_frameworks: &[],
+            checker_libraries: &[],
+            runtime_requirements: &[],
+            managed_packages: &packages,
+            forced_bridges: &forced,
+            web: false,
+        });
+
+        let items = plan.items();
+        let bridge = items
+            .iter()
+            .position(|item| {
+                matches!(item, LinkItem::NamedLibrary { name, origin: LinkOrigin::Bridge { .. } } if name == "elephc_xml")
+            })
+            .expect("--with-xml plans the elephc_xml bridge");
+        let managed: Vec<(usize, &Path)> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| match item {
+                LinkItem::StaticArchive { path, origin, .. }
+                    if matches!(origin, LinkOrigin::ManagedNative { package } if package == "libxml2") =>
+                {
+                    Some((index, path.as_path()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            managed.iter().map(|(_, path)| *path).collect::<Vec<_>>(),
+            vec![
+                Path::new("/cache/libxml2/lib/libelephc_libxml2_shim.a"),
+                Path::new("/cache/libxml2/lib/libxml2.a"),
+            ]
+        );
+        assert!(
+            managed.iter().all(|(index, _)| *index > bridge),
+            "managed libxml2 archives must follow the bridge: {items:?}"
+        );
+        // Nothing here names `xml2`/`iconv` as a `-l` lookup: the Apple-only `-liconv`
+        // is added by bridge resolution (`linker::bridges`), never by planning, and a
+        // system `-lxml2` fallback does not exist.
+        assert!(
+            !items.iter().any(|item| {
+                matches!(item, LinkItem::NamedLibrary { name, .. } if name == "xml2" || name == "iconv")
+            }),
+            "{items:?}"
+        );
+    }
+
     /// Verifies user, extern, bridge, and runtime named inputs keep distinct provenance.
     #[test]
     fn link_plan_classifies_non_managed_origins() {

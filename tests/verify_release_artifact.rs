@@ -1,7 +1,8 @@
 //! Purpose:
 //! Fixture tests for `scripts/verify-release-artifact.sh`: a packed curl
-//! archive is compile-probed after `native add curl` in the empty WORKDIR,
-//! archive-less capabilities stay skipped, and a real link failure still fails.
+//! archive is compile-probed after `native add curl` in the empty WORKDIR, a
+//! packed xml archive after `native add libxml2`, archive-less capabilities
+//! stay skipped, and a real link failure still fails.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness (`cargo test --test verify_release_artifact`).
@@ -9,8 +10,8 @@
 //! Key details:
 //! - The script unpacks into an empty prefix on purpose, so these tests ship a
 //!   mock `elephc` inside a tarball rather than the real compiler.
-//! - The mock accepts `native add curl` before `--with-curl`; it never
-//!   downloads or builds catalog sources.
+//! - The mock accepts `native add curl` before `--with-curl` and `native add
+//!   libxml2` before `--with-xml`; it never downloads or builds catalog sources.
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -41,10 +42,11 @@ fn scratch(label: &str) -> PathBuf {
 
 /// Writes a mock packaged `elephc` that implements the probe's exact calls.
 ///
-/// `--print-capabilities` reports `tls` (archive-only), `curl` (archive plus
-/// managed native package), `regex` and `mysqli` (no archive). `--with-tls`
-/// always "links". `--with-curl` fail-closes unless `native add curl` has
-/// already created a project marker. A `broken` capability, when advertised,
+/// `--print-capabilities` reports `tls` (archive-only), `curl` and `xml`
+/// (archive plus managed native package), `regex` and `mysqli` (no archive).
+/// `--with-tls` always "links". `--with-curl` fail-closes unless `native add
+/// curl` has already created a project marker, and `--with-xml` likewise
+/// unless `native add libxml2` has. A `broken` capability, when advertised,
 /// always fails with a truncated-archive error so a real link failure still
 /// FAILs without inventing a native add.
 fn write_mock_elephc(path: &Path, advertise_broken: bool) {
@@ -66,6 +68,7 @@ case "${{1:-}}" in
   --print-capabilities)
     echo -e 'bridge\ttls\tlibelephc_tls.a'
     echo -e 'bridge\tcurl\tlibelephc_curl.a'
+    echo -e 'bridge\txml\tlibelephc_xml.a'
     {broken_line}    echo -e 'capability\tregex'
     echo -e 'capability\tmysqli'
     ;;
@@ -78,6 +81,16 @@ case "${{1:-}}" in
       echo "native project error: curl support requires managed native package curl" >&2
       echo "project: not found (searched from )" >&2
       echo "recovery: cd -- '' && elephc native add curl" >&2
+      exit 1
+    fi
+    printf '#!/bin/sh\necho ok\n' > probe
+    chmod +x probe
+    ;;
+  --with-xml)
+    if [ ! -f "$state_dir/added-libxml2" ]; then
+      echo "native project error: xml support requires managed native package libxml2" >&2
+      echo "project: not found (searched from )" >&2
+      echo "recovery: cd -- '' && elephc native add libxml2" >&2
       exit 1
     fi
     printf '#!/bin/sh\necho ok\n' > probe
@@ -116,6 +129,7 @@ fn pack_tarball(staging: &Path, tarball: &Path, advertise_broken: bool) {
     write_mock_elephc(&pack.join("elephc"), advertise_broken);
     fs::write(pack.join("libelephc_tls.a"), b"tls-archive\n").expect("write tls archive");
     fs::write(pack.join("libelephc_curl.a"), b"curl-archive\n").expect("write curl archive");
+    fs::write(pack.join("libelephc_xml.a"), b"xml-archive\n").expect("write xml archive");
     if advertise_broken {
         fs::write(pack.join("libelephc_broken.a"), b"broken-archive\n")
             .expect("write broken archive");
@@ -125,7 +139,7 @@ fn pack_tarball(staging: &Path, tarball: &Path, advertise_broken: bool) {
         .arg(tarball)
         .args(["-C"])
         .arg(&pack)
-        .args(["elephc", "libelephc_tls.a", "libelephc_curl.a"])
+        .args(["elephc", "libelephc_tls.a", "libelephc_curl.a", "libelephc_xml.a"])
         .args(if advertise_broken {
             vec!["libelephc_broken.a"]
         } else {
@@ -180,6 +194,18 @@ fn packed_curl_is_ok_after_native_add() {
         "add-first must not compile-fail before native add; log:\n{log}"
     );
     assert!(
+        log.contains("ok    bridge xml (libelephc_xml.a)"),
+        "xml must be reported ok after native add libxml2 then one --with-xml; log:\n{log}"
+    );
+    assert!(
+        log.contains("adding managed native package libxml2 before --with-xml"),
+        "xml must native-add libxml2 first, before the compile; log:\n{log}"
+    );
+    assert!(
+        log.contains("mock: native add libxml2"),
+        "the packaged binary must have seen native add libxml2; log:\n{log}"
+    );
+    assert!(
         log.contains("ok    bridge tls (libelephc_tls.a)"),
         "archive-only bridges must still pass; log:\n{log}"
     );
@@ -225,6 +251,55 @@ fn truncated_archive_still_fails_without_inventing_native_add() {
             && log.contains("mock: native add curl"),
         "curl should still native-add first in the same run; log:\n{log}"
     );
+    assert!(
+        log.contains("ok    bridge xml (libelephc_xml.a)")
+            && log.contains("mock: native add libxml2"),
+        "xml should still native-add libxml2 first in the same run; log:\n{log}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The probe's xml branch mirrors curl's exactly: the add happens BEFORE the one
+/// compile, and a tarball whose binary refuses `--with-xml` without the package is
+/// therefore never "retried" from a FAIL line. Proved by running the mock directly:
+/// `--with-xml` fail-closes until `native add libxml2` has been seen.
+#[test]
+fn mock_with_xml_fails_closed_until_native_add_libxml2() {
+    let dir = scratch("xml_fail_closed");
+    let mock = dir.join("elephc");
+    write_mock_elephc(&mock, false);
+    let state = dir.join("state");
+
+    let before = Command::new(&mock)
+        .arg("--with-xml")
+        .env("ELEPHC_MOCK_STATE", &state)
+        .current_dir(&dir)
+        .output()
+        .expect("run mock --with-xml");
+    assert!(!before.status.success(), "--with-xml must fail before native add libxml2");
+    let stderr = String::from_utf8_lossy(&before.stderr);
+    assert!(
+        stderr.contains("requires managed native package libxml2")
+            && stderr.contains("elephc native add libxml2"),
+        "mock must mirror the compiler's diagnostic; stderr:\n{stderr}"
+    );
+
+    let add = Command::new(&mock)
+        .args(["native", "add", "libxml2"])
+        .env("ELEPHC_MOCK_STATE", &state)
+        .current_dir(&dir)
+        .status()
+        .expect("run mock native add libxml2");
+    assert!(add.success());
+    let after = Command::new(&mock)
+        .arg("--with-xml")
+        .env("ELEPHC_MOCK_STATE", &state)
+        .current_dir(&dir)
+        .status()
+        .expect("run mock --with-xml after add");
+    assert!(after.success(), "--with-xml must link once libxml2 is added");
+    assert!(dir.join("probe").is_file());
 
     let _ = fs::remove_dir_all(&dir);
 }

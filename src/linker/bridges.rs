@@ -7,7 +7,8 @@
 //! - `crate::cli` and `crate::pipeline` for `--with-<bridge>` validation and forcing.
 //!
 //! Key details:
-//! - The bridge table remains the single source for flags, archives, frameworks, and libdl needs.
+//! - The bridge table remains the single source for flags, archives, frameworks, Apple-only
+//!   system libraries, and libdl needs.
 //! - An unresolved, empty, non-file, or symlinked bridge fails before command rendering.
 
 use std::collections::{HashMap, HashSet};
@@ -19,6 +20,7 @@ use elephc_monitoring_contract::{
     IoKind, MonitoringPolicy, TraceContextPolicy, WaitPolicy,
 };
 
+use crate::codegen::platform::Platform;
 use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan};
 
 use super::LinkError;
@@ -37,6 +39,11 @@ pub(super) struct BridgeStaticlib {
     pub(super) whole_archive: bool,
     /// Apple frameworks required by this bridge's transitive dependencies.
     pub(super) apple_frameworks: &'static [&'static str],
+    /// System libraries linked by name (`-l<name>`) on Apple targets only, right where
+    /// `apple_frameworks` are appended. Linux never sees them: the one entry so far,
+    /// `iconv` for the libxml2-backed xml bridge, is part of glibc there, while every
+    /// Apple SDK (macOS, iOS device, iOS Simulator) ships it as a separate `libiconv.tbd`.
+    pub(super) apple_libraries: &'static [&'static str],
     /// Whether the Linux link needs the dynamic loader library.
     pub(super) needs_libdl: bool,
     /// Canonical PHP extensions reported when this bridge alone identifies their surfaces.
@@ -54,6 +61,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "tls",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // The TLS bridge implements PHP's OpenSSL-backed stream crypto surface.
         php_extensions: &["openssl"],
@@ -66,6 +74,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "pdo",
         whole_archive: false,
         apple_frameworks: &["CoreFoundation", "SystemConfiguration"],
+        apple_libraries: &[],
         needs_libdl: true,
         // The archive backs MORE THAN ONE PHP surface (PDO and mysqli), so the
         // linked staticlib alone cannot identify a PHP extension. Reporting comes
@@ -85,6 +94,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "crypto",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // The crypto bridge implements PHP's digest/HMAC `hash` extension.
         php_extensions: &["hash"],
@@ -97,6 +107,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "bcmath",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extensions: &["bcmath"],
@@ -109,6 +120,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "iconv",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // The charset bridge implements PHP's procedural `iconv` extension.
         php_extensions: &["iconv"],
@@ -121,6 +133,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "phar",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // The archive reader/writer is exposed by PHP as `Phar`.
         php_extensions: &["Phar"],
@@ -133,6 +146,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "tz",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // Timezone support folds into the always-present `date` extension.
         php_extensions: &[],
@@ -145,6 +159,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "image",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // The image codec/drawing surface maps to PHP's `gd` extension.
         php_extensions: &["gd"],
@@ -157,6 +172,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "probe",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // The sampling probe is an elephc-native diagnostic, not a PHP extension.
         php_extensions: &[],
@@ -171,6 +187,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "instrument",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // Exact per-function instrumentation is an elephc-native diagnostic.
         php_extensions: &[],
@@ -185,6 +202,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "web",
         whole_archive: true,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // The web bridge owns the PHP `session` extension surface.
         php_extensions: &["session"],
@@ -199,9 +217,30 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "pcntl",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // The process-control bridge implements PHP's `pcntl` and `posix` extensions.
         php_extensions: &["pcntl", "posix"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_xml",
+        env_var: "ELEPHC_XML_LIB_DIR",
+        crate_name: "elephc-xml",
+        flag_name: "xml",
+        whole_archive: false,
+        apple_frameworks: &[],
+        // The bridge's parser IS libxml2 (the managed `libxml2` catalog package,
+        // reached through the Elephc-owned `libelephc_libxml2_shim.a`;
+        // `src/pipeline/backend.rs` splices that package in whenever this bridge is
+        // planned). libxml2's encoding handlers call iconv, which glibc provides from
+        // libc but every Apple SDK ships as a separate `libiconv.tbd`, so Apple links
+        // add `-liconv` right after the managed archives.
+        apple_libraries: &["iconv"],
+        needs_libdl: true,
+        // The libxml2-backed XML bridge implements PHP's `xml` (SAX parser) and
+        // `xmlwriter` extensions; both surfaces are declared by the same injected prelude.
+        php_extensions: &["xml", "xmlwriter"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -211,6 +250,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "eval",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extensions: &[],
@@ -228,6 +268,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
             "CoreServices",
             "SystemConfiguration",
         ],
+        apple_libraries: &[],
         needs_libdl: true,
         // The curl bridge implements PHP's libcurl-backed `curl` extension surface.
         php_extensions: &["curl"],
@@ -296,9 +337,13 @@ pub(super) fn php_extensions_for_lib(lib_name: &str) -> &'static [&'static str] 
 }
 
 /// Replaces located named bridge libraries with exact archive items and adds metadata.
+///
+/// `platform` decides whether the table's `apple_libraries` are appended: they are Apple
+/// SDK libraries (`-liconv` for the xml bridge) that a Linux link must never see.
 pub(super) fn resolve(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
+    platform: Platform,
 ) -> Result<BridgeResolution, LinkError> {
     // Computed ONCE, ahead of the per-bridge loop below: whether THIS program's link plan
     // needs `elephc_curl` at all, regardless of which bridge in the plan is being resolved
@@ -306,7 +351,7 @@ pub(super) fn resolve(
     // `BridgeStaticlib::magician_curl_archive_path`'s own doc for why linking `eval()`
     // together with curl needs a build of that bridge distinct from the plain one.
     let needs_curl = plan_requires_library(plan, "elephc_curl");
-    resolve_with(plan, forced_whole_archive, |bridge| {
+    resolve_with(plan, forced_whole_archive, platform, |bridge| {
         if bridge.lib_name == "elephc_magician" && needs_curl {
             bridge.magician_curl_archive_path()
         } else {
@@ -333,6 +378,7 @@ fn plan_requires_library(plan: &LinkPlan, library: &str) -> bool {
 fn resolve_with<F>(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
+    platform: Platform,
     mut locate: F,
 ) -> Result<BridgeResolution, LinkError>
 where
@@ -342,9 +388,7 @@ where
     let mut located: HashMap<&'static str, PathBuf> = HashMap::new();
     let mut bridge_paths = Vec::new();
     let mut seen_paths = HashSet::new();
-    let mut frameworks = Vec::new();
-    let mut seen_frameworks = HashSet::new();
-    let mut needs_libdl = false;
+    let mut metadata = BridgeLinkMetadata::new(platform);
     let mut ordered = Vec::with_capacity(plan.items().len());
 
     for item in plan.items() {
@@ -356,12 +400,7 @@ where
         {
             if let Some(bridge) = bridge_for_library(name) {
                 bridge.validate_archive(path.clone())?;
-                record_bridge_metadata(
-                    bridge,
-                    &mut needs_libdl,
-                    &mut frameworks,
-                    &mut seen_frameworks,
-                );
+                metadata.record(bridge);
             } else {
                 validate_archive_path(name, path.clone())?;
             }
@@ -377,12 +416,7 @@ where
             continue;
         };
 
-        record_bridge_metadata(
-            bridge,
-            &mut needs_libdl,
-            &mut frameworks,
-            &mut seen_frameworks,
-        );
+        metadata.record(bridge);
 
         let archive = match located.get(bridge.lib_name) {
             Some(archive) => archive.clone(),
@@ -408,23 +442,69 @@ where
         ));
     }
 
-    ordered.extend(frameworks);
+    // Apple system libraries first, then frameworks: both trail every archive in the
+    // plan (bridge and managed alike) so a static `libxml2.a` member pulled in above
+    // still finds `-liconv` to its right under a single left-to-right scan.
+    ordered.extend(metadata.apple_libraries);
+    ordered.extend(metadata.frameworks);
     let mut plan = LinkPlan::from_items(ordered);
     plan.prepend(bridge_paths);
-    Ok(BridgeResolution { plan, needs_libdl })
+    Ok(BridgeResolution {
+        plan,
+        needs_libdl: metadata.needs_libdl,
+    })
 }
 
-/// Accumulates table-driven runtime and framework metadata for one requested bridge.
-fn record_bridge_metadata(
-    bridge: &BridgeStaticlib,
-    needs_libdl: &mut bool,
-    frameworks: &mut Vec<LinkItem>,
-    seen_frameworks: &mut HashSet<&'static str>,
-) {
-    *needs_libdl |= bridge.needs_libdl;
-    for framework in bridge.apple_frameworks {
-        if seen_frameworks.insert(*framework) {
-            frameworks.push(LinkItem::Framework((*framework).to_string()));
+/// Table-driven runtime, framework and Apple-library metadata accumulated across every
+/// requested bridge while one plan is resolved.
+struct BridgeLinkMetadata {
+    /// Platform being linked; decides whether `apple_libraries` are emitted at all.
+    platform: Platform,
+    /// Whether any requested bridge needs `libdl` on Linux.
+    needs_libdl: bool,
+    /// Apple frameworks, in first-seen table order, without duplicates.
+    frameworks: Vec<LinkItem>,
+    /// Apple frameworks already recorded.
+    seen_frameworks: HashSet<&'static str>,
+    /// Apple-only `-l<name>` system libraries, in first-seen table order, without duplicates.
+    apple_libraries: Vec<LinkItem>,
+    /// Apple-only system libraries already recorded.
+    seen_apple_libraries: HashSet<&'static str>,
+}
+
+impl BridgeLinkMetadata {
+    /// Starts an empty accumulator for one link on `platform`.
+    fn new(platform: Platform) -> Self {
+        Self {
+            platform,
+            needs_libdl: false,
+            frameworks: Vec::new(),
+            seen_frameworks: HashSet::new(),
+            apple_libraries: Vec::new(),
+            seen_apple_libraries: HashSet::new(),
+        }
+    }
+
+    /// Accumulates one requested bridge's table metadata.
+    ///
+    /// Frameworks are recorded regardless of platform (the Linux renderer ignores
+    /// `LinkItem::Framework`), but `apple_libraries` become `NamedLibrary` items — which
+    /// every renderer emits as `-l<name>` — so they are recorded on Apple targets only.
+    fn record(&mut self, bridge: &BridgeStaticlib) {
+        self.needs_libdl |= bridge.needs_libdl;
+        for framework in bridge.apple_frameworks {
+            if self.seen_frameworks.insert(*framework) {
+                self.frameworks
+                    .push(LinkItem::Framework((*framework).to_string()));
+            }
+        }
+        if self.platform != Platform::MacOS {
+            return;
+        }
+        for library in bridge.apple_libraries {
+            if self.seen_apple_libraries.insert(*library) {
+                self.apple_libraries.push(LinkItem::named_runtime(*library));
+            }
         }
     }
 }
@@ -1194,6 +1274,27 @@ mod tests {
                 && !after_curl.contains("needs no archive from this tarball"),
             "{probe} must not skip curl the way regex is skipped"
         );
+        // xml is the second packed-archive capability that also needs a catalog
+        // package (`libxml2`: the bridge's parser is libxml2 itself, reached through
+        // the package's shim), and gets the identical add-first branch.
+        assert!(
+            script.contains("[ \"$name\" = \"xml\" ]") && script.contains("native add libxml2"),
+            "{probe} must run native add libxml2 before --with-xml; xml is a \
+             packed-archive capability that also needs a catalog package"
+        );
+        assert!(
+            script.contains("adding managed native package libxml2 before --with-xml"),
+            "{probe} must native-add libxml2 first, not after a failed compile"
+        );
+        let after_xml = script
+            .split_once("[ \"$name\" = \"xml\" ]")
+            .map(|(_, rest)| rest)
+            .unwrap_or("");
+        assert!(
+            after_xml.contains("native add libxml2")
+                && !after_xml.contains("needs no archive from this tarball"),
+            "{probe} must not skip xml the way regex is skipped"
+        );
     }
 
     /// Verifies release artifacts also ship the curl-aware Magician variant.
@@ -1288,6 +1389,19 @@ mod tests {
             pdo.apple_frameworks,
             &["CoreFoundation", "SystemConfiguration"]
         );
+        assert!(pdo.apple_libraries.is_empty());
+
+        // The xml bridge's parser is the managed `libxml2` package (spliced in by
+        // `pipeline::backend`, never by this table), and libxml2's encoding handlers
+        // reference iconv — libc on glibc, a separate `libiconv.tbd` in every Apple SDK.
+        let xml = bridge_for_library("elephc_xml").expect("xml bridge");
+        assert_eq!(xml.crate_name, "elephc-xml");
+        assert_eq!(xml.env_var, "ELEPHC_XML_LIB_DIR");
+        assert_eq!(xml.archive_filename(), "libelephc_xml.a");
+        assert!(!xml.whole_archive);
+        assert!(xml.apple_frameworks.is_empty());
+        assert_eq!(xml.apple_libraries, &["iconv"]);
+        assert_eq!(xml.php_extensions, &["xml", "xmlwriter"]);
 
         let magician = bridge_for_library("elephc_magician").expect("eval bridge");
         assert_eq!(magician.crate_name, "elephc-magician");
@@ -1320,6 +1434,92 @@ mod tests {
                 "SystemConfiguration"
             ]
         );
+        assert!(curl.apple_libraries.is_empty());
+    }
+
+    /// `apple_libraries` are bare linker names: no `-l`, no `lib` prefix, no extension.
+    /// Anything else would render as `-l-liconv` or `-llibiconv.tbd` and fail the Apple
+    /// link with a message that blames the SDK.
+    #[test]
+    fn apple_libraries_are_bare_linker_names() {
+        for bridge in BRIDGES {
+            for library in bridge.apple_libraries {
+                assert!(
+                    !library.is_empty()
+                        && !library.starts_with("-l")
+                        && !library.starts_with("lib")
+                        && !library.contains('.')
+                        && !library.contains('/'),
+                    "{} declares a malformed Apple library `{library}`",
+                    bridge.lib_name
+                );
+            }
+        }
+    }
+
+    /// The xml bridge's `-liconv` is emitted on Apple targets only, AFTER the archives,
+    /// and never on Linux — where glibc already carries iconv and a `-liconv` would fail
+    /// the link outright (there is no such library to find).
+    #[test]
+    fn xml_bridge_apple_libraries_follow_the_archives_on_apple_only() {
+        let executable = std::env::current_exe().expect("test executable path");
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::named_runtime("elephc_xml"),
+            LinkItem::managed_archive("/cache/libxml2/lib/libelephc_libxml2_shim.a", "libxml2"),
+            LinkItem::managed_archive("/cache/libxml2/lib/libxml2.a", "libxml2"),
+        ]);
+
+        let apple = resolve_with(&plan, &[], Platform::MacOS, |_| Ok(executable.clone()))
+            .expect("xml bridge must resolve on Apple");
+        let items = apple.plan.items();
+        let iconv = items
+            .iter()
+            .position(|item| {
+                matches!(item, LinkItem::NamedLibrary { name, origin: LinkOrigin::Runtime } if name == "iconv")
+            })
+            .expect("Apple link must name iconv");
+        let last_archive = items
+            .iter()
+            .rposition(|item| matches!(item, LinkItem::StaticArchive { .. }))
+            .expect("resolved plan carries archives");
+        assert!(iconv > last_archive, "-liconv must trail every archive: {items:?}");
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| matches!(item, LinkItem::NamedLibrary { name, .. } if name == "iconv"))
+                .count(),
+            1,
+            "iconv must be named exactly once"
+        );
+
+        let linux = resolve_with(&plan, &[], Platform::Linux, |_| Ok(executable.clone()))
+            .expect("xml bridge must resolve on Linux");
+        assert!(
+            !linux
+                .plan
+                .items()
+                .iter()
+                .any(|item| matches!(item, LinkItem::NamedLibrary { name, .. } if name == "iconv")),
+            "Linux must never link -liconv: {:?}",
+            linux.plan.items()
+        );
+        assert!(linux.needs_libdl);
+    }
+
+    /// Two requested bridges declaring the same Apple library name it once, exactly like
+    /// frameworks are deduplicated, so a future second `iconv` user cannot double-link.
+    #[test]
+    fn apple_libraries_are_deduplicated_across_bridges() {
+        let mut metadata = BridgeLinkMetadata::new(Platform::MacOS);
+        let xml = bridge_for_library("elephc_xml").expect("xml bridge");
+        metadata.record(xml);
+        metadata.record(xml);
+        assert_eq!(metadata.apple_libraries, vec![LinkItem::named_runtime("iconv")]);
+
+        let mut linux = BridgeLinkMetadata::new(Platform::Linux);
+        linux.record(xml);
+        assert!(linux.apple_libraries.is_empty());
+        assert!(linux.needs_libdl);
     }
 
     /// Verifies automatic TLS linking stays lazy while `--with-tls` force-loads the archive.
@@ -1329,7 +1529,7 @@ mod tests {
         let plan = LinkPlan::from_items(vec![LinkItem::named_runtime("elephc_tls")]);
 
         for (forced, expected_whole_archive) in [(&[][..], false), (&["elephc_tls".to_string()][..], true)] {
-            let resolution = resolve_with(&plan, forced, |_| Ok(archive.clone()))
+            let resolution = resolve_with(&plan, forced, Platform::MacOS, |_| Ok(archive.clone()))
                 .expect("TLS bridge must resolve");
             assert!(resolution.plan.items().iter().any(|item| matches!(
                 item,
@@ -1381,6 +1581,7 @@ mod tests {
         let resolution = resolve_with(
             &LinkPlan::from_items(vec![archive.clone()]),
             &[],
+            Platform::MacOS,
             |_| panic!("an exact bridge archive must not trigger discovery"),
         )
         .expect("exact bridge metadata must resolve");
@@ -1406,7 +1607,7 @@ mod tests {
             LinkItem::named_runtime("elephc_magician"),
         ]);
         let executable = std::env::current_exe().expect("test executable path");
-        let resolution = resolve_with(&plan, &[], |_| Ok(executable.clone()))
+        let resolution = resolve_with(&plan, &[], Platform::MacOS, |_| Ok(executable.clone()))
             .expect("embedded bridge plan must resolve");
         let bridge_names: Vec<&str> = resolution
             .plan
@@ -1431,7 +1632,7 @@ mod tests {
     #[test]
     fn missing_named_bridge_is_structured_error() {
         let plan = LinkPlan::from_items(vec![LinkItem::named_runtime("elephc_tls")]);
-        let error = resolve_with(&plan, &[], |bridge| Err(bridge.missing_error()))
+        let error = resolve_with(&plan, &[], Platform::Linux, |bridge| Err(bridge.missing_error()))
             .expect_err("missing bridge must fail before command rendering");
 
         assert_eq!(
@@ -1480,7 +1681,7 @@ mod tests {
             false,
         )]);
         assert!(matches!(
-            resolve_with(&empty_plan, &[], |_| panic!("exact path must not invoke locator")),
+            resolve_with(&empty_plan, &[], Platform::Linux, |_| panic!("exact path must not invoke locator")),
             Err(LinkError::MissingBridge { name }) if name == "elephc_tls"
         ));
 
@@ -1562,7 +1763,7 @@ mod tests {
         /// Resolves a plan with sentinel archives while preserving the real routing decision.
         fn resolve_with_fake_locators(plan: &LinkPlan) -> BridgeResolution {
             let needs_curl = plan_requires_library(plan, "elephc_curl");
-            resolve_with(plan, &[], |bridge| {
+            resolve_with(plan, &[], Platform::Linux, |bridge| {
                 if bridge.lib_name == "elephc_magician" && needs_curl {
                     Ok(PathBuf::from("/fake/libelephc_magician_curl.a"))
                 } else {

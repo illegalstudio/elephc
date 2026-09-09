@@ -220,7 +220,7 @@ pub(crate) fn link_with_plan(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<(), LinkError> {
-    let resolved = bridges::resolve(plan, forced_whole_archive)?;
+    let resolved = bridges::resolve(plan, forced_whole_archive, target.platform)?;
     let prepared = (target.platform == Platform::MacOS)
         .then(|| archive_dedup::prepare(&resolved.plan));
     let render_plan = prepared

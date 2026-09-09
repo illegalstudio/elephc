@@ -305,6 +305,24 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     {
         native_requirements.push(NativeRequirement::package("curl"));
     }
+    // The xml bridge is the same shape as curl: `elephc_xml` is a Rust `staticlib`
+    // whose parser is libxml2 itself, reached through the Elephc-owned C shim the
+    // managed `libxml2` package builds and archives next to `libxml2.a`. It has no
+    // `RuntimeFeatures` bit either: `elephc_xml` reaches `planned_link_libraries`
+    // because the program names part of the surface (the xml prelude is injected
+    // only when `src/xml_prelude` detects an `xml_*`/`xmlwriter_*` call or an
+    // `XMLParser`/`XMLWriter` reference, and its `extern "elephc_xml"` block is what
+    // requires the bridge) or because `--with-xml` forces it. Mirroring that into
+    // the native requirement makes the final link resolve
+    // `libelephc_libxml2_shim.a` + `libxml2.a` from the project's catalog package
+    // instead of failing on the bridge's undefined `elephc_libxml2_v1_*`/`xml*`
+    // symbols — and, exactly like curl, there is no system `-lxml2` fallback.
+    if planned_link_libraries
+        .iter()
+        .any(|library| library == "elephc_xml")
+    {
+        native_requirements.push(NativeRequirement::package("libxml2"));
+    }
     let resolved_native = match crate::native_deps::resolve_for_compilation(
         Path::new(filename),
         target,
