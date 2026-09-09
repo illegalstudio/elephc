@@ -1289,6 +1289,48 @@ fn web_gc_stats_are_emitted_per_request() {
     }
 }
 
+/// Reloading unchanged and unset typed superglobals must not grow retained storage across requests.
+#[test]
+fn web_eval_superglobal_reload_releases_replaced_owners() {
+    let dir = make_test_dir("web_eval_superglobal_owners");
+    let source = r#"<?php
+$snapshot = $_GET;
+$code = '$_GET = $_GET; // ' . $_GET['token'];
+for ($i = 0; $i < 3; $i++) { eval($code); }
+echo $_GET['token'], ":", $snapshot['token'], "|";
+$remove = 'unset($_GET); // ' . $snapshot['token'];
+eval($remove);
+unset($snapshot); unset($code); unset($remove);
+echo "cleared";
+"#;
+    let bin = compile_web_with_flags(&dir, source, "app", &["--gc-stats"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let stderr_path = dir.join("server.stderr");
+    let stderr_file = fs::File::create(&stderr_path).expect("create server stderr capture");
+    let mut child = ServerGuard::new(Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .stderr(Stdio::from(stderr_file))
+        .spawn().expect("spawn eval superglobal server"));
+    wait_until_ready(&addr);
+    for _ in 0..4 {
+        let response = http_get_with_timeout(&addr, "/?token=owned", Duration::from_secs(10))
+            .expect("superglobal reload request must complete");
+        assert!(response.ends_with("owned:owned|cleared"), "response: {response:?}");
+    }
+    child.kill().expect("stop eval superglobal server");
+    child.wait().expect("reap eval superglobal server");
+    let stderr = fs::read_to_string(stderr_path).expect("read allocation counters");
+    let live = stderr.lines().filter_map(|line| line.strip_prefix("GC: allocs="))
+        .map(|line| {
+            let (allocs, frees) = line.split_once(" frees=").expect("well-formed GC counters");
+            allocs.parse::<i64>().unwrap() - frees.parse::<i64>().unwrap()
+        }).collect::<Vec<_>>();
+    assert_eq!(live.len(), 4, "{stderr}");
+    // The first request warms process-level caches; identical later requests must be stationary.
+    assert_eq!(live[1], live[2], "{stderr}");
+    assert_eq!(live[2], live[3], "{stderr}");
+}
+
 /// Native and eval handler owners, stacks, and reporting masks do not survive a request.
 #[test]
 fn web_resets_core_handlers_between_requests() {

@@ -71,7 +71,8 @@ pub(super) fn store_mixed_scope_cell_to_global(
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
     match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
-            replace_eval_mixed_global(ctx, &symbol, true);
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
@@ -86,8 +87,10 @@ pub(super) fn store_mixed_scope_cell_to_global(
             abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Float, false);
         }
         PhpType::Str => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Str, false);
+            let string = ctx.next_label("eval_reload_global_string_payload");
+            let persist = ctx.next_label("eval_reload_global_persist_string");
+            abi::emit_owned_mixed_string(ctx.emitter, &string, &persist);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -99,7 +102,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed array payload into the ABI result register
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -111,21 +114,33 @@ pub(super) fn store_mixed_scope_cell_to_global(
     Ok(())
 }
 
-/// Publishes an independent global owner before retiring displaced storage, including identical cells.
-fn replace_eval_mixed_global(ctx: &mut FunctionContext<'_>, symbol: &str, borrowed: bool) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_symbol_to_result(ctx.emitter, symbol, &PhpType::Mixed);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
-    if borrowed {
-        // Both owned and borrowed scope entries are borrowed by the native reload operation.
-        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+/// Publishes an acquired global owner before retiring its old payload, including identical pointers.
+fn replace_owned_eval_global(
+    emitter: &mut crate::codegen_support::emit::Emitter,
+    symbol: &str,
+    ty: &PhpType,
+) {
+    emitter.comment("publish eval global replacement before retiring the previous owner");
+    abi::emit_push_result_value(emitter, ty);
+    abi::emit_load_symbol_to_result(emitter, symbol, ty);
+    abi::emit_push_result_value(emitter, ty);
+    if *ty == PhpType::Str {
+        let (ptr, len) = abi::string_result_regs(emitter);
+        abi::emit_load_temporary_stack_slot(emitter, ptr, 16);
+        abi::emit_load_temporary_stack_slot(emitter, len, 24);
+    } else {
+        abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
     }
-    abi::emit_store_result_to_symbol(ctx.emitter, symbol, &PhpType::Mixed, false);
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_store_result_to_symbol(emitter, symbol, ty, false);
+    // Only the retired pointer is needed for release, including a string's first saved word.
+    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 0);
+    abi::emit_release_temporary_stack(emitter, 32);
+    if *ty == PhpType::Str {
+        abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    } else {
+        abi::emit_decref_if_refcounted(emitter, ty);
+    }
+    emitter.comment("eval global replacement owns its native payload");
 }
 
 /// Publishes an acquired replacement before releasing the old raw or reference-cell payload.
@@ -215,7 +230,7 @@ pub(super) fn store_missing_scope_entry_to_global(
         PhpType::Mixed | PhpType::Union(_) => {
             let symbol_name = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol_name);
-            replace_eval_mixed_global(ctx, &symbol, false);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
         }
         PhpType::Int => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -234,11 +249,11 @@ pub(super) fn store_missing_scope_entry_to_global(
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Str, false);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
+            replace_owned_eval_global(ctx.emitter, &symbol, &ty);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -248,4 +263,36 @@ pub(super) fn store_missing_scope_entry_to_global(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replace_owned_eval_global;
+    use crate::codegen_support::{emit::Emitter, platform::Target};
+    use crate::types::PhpType;
+
+    /// Every supported target publishes global replacements before releasing the old typed owner.
+    #[test]
+    fn eval_global_replacement_retires_all_heap_storage_types_after_publication() {
+        let cases = [
+            (PhpType::Mixed, "__rt_decref_mixed"),
+            (PhpType::Str, "__rt_heap_free_safe"),
+            (PhpType::Array(Box::new(PhpType::Mixed)), "__rt_decref_array"),
+            (PhpType::AssocArray { key: Box::new(PhpType::Str), value: Box::new(PhpType::Str) }, "__rt_decref_hash"),
+        ];
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for (ty, release) in &cases {
+                let mut emitter = Emitter::new(Target::parse(target).unwrap());
+                replace_owned_eval_global(&mut emitter, "_eval_reload_test_global", ty);
+                let asm = emitter.output();
+                let publication = asm.rfind("_eval_reload_test_global").unwrap();
+                let cleanup = asm.find(release).unwrap();
+                assert!(publication < cleanup, "{target}: {ty}: {asm}");
+                assert_eq!(asm.matches(release).count(), 1, "{target}: {ty}: {asm}");
+                let restored = if target == "linux-x86_64" { "add rsp, 32" } else { "add sp, sp, #32" };
+                assert!(asm.find(restored).unwrap() < cleanup, "{target}: cleanup must not strand temporary stack owners");
+                assert!(!asm.contains("__rt_incref"), "{target}: the replacement already owns its payload");
+            }
+        }
+    }
 }

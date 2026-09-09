@@ -362,6 +362,10 @@ then releases the displaced native owner, including unchanged cells and missing
 entries. By-value parameters that eval can replace own their initial frame values;
 by-reference parameters continue to use the caller's storage. String reloads
 persist exactly once, including casts that initially return scratch bytes.
+Global reload follows the same publish-before-release rule for both ordinary
+Mixed cells and web superglobals with raw string, indexed-array, or hash storage.
+An unchanged pointer still replaces an independent owner; an unset entry must
+retire the previous payload before leaving an empty global slot.
 
 A callable parameter returned as `Mixed` receives a separate boxed descriptor
 reference. The caller must still retire a temporary callable argument after the
