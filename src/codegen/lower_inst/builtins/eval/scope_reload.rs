@@ -313,12 +313,15 @@ mod tests {
                 let publication = asm.rfind("_eval_guarded_reload_global").unwrap();
                 let cleanup = asm.find("__rt_cleanup_invoke").unwrap();
                 assert!(publication < cleanup, "{target}: {ty}: {asm}");
-                let pending = if target == "linux-x86_64" {
-                    "lea rdx, [rsp + 88]"
+                let pending: &[&str] = if target == "linux-x86_64" {
+                    &["lea rdx, [rsp + 88]"]
                 } else {
-                    "add x2, sp, #88"
+                    &["mov x2, sp", "add x2, x2, #88"]
                 };
-                assert!(asm.contains(pending), "{target}: {asm}");
+                for &instruction in pending {
+                    assert!(asm.contains(instruction), "{target}: {asm}");
+                    assert!(asm.find(instruction).unwrap() < cleanup, "{target}: {asm}");
+                }
                 assert!(!asm.contains("__rt_throw_current"), "{target}: {asm}");
             }
         }

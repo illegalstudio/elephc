@@ -258,7 +258,8 @@ echo count($owner->items), count(PhpArrayWrites::$shared);
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
-        let instructions = module.functions.iter().flat_map(|function| &function.instructions)
+        let instructions = module.functions.iter().chain(&module.class_methods)
+            .flat_map(|function| &function.instructions)
             .collect::<Vec<_>>();
         let fetches = instructions.iter().filter(|inst| inst.op == Op::PropGetForWrite)
             .collect::<Vec<_>>();
