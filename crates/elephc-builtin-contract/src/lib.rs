@@ -21,6 +21,7 @@ mod catalog_constants;
 mod catalog_constants_curl;
 mod catalog_data;
 mod catalog_pcntl;
+mod catalog_xml;
 #[cfg(feature = "curl")]
 mod catalog_curl;
 mod catalog_surfaces;

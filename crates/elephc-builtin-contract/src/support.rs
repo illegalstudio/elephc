@@ -152,13 +152,14 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
         return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
     }
     // Prelude-declared and name-resolver-rewritten functions exist in eval only where
-    // Magician re-implements them: the whole `ext/curl` surface and the hash prelude. The
-    // rest (mysqli, PDO, sessions, image, date/calendar procedural families) is an explicit,
-    // auditable absence rather than a missing binding.
+    // Magician binds them: the whole `ext/curl` surface, the hash prelude, and the xml
+    // prelude (whose eval homes forward to the compiled declarations through the
+    // native-function bridge). The rest (mysqli, PDO, sessions, image, date/calendar
+    // procedural families) is an explicit, auditable absence rather than a missing binding.
     if matches!(
         contract.kind,
         BuiltinKind::PreludeProvided | BuiltinKind::NameResolverRewrite
-    ) && !matches!(contract.area, Area::Curl)
+    ) && !matches!(contract.area, Area::Curl | Area::Xml)
         && !EVAL_IMPLEMENTED_PRELUDE_SURFACES.contains(&contract.name)
     {
         return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
@@ -382,7 +383,9 @@ mod tests {
         // The thirty-four prelude-provided `curl_*` contracts are published only
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(eval_registry, 519 + curl_surface);
+        // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
+        // through forwarding homes (see `eval_support`).
+        assert_eq!(eval_registry, 583 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
         assert_eq!(eval_internal, 99);
@@ -391,12 +394,14 @@ mod tests {
         assert_eq!(eval_pending, 357);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
-        // adds the ten iconv contracts, thirty-five PCNTL contracts, and forty-three
-        // internal `__elephc_curl_*` entry points.
-        assert_eq!(aot_registry, 619);
-        // Ten constructs/dedicated-syntax/hash surfaces, the 343 prelude-provided and
-        // name-resolver-rewritten contracts, and the curl prelude when published.
-        assert_eq!(aot_external, 353 + curl_surface);
+        // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
+        // internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
+        // builtins (`xml_parse_into_struct` plus the nine handler setters).
+        assert_eq!(aot_registry, 629);
+        // Ten constructs/dedicated-syntax/hash surfaces, the 397 prelude-provided and
+        // name-resolver-rewritten contracts (54 of them the xml prelude), and the curl
+        // prelude when published.
+        assert_eq!(aot_external, 407 + curl_surface);
         assert_eq!(aot_unsupported, 3);
     }
 
@@ -444,7 +449,7 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 498 + curl_surface);
+        assert_eq!(interpreter_adapter, 562 + curl_surface);
         assert_eq!(unsupported, 456);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),

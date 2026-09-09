@@ -52,6 +52,9 @@ pub enum Area {
     Image,
     /// `opcache_*` compatibility surface declared by the OPcache prelude.
     Opcache,
+    /// `ext/xml` and `ext/xmlwriter` surfaces declared by the xml prelude (plus the one
+    /// registry builtin `xml_parse_into_struct`).
+    Xml,
 }
 
 /// Describes how a PHP-visible catalog entry reaches executable behavior.

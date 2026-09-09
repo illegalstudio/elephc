@@ -15,6 +15,7 @@ const BCMATH: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_bcmat
 const CRYPTO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_crypto")];
 const PHAR: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_phar")];
 const PCNTL: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_pcntl")];
+const XML: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_xml")];
 const TLS: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_tls")];
 const ZLIB: &[BuiltinRequirement] = &[BuiltinRequirement::SystemLibrary("z")];
 const ICONV_MACOS: &[BuiltinRequirement] = &[BuiltinRequirement::MacOsLibrary("iconv")];
@@ -26,6 +27,11 @@ const REGEX: &[BuiltinRequirement] = &[BuiltinRequirement::RuntimeCapability("pc
 
 /// Returns fixed neutral requirements for one canonical shared contract ID.
 pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement] {
+    if crate::catalog_xml::contract_names()
+        .any(|name| id == BuiltinId::from_canonical_name(name))
+    {
+        return XML;
+    }
     if matches_name(
         id,
         &[

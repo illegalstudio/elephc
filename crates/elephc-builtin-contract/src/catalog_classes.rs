@@ -233,4 +233,6 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("UnexpectedValueException", "unexpectedvalueexception", Class, Spl, CheckerInjected),
     class!("UnhandledMatchError", "unhandledmatcherror", Class, Core, CheckerInjected),
     class!("ValueError", "valueerror", Class, Core, CheckerInjected),
+    class!("XMLParser", "xmlparser", Class, Xml, Prelude),
+    class!("XMLWriter", "xmlwriter", Class, Xmlwriter, Prelude),
 ];
