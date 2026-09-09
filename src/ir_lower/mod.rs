@@ -21,7 +21,7 @@ mod fibers;
 mod function;
 /// The padding-thunk symbol codegen calls for a dynamic `new` that omits defaulted arguments.
 pub(crate) use function::dynamic_constructor_thunk_name;
-pub(crate) use function::lower_boxed_usort_callable;
+pub(crate) use function::{lower_array_merge_callable, lower_boxed_usort_callable};
 mod ownership;
 mod program;
 mod property_initializers;

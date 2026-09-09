@@ -270,6 +270,45 @@ echo count(mergePhpArrays([$argc], ["key" => $argc]));
     }
 }
 
+/// Variadic merge descriptors validate their pack and emit exactly two boxed backend operands.
+#[test]
+fn php_array_merge_callable_unpacks_backend_operands_on_every_target() {
+    use crate::codegen::platform::Target;
+    use crate::ir::{Immediate, RuntimeCallTarget, RuntimeFnId};
+    use std::path::Path;
+
+    let source = r#"<?php
+function mergeDescriptor(callable $callback, array $left, array $right): mixed {
+    return $callback($left, $right);
+}
+$callback = array_merge(...);
+echo count(mergeDescriptor($callback, [$argc], ["key" => $argc]));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let signature = crate::types::first_class_callable_builtin_sig("array_merge").unwrap();
+        let wrapper = crate::ir_lower::lower_array_merge_callable(
+            &mut module, "test_merge_wrapper", &signature, false,
+        );
+        crate::ir::validate_function(&wrapper).unwrap();
+        let merges = wrapper.instructions.iter().filter(|instruction| matches!(
+            instruction.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayMerge)))
+            | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                target: RuntimeFnId::ArrayMerge, ..
+            }))
+        )).collect::<Vec<_>>();
+        assert_eq!(merges.len(), 1, "{name}");
+        assert_eq!(merges[0].operands.len(), 2, "{name}");
+        assert_eq!(merges[0].result_php_type.codegen_repr(), crate::types::PhpType::Mixed, "{name}");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__rt_array_merge_boxed"), "{name}");
+        assert!(assembly.contains("array_merge() takes exactly 2 arguments"), "{name}");
+    }
+}
+
 /// Runtime key-preservation flags on PHP array declarations use the boxed reversal ABI on all targets.
 #[test]
 fn php_array_reverse_uses_boxed_result_storage_on_every_target() {

@@ -390,3 +390,19 @@ No local tests were executed. The crash regression remains subject to CI.
 CI on `7b9199d65` no longer reports the isolated parameter-shadow throw leak
 or the discarded invalid-spread failure in their Linux x86_64 shards, but
 other array, callback and native/eval ownership failures remain open.
+
+### Merge callable argument packs
+
+The generic descriptor wrapper passed its single variadic pack directly to
+the two-operand merge backend. Merge descriptors now lower a small semantic
+body that checks the existing AOT two-argument limit before extracting either
+operand. Ordinary function-body lowering owns the pack on return and throw.
+The canonical variadic signature is unchanged; unsupported argument counts
+raise ArgumentCountError instead of reaching a compiler backend assertion.
+
+New fixtures exercise opaque descriptor calls, result/input independence,
+zero/one/three arguments, invalid operand types and heap cleanup. All-target
+structural coverage pins exactly two boxed backend operands. Build, test
+compilation, assembly-comment alignment, the complete generated-document
+workflow and diff hygiene pass. No generated files changed and no tests were
+executed locally. Runtime correctness and cleanup remain CI gates.

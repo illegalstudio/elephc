@@ -154,6 +154,19 @@ fn build_runtime_call_wrapper_function(
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
     if let RuntimeCallWrapperKind::Builtin { strict_php } = kind {
+        let packed_merge = crate::builtins::registry::lookup(name).is_some_and(|def| {
+            def.spec.semantics.runtime_functions
+                == crate::builtins::semantics::BuiltinRuntimeFunctions::One(crate::ir::RuntimeFnId::ArrayMerge)
+        }) && sig.variadic.is_some();
+        if packed_merge {
+            // Keep the public variadic signature, but validate and unpack it before
+            // crossing the two-operand backend boundary. Full body lowering owns the pack.
+            let function = crate::ir_lower::lower_array_merge_callable(module, label, sig, strict_php);
+            crate::ir::validate_function(&function).map_err(|error| {
+                CodegenIrError::invalid_module(format!("array merge callable wrapper: {error:?}"))
+            })?;
+            return Ok(function);
+        }
         let boxed_user_sort = crate::builtins::registry::lookup(name).is_some_and(|def| {
             def.spec.semantics.runtime_functions
                 == crate::builtins::semantics::BuiltinRuntimeFunctions::One(crate::ir::RuntimeFnId::Usort)

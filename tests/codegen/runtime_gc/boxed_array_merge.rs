@@ -10,6 +10,45 @@
 
 use crate::support::*;
 
+/// Opaque callable invocation unpacks both arrays and preserves input/result owners on return and throw.
+#[test]
+fn test_core_php_array_merge_descriptor_unpack_and_arity_cleanup() {
+    let source = r#"<?php
+function opaqueMergeInvocation(callable $callback, array $arguments): mixed {
+    return call_user_func_array($callback, $arguments);
+}
+$merge = array_merge(...);
+$left = ["shared" => str_repeat("a", 24), 4 => "left"];
+$right = ["shared" => str_repeat("b", 24), 8 => "right"];
+for ($i = 0; $i < 6; $i++) {
+    $result = opaqueMergeInvocation($merge, [$left, $right]);
+    echo implode(",", array_keys($result)), ":", strlen($result["shared"]),
+        ":", $result[0], ":", $result[1], "|";
+    unset($result);
+}
+try { opaqueMergeInvocation($merge, []); }
+catch (ArgumentCountError $error) { echo "zero|"; }
+unset($error);
+try { opaqueMergeInvocation($merge, [$left]); }
+catch (ArgumentCountError $error) { echo "one|"; }
+unset($error);
+try { opaqueMergeInvocation($merge, [$left, $right, []]); }
+catch (ArgumentCountError $error) { echo "three|"; }
+unset($error);
+try { opaqueMergeInvocation($merge, [$left, 42]); }
+catch (TypeError $error) { echo "type|"; }
+unset($error);
+echo strlen($left["shared"]), ":", strlen($right["shared"]);
+unset($left, $right, $merge);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout,
+        format!("{}zero|one|three|type|24:24", "shared,0,1:24:left:right|".repeat(6)),
+        "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Every packed/hash source combination renumbers integers and overwrites string keys in place.
 #[test]
 fn test_core_php_array_merge_layouts_keys_and_empty_sources() {

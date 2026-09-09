@@ -2,11 +2,12 @@
 //! Builds builtin callable bodies that require the full semantic EIR lowering context.
 //!
 //! Called from:
-//! - The codegen runtime-wrapper factory for boxed `usort` descriptor entries.
+//! - The codegen runtime-wrapper factory for boxed array descriptor entries.
 //!
 //! Key details:
 //! - Reuses direct-call reference capture, COW publication and exceptional cleanup.
-//! - Parameters are already validated by the descriptor ABI; no PHP source is reparsed.
+//! - Variadic adapters validate their supported arity before indexing the argument pack.
+//! - No PHP source is reparsed.
 
 use super::*;
 
@@ -24,12 +25,68 @@ pub(crate) fn lower_boxed_usort_callable(
             Expr::new(ExprKind::Variable(name.clone()), span)
         }).collect(),
     }, span);
-    let mut statement = Stmt::new(StmtKind::ExprStmt(call), span);
-    statement.source_mode = if strict_php {
+    lower_builtin_callable_body(
+        module, label, signature, strict_php, vec![Stmt::new(StmtKind::ExprStmt(call), span)],
+    )
+}
+
+/// Expands the callable argument pack into the two operands supported by the merge backend.
+pub(crate) fn lower_array_merge_callable(
+    module: &mut Module,
+    label: &str,
+    signature: &FunctionSig,
+    strict_php: bool,
+) -> Function {
+    let span = Span::dummy();
+    let arguments = Expr::new(ExprKind::Variable(
+        signature.variadic.clone().expect("array_merge callable has a variadic pack"),
+    ), span);
+    let count = Expr::new(ExprKind::FunctionCall {
+        name: Name::unqualified("count"), args: vec![arguments.clone()],
+    }, span);
+    let guard = Stmt::new(StmtKind::If {
+        condition: Expr::new(ExprKind::BinaryOp {
+            left: Box::new(count), op: BinOp::NotEq,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(2), span)),
+        }, span),
+        then_body: vec![Stmt::new(StmtKind::Throw(Expr::new(ExprKind::NewObject {
+            class_name: Name::unqualified("ArgumentCountError"),
+            args: vec![Expr::new(ExprKind::StringLiteral(
+                "array_merge() takes exactly 2 arguments".to_string(),
+            ), span)],
+        }, span)), span)],
+        elseif_clauses: Vec::new(),
+        else_body: None,
+    }, span);
+    let merge = Expr::new(ExprKind::FunctionCall {
+        name: Name::unqualified("array_merge"),
+        args: (0..2).map(|index| Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(arguments.clone()),
+            index: Box::new(Expr::new(ExprKind::IntLiteral(index), span)),
+        }, span)).collect(),
+    }, span);
+    lower_builtin_callable_body(
+        module, label, signature, strict_php,
+        vec![guard, Stmt::new(StmtKind::Return(Some(merge)), span)],
+    )
+}
+
+/// Applies ordinary parameter ownership and exceptional cleanup to a synthetic callable body.
+fn lower_builtin_callable_body(
+    module: &mut Module,
+    label: &str,
+    signature: &FunctionSig,
+    strict_php: bool,
+    mut statements: Vec<Stmt>,
+) -> Function {
+    let source_mode = if strict_php {
         crate::source::SourceMode::Php
     } else {
         crate::source::SourceMode::Lfc
     };
+    for statement in &mut statements {
+        statement.source_mode = source_mode;
+    }
     let return_type = signature.return_type.codegen_repr();
     let mut function = Function::new(
         label.to_string(), return_ir_type(&return_type), return_type.clone(),
@@ -40,7 +97,7 @@ pub(crate) fn lower_boxed_usort_callable(
         &mut function,
         None,
         &mut module.data,
-        &[statement],
+        &statements,
         env_from_signature(signature, false),
         TypeEnv::new(),
         &Default::default(),
