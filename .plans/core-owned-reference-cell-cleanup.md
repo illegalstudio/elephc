@@ -356,3 +356,22 @@ valid arrays with EIR optimization both on and off.
 
 Build, test compilation and diff hygiene pass. No local tests were executed;
 the new optimizer fixture and existing invalid-spread regression await CI.
+
+### Deferred string-local consumption
+
+The remaining list-unpack, join-length and join-comparison leaks share another
+cleanup gap: a consumer can see a string load before a later assignment widens
+its frame slot to Mixed. Codegen then allocates a detached string on that load,
+but ordinary call, comparison and retaining-store cleanup treated it as only
+borrowed. A cleanup-only predicate now emits provisional releases for these
+loads. Existing builder finalization removes them when storage stays concrete.
+The stronger ownership-transfer predicate is deliberately unchanged, so this
+does not make a borrowed string eligible for moves or consume its local owner.
+Callback rooting uses the same predicate instead of a private duplicate.
+
+All-target EIR assertions cover widened loads and borrowed controls. A heap
+fixture covers calls, comparisons and assignment aliases with optimization
+enabled and disabled. Build, test compilation, generated-document audits and
+diff hygiene pass; no local tests were run and generated docs are unchanged.
+Executable confirmation remains pending. A fresh fetch still finds main at
+`b068c2b7d27627b9b6ce451dbbc2e71faba3f7d8`, already included in this branch.

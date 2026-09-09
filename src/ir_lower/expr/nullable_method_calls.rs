@@ -233,7 +233,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
             value: *value,
             ir_type: value_ir_type(&php_type),
         };
-        if ctx.value_is_owning_temporary(lowered) {
+        if ctx.value_needs_release_after_use(lowered) {
             // PHP callees acquire by-value array/hash/Mixed parameters into owning shadow slots.
             // By-value returns from reference parameters also acquire or clone a separate owner.
             // Their result therefore cannot be an unretained alias of the caller's argument.

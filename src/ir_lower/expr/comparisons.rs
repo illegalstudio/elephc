@@ -91,13 +91,13 @@ fn needs_runtime_ordering_dispatch(ctx: &LoweringContext<'_, '_>, value: ValueId
     )
 }
 
-/// Releases an owning binary-operator operand once the consuming opcode has read it.
+/// Retires owned operands and provisional string unboxes after the binary opcode has read them.
 pub(super) fn release_binary_operand_temporary(
     ctx: &mut LoweringContext<'_, '_>,
     operand: LoweredValue,
     span: Span,
 ) {
-    if ctx.value_is_owning_temporary(operand) {
+    if ctx.value_needs_release_after_use(operand) {
         crate::ir_lower::ownership::release_if_owned(ctx, operand, Some(span));
     }
 }

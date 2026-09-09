@@ -2920,7 +2920,34 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Returns whether a retained local/global store should release its source value.
     pub(crate) fn value_needs_release_after_retaining_store(&self, value: LoweredValue) -> bool {
-        self.value_is_owning_temporary(value)
+        self.value_needs_release_after_use(value)
+    }
+
+    /// Includes provisional string unboxes in cleanup without claiming their ownership can move.
+    ///
+    /// A later store can widen a string local to Mixed after a consumer is lowered. Reading
+    /// that slot then allocates a detached string. Emit its release provisionally and let
+    /// builder finalization prune it when the final slot still lends a concrete string.
+    pub(crate) fn value_needs_release_after_use(&self, value: LoweredValue) -> bool {
+        if self.write_operand_is_borrowed {
+            return false;
+        }
+        if self.value_is_owning_temporary(value) {
+            return true;
+        }
+        if self.builder.value_php_type(value.value).codegen_repr() != PhpType::Str {
+            return false;
+        }
+        let Some(inst) = self.builder.value_defining_instruction(value.value) else {
+            return false;
+        };
+        if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            return false;
+        }
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+            return false;
+        };
+        matches!(self.builder.local_kind(slot), LocalKind::PhpLocal | LocalKind::StaticLocal)
     }
 
     /// Returns whether a container read now owns a caller reference.

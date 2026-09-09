@@ -49,7 +49,7 @@ pub(super) fn root_owned_call_operand(
     value: LoweredValue,
     span: Span,
 ) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
-    if !ctx.value_is_owning_temporary(value) && !value_is_deferred_string_local_load(ctx, value) {
+    if !ctx.value_needs_release_after_use(value) {
         return (value, None);
     }
     let ty = ctx.builder.value_php_type(value.value);
@@ -76,26 +76,6 @@ pub(super) fn register_owned_call_operand(
         Op::PushCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(slot)),
         Op::PushCallOperandOwner.default_effects(), Some(span),
     );
-}
-
-/// Recognizes string loads whose final slot can require a detached Mixed-to-string conversion.
-fn value_is_deferred_string_local_load(
-    ctx: &LoweringContext<'_, '_>,
-    value: LoweredValue,
-) -> bool {
-    if ctx.builder.value_php_type(value.value).codegen_repr() != PhpType::Str {
-        return false;
-    }
-    let Some(inst) = ctx.builder.value_defining_instruction(value.value) else {
-        return false;
-    };
-    if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
-        return false;
-    }
-    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
-        return false;
-    };
-    matches!(ctx.builder.local_kind(slot), crate::ir::LocalKind::PhpLocal | crate::ir::LocalKind::StaticLocal)
 }
 
 /// Clears a rooted operand before releasing it, including when its destructor throws.
