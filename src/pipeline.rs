@@ -148,6 +148,7 @@ pub(crate) fn compile(config: CliConfig) {
         (with_crates.contains("tz"), "tz"),
         (with_crates.contains("image"), "image"),
         (with_crates.contains("curl"), "curl"),
+        (with_crates.contains("xml"), "xml"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
@@ -360,6 +361,20 @@ pub(crate) fn compile(config: CliConfig) {
         )
     };
     timings.record_since("curl-prelude", phase_started);
+
+    // Inject the `ext/xml` / `ext/xmlwriter` prelude (the `XMLParser` and `XMLWriter`
+    // classes and the `xml_*` / `xmlwriter_*` wrappers over the `elephc_xml` extern block)
+    // only when the program references that surface, so XML-free binaries never declare
+    // the classes and never link `-lelephc_xml`. Order-independent like the hash and curl
+    // preludes; `--with-xml` forces the injection for opaque dynamic use.
+    crate::progress::phase("xml-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::xml_prelude::inject_if_used(
+        ast,
+        with_crates.contains("xml"),
+        &mut prelude_inventory,
+    );
+    timings.record_since("xml-prelude", phase_started);
 
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();

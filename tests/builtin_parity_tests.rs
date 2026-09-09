@@ -68,10 +68,11 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
         );
     }
     // Five language constructs, one dedicated-syntax surface, three eval-only reflection
-    // functions, the 293 prelude-provided functions outside `ext/curl` (four `hash_*` plus
-    // the mysqli, PDO, web, image, OPcache, tz, var_export and version preludes), and the
-    // 54 date/calendar functions the name resolver rewrites.
-    assert_eq!(exceptional.len(), 356);
+    // functions, the 347 prelude-provided functions outside `ext/curl` (four `hash_*`, the
+    // 54 xml/xmlwriter declarations, plus the mysqli, PDO, web, image, OPcache, tz,
+    // var_export and version preludes), and the 54 date/calendar functions the name
+    // resolver rewrites.
+    assert_eq!(exceptional.len(), 410);
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
@@ -105,7 +106,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     assert_eq!(dedicated_syntax, 1);
     assert_eq!(unsupported, 3);
     assert_eq!(rewrites, 54);
-    assert_eq!(preludes.len(), 293);
+    assert_eq!(preludes.len(), 347);
     for name in ["hash_copy", "hash_final", "hash_init", "hash_update"] {
         assert!(preludes.contains(name), "{name} must keep its prelude route");
     }

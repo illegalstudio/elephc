@@ -72,6 +72,7 @@ mod termination;
 mod timings;
 mod types;
 mod tz_prelude;
+mod xml_prelude;
 mod var_export_prelude;
 mod version_prelude;
 mod web_prelude;

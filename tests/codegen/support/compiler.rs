@@ -287,6 +287,7 @@ fn try_compile_source_to_asm_with_defines_repr(
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
@@ -384,6 +385,12 @@ fn set_fixture_linked_extensions(libraries: &[String]) {
                     extensions.push("posix".to_string());
                 }
                 Some("pcntl")
+            }
+            "elephc_xml" => {
+                if !extensions.iter().any(|existing| existing == "xmlwriter") {
+                    extensions.push("xmlwriter".to_string());
+                }
+                Some("xml")
             }
             _ => None,
         };

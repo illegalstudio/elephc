@@ -287,6 +287,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         elephc::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
+    let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
