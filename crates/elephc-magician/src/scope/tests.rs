@@ -44,6 +44,22 @@ fn aot_visible_cells_exclude_interpreter_only_locals() {
     assert_eq!(scope.aot_visible_cells(), vec![native]);
 }
 
+/// Republishing a synchronized address retires exactly the previous scope-owned lease.
+#[test]
+fn aot_sync_retires_the_prior_scope_lease_for_identical_cells() {
+    let cell = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+    for previous in [ScopeCellOwnership::Borrowed, ScopeCellOwnership::Owned] {
+        for incoming in [ScopeCellOwnership::Borrowed, ScopeCellOwnership::Owned] {
+            let mut scope = ElephcEvalScope::new();
+            scope.set("value", cell, previous);
+            let replaced = scope.set_from_aot("value", cell, incoming);
+            assert_eq!(replaced, (previous == ScopeCellOwnership::Owned).then_some(cell));
+            assert_eq!(scope.entry("value").unwrap().flags().ownership, incoming);
+            assert_eq!(scope.aot_visible_cells(), vec![cell]);
+        }
+    }
+}
+
 /// Verifies unsetting a variable creates a dirty marker that is not visible.
 #[test]
 fn unset_records_missing_dirty_marker() {

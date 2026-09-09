@@ -179,7 +179,7 @@ impl ElephcEvalScope {
         owned_cell_except(previous, cell)
     }
 
-    /// Stores a cell synchronized by generated code and marks its name as AOT-visible.
+    /// Replaces the prior scope lease with a native borrow or a newly transferred owner.
     pub fn set_from_aot(
         &mut self,
         name: impl Into<String>,
@@ -188,7 +188,13 @@ impl ElephcEvalScope {
     ) -> Option<RuntimeCellHandle> {
         let name = name.into();
         self.aot_visible_names.insert(name.clone());
-        self.set(name, cell, ownership)
+        let previous = self.entries.get(&name).copied().filter(|entry| {
+            entry.flags().is_visible() && entry.flags().ownership == ScopeCellOwnership::Owned
+        }).map(ScopeEntry::cell);
+        self.set(name, cell, ownership);
+        // Native reload acquired its own lease. Republishing that same address must
+        // retire the former scope owner instead of losing it when the flags change.
+        previous
     }
 
     /// Stores a variable while preserving existing PHP reference aliases.
