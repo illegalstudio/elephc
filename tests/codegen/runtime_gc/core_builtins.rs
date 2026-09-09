@@ -594,6 +594,28 @@ fn test_core_aot_gc_status_first_class_snapshot_is_heap_clean() {
     assert_gc_status_call_cleanup("invokeCollectorStatus(gc_status(...))");
 }
 
+/// Returning a callable as Mixed keeps it alive after retiring the separate temporary argument.
+#[test]
+fn test_core_first_class_callable_boxed_return_keeps_independent_owner() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function boxCollectorCallable(callable $callback): mixed { return $callback; }
+function forwardCollectorCallable(callable $callback): callable { return $callback; }
+for ($i = 0; $i < 3; $i++) {
+    $boxed = boxCollectorCallable(gc_status(...));
+    $snapshot = $boxed();
+    echo count($snapshot), ":";
+    unset($snapshot, $boxed);
+    $raw = forwardCollectorCallable(gc_status(...));
+    $snapshot = $raw();
+    echo count($snapshot), "|";
+    unset($snapshot, $raw);
+}
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "12:12|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Isolates each GC call surface so one ownership failure cannot mask another.
 fn assert_gc_status_call_cleanup(call: &str) {
     let source = format!(r#"<?php
