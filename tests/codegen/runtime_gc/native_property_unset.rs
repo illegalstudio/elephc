@@ -73,9 +73,12 @@ function exerciseEvalArrayRelease(string $source): void {
 }
 $source = '$caught = 0;
 for ($i = 0; $i < 3; $i++) {
+    echo "new|";
     $children = [new EvalReleaseNativeChild(), new EvalReleaseNativeChild()];
+    echo "unset|";
     try { unset($children); }
     catch (RuntimeException $error) {
+        echo "caught|";
         if ($error->getMessage() === "child" && $error->getPrevious() !== null) { $caught++; }
         unset($error);
     }
@@ -86,7 +89,7 @@ unset($source);
 echo gc_status()["protected"] ? "protected" : "ready";
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "3:outer|ready", "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}3:outer|ready", "new|unset|caught|".repeat(3)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
@@ -111,9 +114,12 @@ function exerciseNativeUnsetThrow(string $source): void {
 }
 $source = '$count = 0;
 for ($i = 0; $i < 3; $i++) {
+    echo "new|";
     $holder->child = new NativeUnsetThrowChild();
+    echo "unset|";
     try { unset($holder->child); }
     catch (RuntimeException $error) {
+        echo "caught|";
         if ($error->getMessage() === "inner" && !isset($holder->child)) { $count++; }
         unset($error);
     }
@@ -121,7 +127,7 @@ for ($i = 0; $i < 3; $i++) {
 echo $count, ":";' . ' // ' . $argc;
 exerciseNativeUnsetThrow($source);
 "#;
-    assert_eq!(compile_and_run(source), "3:outer|again");
+    assert_eq!(compile_and_run(source), format!("{}3:outer|again", "new|unset|caught|".repeat(3)));
 }
 
 /// Repeated destructor throws free native children and temporary exception boxes after eval catches them.

@@ -23,9 +23,12 @@ class NativeThrowingClosureReceiver {
 function releaseThrowingClosureReceivers(string $source): void { eval($source); }
 $source = '$caught = 0;
 for ($i = 0; $i < 3; $i++) {
+    echo "new|";
     $callbacks = [(new NativeThrowingClosureReceiver())->read(...), (new NativeThrowingClosureReceiver())->read(...)];
+    echo "unset|";
     try { unset($callbacks); }
     catch (RuntimeException $error) {
+        echo "caught|";
         $previous = $error->getPrevious();
         if ($previous !== null && $previous->getMessage() === "receiver" && $previous->getPrevious() === null) { $caught++; }
         unset($error); unset($previous);
@@ -36,7 +39,7 @@ releaseThrowingClosureReceivers($source);
 unset($source);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "3:ready", "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}3:ready", "new|unset|caught|".repeat(3)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
