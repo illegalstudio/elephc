@@ -35,9 +35,10 @@ requirements against the nearest project's `elephc.toml`, deterministic
 `elephc.lock`, and verified target/toolchain cache receipt. It passes exact
 static archive paths to the linker; compilation never downloads or builds them.
 
-The current catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, and curl
-8.21.0. Regex use links PCRE2's managed archives in the fixed shim/POSIX/8-bit
-order and has no production system-library fallback:
+The current catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2
+1.70.0, libssh2 1.11.1, curl 8.21.0, and libxml2 2.15.3. Regex use links PCRE2's
+managed archives in the fixed shim/POSIX/8-bit order and has no production
+system-library fallback:
 
 ```bash
 elephc native add pcre2
@@ -59,6 +60,19 @@ the same no-system-fallback contract (no Homebrew/distro `-lcurl`/`-lssl`):
 ```bash
 elephc native add curl
 elephc app.php --with-curl
+```
+
+libxml2 backs the `xml` bridge the same way: `elephc_xml`'s parser and writer
+are libxml2 itself, reached through an Elephc-owned C shim the recipe compiles
+against the freshly built headers, and a link that plans the bridge (auto-detected
+xml use or `--with-xml`) resolves the package's two archives in the fixed
+`libelephc_libxml2_shim.a -> libxml2.a` order, with no system `-lxml2` fallback.
+The package has no catalog dependencies; Apple targets additionally link the
+SDK's `libiconv`, which glibc already provides on Linux:
+
+```bash
+elephc native add libxml2
+elephc app.php --with-xml
 ```
 
 See [Native dependencies](native-dependencies.md) for the full workflow.
@@ -105,14 +119,16 @@ archives) that elephc links into the program: `pdo` (database access), `tls`
 `bcmath` (exact arbitrary-precision decimal arithmetic),
 `iconv` (character-set conversion and the character-oriented `iconv_*` functions),
 `phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
-processing), `pcntl` (Unix process control and signals), `eval` (the Magician
-interpreter fallback for dynamic `eval()`), `web` (the `--web` server), and
-`curl` (the libcurl-backed `ext/curl` surface).
+processing), `pcntl` (Unix process control and signals), `xml` (the `ext/xml`
+SAX parser and `ext/xmlwriter`), `eval` (the Magician interpreter fallback for
+dynamic `eval()`), `web` (the `--web` server), and `curl` (the libcurl-backed
+`ext/curl` surface).
 
 By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
 calling a `bc*` function pulls in `bcmath`, calling an `iconv*` function pulls in
-`iconv`, referencing `PDO` pulls in `pdo`, and so on. An `eval()` call pulls in Magician
+`iconv`, referencing `PDO` pulls in `pdo`, creating an `XMLWriter` or calling an
+`xml_*` function pulls in `xml`, and so on. An `eval()` call pulls in Magician
 only when it needs runtime parsing: eligible literal fragments can be parsed at
 compile time and lowered to native EIR without the interpreter bridge. Programs
 that do not need a feature never link its crate, so binaries stay small.
@@ -120,7 +136,7 @@ that do not need a feature never link its crate, so binaries stay small.
 `--with-CRATE` force-enables a bridge regardless of that auto-detection. It
 force-links the staticlib (whole-archived, so it is retained even if no symbol
 references it) and, for crates whose PHP surface comes from an injected prelude
-(`pdo`, `mysqli`, `tz`, `image`), force-injects that prelude so the classes/functions are
+(`pdo`, `mysqli`, `tz`, `image`, `xml`), force-injects that prelude so the classes/functions are
 available. This is useful when a program reaches a feature through indirection
 that detection cannot see. The flag is repeatable:
 
@@ -178,6 +194,21 @@ elephc native add curl
 elephc app.php --with-curl
 ```
 
+`--with-xml` is the second such flag. The `elephc_xml` archive carries the
+PHP-facing `XMLParser` / `XMLWriter` implementation, but its parser is libxml2
+itself, so the final link also needs the `libxml2` package's
+`libelephc_libxml2_shim.a` and `libxml2.a`, declared and installed with
+`elephc native add libxml2`. Auto-detected xml use requires the package just the
+same; the flag only adds the force-link and the prelude injection. Whichever
+way the bridge is linked, the [XML guide's runtime limits](../php/xml.md#runtime-limits)
+apply — a per-handler-invocation heap cost that [`--heap-size`](#heap-size)
+accommodates:
+
+```bash
+elephc native add libxml2
+elephc app.php --with-xml
+```
+
 `--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
 mode, which owns the program entry point). An unknown capability name is
 rejected with the list of valid names. Forcing a bridge increases binary size,
@@ -187,7 +218,8 @@ Bridge crates are Elephc's optional Rust workspace components. They are not
 installed or versioned by `elephc native`. A bridge or runtime-capability flag
 may require a separately declared managed package — `--with-regex` requires
 `pcre2`, `--with-curl` requires `curl` (which in turn declares `openssl` and
-`zlib`) — but the flag itself does not install it. Composer dependencies are
+`zlib`), `--with-xml` requires `libxml2` — but the flag itself does not install
+it. Composer dependencies are
 PHP source handled by the compile-time autoload pipeline and remain separate.
 
 ## Heap size

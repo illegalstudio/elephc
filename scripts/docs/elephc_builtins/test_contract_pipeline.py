@@ -51,9 +51,10 @@ class ContractPipelineTests(unittest.TestCase):
                     "dedicated-syntax": 1,
                     # Four hash_*, the thirty-four PHP-visible curl_* contracts the
                     # canonical `--features curl` docs configuration publishes (see
-                    # extract.run_gen_builtins), and the 289 functions the other
+                    # extract.run_gen_builtins), the fifty-four xml_* / xmlwriter_*
+                    # functions of the xml prelude, and the 289 functions the other
                     # injected preludes declare.
-                    "prelude": 327,
+                    "prelude": 381,
                     # The date/calendar procedural families rewritten by the name resolver.
                     "name-resolver-rewrite": 54,
                     "none": 3,

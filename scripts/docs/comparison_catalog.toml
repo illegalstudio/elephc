@@ -249,6 +249,15 @@ modules  = ["pcntl"]
 notes    = "Target-aware Unix process control; auto-linked or forced with --with-pcntl"
 
 [[extensions]]
+feature  = "XML"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.xml.php"
+docs     = "docs/php/xml.md"
+evidence = "tests/codegen/xml"
+modules  = ["xml", "xmlwriter"]
+notes    = "ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the surface is complete, with the runtime's per-handler-invocation heap cost documented under Runtime limits in docs/php/xml.md"
+
+[[extensions]]
 feature  = "cURL"
 status   = "supported"
 php      = "https://www.php.net/manual/en/book.curl.php"

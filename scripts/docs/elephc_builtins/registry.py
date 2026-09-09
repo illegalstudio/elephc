@@ -35,6 +35,7 @@ AREAS: list[str] = [
     "Database",
     "Web",
     "Image",
+    "XML",
 ]
 
 
@@ -79,6 +80,10 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     "web": ("Web", "Web"),
     "image": ("Image", "Image"),
     "opcache": ("Misc", "OPcache"),
+    # `Area::Xml`: the `xml_*` / `xmlwriter_*` prelude surfaces plus the one registry
+    # builtin `xml_parse_into_struct`; both PHP modules share one docs area and the
+    # narrative page docs/php/xml.md.
+    "xml": ("XML", "XML"),
 }
 
 

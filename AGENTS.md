@@ -185,11 +185,11 @@ bridge.
 
 `--with-<crate>` force-enables a bridge regardless of detection. It force-links
 the staticlib (whole-archived so it is not dead-stripped) and, for crates whose
-PHP surface comes from a prelude (`pdo`, `tz`, `image`), force-injects that
+PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`), force-injects that
 prelude so the API is declared even when usage was not detected. The flag name is
 the bridge's `flag_name` (`crate_name` minus the `elephc-` prefix): `--with-pdo`,
 `--with-tls`, `--with-crypto`, `--with-iconv`, `--with-phar`, `--with-tz`,
-`--with-image`, `--with-curl`.
+`--with-image`, `--with-curl`, `--with-xml`.
 `--with-web` is an alias for `--web` (the full server mode, which owns the program
 entry point). An unknown `--with-<name>` is a hard CLI error listing the valid
 crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
@@ -212,6 +212,21 @@ archives it declares as dependencies, in the fixed order
 `libcurl.a -> libssl.a -> libcrypto.a -> libz.a`. There is no system fallback:
 a missing `curl` package fails closed with the same `elephc native add curl`
 recovery style as PCRE2, never a `-lcurl`.
+
+`xml` is the second such bridge: `--with-xml` (or ordinary detection of an
+`xml_*` / `xmlwriter_*` call or of the `XMLParser` / `XMLWriter` classes, via
+`src/xml_prelude/detect.rs`) force-links `elephc_xml`, and `src/pipeline/backend.rs`
+mirrors that into `NativeRequirement::package("libxml2")` so the final link also
+resolves the managed `libxml2` package's two archives in the fixed order
+`libelephc_libxml2_shim.a -> libxml2.a`. The bridge reaches libxml2 only through
+the recipe-compiled shim `src/native_deps/recipes/libxml2_shim.c` (which owns
+every access to libxml2's struct internals) plus libxml2's opaque public API,
+both declared in `crates/elephc-xml/src/ffi.rs` without linking — no bindgen,
+no `-sys` crate, no headers at cargo build time. Apple targets add `-liconv`
+for libxml2's encoding handlers through the entry's
+`BridgeStaticlib.apple_libraries`; glibc provides iconv from libc. `libxml2`
+has no catalog dependencies, and a missing package fails closed with the
+`elephc native add libxml2` recovery, never a `-lxml2`.
 
 ### Codegen layout
 

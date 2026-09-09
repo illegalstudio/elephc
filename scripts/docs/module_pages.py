@@ -31,6 +31,8 @@ MODULE_PAGES: dict[str, str] = {
     "posix": "pcntl.md",
     "session": "sessions.md",
     "spl": "spl.md",
+    "xml": "xml.md",
+    "xmlwriter": "xml.md",
     "zend opcache": "opcache.md",
 }
 

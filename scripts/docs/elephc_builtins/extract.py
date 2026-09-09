@@ -584,6 +584,13 @@ PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
         "OPcache",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
+    # The xml surface keeps its own catalog module; the built prelude splits the parser
+    # (`xml_*`) and writer (`xmlwriter_*`) declarations across two generated files.
+    "xml": (
+        ("xml_prelude/build/parser.rs", "xml_prelude/build/writer.rs"),
+        "xml",
+        "crates/elephc-builtin-contract/src/catalog_xml.rs",
+    ),
 }
 
 

@@ -313,7 +313,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, iconv, phar, tz, image, pcntl, eval, regex, curl, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, iconv, phar, tz, image, pcntl, xml, eval, regex, curl, web)
 elephc app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc app.php --with-mysqli
@@ -362,9 +362,10 @@ elephc main.php
 
 `elephc native` manages a small, runtime/builtin-oriented catalog of verified C
 sources: PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0, libssh2 1.11.1,
-and curl 8.21.0. Adding curl declares and links its complete pinned dependency
-closure. This is intentionally **not** the mechanism used for Composer packages,
-Rust bridge crates, compilers/SDKs, or arbitrary FFI libraries:
+curl 8.21.0, and libxml2 2.15.3. Adding curl declares and links its complete
+pinned dependency closure. This is intentionally **not** the mechanism used for
+Composer packages, Rust bridge crates, compilers/SDKs, or arbitrary FFI
+libraries:
 
 | Need | Mechanism |
 |---|---|
@@ -499,6 +500,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Database (PDO)**: `PDO`, `PDOStatement`, `PDOException` with SQLite, PostgreSQL, MySQL/MariaDB, optional FreeTDS PDO_DBLIB, pure-Rust PDO_FIREBIRD, system-driver-manager PDO_ODBC, Client SDK PDO_INFORMIX/PDO_IBM, Microsoft ODBC PDO_SQLSRV, Oracle Instant Client PDO_OCI, and official CCI PDO_CUBRID drivers, positional `?` and named `:name` binds, fetch modes, transactions, and `foreach` over result sets
 - **Database (mysqli)**: a documented `mysqli` / `mysqli_stmt` / `mysqli_result` subset for MySQL/MariaDB over the same pure-Rust client — buffered independent results, prepared statements, `multi_query`, `mysqli_report` error modes, and the full procedural `mysqli_*` alias surface
 - **Process control (PCNTL)**: `pcntl_fork`, wait/status helpers, `pcntl_exec`, signal handlers and async dispatch, masks, priorities, Linux affinity/namespaces, and macOS QoS; see the [PCNTL guide](docs/php/pcntl.md)
+- **XML**: every function, class and constant of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and of `ext/xmlwriter` (`XMLWriter` with memory and URI output) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) and its [runtime limits](docs/php/xml.md#runtime-limits) for the per-handler-invocation heap cost
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
 - **Native extensions**: complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
@@ -724,6 +726,7 @@ crates/
 ├── elephc-probe/        # Sampled profiling and authenticated service endpoint
 ├── elephc-tls/          # TLS stream bridge
 ├── elephc-tz/           # IANA timezone bridge
+├── elephc-xml/          # ext/xml and ext/xmlwriter bridge over the catalog's static libxml2
 └── elephc-web/          # Prefork HTTP server bridge
 ```
 
