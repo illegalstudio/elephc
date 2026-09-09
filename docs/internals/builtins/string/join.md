@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `independent`
+- **Result ownership**: `fresh`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

@@ -50,6 +50,19 @@ fn lower_boxed_array_values(
     array: ValueId,
 ) -> Result<()> {
     ctx.load_value_to_result(array)?;
+    emit_loaded_boxed_array_values(
+        ctx,
+        "array_values(): Argument #1 ($array) must be of type array",
+    )?;
+    store_if_result(ctx, inst)
+}
+
+/// Normalizes a borrowed box in the result register into an owned dense Mixed array.
+/// Non-array tags throw the caller-provided diagnostic before any container access.
+pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_boxed_array_values(
+    ctx: &mut FunctionContext<'_>,
+    invalid_message: &str,
+) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let indexed = ctx.next_label("avals_boxed_indexed");
     let invalid = ctx.next_label("avals_boxed_invalid");
@@ -91,12 +104,9 @@ fn lower_boxed_array_values(
         }
     }
     ctx.emitter.label(&invalid);
-    crate::codegen::lower_inst::exceptions::emit_type_error(
-        ctx,
-        "array_values(): Argument #1 ($array) must be of type array",
-    );
+    crate::codegen::lower_inst::exceptions::emit_type_error(ctx, invalid_message);
     ctx.emitter.label(&done);
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Lowers `array_values()` for a PHP `array<mixed>` value that may hold indexed or hash storage.
@@ -106,6 +116,14 @@ fn lower_dynamic_mixed_array_values(
     array: ValueId,
 ) -> Result<()> {
     ctx.load_value_to_result(array)?;
+    emit_loaded_dynamic_mixed_array_values(ctx)?;
+    store_if_result(ctx, inst)
+}
+
+/// Retains loaded packed Mixed storage or copies promoted hash values into an owned dense array.
+pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_dynamic_mixed_array_values(
+    ctx: &mut FunctionContext<'_>,
+) -> Result<()> {
     let assoc_label = ctx.next_label("avals_dynamic_assoc");
     let done_label = ctx.next_label("avals_dynamic_done");
     let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
@@ -136,7 +154,7 @@ fn lower_dynamic_mixed_array_values(
         }
     }
     ctx.emitter.label(&done_label);
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Lowers associative-array `array_values()` by copying values into a new indexed array.

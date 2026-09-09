@@ -1932,6 +1932,9 @@ impl RuntimeFnId {
                 // bucket would keep an owned name temporary — and skip releasing the hash.
                 | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
+                // The join lowerer persists every result before retiring normalized
+                // input values, so destructor reentry cannot overwrite returned bytes.
+                | RuntimeFnId::Implode
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
@@ -2024,7 +2027,6 @@ impl RuntimeFnId {
                 | RuntimeFnId::Decoct
                 | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
-                | RuntimeFnId::Implode
         ) {
             BuiltinResultOwnership::Independent
         } else {
