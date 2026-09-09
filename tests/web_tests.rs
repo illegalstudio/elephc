@@ -1296,7 +1296,8 @@ fn web_eval_superglobal_reload_releases_replaced_owners() {
     let source = r#"<?php
 $snapshot = $_GET;
 $code = '$_GET = $_GET; // ' . $_GET['token'];
-for ($i = 0; $i < 3; $i++) { eval($code); }
+$rounds = (int) $_GET['rounds'];
+for ($i = 0; $i < $rounds; $i++) { eval($code); }
 echo $_GET['token'], ":", $snapshot['token'], "|";
 $remove = 'unset($_GET); // ' . $snapshot['token'];
 eval($remove);
@@ -1312,8 +1313,8 @@ echo "cleared";
         .stderr(Stdio::from(stderr_file))
         .spawn().expect("spawn eval superglobal server"));
     wait_until_ready(&addr);
-    for _ in 0..4 {
-        let response = http_get_with_timeout(&addr, "/?token=owned", Duration::from_secs(10))
+    for rounds in [1, 2, 4, 8] {
+        let response = http_get_with_timeout(&addr, &format!("/?token=owned&rounds={rounds}"), Duration::from_secs(10))
             .expect("superglobal reload request must complete");
         assert!(response.ends_with("owned:owned|cleared"), "response: {response:?}");
     }
@@ -1326,7 +1327,7 @@ echo "cleared";
             allocs.parse::<i64>().unwrap() - frees.parse::<i64>().unwrap()
         }).collect::<Vec<_>>();
     assert_eq!(live.len(), 4, "{stderr}");
-    // The first request warms process-level caches; identical later requests must be stationary.
+    // Warm up once, then require stable live storage despite increasing reload counts.
     assert_eq!(live[1], live[2], "{stderr}");
     assert_eq!(live[2], live[3], "{stderr}");
 }

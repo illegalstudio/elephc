@@ -193,12 +193,34 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 8);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 16);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 24);
+    // Bulk reclamation also retires every block that remained after typed cleanup.
+    // Keep cumulative allocation totals, but do not carry their live footprint into a new arena.
+    let value = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, value, "_gc_allocs", 0);
+    abi::emit_store_reg_to_symbol(emitter, value, "_gc_frees", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_gc_live", 0);
 }
 
 #[cfg(test)]
 mod handler_reset_tests {
     use super::*;
     use crate::codegen::platform::{AppleVariant, Platform, Target};
+
+    /// Full arena reclamation accounts for outstanding blocks only after retiring the old heap.
+    #[test]
+    fn web_arena_reset_reconciles_allocation_counters_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_heap_arena_reset(&mut emitter);
+            let asm = emitter.output();
+            let heap_reset = asm.rfind("_heap_small_bins").unwrap();
+            let allocs = asm.find("_gc_allocs").unwrap();
+            let frees = asm.find("_gc_frees").unwrap();
+            let live = asm.find("_gc_live").unwrap();
+            assert!(heap_reset < allocs && allocs < frees && frees < live, "{name}");
+            assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("_gc_peak"), "{name}");
+        }
+    }
 
     /// Every target releases handlers before inventory cleanup and before resetting the heap.
     #[test]

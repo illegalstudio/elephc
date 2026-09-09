@@ -408,6 +408,8 @@ Passing `--heap-debug` enables additional runtime verification without changing 
 
 When one of these checks trips, the program exits with a fatal heap-debug error instead of continuing with corrupted allocator state.
 
+In full-reset `--web` mode, the next request reclaims the previous PHP heap arena after typed cleanup. This bulk release brings cumulative frees up to cumulative allocations and resets live bytes to zero; the process peak watermark is retained. Per-request counter differences therefore describe the current arena, not blocks already reclaimed by earlier resets.
+
 ### When memory is freed
 
 - **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects). When a store inside a loop is lowered before a later store has widened the slot to boxed storage (e.g. an inner `for` counter re-initialized by the outer body but widened Int→Mixed by its `++` update), lowering emits a deferred `release_local_slot` and the backend decides against the slot's final widened storage type, so the previous iteration's box is still released
