@@ -10,6 +10,31 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Mixed reference stores consume the explicit string acquire on every supported ABI.
+#[test]
+fn mixed_reference_stores_adopt_acquired_strings_on_all_targets() {
+    let source = r#"<?php
+function replace_mixed_reference(mixed &$value): void { $value = "replaced"; }
+$value = null;
+replace_mixed_reference($value);
+echo $value;
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "replace_mixed_reference").unwrap();
+        let store = function.instructions.iter().find(|inst| inst.op == Op::StoreRefCell).unwrap();
+        let ValueDef::Instruction { inst, .. } = function.value(store.operands[0]).unwrap().def else {
+            panic!("{target}: reference store must receive an acquired string");
+        };
+        assert_eq!(function.instruction(inst).unwrap().op, Op::Acquire, "{target}");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("transfer acquired ref-cell payload into Mixed storage"), "{target}");
+    }
+}
+
 /// Static properties acquire their own object owner even before final local storage is known.
 #[test]
 fn static_property_stores_preserve_concrete_and_widened_local_owners_on_all_targets() {

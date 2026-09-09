@@ -92,14 +92,14 @@ pub(super) fn store_value_through_ref_cell_slot(
     abi::load_at_offset(ctx.emitter, state_reg, state_offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // select ref-cell storage after a runtime promotion
                 &format!("cbnz {}, {}", state_reg, ref_cell)
-            );                                                                  // select ref-cell storage after a runtime promotion
+            );
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // test the slot's runtime representation flag
                 &format!("test {}, {}", state_reg, state_reg)
-            );                                                                  // test the slot's runtime representation flag
+            );
             ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select ref-cell storage after a runtime promotion
         }
     }
@@ -320,7 +320,16 @@ pub(super) fn store_value_to_ref_cell_as(
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = target_ty.codegen_repr();
     reject_multiword_ref_param_local(&target_ty, "store")?;
-    coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+    if target_ty == PhpType::Mixed
+        && source_ty.codegen_repr() != PhpType::Mixed
+        && ctx.value_can_own_mixed_box_source(value)?
+    {
+        // The EIR acquire belongs to this store, not to an additional retained copy.
+        ctx.emitter.comment("transfer acquired ref-cell payload into Mixed storage");
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+    } else {
+        coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+    }
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
@@ -398,9 +407,9 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(
+                        ctx.emitter.instruction(                                // save the int result to the placeholder slot above the saved Mixed pointer
                             "mov QWORD PTR [rsp + 16], rax"
-                        );                                                      // save the int result to the placeholder slot above the saved Mixed pointer
+                        );
                     }
                 }
                 // Pop the saved Mixed pointer into result_reg for decref_mixed.
@@ -422,9 +431,9 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the bool result to the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(
+                        ctx.emitter.instruction(                                // save the bool result to the placeholder slot
                             "mov QWORD PTR [rsp + 16], rax"
-                        );                                                      // save the bool result to the placeholder slot
+                        );
                     }
                 }
                 abi::emit_pop_reg(ctx.emitter, result_reg);
@@ -444,9 +453,9 @@ pub(super) fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str d0, [sp, #16]");           // save the float result to the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(
+                        ctx.emitter.instruction(                                // save the float result to the placeholder slot
                             "movsd QWORD PTR [rsp + 16], xmm0"
-                        );                                                      // save the float result to the placeholder slot
+                        );
                     }
                 }
                 abi::emit_pop_reg(ctx.emitter, int_reg); // pop Mixed pointer into int_reg

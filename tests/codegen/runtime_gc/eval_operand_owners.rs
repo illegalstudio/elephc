@@ -10,6 +10,26 @@
 
 use crate::support::*;
 
+/// Native Mixed reference stores adopt acquired strings instead of persisting a second copy.
+#[test]
+fn test_core_native_mixed_reference_stores_transfer_acquired_strings() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function replaceMixedReferenceOwner(mixed &$value): void {
+    $value = "replaced";
+    $value = $value;
+}
+$value = null;
+for ($i = 0; $i < 3; $i++) {
+    replaceMixedReferenceOwner($value);
+    echo $value, "|";
+}
+unset($value);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "replaced|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Eval replacements, unchanged snapshots and missing entries balance native parameter owners.
 #[test]
 fn test_core_eval_local_reload_balances_replaced_and_missing_parameters() {
