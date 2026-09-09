@@ -235,6 +235,31 @@ echo count(reversePhpArray(["key" => $argc], $argc > 1));
     }
 }
 
+/// Boxed key sorts publish unique hash payloads before relinking on every supported target.
+#[test]
+fn boxed_array_key_sorts_keep_cell_types_on_every_target() {
+    use crate::codegen::platform::Target;
+    use std::path::Path;
+
+    let source = r#"<?php
+function orderBoxedKeys(array &$items): void { krsort($items); ksort($items); }
+$items = [$argc, 2];
+orderBoxedKeys($items);
+echo implode(',', array_keys($items));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains("__rt_hash_ksort"), "{name}");
+        assert!(assembly.contains("__rt_hash_krsort"), "{name}");
+        assert!(assembly.matches("__rt_array_cell_ensure_unique").count() >= 2, "{name}");
+        assert!(assembly.matches("__rt_mixed_cell_promote_to_hash").count() >= 2, "{name}");
+    }
+}
+
 /// Boxed property push validates and separates its receiver before appending on every target.
 #[test]
 fn boxed_array_push_properties_publish_separated_cells_on_every_target() {

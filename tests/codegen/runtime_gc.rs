@@ -48,6 +48,7 @@ mod boxed_array_map;
 mod boxed_array_implode;
 mod boxed_array_reference_outputs;
 mod boxed_array_take;
+mod boxed_array_key_sort;
 mod boxed_array_call_results;
 mod mixed_parameters;
 mod native_string_arguments;

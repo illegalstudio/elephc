@@ -140,7 +140,7 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     super::super::ensure_arg_count(inst, "array_pop", 1)?;
     let array = expect_operand(inst, 0)?;
     if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
-        return boxed_take::lower_boxed_array_take(ctx, inst, array, false);
+        return boxed_mutation::lower_boxed_array_take(ctx, inst, array, false);
     }
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;

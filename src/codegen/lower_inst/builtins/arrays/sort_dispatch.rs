@@ -523,6 +523,9 @@ pub(super) fn lower_array_key_sort(
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
     match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::Mixed => {
+            super::boxed_mutation::lower_boxed_array_key_sort(ctx, inst, array, name, order)
+        }
         PhpType::AssocArray { .. } => {
             let helper = match order {
                 KeySortOrder::Ascending => "__rt_hash_ksort",

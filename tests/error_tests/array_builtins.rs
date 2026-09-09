@@ -490,6 +490,17 @@ fn test_error_krsort_wrong_args() {
     expect_error("<?php krsort();", "krsort() takes exactly 1 argument");
 }
 
+/// Boxed PHP array support does not relax the receiver contract for scalar locals.
+#[test]
+fn test_error_key_sort_scalar_receiver() {
+    for name in ["ksort", "krsort"] {
+        expect_error(
+            &format!("<?php $value = 7; {name}($value);"),
+            &format!("{name}() argument must be array"),
+        );
+    }
+}
+
 /// Verifies that error natsort wrong args.
 #[test]
 fn test_error_natsort_wrong_args() {

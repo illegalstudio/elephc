@@ -5,7 +5,7 @@
 //! - `crate::builtins::array::ksort` and `crate::builtins::array::krsort`.
 //!
 //! Key details:
-//! - Concrete arrays are accepted directly; boxed cells of heterogeneous array places defer
+//! - Concrete arrays and PHP array declarations are accepted directly; boxed cells of array places defer
 //!   runtime tag validation to the shared nested key-sort lowering path.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -15,7 +15,7 @@ use crate::types::PhpType;
 
 /// Validates the common array receiver contract for `ksort()` and `krsort()`.
 ///
-/// Concrete indexed and associative arrays are accepted statically. A boxed element of a packed
+/// Concrete arrays and boxed PHP array declarations are accepted statically. A boxed element of a packed
 /// or associative heterogeneous array place is also accepted because the nested lowering path
 /// checks its runtime tag before mutation and raises the builtin-specific PHP `TypeError` for
 /// invalid cells.
@@ -24,6 +24,7 @@ pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let accepts_mixed_nested_element = ty == PhpType::Mixed
         && is_mixed_array_element_lvalue(cx.checker, cx.env, &cx.args[0])?;
     if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        && !ty.is_php_array()
         && !accepts_mixed_nested_element
     {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
