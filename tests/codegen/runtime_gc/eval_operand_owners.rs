@@ -10,6 +10,23 @@
 
 use crate::support::*;
 
+/// First compound writes use the OS count and retain it across later expression assignments.
+#[test]
+fn test_core_native_process_argument_first_writes_preserve_initial_values() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$argc += 7;
+echo $argc === count($argv) + 7 ? "first|" : "bad|";
+$updated = ($argc += 3);
+echo $updated === count($argv) + 10 ? "expression|" : "bad|";
+++$argc;
+echo $argc === count($argv) + 11 ? "increment" : "bad";
+unset($updated);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "first|expression|increment", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Global string stores transfer their acquired copy, including self-assignment and replacement.
 #[test]
 fn test_core_native_global_string_stores_transfer_persisted_payloads() {

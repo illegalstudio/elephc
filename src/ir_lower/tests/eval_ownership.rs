@@ -10,6 +10,34 @@
 
 use crate::ir::{Immediate, Op, Ownership};
 
+/// Main's first process-variable write retires its entry owner without inserting a null initializer.
+#[test]
+fn process_local_first_writes_preserve_entry_initialization_on_all_targets() {
+    for statement in ["$argc += 7;", "$updated = ($argc += 7);", "++$argc;", "$argc = count($argv) + 7;", "$argv = [$argv[0] . \"replacement\"];"] {
+        let name = if statement.starts_with("$argv") { "argv" } else { "argc" };
+        let source = format!("<?php {statement} echo $argv[0], count($argv), $argc;");
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let module = super::lower_source_at_for_target(
+                &source, std::path::Path::new("main.php"), std::path::Path::new("."),
+                crate::codegen::platform::Target::parse(target).unwrap(),
+            );
+            let main = module.functions.iter().find(|function| function.flags.is_main).unwrap();
+            let local = main.locals.iter().find(|local| local.name.as_deref() == Some(name)).unwrap();
+            let slot = Some(Immediate::LocalSlot(local.id));
+            let store = main.instructions.iter().position(|inst| inst.op == Op::StoreLocal && inst.immediate == slot).unwrap();
+            if Ownership::php_type_needs_lifetime_tracking(&local.php_type) {
+                assert!(main.instructions[..store].iter().any(|inst| inst.op == Op::ReleaseLocalSlot && inst.immediate == slot),
+                    "{target}: {statement} must retire the entry-point owner");
+            }
+            let value = main.value(main.instructions[store].operands[0]).unwrap();
+            if let crate::ir::ValueDef::Instruction { inst, .. } = value.def {
+                assert_ne!(main.instruction(inst).unwrap().op, Op::ConstNull, "{target}: {statement}");
+            }
+            crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        }
+    }
+}
+
 /// Runtime eval roots its code buffer and releases discarded profiled results on every target.
 #[test]
 fn profiled_eval_owns_its_result_and_roots_its_source_on_all_targets() {

@@ -15,6 +15,7 @@ mod builtin_datetime;
 mod context;
 mod effect_refinement;
 mod effects_lookup;
+mod entry_locals;
 mod expr;
 mod fibers;
 mod function;
