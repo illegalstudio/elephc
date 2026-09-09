@@ -31,6 +31,36 @@ fn program_return_retains_borrowed_scope_storage() {
     assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 0);
 }
 
+/// A pending return owns its source before finally mutates storage, and overrides release that owner.
+#[test]
+fn pending_return_survives_finally_storage_mutations_and_overrides() {
+    for (source, kept) in [
+        ("try { return $value; } finally { unset($value); }", true),
+        ("try { return $value; } finally { $value = 'replaced'; }", true),
+        ("try { try { return $value; } finally { unset($value); } } finally {}", true),
+        ("try { return $value; } finally { unset($value); return 'override'; }", false),
+    ] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let original = values.string("kept").unwrap();
+        scope.set("value", original, ScopeCellOwnership::Owned);
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let outcome = execute_program_outcome_with_context(
+            &mut context, &program, &mut scope, &mut values,
+        ).unwrap();
+        let EvalOutcome::Value(returned) = outcome else { panic!("expected return: {source}"); };
+        assert_eq!(returned == original, kept, "{source}");
+        assert!(!returned.is_borrowed(), "{source}");
+        for cell in scope.drain_owned_cells() { values.release(cell).unwrap(); }
+        assert_eq!(values.cell_owners[&(original.as_ptr() as usize)], usize::from(kept), "{source}");
+        assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 1, "{source}");
+        values.release(returned).unwrap();
+        assert_eq!(values.cell_owners[&(original.as_ptr() as usize)], 0, "{source}");
+        assert_eq!(values.cell_owners[&(returned.as_ptr() as usize)], 0, "{source}");
+    }
+}
+
 /// Throws retain storage reads before catches or finally blocks can replace the source binding.
 #[test]
 fn thrown_storage_values_keep_an_independent_control_owner() {

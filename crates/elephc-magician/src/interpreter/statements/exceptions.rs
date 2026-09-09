@@ -34,6 +34,16 @@ pub(in crate::interpreter) fn execute_try_stmt(
     if finally_body.is_empty() {
         return Ok(control);
     }
+    // A storage read must survive a finally block that replaces or unsets its source binding.
+    let control = match control {
+        EvalControl::Return(value) if value.is_borrowed() => {
+            EvalControl::Return(values.retain(value)?)
+        }
+        EvalControl::Throw(value) if value.is_borrowed() => {
+            EvalControl::Throw(values.retain(value)?)
+        }
+        control => control,
+    };
     match execute_statements(finally_body, context, scope, values) {
         Ok(EvalControl::None) => Ok(control),
         Ok(finally_control) => {
