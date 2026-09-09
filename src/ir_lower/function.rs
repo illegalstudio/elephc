@@ -30,6 +30,9 @@ use crate::types::{
     PackedClassInfo, PhpType, TypeEnv,
 };
 
+mod builtin_wrappers;
+pub(crate) use builtin_wrappers::lower_boxed_usort_callable;
+
 /// AST parameter tuple shape used by function, method, and closure declarations.
 type AstParams = [(
     String,

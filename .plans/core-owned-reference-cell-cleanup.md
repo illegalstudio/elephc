@@ -298,3 +298,25 @@ behavioral assertion remains a CI gate. Test compilation and diff hygiene pass.
 A fresh `git fetch origin` confirms that `origin/main` remains
 `b068c2b7d27627b9b6ce451dbbc2e71faba3f7d8`, already an ancestor of this branch.
 No further rebase or history rewrite is needed at this checkpoint.
+
+### Boxed usort callable body
+
+The runtime descriptor wrapper used the generic one-instruction builtin body,
+passing a boxed array directly into the raw usort backend even when the source
+call had already selected the private-array graph. Boxed usort wrappers now
+reuse full semantic body lowering, including parameter references, private
+working storage, normal/exceptional publication and ownership finalization.
+The wrapper factory validates the resulting EIR before emitting any assembly.
+No separate backend sorter or reduced callable semantics were added.
+
+Shared callback inference also treats union-backed arrays as dynamic values
+and keys instead of applying the historical integer fallback. New fixtures
+exercise an opaque descriptor parameter, COW aliases, comparator mutation and
+throwing cleanup, plus declared arrays with typed string comparators. The
+all-target structural test validates the wrapper's handler and concrete work
+array in addition to compiling its emitted body.
+
+`cargo build`, `cargo check --tests`, assembly-comment alignment and the full
+builtin documentation workflow pass. The generators produce no documentation
+diff. No local tests were executed. Runtime and all-target structural results
+remain CI gates; CI `34415026947` on the preceding pushed head is still live.

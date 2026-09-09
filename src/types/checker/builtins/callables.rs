@@ -24,6 +24,9 @@ use super::super::Checker;
 
 mod preg_replace_callback;
 
+#[cfg(test)]
+mod tests;
+
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
 /// Type-checks a first-class `preg_replace_callback(...)` invocation with callback context.
@@ -115,14 +118,14 @@ fn specialize_dynamic_assoc_variadic_first_class_callback(
 
 /// Returns the element type carried by an array/associative-array type.
 ///
-/// A `Mixed` receiver yields `Mixed` elements so callback validation can preserve the
+/// A boxed receiver yields `Mixed` elements so callback validation can preserve the
 /// declaration as the only available contract. Other non-array types retain the historical
 /// `Int` fallback; callers that require arrays diagnose the invalid container separately.
 pub(crate) fn array_element_type(arr_ty: &PhpType) -> PhpType {
     match arr_ty {
         PhpType::Array(elem_ty) => (**elem_ty).clone(),
         PhpType::AssocArray { value, .. } => (**value).clone(),
-        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
         _ => PhpType::Int,
     }
 }
@@ -130,14 +133,14 @@ pub(crate) fn array_element_type(arr_ty: &PhpType) -> PhpType {
 /// Returns the array key type carried by an array/associative-array type.
 ///
 /// Indexed arrays are integer-keyed; an associative array reports its declared key type.
-/// A `Mixed` receiver yields `Mixed` keys so callback validation keeps the declaration as
+/// A boxed receiver yields `Mixed` keys so callback validation keeps the declaration as
 /// the only available contract. Other non-array types retain the `Int` fallback, matching
 /// [`array_element_type`]; callers that require arrays diagnose the container separately.
 pub(crate) fn array_key_type(arr_ty: &PhpType) -> PhpType {
     match arr_ty {
         PhpType::Array(_) => PhpType::Int,
         PhpType::AssocArray { key, .. } => (**key).clone(),
-        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
         _ => PhpType::Int,
     }
 }

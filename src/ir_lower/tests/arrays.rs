@@ -346,9 +346,14 @@ fn boxed_usort_publishes_private_arrays_on_every_target() {
     let source = r#"<?php
 class TargetSortBag { public array $items = ['b' => 2, 'a' => 1]; }
 function targetBoxedSort(array &$items): void { usort($items, fn(int $a, int $b): int => $a <=> $b); }
+function dynamicBoxedSort(callable $sort, array &$items): void {
+    $sort($items, fn(int $a, int $b): int => $a <=> $b);
+}
 $bag = new TargetSortBag();
 $items = [2, 1];
 targetBoxedSort($items);
+$sort = usort(...);
+dynamicBoxedSort($sort, $items);
 usort($bag->items, fn(int $a, int $b): int => $b <=> $a);
 usort(callback: fn(int $a, int $b): int => $a <=> $b, array: $bag->items);
 echo implode(',', $bag->items);
@@ -391,6 +396,20 @@ echo implode(',', $bag->items);
         }
         assert!(sorts >= 3, "{name}: both planner forms reach the private-array lowering");
         assert!(rooted_references >= 2, "{name}: both property sorts capture a rooted reference");
+        let signature = crate::builtins::registry::first_class_callable_sig("usort").unwrap();
+        let wrapper = crate::ir_lower::lower_boxed_usort_callable(
+            &mut module.clone(), "boxed_usort_probe", &signature, false,
+        );
+        crate::ir::validate_function(&wrapper).unwrap();
+        assert!(wrapper.instructions.iter().any(|inst| inst.op == Op::TryPushHandler), "{name}");
+        assert!(wrapper.instructions.iter().any(|inst| inst.op == Op::CatchBind), "{name}");
+        let wrapper_sorts = wrapper.instructions.iter().filter(|inst| matches!(inst.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Usort)
+                | RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::Usort, .. }))
+        )).collect::<Vec<_>>();
+        assert_eq!(wrapper_sorts.len(), 1, "{name}");
+        assert_eq!(wrapper.value(wrapper_sorts[0].operands[0]).unwrap().php_type,
+            PhpType::Array(Box::new(PhpType::Mixed)), "{name}");
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert!(assembly.contains("__rt_usort"), "{name}");

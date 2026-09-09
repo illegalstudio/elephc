@@ -153,6 +153,21 @@ fn build_runtime_call_wrapper_function(
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
+    if let RuntimeCallWrapperKind::Builtin { strict_php } = kind {
+        let boxed_user_sort = crate::builtins::registry::lookup(name).is_some_and(|def| {
+            def.spec.semantics.runtime_functions
+                == crate::builtins::semantics::BuiltinRuntimeFunctions::One(crate::ir::RuntimeFnId::Usort)
+        }) && sig.params.first().is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed);
+        if boxed_user_sort {
+            // The graph owns reference capture and normal/exceptional publication. A raw
+            // RuntimeCall would bypass that graph and treat a Mixed cell as an array header.
+            let function = crate::ir_lower::lower_boxed_usort_callable(module, label, sig, strict_php);
+            crate::ir::validate_function(&function).map_err(|error| {
+                CodegenIrError::invalid_module(format!("boxed sort callable wrapper: {error:?}"))
+            })?;
+            return Ok(function);
+        }
+    }
     let return_php_type = wrapper_return_php_type(&sig.return_type);
     let mut function = Function::new(
         label.to_string(),

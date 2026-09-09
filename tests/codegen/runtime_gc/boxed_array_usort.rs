@@ -10,6 +10,50 @@
 
 use crate::support::*;
 
+/// Runtime-selected sort descriptors share the direct boxed-array copy and exceptional publication.
+#[test]
+fn test_core_boxed_usort_opaque_descriptor_cow_and_throw_cleanup() {
+    let source = r#"<?php
+function dispatchBoxedSort(callable $sort, array &$items, callable $compare): void {
+    $sort($items, $compare);
+}
+function descriptorSortValues(): array { return ['b' => 2, 'a' => 1]; }
+$sort = usort(...);
+$items = descriptorSortValues();
+$copy = $items;
+dispatchBoxedSort($sort, $items, fn(int $a, int $b): int => $a <=> $b);
+echo implode(',', $items), ':', implode(',', array_keys($items)), '|', implode(',', $copy), '|';
+try {
+    dispatchBoxedSort($sort, $items, function(int $a, int $b) use (&$items): int {
+        $items = ['replacement' => 9];
+        throw new Exception('stop');
+    });
+} catch (Exception $error) {
+    echo $error->getMessage(), '|';
+    unset($error);
+}
+echo implode(',', $items), ':', implode(',', array_keys($items));
+unset($items, $copy, $sort);
+"#;
+    assert_clean_sort(source, "1,2:0,1|2,1|stop|1,2:0,1");
+}
+
+/// Declared arrays keep comparator parameter declarations instead of inventing integer elements.
+#[test]
+fn test_core_boxed_usort_array_contract_keeps_typed_string_callback() {
+    let source = r#"<?php
+function sortDeclaredWords(array &$words): void {
+    usort($words, fn(string $a, string $b): int => strcmp($a, $b));
+}
+$words = ['last' => str_repeat('z', 3), 'first' => str_repeat('a', 3)];
+$copy = $words;
+sortDeclaredWords($words);
+echo implode(',', $words), '|', implode(',', $copy);
+unset($words, $copy);
+"#;
+    assert_clean_sort(source, "aaa,zzz|zzz,aaa");
+}
+
 /// Capturing a property reference borrows the rooted receiver until the sort finalizer releases it.
 #[test]
 fn test_core_boxed_usort_property_root_keeps_receiver_alive_until_unset() {
