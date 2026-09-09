@@ -329,6 +329,10 @@ fn owned_parameter_slots(
     stored_slots: &HashSet<LocalSlotId>,
     ever_ref_cell_slots: &HashSet<LocalSlotId>,
 ) -> HashSet<LocalSlotId> {
+    // Eval can replace caller-visible parameters without an explicit EIR StoreLocal.
+    let eval_can_replace_locals = function.locals.iter().any(|local| {
+        matches!(local.kind, crate::ir::LocalKind::EvalScope | crate::ir::LocalKind::EvalGlobalScope)
+    });
     function
         .params
         .iter()
@@ -345,7 +349,8 @@ fn owned_parameter_slots(
                 && param.php_type.codegen_repr() != PhpType::Mixed;
             (stored_slots.contains(&slot)
                 || ever_ref_cell_slots.contains(&slot)
-                || prologue_boxes_owned_mixed)
+                || prologue_boxes_owned_mixed
+                || (eval_can_replace_locals && local.kind == crate::ir::LocalKind::PhpLocal))
                 .then_some(slot)
         })
         .collect()
@@ -393,6 +398,23 @@ mod tests {
     use crate::codegen::generate_user_asm_from_ir;
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership};
+
+    /// Eval replacement requires a by-value parameter owner even without explicit EIR stores.
+    #[test]
+    fn eval_scope_makes_visible_by_value_parameters_owned() {
+        for by_ref in [false, true] {
+            let mut function = Function::new("eval_parameter".to_string(), IrType::Void, PhpType::Void);
+            function.params.push(FunctionParam {
+                name: "value".to_string(), ir_type: IrType::Str, php_type: PhpType::Str,
+                by_ref, variadic: false,
+            });
+            let slot = function.add_local(Some("value".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+            function.add_local(Some("scope".to_string()), IrType::I64, PhpType::Int, LocalKind::EvalScope);
+            let analysis = LocalSlotAnalysis::new(&function);
+            assert!(!analysis.has_store(slot));
+            assert_eq!(analysis.owns_parameter_slot(slot), !by_ref);
+        }
+    }
 
     /// Verifies a later promotion does not flow backward into an earlier deferred release.
     #[test]

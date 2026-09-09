@@ -10,6 +10,52 @@
 
 use crate::support::*;
 
+/// Eval replacements, unchanged snapshots and missing entries balance native parameter owners.
+#[test]
+fn test_core_eval_local_reload_balances_replaced_and_missing_parameters() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function reloadLocalOwners(string $source, mixed $value, string $text): void {
+    eval($source);
+    echo strlen($value), ":", strlen($text), "|";
+    eval($source);
+    echo strlen($value), ":", strlen($text), "|";
+}
+$value = str_repeat("a", 8);
+$text = str_repeat("b", 12);
+$source = '$value = str_repeat("v", 48); $text = str_repeat("t", 64); // ' . $argc;
+reloadLocalOwners($source, $value, $text);
+$source = '$value = $value; $text = $text; // ' . $argc;
+reloadLocalOwners($source, $value, $text);
+$source = 'unset($value, $text); // ' . $argc;
+reloadLocalOwners($source, $value, $text);
+echo strlen($value), ":", strlen($text);
+unset($source, $value, $text);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "48:64|48:64|8:12|8:12|0:0|0:0|8:12", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Independent scope snapshots protect aliased native reference cells during sequential reload.
+#[test]
+fn test_core_eval_local_reload_keeps_aliased_reference_payloads_alive() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function reloadAliasedOwners(mixed &$first, mixed &$second, string $source): void {
+    eval($source);
+    echo strlen($first), ":", strlen($second), "|";
+}
+$value = str_repeat("a", 8);
+$source = '$first = str_repeat("b", 48); $second = $first; // ' . $argc;
+reloadAliasedOwners($value, $value, $source);
+reloadAliasedOwners($value, $value, $source);
+echo strlen($value);
+unset($source, $value);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "48:48|48:48|48", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// First compound writes use the OS count and retain it across later expression assignments.
 #[test]
 fn test_core_native_process_argument_first_writes_preserve_initial_values() {

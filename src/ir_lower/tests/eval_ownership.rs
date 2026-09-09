@@ -10,6 +10,33 @@
 
 use crate::ir::{Immediate, Op, Ownership};
 
+/// Eval reload retires displaced local owners through target-native stores and release helpers.
+#[test]
+fn eval_local_reload_releases_previous_owners_on_all_targets() {
+    let source = r#"<?php
+function reloadOwnedLocal(string $code, mixed $value): mixed {
+    eval($code);
+    return $value;
+}
+$code = '$value = "new"; // ' . $argc;
+echo reloadOwnedLocal($code, "old");
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let mut replacements = 0;
+        for section in asm.split("publish eval local replacement before retiring the previous owner").skip(1) {
+            let (replacement, _) = section.split_once("eval local replacement owns its native payload").unwrap();
+            assert!(replacement.contains("__rt_decref_mixed") || replacement.contains("__rt_heap_free_safe"), "{target}: {replacement}");
+            replacements += 1;
+        }
+        assert!(replacements >= 2, "{target}: present and missing entries must both retire their old owners");
+    }
+}
+
 /// Main's first process-variable write retires its entry owner without inserting a null initializer.
 #[test]
 fn process_local_first_writes_preserve_entry_initialization_on_all_targets() {

@@ -16,8 +16,8 @@ pub(super) fn store_mixed_scope_cell_to_local(
 ) -> Result<()> {
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
-            emit_retain_scope_cell_if_owned(ctx);
-            ctx.store_current_result_to_local(local.slot)?;
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            replace_owned_eval_local(ctx, local)?;
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
@@ -32,8 +32,10 @@ pub(super) fn store_mixed_scope_cell_to_local(
             ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Str => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-            ctx.store_current_result_to_local(local.slot)?;
+            let string = ctx.next_label("eval_reload_string_payload");
+            let persist = ctx.next_label("eval_reload_persist_string");
+            abi::emit_owned_mixed_string(ctx.emitter, &string, &persist);
+            replace_owned_eval_local(ctx, local)?;
         }
         PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
             // Objects, arrays, and hashes are heap pointers boxed in the
@@ -46,7 +48,8 @@ pub(super) fn store_mixed_scope_cell_to_local(
             let result_reg = abi::int_result_reg(ctx.emitter);
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed heap pointer into the local-store result register
-            ctx.store_current_result_to_local(local.slot)?;
+            abi::emit_incref_if_refcounted(ctx.emitter, &local.ty);
+            replace_owned_eval_local(ctx, local)?;
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -125,25 +128,37 @@ fn replace_eval_mixed_global(ctx: &mut FunctionContext<'_>, symbol: &str, borrow
     abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
 }
 
-/// Retains a scope-owned Mixed cell before storing it into a native local owner.
-pub(super) fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
-    let flags_reg = abi::secondary_scratch_reg(ctx.emitter);
-    let skip = ctx.next_label("eval_scope_reload_borrowed");
-    abi::emit_load_temporary_stack_slot(ctx.emitter, flags_reg, 8);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // borrowed scope entries can be copied back without retaining
-        }
-        Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("je {}", skip));                   // borrowed scope entries can be copied back without retaining
-        }
+/// Publishes an acquired replacement before releasing the old raw or reference-cell payload.
+fn replace_owned_eval_local(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) -> Result<()> {
+    let ty = local.ty.codegen_repr();
+    ctx.emitter.comment("publish eval local replacement before retiring the previous owner");
+    abi::emit_push_result_value(ctx.emitter, &ty);
+    ctx.load_local_to_result(local.slot)?;
+    abi::emit_push_result_value(ctx.emitter, &ty);
+    load_saved_eval_local_result(ctx, &ty, 16);
+    ctx.store_current_result_to_local(local.slot)?;
+    load_saved_eval_local_result(ctx, &ty, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if ty == PhpType::Str {
+        let (ptr, _) = abi::string_result_regs(ctx.emitter);
+        abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), ptr);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    } else {
+        abi::emit_decref_if_refcounted(ctx.emitter, &ty);
     }
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
-    ctx.emitter.label(&skip);
+    ctx.emitter.comment("eval local replacement owns its native payload");
+    Ok(())
+}
+
+/// Restores a heap pointer or string pair from a saved eval replacement operand.
+fn load_saved_eval_local_result(ctx: &mut FunctionContext<'_>, ty: &PhpType, offset: usize) {
+    if *ty == PhpType::Str {
+        let (ptr, len) = abi::string_result_regs(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, ptr, offset);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, len, offset + 8);
+    } else {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    }
 }
 
 /// Stores the local fallback used when eval unsets or removes a synchronized local.
@@ -155,7 +170,7 @@ pub(super) fn store_missing_scope_entry_to_local(
         PhpType::Mixed | PhpType::Union(_) => {
             let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol);
-            ctx.store_current_result_to_local(local.slot)?;
+            replace_owned_eval_local(ctx, local)?;
         }
         PhpType::Int | PhpType::Bool => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -170,13 +185,13 @@ pub(super) fn store_missing_scope_entry_to_local(
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-            ctx.store_current_result_to_local(local.slot)?;
+            replace_owned_eval_local(ctx, local)?;
         }
         PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
             // Heap-pointer locals fall back to the null pointer when eval
             // removed the entry, matching the object fallback.
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            ctx.store_current_result_to_local(local.slot)?;
+            replace_owned_eval_local(ctx, local)?;
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(

@@ -217,10 +217,13 @@ pub(super) fn flush_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[E
         let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &ty);
+        } else {
+            // Keep an independent snapshot while eval or another alias replaces the native slot.
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
         }
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-        emit_eval_scope_set(ctx, local, scope_set_flags_for_type(&ty));
+        emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED);
     }
     Ok(())
 }
