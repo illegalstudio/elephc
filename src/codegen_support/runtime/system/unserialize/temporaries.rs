@@ -25,7 +25,7 @@ fn emit_defer_data(emitter: &mut Emitter) {
     let scratch = abi::secondary_scratch_reg(emitter);
     emitter.blank();
     emitter.label_global("__rt_unserialize_defer_data");
-    abi::emit_frame_prologue(emitter, 16);
+    abi::emit_frame_prologue(emitter, 32);
     abi::store_at_offset(emitter, result, 8);
     abi::emit_load_int_immediate(emitter, result, 24);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
@@ -36,7 +36,7 @@ fn emit_defer_data(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, scratch, "_unser_active", 0);
     abi::emit_store_to_address(emitter, scratch, result, 16);
     abi::emit_store_reg_to_symbol(emitter, result, "_unser_temporaries", 0);
-    abi::emit_frame_restore(emitter, 16);
+    abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
 }
 
@@ -47,7 +47,7 @@ fn emit_detach_data(emitter: &mut Emitter) {
     let depth = abi::tertiary_scratch_reg(emitter);
     emitter.blank();
     emitter.label_global("__rt_unserialize_detach_data");
-    abi::emit_frame_prologue(emitter, 32);
+    abi::emit_frame_prologue(emitter, 48);
     abi::emit_load_symbol_to_reg(emitter, result, "_unser_temporaries", 0);
     abi::store_at_offset(emitter, result, 8);
     abi::emit_store_zero_to_local_slot(emitter, 16);
@@ -77,7 +77,7 @@ fn emit_detach_data(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, result, "_unser_temporaries", 0);
     abi::load_at_offset(emitter, result, 8);
     emitter.label("__rt_unserialize_detach_data_return");
-    abi::emit_frame_restore(emitter, 32);
+    abi::emit_frame_restore(emitter, 48);
     abi::emit_return(emitter);
 }
 
@@ -141,8 +141,15 @@ mod tests {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_unserialize_temporaries(&mut emitter);
             let asm = emitter.output();
-            let (_, detach) = asm.split_once("__rt_unserialize_detach_data:").unwrap();
+            let (defer, detach) = asm.split_once("__rt_unserialize_detach_data:").unwrap();
             let (detach, finish) = detach.split_once("__rt_unserialize_finish_data:").unwrap();
+            let (defer_frame, detach_frame) = if name == "linux-x86_64" {
+                ("sub rsp, 16", "sub rsp, 32")
+            } else {
+                ("sub sp, sp, #32", "sub sp, sp, #48")
+            };
+            assert!(defer.contains(defer_frame), "{name}: saved data must fit above the callee stack");
+            assert!(detach.contains(detach_frame), "{name}: cursor spills must fit below the frame footer");
             assert!(detach.contains("_unser_active") && detach.contains("_unser_temporaries"), "{name}");
             assert!(!detach.contains("__rt_heap_free"), "{name}: detachment must not invoke PHP");
             assert_eq!(finish.matches("__rt_cleanup_invoke").count(), 2, "{name}");
