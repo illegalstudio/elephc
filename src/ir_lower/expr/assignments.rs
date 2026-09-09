@@ -262,6 +262,9 @@ pub(super) fn lower_dynamic_property_assign(
         Op::DynamicPropSet.default_effects(),
         Some(span),
     );
+    crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
+        ctx, &PhpType::Mixed, value, span,
+    );
 }
 
 /// Lowers pre/post increment and decrement expressions.
@@ -338,4 +341,3 @@ pub(super) fn lower_inc_dec(
         ctx.load_local(name, Some(expr.span))
     }
 }
-

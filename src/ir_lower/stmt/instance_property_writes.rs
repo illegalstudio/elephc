@@ -80,9 +80,10 @@ pub(super) fn lower_property_assign(
         Op::PropSet.default_effects(),
         Some(span),
     );
-    if let Some(property_ty) = object_property_type(ctx, object.value, property) {
-        release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
-    }
+    // Undeclared dynamic properties store boxed Mixed values. Boxing retains a
+    // concrete temporary payload just like a declared property store does.
+    let property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
+    release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
 }
 
 /// Narrows a boxed Mixed value assigned to a packed `int` field into its raw `I64` payload.

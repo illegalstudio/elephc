@@ -10,6 +10,34 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Dynamic property stores retire concrete object temporaries after their boxes retain them.
+#[test]
+fn dynamic_property_stores_release_temporary_object_sources_on_all_targets() {
+    let source = r#"<?php
+        class DynamicStoredOwner { public function __destruct() { echo "released"; } }
+        function store_dynamic_owner(stdClass $holder, string $name): void {
+            $holder->named = new DynamicStoredOwner();
+            $holder->{$name} = new DynamicStoredOwner();
+        }
+        store_dynamic_owner(new stdClass(), "runtime");
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "store_dynamic_owner").unwrap();
+        for op in [Op::PropSet, Op::DynamicPropSet] {
+            let index = function.instructions.iter().position(|inst| inst.op == op).unwrap();
+            let source = *function.instructions[index].operands.last().unwrap();
+            assert!(function.instructions[index + 1..].iter().any(|inst| {
+                inst.op == Op::Release && inst.operands == [source]
+            }), "{target}: {op:?} must retire the boxed object's original owner");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Static scalar stores release fresh boxes but do not acquire borrowed conversion sources on any ABI.
 #[test]
 fn static_scalar_conversions_preserve_source_box_ownership_on_all_targets() {
