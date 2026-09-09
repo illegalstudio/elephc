@@ -251,6 +251,18 @@ fn parse_fragment_accepts_eval_finally_source() {
         }]
     );
 }
+/// An empty finally clause satisfies try syntax, unlike a try with no handler or finalizer.
+#[test]
+fn parse_fragment_accepts_empty_finally_but_rejects_missing_handler() {
+    let program = parse_fragment(b"try { return 1; } finally {}").unwrap();
+    assert_eq!(program.statements(), &[EvalStmt::Try {
+        body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
+        catches: Vec::new(),
+        finally_body: Vec::new(),
+    }]);
+    assert!(parse_fragment(b"try { return 1; }").is_err());
+}
+
 /// Verifies unset fragments expand variable, array-access, and object-property operands.
 #[test]
 fn parse_fragment_accepts_unset_source() {

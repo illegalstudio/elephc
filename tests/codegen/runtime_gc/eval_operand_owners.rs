@@ -51,7 +51,7 @@ fn test_core_eval_returned_local_survives_finally_unset() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 function returnEvalFinallyOwner(string $source): mixed { return eval($source); }
 $source = '$value = str_repeat("x", 48);
-try { return $value; } finally { unset($value); } // ' . $argc;
+try { try { return $value; } finally { unset($value); } } finally {} // ' . $argc;
 for ($i = 0; $i < 3; $i++) {
     $result = returnEvalFinallyOwner($source);
     echo strlen($result), "|";

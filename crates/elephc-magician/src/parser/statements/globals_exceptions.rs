@@ -62,14 +62,14 @@ impl Parser {
         while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "catch")) {
             catches.push(self.parse_catch_clause()?);
         }
-        let finally_body = if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "finally"))
-        {
+        let has_finally = matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "finally"));
+        let finally_body = if has_finally {
             self.advance();
             self.parse_block()?
         } else {
             Vec::new()
         };
-        if catches.is_empty() && finally_body.is_empty() {
+        if catches.is_empty() && !has_finally {
             return Err(EvalParseError::UnexpectedToken);
         }
         Ok(vec![EvalStmt::Try {
