@@ -206,3 +206,14 @@ fn xml_set_element_handler_rejects_extra_required_parameters_after_an_unpack() {
         "xml_set_element_handler(): start handler declares 4 required parameters but the element event supplies 3",
     );
 }
+
+/// Handlers inside a run-time unpack are not literals the setter could type; the call is
+/// rejected with the builtins' general unknown-length unpack diagnostic (documented
+/// divergence: PHP binds them at run time).
+#[test]
+fn xml_set_element_handler_rejects_handlers_inside_a_dynamic_unpack() {
+    expect_xml_error(
+        "<?php $p = xml_parser_create(); $tail = [function ($parser, $name, $attributes) { echo $name; }, null]; xml_set_element_handler($p, ...$tail);",
+        "xml_set_element_handler() takes exactly 3 arguments",
+    );
+}

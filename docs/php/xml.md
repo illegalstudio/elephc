@@ -296,6 +296,13 @@ leaked block and byte totals), not guarantees.
   clone at run time; either way `clone` throws `Error: Trying to clone an
   uncloneable object of class ...` and the original object keeps its handle.
 
+- A handler that arrives through a run-time unpack (`xml_set_element_handler($p,
+  ...$handlers)`) is rejected at compile time with the builtins' general
+  `takes exactly N arguments` diagnostic for an unpack of unknown length, where
+  PHP binds it at run time. Name the handlers in the call instead
+  (`...$args, start_handler: ..., end_handler: ...` works, with the parser
+  unpacked from a list or a string-keyed array).
+
 See the generated [`xml_parse()` reference](./builtins/xml/xml_parse.md) and
 the neighboring XML builtin pages for individual signatures and backend support.
 

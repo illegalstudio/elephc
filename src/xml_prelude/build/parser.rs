@@ -116,6 +116,15 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                 ]),
         )
         .method(
+            method("__unserialize")
+                .param("data", t_array())
+                .keep_unread_params()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_throw(e_new("Exception", vec![e_str("Unserialization of 'XMLParser' is not allowed")])),
+                ]),
+        )
+        .method(
             method("__elephc_create")
                 .static_()
                 .param("function", TypeExpr::Str)

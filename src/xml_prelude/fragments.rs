@@ -187,6 +187,10 @@ final class XMLParser {
         throw new Exception("Serialization of 'XMLParser' is not allowed");
     }
 
+    public function __unserialize(array $data): void {
+        throw new Exception("Unserialization of 'XMLParser' is not allowed");
+    }
+
     // Mints a parser for xml_parser_create() ($namespaces false) or xml_parser_create_ns().
     // Only the first byte of $separator is used, exactly like php-src's compat layer.
     public static function __elephc_create(string $function, ?string $encoding, bool $namespaces, string $separator): XMLParser {
@@ -991,6 +995,20 @@ class XMLWriter {
         $this->__elephc_std_fd = 0;
         $this->__elephc_stream = null;
         throw new Error("Trying to clone an uncloneable object of class " . get_class($this));
+    }
+
+    // php-src's XMLWriter carries no properties, so serialize() writes an empty object
+    // and unserialize() hands back a fresh, unopened writer; the bridge handle and the
+    // stream state must never travel (a restored copy would own the original's handle).
+    public function __serialize(): array {
+        return [];
+    }
+
+    public function __unserialize(array $data): void {
+        $this->__elephc_handle = 0;
+        $this->__elephc_stream = null;
+        $this->__elephc_std_fd = 0;
+        $this->__elephc_uri_mode = false;
     }
 
     public function __debugInfo(): array {

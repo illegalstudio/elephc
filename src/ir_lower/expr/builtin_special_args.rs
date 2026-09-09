@@ -275,6 +275,18 @@ pub(super) fn lower_xml_handler_setter_named_args(
         {
             return operands;
         }
+        // An associative dynamic unpack (`...$named` with string keys) is what the shared
+        // spread-plan lowering declines; the plan's normalized form reads each parameter
+        // out of the unpacked array by key, in signature order, so the closure literals
+        // are still right there for the per-slot typing.
+        let normalized = plan.normalized_args();
+        if normalized.len() == plan.regular_args.len() {
+            return normalized
+                .iter()
+                .enumerate()
+                .map(|(param_idx, arg)| lower_xml_handler_setter_arg(ctx, Some(sig), &hints, param_idx, arg))
+                .collect();
+        }
         return lower_args_with_signature(ctx, Some(sig), args);
     }
     let mut source_values = Vec::with_capacity(plan.source_args.len());

@@ -191,3 +191,34 @@ echo "done\n";
         "Error: Trying to clone an uncloneable object of class XMLWriter\nError: Trying to clone an uncloneable object of class XMLParser\nError: Trying to clone an uncloneable object of class XMLWriter\nbool(true)\n<inner><i>1</i></inner>|END\nError: Trying to clone an uncloneable object of class XMLParser\nint(1)\nbool(true)\nint(1)\nbool(true)\nbool(true)\n<outer><o>2</o></outer>|END\ndone\n"
     );
 }
+
+/// Serialization follows php-src: `XMLWriter` carries no properties, so `serialize()`
+/// writes an empty object and `unserialize()` hands back a fresh, unopened writer that
+/// never shares the original's handle (the original keeps writing after the copy is
+/// used and destroyed); `XMLParser` refuses both directions with PHP's exceptions and
+/// still parses afterwards.
+#[test]
+fn test_xml_serialization_matches_php() {
+    if skip_without_xml_native("test_xml_serialization_matches_php") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$w = new XMLWriter(); $w->openMemory(); $w->writeElement("a");
+$s = serialize($w); var_dump($s);
+$u = unserialize($s); var_dump($u instanceof XMLWriter, $u->openMemory(), $u->writeElement("b"), $u->outputMemory());
+var_dump($w->writeElement("c"), $w->outputMemory());
+unset($u); var_dump($w->writeElement("d"), $w->outputMemory());
+var_dump(unserialize('O:9:"XMLWriter":0:{}') instanceof XMLWriter);
+$p = xml_parser_create();
+try { serialize($p); } catch (Exception $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { unserialize('O:9:"XMLParser":0:{}'); echo "no throw\n"; } catch (Exception $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+var_dump(xml_parse($p, "<ok/>", true));
+"#,
+    );
+    // PHP 8.5.10 prints the same.
+    assert_eq!(
+        out,
+        "string(20) \"O:9:\"XMLWriter\":0:{}\"\nbool(true)\nbool(true)\nbool(true)\nstring(4) \"<b/>\"\nbool(true)\nstring(8) \"<a/><c/>\"\nbool(true)\nstring(4) \"<d/>\"\nbool(true)\nException: Serialization of 'XMLParser' is not allowed\nException: Unserialization of 'XMLParser' is not allowed\nint(1)\n"
+    );
+}

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1198](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1198) (`xmlwriter_end_cdata`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1217](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1217) (`xmlwriter_end_cdata`)
 - **Function symbol**: `xmlwriter_end_cdata()`
 
 

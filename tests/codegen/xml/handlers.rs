@@ -345,3 +345,24 @@ echo "set\n";
         "A array(1) {\n  [\"ID\"]=>\n  string(1) \"x\"\n}\nB array(1) {\n  [\"ID\"]=>\n  string(1) \"y\"\n}\nS ROOT array(1) {\n  [\"ID\"]=>\n  string(1) \"z\"\n}\nC 2\nE 4\nmade\nset\n"
     );
 }
+
+/// An associative array unpacked at run time (`...$named` with a `parser` key) next to
+/// named handler closures: the shared spread plan declines string-keyed dynamic unpacks,
+/// so the setter lowers the plan's normalized form (each parameter read from the array
+/// by key) with the same per-slot handler typing.
+#[test]
+fn test_xml_dynamic_assoc_unpack_with_named_handlers() {
+    if skip_without_xml_native("test_xml_dynamic_assoc_unpack_with_named_handlers") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$p = xml_parser_create(); $a = ['parser' => $p];
+xml_set_element_handler(...$a, end_handler: function ($parser, $name) { echo "E ", strlen($name), "\n"; }, start_handler: function ($parser, $name, array $attributes) { echo "S $name "; var_dump($attributes); });
+xml_set_character_data_handler(...$a, handler: function ($parser, $data) { echo "C ", strlen($data), "\n"; });
+xml_parse($p, '<root id="x">hi</root>', true);
+"#,
+    );
+    // PHP 8.5.10 prints the same.
+    assert_eq!(out, "S ROOT array(1) {\n  [\"ID\"]=>\n  string(1) \"x\"\n}\nC 2\nE 4\n");
+}
