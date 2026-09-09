@@ -241,6 +241,25 @@ echo implode(",", $source);
     assert_eq!(compile_and_run(source), "old|0,key,1:old,new,tail|old");
 }
 
+/// Sparse promotion retains Mixed children after the source's packed storage is released.
+#[test]
+fn test_core_native_sparse_promotion_retains_mixed_children() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function sparseMixedOwners(array $items): array { unset($items[1]); return $items; }
+for ($i = 0; $i < 3; $i++) {
+    $source = ["left", 7, "right"];
+    $sparse = sparseMixedOwners($source);
+    unset($source);
+    $noise = str_repeat("x", 48);
+    echo $sparse[0], ":", $sparse[2], "|";
+    unset($noise, $sparse);
+}
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "left:right|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Whole-array parameter replacement preserves boxed reads, returns, and reference writeback.
 #[test]
 fn test_core_native_php_array_reassignment_preserves_declared_storage() {

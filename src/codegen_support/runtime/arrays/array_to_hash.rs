@@ -146,7 +146,7 @@ fn emit_array_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_array_to_hash_set");                           // scalar elements need no retain
     emitter.instruction("cmp r9, 7");                                           // is the element above the heap-backed tag range?
     emitter.instruction("jg __rt_array_to_hash_set");                           // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // load the heap-backed element pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // pass the heap-backed element in the internal retain ABI register
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed element for the result hash
     emitter.instruction("jmp __rt_array_to_hash_set");                          // continue to insertion
     emitter.label("__rt_array_to_hash_string");
@@ -175,3 +175,25 @@ fn emit_array_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the result hash in rax
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Promotion passes the child pointer, not the loop index, to the retain helper on every ABI.
+    #[test]
+    fn array_to_hash_retains_heap_children_using_the_internal_abi() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_array_to_hash(&mut emitter);
+            let asm = emitter.output();
+            let prefix = asm.split_once("__rt_incref").expect("child retain").0;
+            let load = if name == "linux-x86_64" {
+                "mov rax, QWORD PTR [rbp - 56]"
+            } else {
+                "ldr x0, [sp, #48]"
+            };
+            assert!(prefix.lines().rev().take(2).any(|line| line.contains(load)), "{name}");
+        }
+    }
+}
