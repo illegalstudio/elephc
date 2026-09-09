@@ -578,8 +578,15 @@ impl ExceptionFlowAnalysis {
             | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::ErrorSuppress(inner)
-            | ExprKind::PtrCast { expr: inner, .. }
-            | ExprKind::Spread(inner) => self.expr_throws(inner, bindings, class_context),
+            | ExprKind::PtrCast { expr: inner, .. } => self.expr_throws(inner, bindings, class_context),
+            ExprKind::Spread(inner) => {
+                let evaluated = self.expr_throws(inner, bindings, class_context);
+                if matches!(inner.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
+                    evaluated
+                } else {
+                    evaluated.combined(ThrownTypes::unknown())
+                }
+            }
             ExprKind::Print(inner) => self
                 .expr_throws(inner, bindings, class_context)
                 .combined(self.string_conversion_throws(inner, class_context)),

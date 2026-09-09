@@ -10,6 +10,31 @@
 
 use super::*;
 
+/// Dynamic spreads retain validation and callback effects; known array literals keep their child effects.
+#[test]
+fn test_effect_analysis_keeps_dynamic_array_spread_observable() {
+    let dynamic = Expr::new(ExprKind::Spread(Box::new(Expr::var("items"))), Span::dummy());
+    let effect = expr_effect(&dynamic);
+    assert!(effect.may_throw && effect.has_side_effects && effect.writes_globals);
+    let literal = Expr::new(
+        ExprKind::Spread(Box::new(Expr::new(
+            ExprKind::ArrayLiteral(vec![Expr::int_lit(1)]), Span::dummy(),
+        ))),
+        Span::dummy(),
+    );
+    assert!(!expr_is_observable(&literal));
+    let tokens = crate::lexer::tokenize(
+        "<?php try { [...$items]; } catch (Error $error) { echo 'caught'; } finally { echo 'done'; }",
+    ).unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    for optimized in [prune_constant_control_flow(program.clone()), eliminate_dead_code(program)] {
+        assert!(optimized.iter().any(|statement| matches!(
+            &statement.kind,
+            StmtKind::Try { catches, finally_body: Some(_), .. } if !catches.is_empty()
+        )), "{optimized:?}");
+    }
+}
+
 /// Reference source calls and implicit target destruction both preserve catch and finally clauses.
 #[test]
 fn test_effect_analysis_preserves_reference_assignment_exception_boundaries() {

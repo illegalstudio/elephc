@@ -342,3 +342,17 @@ It does not confirm full recovery: the list-unpack string leak persists, the
 new scalar-header fixture exposes separate box leaks, and discarded invalid
 spread calls lose their expected exception. These remain open gates alongside
 the previously recorded callback, native/eval and hydration failures.
+
+### Discarded dynamic spread effects
+
+Both AST effect inference and exception-flow summaries previously treated a
+spread as only its operand expression. A function returning `[...$items]` could
+therefore be discarded as pure, and its caller's catch removed, even though
+dynamic unpack validation raises Error. Dynamic sources now retain observable
+effects and conservative throwable flow; literal arrays keep their recursively
+computed child effects. Unit coverage pins that distinction. A runtime-unknown
+fixture covers unused literals, discarded function results, catch/finally and
+valid arrays with EIR optimization both on and off.
+
+Build, test compilation and diff hygiene pass. No local tests were executed;
+the new optimizer fixture and existing invalid-spread regression await CI.

@@ -14,6 +14,7 @@ use crate::support::*;
 #[path = "optimizer/boxed_array_snapshots.rs"]
 mod boxed_array_snapshots;
 mod implode_effects;
+mod spread_effects;
 
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;
