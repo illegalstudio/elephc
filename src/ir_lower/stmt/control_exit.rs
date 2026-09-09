@@ -54,7 +54,9 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
                 PhpType::Pointer(None), crate::ir::LocalKind::ReturnRefCell);
             ctx.emit_void(Op::AcquireRefCell, vec![cell_ptr.value], Some(Immediate::LocalSlot(owner)),
                 Op::AcquireRefCell.default_effects(), Some(span));
-            crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+            if ctx.value_is_owning_temporary(object) {
+                crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+            }
             terminate_return(ctx, Some(cell_ptr.value));
             return;
         }

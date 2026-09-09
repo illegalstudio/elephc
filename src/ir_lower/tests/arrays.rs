@@ -264,7 +264,7 @@ echo implode(',', array_keys($items));
 #[test]
 fn boxed_usort_publishes_private_arrays_on_every_target() {
     use crate::codegen::platform::Target;
-    use crate::ir::{Immediate, RuntimeCallTarget, RuntimeFnId};
+    use crate::ir::{Immediate, LocalKind, Op, RuntimeCallTarget, RuntimeFnId, ValueDef};
     use crate::types::PhpType;
     use std::path::Path;
 
@@ -283,8 +283,26 @@ echo implode(',', $bag->items);
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
         let mut sorts = 0;
+        let mut rooted_references = 0;
         for function in &module.functions {
             for inst in &function.instructions {
+                if inst.op == Op::LoadPropRefCell {
+                    let receiver = inst.operands[0];
+                    let ValueDef::Instruction { inst: producer, .. } = function.value(receiver).unwrap().def else {
+                        continue;
+                    };
+                    let producer = &function.instructions[producer.as_raw() as usize];
+                    if producer.op == Op::LoadLocal {
+                        if let Some(Immediate::LocalSlot(slot)) = producer.immediate {
+                            if function.locals[slot.as_raw() as usize].kind == LocalKind::HiddenTemp {
+                                rooted_references += 1;
+                                assert!(!function.instructions.iter().any(|candidate| {
+                                    candidate.op == Op::Release && candidate.operands == [receiver]
+                                }), "{name}: the reference capture borrows its rooted object receiver");
+                            }
+                        }
+                    }
+                }
                 if matches!(inst.immediate,
                     Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Usort)
                         | RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::Usort, .. })))
@@ -297,6 +315,7 @@ echo implode(',', $bag->items);
             }
         }
         assert!(sorts >= 3, "{name}: both planner forms reach the private-array lowering");
+        assert!(rooted_references >= 2, "{name}: both property sorts capture a rooted reference");
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert!(assembly.contains("__rt_usort"), "{name}");

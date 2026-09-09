@@ -92,3 +92,23 @@ The additional finally-return fix retires a pending reference-return lease when
 finally overrides it. At this checkpoint it is committed locally while the
 current CI run finishes, to avoid cancelling the diagnostics needed for the
 unresolved failures.
+
+### Receiver cleanup isolated from b27528dfc assembly
+
+On `b27528dfc`, both iOS compile/link jobs and macOS managed native packages
+passed. Linux x86_64 shard 10 also passed, including the previously failing
+self-rebinding case. Shard 7 no longer reports the repeated-reference loop
+leak. The throwing comparator factory now passes the checker but fails during
+execution, so it is not a completed ownership fix.
+
+The failing usort assembly shows an extra object release immediately after
+capturing the property reference from a `HiddenTemp` receiver. That slot still
+owns its retained object and is released again by the sort finalizer. The
+reference assignment and reference return paths now use the same owning-
+temporary check as ordinary property and method reads. A destructor-order
+regression and all-target EIR assertions cover the rooted receiver boundary.
+
+Native/eval Throwable round trips still leak 12 blocks (597 bytes). The
+reference-return cleanup-throw regression currently prints `holder|` followed
+by an uncaught `Exception: cleanup`; its next failure log includes assembly.
+Neither exception problem is claimed resolved by the receiver correction.

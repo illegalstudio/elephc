@@ -10,6 +10,23 @@
 
 use crate::support::*;
 
+/// Capturing a property reference borrows the rooted receiver until the sort finalizer releases it.
+#[test]
+fn test_core_boxed_usort_property_root_keeps_receiver_alive_until_unset() {
+    let source = r#"<?php
+class RootedSortBag {
+    public array $items = ['b' => 2, 'a' => 1];
+    public function __destruct() { echo 'bag|'; }
+}
+$bag = new RootedSortBag();
+usort($bag->items, fn(int $a, int $b): int => $a <=> $b);
+echo 'sorted|', implode(',', $bag->items), '|';
+unset($bag);
+echo 'done';
+"#;
+    assert_clean_sort(source, "sorted|1,2|bag|done");
+}
+
 /// Returned arrays support empty and nonempty sorting, typed callbacks and first-class calls.
 #[test]
 fn test_core_boxed_usort_returned_arrays_and_callable_forms() {

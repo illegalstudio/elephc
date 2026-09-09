@@ -52,7 +52,7 @@ pub(crate) fn lower_ref_assign_property(
     );
     if owns_cell {
         ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
-        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+        release_owning_receiver_temporary(ctx, object, span);
     } else {
         ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
     }

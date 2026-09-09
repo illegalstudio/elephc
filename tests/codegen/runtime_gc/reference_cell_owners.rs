@@ -121,10 +121,10 @@ function &throwingReturnedLease(): array {
 try { $value = &throwingReturnedLease(); } catch (Exception $error) { echo 'caught'; }
 unset($error);
 "#;
-    let out = compile_and_run_with_heap_debug(source);
-    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\nGenerated user assembly:\n{}", out.stdout, out.stderr, asm);
     assert_eq!(out.stdout, "holder|payload|caught", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{}", out.stderr, asm);
     assert_eq!(compile_and_run_tagged(source), "holder|payload|caught");
 }
 
