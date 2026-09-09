@@ -374,11 +374,14 @@ fn validate_instruction_immediate(
         }),
         LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
         | ReleaseLocalRefCell
-        | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner | BindRefCellPtr
+        | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
-        PromoteLocalRefCell | AliasLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
+        BindRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
+            matches!(imm, Imm::LocalSlot(_) | Imm::LocalSlotPair { .. })
+        }),
+        PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
         EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
@@ -567,7 +570,7 @@ fn validate_opcode_rules(
         | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
         ThrowError => check_count(inst_id, inst, 0, "0"),
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
-        UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell
+        UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell
         | ReleaseLocalRefCell
         | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner => {
             check_count(inst_id, inst, 0, "0")

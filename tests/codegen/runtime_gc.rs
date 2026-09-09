@@ -50,6 +50,7 @@ mod boxed_array_reference_outputs;
 mod boxed_array_take;
 mod boxed_array_key_sort;
 mod boxed_array_usort;
+mod reference_cell_owners;
 mod boxed_array_call_results;
 mod mixed_parameters;
 mod native_string_arguments;

@@ -16,7 +16,7 @@ const CELL: usize = 16;
 const THROWN: usize = 24;
 const DEFER: usize = 32;
 
-/// Emits bounded payload release followed by unconditional cell retirement on every target.
+/// Releases one cell owner and retires its payload and allocation only after the final alias is gone.
 pub fn emit_local_ref_cell_release(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
@@ -27,6 +27,20 @@ pub fn emit_local_ref_cell_release(emitter: &mut Emitter) {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
     abi::emit_store_zero_to_local_slot(emitter, THROWN);
+    abi::load_at_offset(emitter, result, CELL);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_local_ref_cell_release_return");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr w9, [x0, #-12]");                          // load the reference cell's current owner count
+            emitter.instruction("subs w9, w9, #1");                             // retire this alias without releasing shared contents
+            emitter.instruction("str w9, [x0, #-12]");                          // publish the remaining owner count
+            emitter.instruction("b.ne __rt_local_ref_cell_release_return");     // other aliases still own the cell and its value
+        }
+        Arch::X86_64 => {
+            emitter.instruction("sub DWORD PTR [rax - 12], 1");                 // retire this alias from the uniform heap header
+            emitter.instruction("jne __rt_local_ref_cell_release_return");      // keep the cell and its contents while another owner remains
+        }
+    }
     abi::load_at_offset(emitter, result, ENTRY);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_local_ref_cell_release_free");
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), ENTRY);
@@ -71,6 +85,12 @@ mod tests {
             let chain = asm.find("__rt_exception_chain").unwrap();
             let propagate = asm.find("__rt_throw_current").unwrap();
             assert!(release < free && free < chain && chain < propagate, "{name}");
+            let retain_guard = if name == "linux-x86_64" {
+                "sub DWORD PTR [rax - 12], 1"
+            } else {
+                "subs w9, w9, #1"
+            };
+            assert!(asm.find(retain_guard).unwrap() < release, "{name}: shared cells skip payload retirement");
             assert_eq!(asm.matches("__rt_heap_free").count(), 1, "{name}: retire the cell once");
         }
     }

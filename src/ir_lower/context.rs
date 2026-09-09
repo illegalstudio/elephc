@@ -2366,13 +2366,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 second: source_slot,
             }),
             IrType::Void,
-            source_ty,
+            source_ty.clone(),
             Ownership::NonHeap,
             Op::AliasLocalRefCell.default_effects(),
             span,
         );
         self.mark_ref_bound_local(target);
         self.initialized_slots.insert(target_slot);
+        if let Some(source_owner) = self.ref_cell_owner_slot(source) {
+            let target_owner = self.declare_ref_cell_owner(target, source_ty);
+            self.emit_void(
+                Op::RetainLocalRefCell, Vec::new(),
+                Some(Immediate::LocalSlotPair { first: source_owner, second: target_owner }),
+                Op::RetainLocalRefCell.default_effects(), span,
+            );
+            self.initialized_slots.insert(target_owner);
+        }
     }
 
     /// Binds `target` as a NON-owning reference alias to an already-materialized ref-cell
@@ -2390,15 +2399,45 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value_type: PhpType,
         span: Option<Span>,
     ) {
+        self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, false, span);
+    }
+
+    /// Retains a known heap-backed property cell so this alias survives its object's destruction.
+    pub(crate) fn bind_owned_local_ref_cell_ptr(
+        &mut self,
+        target: &str,
+        cell_ptr: LoweredValue,
+        value_type: PhpType,
+        span: Option<Span>,
+    ) {
+        self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, true, span);
+    }
+
+    /// Binds a borrowed or owned cell, retiring the previous binding before publishing the new one.
+    fn bind_ref_cell_ptr_impl(
+        &mut self,
+        target: &str,
+        cell_ptr: LoweredValue,
+        value_type: PhpType,
+        owns_cell: bool,
+        span: Option<Span>,
+    ) {
         self.clear_static_callable_local(target);
         self.clear_fiber_start_sig(target);
         self.release_replaced_local_before_ref_alias(target, span);
         let target_slot = self.declare_local(target, value_type.clone());
         self.set_local_type(target, value_type.clone());
+        let immediate = if owns_cell {
+            let owner = self.declare_ref_cell_owner(target, value_type.clone());
+            self.initialized_slots.insert(owner);
+            Immediate::LocalSlotPair { first: target_slot, second: owner }
+        } else {
+            Immediate::LocalSlot(target_slot)
+        };
         self.builder.emit_with_effects(
             Op::BindRefCellPtr,
             vec![cell_ptr.value],
-            Some(Immediate::LocalSlot(target_slot)),
+            Some(immediate),
             IrType::Void,
             value_type,
             Ownership::NonHeap,

@@ -138,7 +138,7 @@ fn ref_cell_target_slot(
 ) -> Option<LocalSlotId> {
     match (op, immediate) {
         (
-            Op::PromoteLocalRefCell | Op::AliasLocalRefCell,
+            Op::PromoteLocalRefCell | Op::AliasLocalRefCell | Op::BindRefCellPtr,
             Some(Immediate::LocalSlotPair { first, .. }),
         ) => Some(*first),
         (

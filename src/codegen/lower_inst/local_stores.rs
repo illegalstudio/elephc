@@ -146,16 +146,28 @@ pub(super) fn lower_alias_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &I
     Ok(())
 }
 
-/// Lowers `BindRefCellPtr`: binds the target local slot as a non-owning reference
-/// alias to a ref-cell pointer value (operand 0). Stores the pointer into the slot and
-/// marks it as a promoted ref cell so later loads/stores dereference it. The local does
-/// not own the cell — the owner is the source object property — so no owner slot is
-/// allocated and no release is emitted at scope exit.
+/// Copies a nullable owned cell into another owner slot, preserving aliases beyond source retirement.
+pub(super) fn lower_retain_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let (source, target) = expect_local_slot_pair(inst)?;
+    let source_offset = ctx.local_offset(source)?;
+    let target_offset = ctx.local_offset(target)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result, source_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::store_at_offset(ctx.emitter, result, target_offset);
+    Ok(())
+}
+
+/// Binds a raw cell pointer, retaining it when an explicit hidden owner slot accompanies the alias.
 pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    let target_slot = expect_local_slot(inst)?;
+    let (target_slot, owner) = match inst.immediate {
+        Some(Immediate::LocalSlot(slot)) => (slot, None),
+        Some(Immediate::LocalSlotPair { first, second }) => (first, Some(second)),
+        _ => return Err(CodegenIrError::invalid_module("bind_ref_cell_ptr requires an alias slot")),
+    };
     let target_offset = ctx.local_offset(target_slot)?;
-    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let pointer_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(value, pointer_reg)?;
     abi::store_at_offset_scratch(
         ctx.emitter,
@@ -163,6 +175,11 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
         target_offset,
         abi::tertiary_scratch_reg(ctx.emitter),
     );
+    if let Some(owner) = owner {
+        let owner_offset = ctx.local_offset(owner)?;
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+        abi::store_at_offset(ctx.emitter, pointer_reg, owner_offset);
+    }
     ctx.mark_promoted_ref_cell(target_slot);
     Ok(())
 }

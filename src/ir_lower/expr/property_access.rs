@@ -36,16 +36,25 @@ pub(crate) fn lower_ref_assign_property(
     };
     let object = lower_expr(ctx, object);
     let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
+    let owns_cell = match ctx.builder.value_php_type(object.value).codegen_repr() {
+        PhpType::Object(class) => ctx.classes.get(class.as_str())
+            .is_some_and(|info| info.owned_reference_properties.contains(property)),
+        _ => false,
+    };
     let data = ctx.intern_string(property);
     let cell_ptr = ctx.emit_value(
         Op::LoadPropRefCell,
         vec![object.value],
         Some(Immediate::Data(data)),
-        value_type.clone(),
+        PhpType::Pointer(None),
         Op::LoadPropRefCell.default_effects(),
         Some(span),
     );
-    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    if owns_cell {
+        ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    } else {
+        ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    }
 }
 
 /// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a
@@ -739,4 +748,3 @@ pub(super) fn static_property_result_type(
     };
     normalize_value_php_type(property_ty.codegen_repr())
 }
-

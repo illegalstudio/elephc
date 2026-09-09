@@ -498,6 +498,9 @@ pub enum Op {
     StoreRefCell,
     PromoteLocalRefCell,
     AliasLocalRefCell,
+    /// Retains the nullable cell in one hidden owner slot into another hidden owner slot.
+    /// Immediate: source/destination owner slots. Inline borrowed references remain null owners.
+    RetainLocalRefCell,
     ReleaseLocalRefCell,
     ReleaseLocalSlot,
     PushCallOperandOwner,
@@ -701,9 +704,8 @@ pub enum Op {
     /// addresses the element's inline storage within the array; the local aliases it
     /// non-owning (the array owns the storage). Operands: array, index. No immediate.
     LoadArrayElemRefCell,
-    /// Binds a local slot as a non-owning reference alias to a ref-cell pointer value.
-    /// Operand: the cell pointer (SSA value); immediate: target local slot. The local
-    /// does not own the cell (no release at scope exit); the owner is the object/source.
+    /// Binds a local slot to a ref-cell pointer. A LocalSlot immediate borrows the cell;
+    /// a LocalSlotPair gives the target and an owned cell slot, retaining the cell for scope cleanup.
     BindRefCellPtr,
     DynamicPropGet,
     DynamicPropSet,
@@ -897,9 +899,9 @@ impl Op {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
-            ReleaseLocalRefCell => {
-                E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP
-            }
+            RetainLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            // The last cell owner can run an arbitrary payload destructor.
+            ReleaseLocalRefCell => E::all(),
             // Retiring the slot can invoke an arbitrary PHP destructor after clearing its owner.
             ReleaseLocalSlot => E::all(),
             PushCallOperandOwner | PopCallOperandOwner => {
@@ -974,7 +976,7 @@ impl Op {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
-            BindRefCellPtr => E::WRITES_LOCAL,
+            BindRefCellPtr => E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
             HashUnset | PropUnset | OffsetUnset => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP
                 | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySet | HashSet | ArrayPush | HashAppend | PropSet
@@ -1127,6 +1129,7 @@ impl Op {
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
             AliasLocalRefCell => "alias_local_ref_cell",
+            RetainLocalRefCell => "retain_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
             ReleaseLocalSlot => "release_local_slot",
             PushCallOperandOwner => "push_call_operand_owner",
