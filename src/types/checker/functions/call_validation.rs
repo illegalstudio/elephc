@@ -558,7 +558,8 @@ impl Checker {
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
-                            arg.span,
+                            arg,
+                            caller_env,
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                         self.record_php_array_reference_output(arg, expected_ty, &actual_ty, span);

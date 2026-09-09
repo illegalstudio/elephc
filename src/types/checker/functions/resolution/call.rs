@@ -360,7 +360,8 @@ impl Checker {
                         self.require_boxed_by_ref_storage(
                             &declared_ty,
                             &ty,
-                            arg.span,
+                            arg,
+                            caller_env,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                         self.record_php_array_reference_output(arg, &declared_ty, &ty, span);

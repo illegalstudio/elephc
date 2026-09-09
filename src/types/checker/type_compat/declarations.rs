@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, TypeExpr};
-use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType};
+use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType, TypeEnv};
 
 use super::super::inference::syntactic::infer_expr_type_syntactic;
 use super::super::{Checker, FnDecl};
@@ -193,15 +193,14 @@ impl Checker {
         }
     }
 
-    /// Validates that `actual_ty` is suitable storage for a by-reference parameter whose
-    /// declared type needs boxed or nullable storage.
-    /// Returns an error if `actual_ty` is a concrete non-boxed type that cannot represent
-    /// writes of every value accepted by the by-reference parameter.
+    /// Validates boxed reference storage, including local array slots that EIR can widen.
+    /// Rejects concrete storage without a supported conversion before exposing its address.
     pub(crate) fn require_boxed_by_ref_storage(
-        &self,
+        &mut self,
         expected_ty: &PhpType,
         actual_ty: &PhpType,
-        span: crate::span::Span,
+        arg: &Expr,
+        env: &TypeEnv,
         context: &str,
     ) -> Result<(), CompileError> {
         // The call lowering boxes PHP array locals before exposing their ref-cell address.
@@ -214,8 +213,18 @@ impl Checker {
         if requires_by_ref_boxed_storage(expected_ty)
             && !supports_by_ref_boxed_storage(actual_ty)
         {
+            // `lower_by_ref_array_element_arg_with_signature` widens a local
+            // indexed array to Mixed slots before taking the element address.
+            // Only that addressable shape has this conversion, not arbitrary
+            // scalar locals, properties, nested places or tagged nullable slots.
+            if expected_ty.codegen_repr() == PhpType::Mixed
+                && matches!(arg.kind, ExprKind::ArrayAccess { .. })
+                && self.is_by_ref_argument_lvalue(arg, env)?
+            {
+                return Ok(());
+            }
             return Err(CompileError::new(
-                span,
+                arg.span,
                 &format!(
                     "{} requires a variable with mixed/union/nullable storage when passed by reference",
                     context

@@ -10,6 +10,28 @@
 
 use crate::support::*;
 
+/// Named and first-class calls widen scalar element slots without changing earlier value copies.
+#[test]
+fn test_core_array_element_mixed_reference_named_and_callable_storage() {
+    let source = r#"<?php
+function replaceBoxedSlot(mixed &$value): void { $value = "updated"; }
+$named = [1];
+$namedCopy = $named;
+replaceBoxedSlot(value: $named[0]);
+$callable = replaceBoxedSlot(...);
+$fcc = [2];
+$fccCopy = $fcc;
+$callable($fcc[0]);
+echo $named[0], ':', $namedCopy[0], '|', $fcc[0], ':', $fccCopy[0];
+unset($named, $namedCopy, $fcc, $fccCopy);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "updated:1|updated:2", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "updated:1|updated:2");
+}
+
 /// Element references carry addresses while their parent arrays own boxed, string and scalar values.
 #[test]
 fn test_core_array_element_reference_addresses_preserve_pointee_storage() {

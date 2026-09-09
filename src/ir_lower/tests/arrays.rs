@@ -235,7 +235,7 @@ echo count(reversePhpArray(["key" => $argc], $argc > 1));
     }
 }
 
-/// Every target boxes nested array slots before passing their real addresses to array ref parameters.
+/// Every target boxes scalar and nested array slots before exposing addresses to boxed ref parameters.
 #[test]
 fn php_array_reference_elements_use_boxed_parent_slots_on_every_target() {
     use crate::codegen::platform::Target;
@@ -245,9 +245,13 @@ fn php_array_reference_elements_use_boxed_parent_slots_on_every_target() {
 
     let source = r#"<?php
 function mutateNestedPhpArray(array &$items): void { $items["key"] = 7; }
+function replaceScalarArraySlot(mixed &$value): void { $value = "updated"; }
 $items = [[$argc]];
 mutateNestedPhpArray($items[0]);
 echo count($items[0]);
+$scalars = [$argc];
+replaceScalarArraySlot($scalars[0]);
+echo $scalars[0];
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
@@ -266,7 +270,7 @@ echo count($items[0]);
                 }
             }
         }
-        assert!(addresses > 0, "{name}");
+        assert!(addresses >= 2, "{name}");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }

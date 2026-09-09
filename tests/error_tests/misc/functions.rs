@@ -551,6 +551,17 @@ fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
     );
 }
 
+/// Array-slot widening does not authorize incompatible scalar-local reference storage.
+#[test]
+fn test_error_mixed_by_ref_scalar_local_still_requires_boxed_storage() {
+    for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
+        expect_error(
+            &format!("<?php function replaceScalar(mixed &$slot): void {{ $slot = 'changed'; }} $value = 1; {call}"),
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
+}
+
 // -- Include/require path expression errors --
 
 /// Verifies that a static closure cannot capture `$this` from the enclosing scope.
