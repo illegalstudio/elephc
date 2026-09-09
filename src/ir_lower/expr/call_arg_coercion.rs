@@ -197,11 +197,11 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
     let ExprKind::Variable(array_name) = &array.kind else {
         return None;
     };
-    let PhpType::Array(mut elem_ty) = ctx.local_type(array_name).codegen_repr() else {
+    let PhpType::Array(elem_ty) = ctx.local_type(array_name).codegen_repr() else {
         return None;
     };
     let (_, param_ty) = sig.params.get(index)?;
-    if param_ty.is_php_array() && elem_ty.codegen_repr() != PhpType::Mixed {
+    if param_ty.codegen_repr() == PhpType::Mixed && elem_ty.codegen_repr() != PhpType::Mixed {
         // The callee replaces a Mixed pointer through this element's actual slot, not a
         // detached temporary. Widen the outer array's slots before exposing that address.
         // Retaining the borrowed source lets the consuming conversion separate COW aliases.
@@ -219,12 +219,7 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
         ctx.store_call_argument_local(
             array_name, converted, boxed_parent_ty, Some(arg.span),
         );
-        elem_ty = Box::new(PhpType::Mixed);
     }
-    let element_ty = match normalize_value_php_type(*elem_ty) {
-        PhpType::Void => normalize_value_php_type(param_ty.codegen_repr()),
-        other => other,
-    };
     let array_value = ctx.load_local(array_name, Some(array.span));
     let element_index = lower_expr(ctx, element_index);
     let element_index = coerce_to_int_at_span(ctx, element_index, Some(arg.span));
@@ -235,7 +230,7 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
             vec![array_value.value, element_index.value],
             None,
             IrType::I64,
-            element_ty,
+            PhpType::Pointer(None),
             Ownership::NonHeap,
             Op::ArrayElemAddr.default_effects(),
             Some(arg.span),

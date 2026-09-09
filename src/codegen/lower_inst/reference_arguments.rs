@@ -244,7 +244,14 @@ pub(super) fn plan_ref_arg_writebacks(
         if !ref_params[param_index] || param_types[param_index].codegen_repr() != PhpType::Mixed {
             continue;
         }
-        let source_ty = ctx.raw_value_php_type(*value)?.codegen_repr();
+        let source_ty = if let Some(array) = array_element_address_source(ctx, *value)? {
+            let PhpType::Array(element) = ctx.value_php_type(array)?.codegen_repr() else {
+                return Err(CodegenIrError::invalid_module("array element address requires an indexed receiver"));
+            };
+            element.codegen_repr()
+        } else {
+            ctx.raw_value_php_type(*value)?.codegen_repr()
+        };
         if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
             continue;
         }
@@ -572,17 +579,25 @@ pub(super) fn materialize_local_ref_arg_address(ctx: &mut FunctionContext<'_>, v
 
 /// Returns true when a value already holds a direct pointer to an array element slot.
 pub(super) fn value_is_array_element_address(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    Ok(array_element_address_source(ctx, value)?.is_some())
+}
+
+/// Resolves an element-slot pointer to the array whose element type describes its pointee storage.
+fn array_element_address_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<ValueId>> {
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };
     let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(false);
+        return Ok(None);
     };
     let inst_ref = ctx
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    Ok(inst_ref.op == Op::ArrayElemAddr)
+    if inst_ref.op != Op::ArrayElemAddr {
+        return Ok(None);
+    }
+    Ok(Some(expect_operand(inst_ref, 0)?))
 }
 
 /// Describes a local operand used as a by-reference call argument.

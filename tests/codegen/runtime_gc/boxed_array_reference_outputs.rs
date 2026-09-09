@@ -10,6 +10,32 @@
 
 use crate::support::*;
 
+/// Element references carry addresses while their parent arrays own boxed, string and scalar values.
+#[test]
+fn test_core_array_element_reference_addresses_preserve_pointee_storage() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function updateNestedArrayValue(array &$value): void { $value["added"] = 7; }
+function replaceMixedElement(mixed &$value): void { $value = "changed"; }
+function replaceStringElement(string &$value): void { $value = "new"; }
+$nested = [[1]];
+$nestedCopy = $nested;
+updateNestedArrayValue($nested[0]);
+echo $nested[0]["added"], ":", count($nestedCopy[0]), "|";
+$numbers = [10, 20];
+$numberCopy = $numbers;
+replaceMixedElement($numbers[0]);
+echo $numbers[0], ":", $numberCopy[0], "|";
+$strings = [str_repeat("x", 8)];
+$stringCopy = $strings;
+replaceStringElement($strings[0]);
+echo $strings[0], ":", $stringCopy[0];
+unset($nested, $nestedCopy, $numbers, $numberCopy, $strings, $stringCopy);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "7:1|changed:10|new:xxxxxxxx", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Key results retain their runtime types after a hash reference widens only one of two value copies.
 #[test]
 fn test_core_native_php_array_reference_output_preserves_snapshot_key_types() {
@@ -83,8 +109,8 @@ function checkConditionalArray(bool $write): void {
     $packed = [1];
     $hash = ["old" => 2];
     $copy = $packed;
-    $write && conditionallyWriteArray($packed);
-    $write && conditionallyWriteArray($hash);
+    $packedChanged = $write && conditionallyWriteArray($packed);
+    $hashChanged = $write && conditionallyWriteArray($hash);
     echo implode(",", array_keys($packed)), ":", implode(",", $packed), "|";
     echo implode(",", array_keys($hash)), ":", implode(",", $hash), "|";
     echo implode(",", array_keys($copy)), ":", implode(",", $copy), ";";

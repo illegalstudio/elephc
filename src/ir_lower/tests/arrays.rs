@@ -181,7 +181,7 @@ echo count(reversePhpArray(["key" => $argc], $argc > 1));
 #[test]
 fn php_array_reference_elements_use_boxed_parent_slots_on_every_target() {
     use crate::codegen::platform::Target;
-    use crate::ir::Op;
+    use crate::ir::{IrType, Op, Ownership};
     use crate::types::PhpType;
     use std::path::Path;
 
@@ -200,7 +200,11 @@ echo count($items[0]);
             for instruction in &function.instructions {
                 if instruction.op == Op::ArrayElemAddr {
                     addresses += 1;
-                    assert_eq!(instruction.result_php_type, PhpType::Mixed, "{name}");
+                    assert_eq!(instruction.result_php_type, PhpType::Pointer(None), "{name}");
+                    assert_eq!(instruction.result_type, IrType::I64, "{name}");
+                    assert_eq!(instruction.result_ownership, Ownership::NonHeap, "{name}");
+                    let receiver = function.value(instruction.operands[0]).unwrap();
+                    assert_eq!(receiver.php_type.codegen_repr(), PhpType::Array(Box::new(PhpType::Mixed)), "{name}");
                 }
             }
         }
