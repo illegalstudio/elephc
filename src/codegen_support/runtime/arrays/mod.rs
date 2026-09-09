@@ -47,6 +47,7 @@ mod array_is_list;
 mod array_key_exists;
 mod array_key_exists_mixed_key;
 mod array_map;
+mod array_map_boxed;
 mod array_map_mixed;
 mod array_map_str;
 mod array_merge;
@@ -273,6 +274,7 @@ pub use array_key_exists::emit_array_key_exists;
 pub use array_key_exists_mixed_key::emit_array_key_exists_mixed_key;
 /// Emit array map helper.
 pub use array_map::emit_array_map;
+pub use array_map_boxed::emit_array_map_boxed;
 /// Emit mixed-result array map helper.
 pub use array_map_mixed::emit_array_map_mixed;
 /// Emit string-returning array map helpers.

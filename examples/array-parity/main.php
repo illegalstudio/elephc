@@ -1,5 +1,5 @@
 <?php
-// Array builtin parity — a tour of the array helpers added in the parity work.
+// Array builtin parity: a tour of the array helpers added in the parity work.
 
 // --- list shape and edge keys ---
 $list = [10, 20, 30];
@@ -9,6 +9,28 @@ echo "is_list(list):  " . (array_is_list($list) ? "true" : "false") . "\n";
 echo "is_list(hash):  " . (array_is_list($hash) ? "true" : "false") . "\n";
 echo "first key:      " . array_key_first($hash) . "\n";
 echo "last key:       " . array_key_last($hash) . "\n";
+
+// --- reversal through PHP array parameters ---
+// PHP array parameters can contain lists or sparse maps without losing their keys.
+function printNewestFirst(array $events, bool $keepIds): void {
+    $reversed = array_reverse($events, preserve_keys: $keepIds);
+    echo implode(", ", array_keys($reversed)), ": ", implode(", ", $reversed), "\n";
+}
+printNewestFirst([10 => "opened", "note" => "reviewed", 40 => "closed"], true);
+printNewestFirst(["opened", "reviewed", "closed"], false);
+
+// --- callbacks preserve keys through the same PHP array boundary ---
+function labelEvents(array $events): array {
+    return array_map(fn(mixed $event): string => "event:" . $event, $events);
+}
+echo implode(", ", labelEvents([10 => "opened", "note" => "reviewed"])), "\n";
+
+// --- merge list entries and named settings through PHP array parameters ---
+function mergeEventSettings(array $defaults, array $overrides): array {
+    return array_merge($defaults, $overrides);
+}
+$settings = mergeEventSettings([10 => "opened", "mode" => "draft"], [30 => "closed", "mode" => "review"]);
+echo "merge: ", implode(", ", array_keys($settings)), ": ", implode(", ", $settings), "\n";
 
 // --- hash set operations (right-wins replace, recursive replace) ---
 $base = ["host" => "localhost", "port" => 80];

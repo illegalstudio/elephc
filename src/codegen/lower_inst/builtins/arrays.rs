@@ -36,6 +36,8 @@ mod shift;
 mod unshift;
 pub(in crate::codegen::lower_inst::builtins) mod values;
 mod basic;
+mod boxed_merge;
+mod boxed_reverse;
 mod filter;
 mod map_dispatch;
 mod map_results;

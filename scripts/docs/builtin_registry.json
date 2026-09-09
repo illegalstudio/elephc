@@ -15445,7 +15445,13 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw",
+          "may_fatal"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -16941,7 +16947,13 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw",
+          "may_fatal"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -18464,7 +18476,13 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw",
+          "may_fatal"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",

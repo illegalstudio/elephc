@@ -272,7 +272,7 @@ pub(super) fn store_void_builtin_result(ctx: &mut FunctionContext<'_>, inst: &In
 /// Returns the indexed-array slot type produced by the selected `array_map()` runtime helper.
 pub(super) fn array_map_callback_result_element_type(return_ty: &PhpType) -> Result<PhpType> {
     let return_ty = return_ty.codegen_repr();
-    if matches!(return_ty, PhpType::Int | PhpType::Bool | PhpType::Str) {
+    if matches!(return_ty, PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Mixed) {
         Ok(return_ty)
     } else {
         Err(CodegenIrError::unsupported(format!(
@@ -378,4 +378,3 @@ pub(super) fn box_array_result_for_mixed_builtin(
         );
     }
 }
-

@@ -40,6 +40,9 @@ builtin! {
 /// registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if ty.is_php_array() {
+        return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+    }
     match ty {
         PhpType::Array(_) => Ok(PhpType::Array(Box::new(PhpType::Int))),
         PhpType::AssocArray { key, .. } => Ok(PhpType::Array(key)),

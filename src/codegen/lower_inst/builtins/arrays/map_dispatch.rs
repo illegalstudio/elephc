@@ -20,6 +20,8 @@ pub(super) enum ArrayMapTarget {
     Indexed,
     /// Associative source: `__rt_hash_map` rebuilds a hash under the source keys.
     Hash,
+    /// Boxed PHP array: runtime storage selects traversal and every callback input is Mixed.
+    Boxed,
 }
 
 /// Lowers `array_map()` through the callback runtime helper matching the callback result type.
@@ -33,7 +35,9 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let callback = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
     let source_ty = ctx.value_php_type(array)?.codegen_repr();
-    let (elem_ty, target) = if matches!(source_ty, PhpType::AssocArray { .. }) {
+    let (elem_ty, target) = if source_ty == PhpType::Mixed {
+        (PhpType::Mixed, ArrayMapTarget::Boxed)
+    } else if matches!(source_ty, PhpType::AssocArray { .. }) {
         (
             hash_map_source_value_type(&source_ty)?,
             ArrayMapTarget::Hash,
@@ -381,4 +385,3 @@ pub(super) fn emit_dynamic_string_callback_abort(ctx: &mut FunctionContext<'_>, 
         }
     }
 }
-

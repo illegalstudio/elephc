@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// A boxed PHP array operand must not hide an invalid first or second merge argument.
+#[test]
+fn test_error_php_array_merge_rejects_non_array_operands() {
+    expect_error(
+        "<?php function bad(array $items): array { return array_merge($items, 7); } bad([1]);",
+        "array_merge() second argument must be array",
+    );
+    expect_error(
+        "<?php function bad(array $items): array { return array_merge(7, $items); } bad([1]);",
+        "array_merge() first argument must be array",
+    );
+}
+
 // Verifies that a heterogeneous associative array with string and integer values widens to `mixed` without error.
 /// Verifies that assoc array mixed type checks.
 #[test]

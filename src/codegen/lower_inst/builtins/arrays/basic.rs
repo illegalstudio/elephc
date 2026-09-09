@@ -297,8 +297,7 @@ pub(super) fn hash_flip_result_value_type(result_ty: &PhpType) -> Result<PhpType
     }
 }
 
-/// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
-/// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
+/// Lowers boxed PHP arrays or concrete indexed arrays through their representation-safe reverse helper.
 ///
 /// PHP's `bool $preserve_keys = false` keeps the source integer keys while reversing the
 /// iteration order. A dense indexed array cannot hold keys in descending order, so the
@@ -308,6 +307,9 @@ pub(super) fn hash_flip_result_value_type(result_ty: &PhpType) -> Result<PhpType
 pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_reverse", 1, 2)?;
     let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        return super::boxed_reverse::lower_boxed_array_reverse(ctx, inst, array);
+    }
     let preserve_keys = match inst.operands.get(1).copied() {
         None => false,
         Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
@@ -471,4 +473,3 @@ fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Optio
         _ => Ok(None),
     }
 }
-

@@ -745,6 +745,12 @@ impl RuntimeFnId {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 _ => declared.clone(),
             },
+            RuntimeFnId::ArrayValues if arg_types.first().is_some_and(PhpType::is_php_array) => {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+            RuntimeFnId::ArrayMerge if arg_types.iter().any(PhpType::is_php_array) => {
+                PhpType::php_array()
+            }
             RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
@@ -758,6 +764,9 @@ impl RuntimeFnId {
             // read the pointer as a Mixed cell and crashed. The `$preserve_keys` hash shape needs
             // a compile-time literal, which a dynamic wrapper cannot provide, so it is dropped
             // from the callable ABI by `refine_runtime_callable_wrapper_sig`.
+            RuntimeFnId::ArrayReverse if arg_types.first().is_some_and(PhpType::is_php_array) => {
+                PhpType::php_array()
+            }
             RuntimeFnId::ArrayReverse => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(element @ (PhpType::Array(_) | PhpType::AssocArray { .. })) => element,
                 _ => declared.clone(),
@@ -988,6 +997,13 @@ impl RuntimeFnId {
                     | crate::ir::Effects::ALLOC_HEAP.bits()
                     | crate::ir::Effects::MAY_THROW.bits(),
             ),
+            RuntimeFnId::ArrayMerge | RuntimeFnId::ArrayReverse | RuntimeFnId::ArrayValues => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
@@ -1005,17 +1021,14 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeyFirst |
             RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
-            RuntimeFnId::ArrayMerge |
             RuntimeFnId::ArrayMergeRecursive |
             RuntimeFnId::ArrayProduct |
             RuntimeFnId::ArrayReplace |
             RuntimeFnId::ArrayReplaceRecursive |
-            RuntimeFnId::ArrayReverse |
             RuntimeFnId::ArraySearch |
             RuntimeFnId::ArraySlice |
             RuntimeFnId::ArraySum |
             RuntimeFnId::ArrayUnique |
-            RuntimeFnId::ArrayValues |
             RuntimeFnId::Asin |
             RuntimeFnId::Atan |
             // `base64_decode()` only reads the subject's bytes and writes its answer into a
