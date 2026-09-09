@@ -1786,17 +1786,26 @@ fn emit_push_string_callable_array_slot(
     Ok(())
 }
 
-/// Returns true when a selector value was produced by an EIR array literal allocation.
-fn value_is_array_literal(ctx: &FunctionContext<'_>, value: ValueId) -> bool {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return false;
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return false;
-    };
-    ctx.function
-        .instruction(inst)
-        .is_some_and(|inst| matches!(inst.op, Op::ArrayNew))
+/// Recognizes array literal selectors through identity-preserving ownership retains.
+fn value_is_array_literal(ctx: &FunctionContext<'_>, mut value: ValueId) -> bool {
+    loop {
+        let Some(value_ref) = ctx.function.value(value) else {
+            return false;
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return false;
+        };
+        let Some(inst) = ctx.function.instruction(inst) else {
+            return false;
+        };
+        if inst.op != Op::Acquire {
+            return inst.op == Op::ArrayNew;
+        }
+        let Some(source) = inst.operands.first() else {
+            return false;
+        };
+        value = *source;
+    }
 }
 
 /// Loads and unboxes one boxed-Mixed slot from a callable array.
