@@ -1,11 +1,11 @@
 ---
-title: "xml_get_current_line_number() — internals"
+title: "xml_get_current_line_number() - internals"
 description: "Compiler internals for xml_get_current_line_number(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 914
+  order: 939
 ---
 
-## `xml_get_current_line_number()` — internals
+## `xml_get_current_line_number()` - internals
 
 ## Where it lives
 

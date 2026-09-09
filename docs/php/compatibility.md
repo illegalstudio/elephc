@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **883 / 2169** (41%), classes **142 / 329** (43%), constants **1094 / 3180** (34%).
+Overall coverage: functions **911 / 2169** (42%), classes **142 / 329** (43%), constants **1097 / 3180** (34%).
 
 ## Coverage by PHP module
 

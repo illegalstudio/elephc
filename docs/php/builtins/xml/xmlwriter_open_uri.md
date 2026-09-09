@@ -2,7 +2,7 @@
 title: "xmlwriter_open_uri()"
 description: "Creates a writer that outputs to a URI or file path; throws ValueError when it cannot be opened."
 sidebar:
-  order: 946
+  order: 971
 ---
 
 ## xmlwriter_open_uri()
@@ -21,9 +21,9 @@ Creates a writer that outputs to a URI or file path; throws ValueError when it c
 ## Availability
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_open_uri.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_open_uri.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_open_uri.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_open_uri.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -1,16 +1,16 @@
 ---
-title: "xml_set_default_handler() — internals"
+title: "xml_set_default_handler() - internals"
 description: "Compiler internals for xml_set_default_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 924
+  order: 949
 ---
 
-## `xml_set_default_handler()` — internals
+## `xml_set_default_handler()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/xml/xml_set_default_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/xml/xml_set_default_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:674](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L674) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
