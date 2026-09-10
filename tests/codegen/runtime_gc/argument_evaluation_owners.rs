@@ -92,3 +92,63 @@ echo "done";
         out.stderr,
     );
 }
+
+/// A successful call retires a widened by-reference local's incidental value view exactly once.
+#[test]
+fn test_widened_string_reference_place_success_path_balances_heap() {
+    let source = r#"<?php
+function referenceOwnerSuccess(string &$text, int $later): void {}
+function referenceOwnerLater(): int { return 1; }
+
+$text = "reference-place";
+referenceOwnerSuccess($text, referenceOwnerLater());
+echo $text === "reference-place" ? "ok" : "bad";
+unset($text);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(
+        out.success,
+        "stdout={:?}\nstderr={}",
+        out.stdout,
+        out.stderr,
+    );
+    assert_eq!(out.stdout, "ok", "{}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr,
+    );
+}
+
+/// `substr()` results remain owned when source evaluation is pinned across later arguments.
+#[test]
+fn test_substr_evaluation_owner_slices_are_independent_and_balance_heap() {
+    let source = r#"<?php
+function sliceEvaluationLength(): int { return 3; }
+function sliceEvaluationAt(string $source, int $offset): string {
+    return substr($source, $offset, sliceEvaluationLength());
+}
+
+for ($i = 0; $i < 3; $i++) {
+    $zero = sliceEvaluationAt("abcdef", 0);
+    $nonzero = sliceEvaluationAt("abcdef", 2);
+    $empty = sliceEvaluationAt("abcdef", 6);
+    $returned = sliceEvaluationAt("abcdef", 1);
+    echo $zero, "|", $nonzero, "|", $empty, "|", $returned, "\n";
+    unset($zero, $nonzero, $empty, $returned);
+}
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(
+        out.success,
+        "stdout={:?}\nstderr={}",
+        out.stdout,
+        out.stderr,
+    );
+    assert_eq!(out.stdout, "abc|cde||bcd\n".repeat(3), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr,
+    );
+}

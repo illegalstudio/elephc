@@ -208,9 +208,42 @@ pub(super) fn emit_builtin_call_value(
                     error,
                 )
             });
-            let call = LoweredValue {
+            let raw_call = LoweredValue {
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
+            };
+            // `substr()` can return an interior view into its source string. When source-order
+            // evaluation transferred a pinned temporary into the final call operand, letting
+            // that pin flow through the result would either leak its base allocation forever
+            // or free an interior pointer. Persist the view before retiring the base owner so
+            // the result has an ordinary independent string lifetime.
+            let stabilizes_evaluation_pin = matches!(
+                def.spec.semantics.lowering,
+                crate::builtins::semantics::BuiltinLowering::Runtime(
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr)
+                        | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                            target: crate::ir::RuntimeFnId::Substr,
+                            ..
+                        },
+                ),
+            ) && matches!(
+                def.spec.semantics.result_ownership,
+                crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments,
+            ) && ctx.builder.value_php_type(raw_call.value).codegen_repr() == PhpType::Str
+                && operands.first().is_some_and(|operand| {
+                    value_is_call_argument_evaluation_pin(ctx, *operand)
+                });
+            let call = if stabilizes_evaluation_pin {
+                ctx.emit_owned_value(
+                    Op::StrPersist,
+                    vec![raw_call.value],
+                    None,
+                    PhpType::Str,
+                    Op::StrPersist.default_effects(),
+                    Some(span),
+                )
+            } else {
+                raw_call
             };
             // Consumers make lifetime decisions during lowering, before final
             // ownership refinement. In particular, Fresh strings already own
@@ -223,18 +256,22 @@ pub(super) fn emit_builtin_call_value(
             ) {
                 ctx.builder.set_value_ownership(call.value, Ownership::Owned);
             }
-            let return_alias = match def.spec.semantics.result_ownership {
-                crate::builtins::semantics::BuiltinResultOwnership::NonHeap
-                | crate::builtins::semantics::BuiltinResultOwnership::Fresh
-                | crate::builtins::semantics::BuiltinResultOwnership::Independent => {
-                    ReturnArgAlias::None
-                }
-                crate::builtins::semantics::BuiltinResultOwnership::Aliases(indexes) => {
-                    ReturnArgAlias::Parameters(indexes.iter().copied().collect())
-                }
-                crate::builtins::semantics::BuiltinResultOwnership::Borrowed
-                | crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments => {
-                    ReturnArgAlias::Unknown
+            let return_alias = if stabilizes_evaluation_pin {
+                ReturnArgAlias::None
+            } else {
+                match def.spec.semantics.result_ownership {
+                    crate::builtins::semantics::BuiltinResultOwnership::NonHeap
+                    | crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                    | crate::builtins::semantics::BuiltinResultOwnership::Independent => {
+                        ReturnArgAlias::None
+                    }
+                    crate::builtins::semantics::BuiltinResultOwnership::Aliases(indexes) => {
+                        ReturnArgAlias::Parameters(indexes.iter().copied().collect())
+                    }
+                    crate::builtins::semantics::BuiltinResultOwnership::Borrowed
+                    | crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments => {
+                        ReturnArgAlias::Unknown
+                    }
                 }
             };
             for (_, slot) in roots.iter().rev() {

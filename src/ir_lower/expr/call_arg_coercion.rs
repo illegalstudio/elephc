@@ -41,6 +41,33 @@ pub(super) fn lower_arg_with_signature(
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 
+/// Protects an incidental value view of an earlier reference place without replacing the place.
+///
+/// A local whose final frame storage widens to `Mixed` can make its narrower `LoadLocal<Str>`
+/// allocate an owned detached string during codegen. The call still needs that exact load as its
+/// by-reference place marker, so retain it as the operand and let the evaluation ledger treat the
+/// protected value view as an intermediate owner. An exception from a later argument then retires
+/// the detached view, while successful call materialization still recovers the original local slot.
+fn root_prior_argument_preserving_reference_place(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+    value: crate::ir::ValueId,
+) -> crate::ir::ValueId {
+    let lowered = lowered_value_from_id(ctx, value);
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        if matches!(arg.kind, ExprKind::Variable(_))
+            && sig.params.get(index).is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Str)
+            && ctx.builder.value_php_type(value).codegen_repr() == PhpType::Str
+        {
+            let _protected_view = root_evaluated_call_argument(ctx, lowered, arg.span);
+        }
+        return value;
+    }
+    root_evaluated_call_argument(ctx, lowered, arg.span).value
+}
+
 /// Coerces a positional argument to storage owned explicitly by EIR when required.
 ///
 /// Integer-to-float conversion selects the callee's floating-point ABI class. Mixed-to-string
@@ -410,11 +437,10 @@ fn lower_args_with_signature_options(
             .enumerate()
             .map(|(index, arg)| {
                 let value = lower_arg_with_signature(ctx, sig, index, arg);
-                if index + 1 < args.len()
-                    && !sig.ref_params.get(index).copied().unwrap_or(false)
-                {
-                    let lowered = lowered_value_from_id(ctx, value);
-                    root_evaluated_call_argument(ctx, lowered, arg.span).value
+                if index + 1 < args.len() {
+                    root_prior_argument_preserving_reference_place(
+                        ctx, sig, index, arg, value,
+                    )
                 } else {
                     value
                 }
@@ -427,11 +453,10 @@ fn lower_args_with_signature_options(
         .enumerate()
         .map(|(index, arg)| {
             let value = lower_arg_with_signature(ctx, sig, index, arg);
-            if index + 1 < args.len()
-                && !sig.ref_params.get(index).copied().unwrap_or(false)
-            {
-                let lowered = lowered_value_from_id(ctx, value);
-                root_evaluated_call_argument(ctx, lowered, arg.span).value
+            if index + 1 < args.len() {
+                root_prior_argument_preserving_reference_place(
+                    ctx, sig, index, arg, value,
+                )
             } else {
                 value
             }

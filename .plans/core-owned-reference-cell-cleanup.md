@@ -2179,3 +2179,31 @@ Native Sol traced the 80-byte CI residue to this missing owner classification.
 Cargo check --tests, exporter build, documentation and target-boundary audits,
 assembly-comment alignment and diff hygiene pass. Generated docs are unchanged.
 No local tests execute; the comparator fixtures remain the runtime gate.
+
+### Balance argument evaluation pins, views and descriptor construction
+
+Mark source-evaluation Acquire operations as lifetime pins. When substr borrows a
+view into such a pin, persist its result before retiring the base allocation.
+This covers the HTTP slice leaks and the three XML separator/name slices found
+by native review, including offset zero, interior and empty results.
+
+Publish signature-unknown descriptor argument containers before evaluating their
+contents. Populate them through borrowed slot loads so growth republishes the
+current pointer. Transfer or box the completed owner and retire construction
+roots, including when an argument or spread throws.
+
+Protect the detached Str view of an earlier by-reference local without replacing
+its ABI place marker. Keep this change limited to concrete string parameters and
+string views. Skip the duplicate normal-path release after the source view has
+already transferred to its unwind-visible intermediate. Other reference shapes
+and named-reference lowering retain their existing behavior.
+
+Native Sol implemented the bounded fixes; coordinator review caught and repaired
+non-variable place replacement and duplicate release hazards before commit. Add
+five-target ownership/order/place assertions and heap regressions for successful
+reference calls and slice returns. Repair fixtures that did not establish their
+intended Mixed/callable/spread path. Cargo check --tests, exporter build, docs and
+target-boundary audits, assembly comments and diff hygiene pass. No tests execute
+locally. The two metadata leak fixtures and the residual pair of 38-byte strings
+in the argument-throw fixture still have no confirmed cause; require evidence from
+the next exact-head CI and do not claim they are fixed by this batch.

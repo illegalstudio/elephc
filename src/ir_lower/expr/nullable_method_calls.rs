@@ -260,6 +260,25 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
             retire_owned_call_operand(ctx, *slot, span);
             continue;
         }
+        let reference_place_view_already_released = signature.is_some_and(|signature| {
+            signature
+                .ref_params
+                .get(parameter_index)
+                .copied()
+                .unwrap_or(false)
+        }) && matches!(
+            ctx.builder.value_defining_op(*value),
+            Some(Op::LoadLocal | Op::LoadRefCell)
+        ) && ctx.builder.function().instructions.iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [*value]
+        });
+        if reference_place_view_already_released {
+            // Source-order evaluation already transferred this incidental value view into an
+            // unwind-visible intermediate. The call operand remains the original load solely so
+            // ABI materialization can recover its local slot; releasing that view again after a
+            // successful call would free the same detached Mixed-to-string result twice.
+            continue;
+        }
         let php_type = ctx.builder.value_php_type(*value);
         let lowered = LoweredValue {
             value: *value,

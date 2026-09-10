@@ -43,7 +43,8 @@ pub(super) fn root_evaluated_call_argument(
         return value;
     }
     let temp_name = ctx.declare_owned_hidden_temp(ty.clone());
-    let rooted = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    let rooted =
+        crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span));
     ctx.store_local(&temp_name, rooted, ty, Some(span));
     let slot = ctx.local_slots[&temp_name];
     register_owned_call_operand(ctx, slot, span);
@@ -77,6 +78,22 @@ pub(super) fn root_evaluated_call_argument(
         value: borrowed,
         ir_type: rooted.ir_type,
     }
+}
+
+/// Returns whether a final call operand is the lease transferred from source evaluation.
+///
+/// The lifetime-pin marker distinguishes these operands from ordinary call roots. A
+/// may-alias string runtime can return a view into this lease, so it must make that view
+/// independent before the ordinary argument cleanup retires the pinned allocation.
+pub(super) fn value_is_call_argument_evaluation_pin(
+    ctx: &LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+) -> bool {
+    ctx.builder
+        .value_defining_instruction(value)
+        .is_some_and(|inst| {
+            inst.op == Op::Acquire && inst.immediate == Some(Immediate::Bool(true))
+        })
 }
 
 /// Hands final operands their stored owner and republishes intermediate roots through the call.

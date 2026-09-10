@@ -74,6 +74,48 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     Some(lower_untyped_descriptor_invoker_indexed_container(ctx, args, span))
 }
 
+/// Publishes a descriptor container before argument expressions can throw.
+fn publish_untyped_descriptor_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    container: LoweredValue,
+    span: Span,
+) -> crate::ir::LocalSlotId {
+    let (_, owner) = root_owned_call_operand(ctx, container, span);
+    owner.expect("fresh descriptor container must have a managed owner")
+}
+
+/// Borrows the published container through its slot so growth writes the new pointer back.
+fn load_published_descriptor_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    slot: crate::ir::LocalSlotId,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let value = ctx.emit_value(
+        Op::LoadLocal,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        php_type,
+        Op::LoadLocal.default_effects(),
+        Some(span),
+    );
+    ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
+    value
+}
+
+/// Transfers a completed indexed container out of its published construction slot.
+fn take_published_descriptor_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    slot: crate::ir::LocalSlotId,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let borrowed = load_published_descriptor_container(ctx, slot, php_type, span);
+    let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, borrowed, Some(span));
+    retire_owned_call_operand(ctx, slot, span);
+    owned
+}
+
 /// Builds an indexed descriptor-invoker container for signature-unknown calls.
 pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
     ctx: &mut LoweringContext<'_, '_>,
@@ -90,13 +132,26 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    let owner = publish_untyped_descriptor_container(ctx, array, span);
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
             let source = lower_expr(ctx, inner);
+            let array = load_published_descriptor_container(
+                ctx,
+                owner,
+                array_ty.clone(),
+                arg.span,
+            );
             lower_indexed_array_spread_into_array(ctx, array, source, Some(&elem_ty), arg.span);
             continue;
         }
         let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
+        let array = load_published_descriptor_container(
+            ctx,
+            owner,
+            array_ty.clone(),
+            arg.span,
+        );
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -106,7 +161,7 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
         );
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
     }
-    array
+    take_published_descriptor_container(ctx, owner, array_ty, span)
 }
 
 /// Builds an associative descriptor-invoker container for named or named/spread calls.
@@ -123,16 +178,23 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
         Op::HashNew,
         Vec::new(),
         Some(Immediate::Capacity(args.len() as u32)),
-        hash_ty,
+        hash_ty.clone(),
         Op::HashNew.default_effects(),
         Some(span),
     );
+    let owner = publish_untyped_descriptor_container(ctx, hash, span);
     let mut next_positional_key = emit_i64_at_span(ctx, 0, span);
     for arg in args {
         match &arg.kind {
             ExprKind::NamedArg { name, value } => {
                 let key = lower_string_literal(ctx, name, arg);
                 let value = lower_untyped_descriptor_invoker_arg_value(ctx, value);
+                let hash = load_published_descriptor_container(
+                    ctx,
+                    owner,
+                    hash_ty.clone(),
+                    arg.span,
+                );
                 ctx.emit_void(
                     Op::HashSet,
                     vec![hash.value, key.value, value.value],
@@ -143,6 +205,12 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             }
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
+                let hash = load_published_descriptor_container(
+                    ctx,
+                    owner,
+                    hash_ty.clone(),
+                    arg.span,
+                );
                 next_positional_key = lower_untyped_descriptor_invoker_spread_into_hash(
                     ctx,
                     hash,
@@ -154,6 +222,12 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             _ => {
                 let key = next_positional_key;
                 let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
+                let hash = load_published_descriptor_container(
+                    ctx,
+                    owner,
+                    hash_ty.clone(),
+                    arg.span,
+                );
                 ctx.emit_void(
                     Op::HashSet,
                     vec![hash.value, key.value, value.value],
@@ -173,7 +247,10 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             }
         }
     }
-    ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span))
+    let hash = load_published_descriptor_container(ctx, owner, hash_ty, span);
+    let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span));
+    retire_owned_call_operand(ctx, owner, span);
+    boxed
 }
 
 /// Copies an indexed spread source into a descriptor-invoker hash with numeric keys.
@@ -354,4 +431,3 @@ pub(super) fn lower_first_class_callable_expr_call(
         _ => None,
     }
 }
-
