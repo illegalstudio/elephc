@@ -67,6 +67,52 @@ unset($source);
     assert_eq!(compile_and_run_tagged(source), expected);
 }
 
+/// Focused eval callable and metadata results release temporary cells without consuming objects.
+#[test]
+fn test_core_eval_callable_and_nonempty_metadata_results_balance_owners() {
+    let source = r#"<?php
+interface FocusedMetadataInterface {}
+trait FocusedMetadataTrait {}
+class FocusedMetadataBase {}
+class FocusedMetadataOwner extends FocusedMetadataBase implements FocusedMetadataInterface {
+    use FocusedMetadataTrait;
+    public int $value = 9;
+    public function method(): void {}
+    public function __invoke(): void {}
+    public function __destruct() { echo "D|"; }
+}
+function inspectFocusedEvalMetadataOwners(FocusedMetadataOwner $object, string $source): void {
+    eval($source);
+    echo $object->value, "|";
+}
+$source = '$valid = [$object, "method"];
+$invalid = [$object, "missing"];
+$closure = function(): void {};
+echo is_callable($valid) ? "V" : "v";
+echo is_callable($invalid) ? "bad" : "N";
+echo is_callable($closure) ? "C" : "c";
+echo is_callable($object) ? "I:" : "i:";
+$parents = class_parents($object);
+$interfaces = class_implements($object);
+$traits = class_uses($object);
+$vars = get_object_vars($object);
+echo count($parents), ":", count($interfaces), ":", count($traits), ":", $vars["value"], "|";
+unset($valid, $invalid, $closure, $parents, $interfaces, $traits, $vars); // ' . $argc;
+for ($i = 0; $i < 3; $i++) {
+    $object = new FocusedMetadataOwner();
+    inspectFocusedEvalMetadataOwners($object, $source);
+    unset($object);
+}
+unset($source);
+"#;
+    let expected = "VNCI:1:1:1:9|9|D|".repeat(3);
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
 /// A native exception thrown inside an eval catch must execute, and may be overridden by, finally.
 #[test]
 fn test_core_eval_finally_runs_after_native_throw_from_catch() {

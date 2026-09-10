@@ -471,6 +471,53 @@ fn builtin_arguments_retain_source_before_later_global_replacement() {
     values.release(result).unwrap();
 }
 
+/// Callable probes release array-extracted receivers but preserve direct object owners.
+#[test]
+fn is_callable_probe_owns_only_array_normalized_receivers() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let program = parse_fragment(
+        br#"class CallableOwnershipProbe {
+    public function hit() {}
+    public function __invoke() {}
+}
+$object = new CallableOwnershipProbe();
+$closure = function() {};"#,
+    )
+    .unwrap();
+    let result =
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    values.release(result).unwrap();
+    let object = scope.visible_cell("object").unwrap();
+    let closure = scope.visible_cell("closure").unwrap();
+
+    let releases = values.releases.len();
+    assert!(eval_is_callable_value(object, None, &context, &mut values).unwrap());
+    assert!(eval_is_callable_value(closure, None, &context, &mut values).unwrap());
+    assert_eq!(values.releases.len(), releases);
+
+    for (method_name, expected) in [("hit", true), ("missing", false)] {
+        let method = values.string(method_name).unwrap();
+        let callback = values.alloc(FakeValue::Array(vec![object.owned(), method]));
+        values.retain(object).unwrap();
+        let releases = values.releases.len();
+        assert_eq!(
+            eval_is_callable_value(callback, None, &context, &mut values).unwrap(),
+            expected,
+            "{method_name}",
+        );
+        assert!(values.releases[releases..].contains(&object), "{method_name}");
+        assert!(values.releases[releases..].contains(&method), "{method_name}");
+        assert_eq!(
+            values.cell_owners[&(object.as_ptr() as usize)],
+            1,
+            "{method_name}",
+        );
+        values.release(callback).unwrap();
+    }
+}
+
 /// Named builtin gaps own synthesized defaults and release them on success and rejected operations.
 #[test]
 fn named_builtin_defaults_are_released_after_dispatch() {

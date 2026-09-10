@@ -77,6 +77,85 @@ fn metadata_array_decoder_releases_temporary_owners() {
     }
 }
 
+/// Owned metadata decoding also retires its source array on success and malformed data.
+#[test]
+fn owned_metadata_array_decoder_releases_container_on_every_exit() {
+    for invalid in [false, true] {
+        let mut values = FakeOps::default();
+        let value = values
+            .string_bytes_value(if invalid { &[0xff] } else { b"NativeParent" })
+            .unwrap();
+        let array = values.alloc(FakeValue::Array(vec![value]));
+        let result =
+            crate::interpreter::builtins::eval_owned_runtime_string_array_to_vec(
+                array,
+                &mut values,
+            );
+        assert_eq!(result.is_err(), invalid);
+        assert!(values.releases.contains(&value));
+        assert!(values.releases.contains(&array));
+    }
+}
+
+/// Relation array construction retires decoded names and partial results after insertion errors.
+#[test]
+fn class_relation_array_builder_cleans_nonempty_results_on_failure() {
+    for relation in ["class_implements", "class_parents", "class_uses"] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        assert!(context.define_native_class_parent("KnownClass", "ParentClass"));
+        let target = values.string("KnownClass").unwrap();
+        values.fail_array_set_call(0);
+        let result =
+            eval_class_relation_result(relation, &[target], &mut context, &mut values);
+        assert_eq!(result, Err(EvalStatus::UnsupportedConstruct), "{relation}");
+        assert_eq!(values.cell_owners[&(target.as_ptr() as usize)], 1, "{relation}");
+        for (id, owners) in &values.cell_owners {
+            if *id != target.as_ptr() as usize {
+                assert_eq!(*owners, 0, "{relation} leaked cell {id}");
+            }
+        }
+    }
+}
+
+/// Object-variable result construction abandons all new cells after any insertion fails.
+#[test]
+fn get_object_vars_builder_releases_declared_and_dynamic_partial_results() {
+    for failed_insert in [0, 1] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let program = parse_fragment(
+            br#"class ObjectVarsOwnershipProbe {
+    public $declared = "declared";
+}
+$object = new ObjectVarsOwnershipProbe();
+$object->dynamic = "dynamic";"#,
+        )
+        .unwrap();
+        let result =
+            execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        values.release(result).unwrap();
+        let object = scope.visible_cell("object").unwrap();
+        let preexisting = values.cell_owners.keys().copied().collect::<std::collections::HashSet<_>>();
+        values.fail_array_set_call(failed_insert);
+
+        let result = eval_symbols_values_result(
+            "get_object_vars",
+            &[object],
+            &mut context,
+            &mut values,
+        );
+
+        assert_eq!(result, Err(EvalStatus::UnsupportedConstruct));
+        for (id, owners) in &values.cell_owners {
+            if !preexisting.contains(id) {
+                assert_eq!(*owners, 0, "insert {failed_insert} leaked cell {id}");
+            }
+        }
+    }
+}
+
 /// Successful insertion releases temporary operands but transfers the finished array to its caller.
 #[test]
 fn collection_builder_releases_operands_without_releasing_finished_array() {

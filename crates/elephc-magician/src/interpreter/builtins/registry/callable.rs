@@ -182,6 +182,21 @@ pub(in crate::interpreter) fn eval_callable_from_scope(
     eval_callable_with_optional_scope(callback, context, Some(scope), values)
 }
 
+/// Normalizes one callback for a non-invoking probe and reports any owned array receiver.
+pub(in crate::interpreter) fn eval_callable_for_probe(
+    callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    lexical_scope: Option<&ElephcEvalScope>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(EvaluatedCallable, Option<RuntimeCellHandle>), EvalStatus> {
+    eval_callable_with_optional_scope_and_array_receiver(
+        callback,
+        context,
+        lexical_scope,
+        values,
+    )
+}
+
 /// Normalizes one PHP callback with optional scope-sensitive special class receivers.
 pub(in crate::interpreter) fn eval_callable_with_optional_scope(
     callback: RuntimeCellHandle,
@@ -189,25 +204,50 @@ pub(in crate::interpreter) fn eval_callable_with_optional_scope(
     lexical_scope: Option<&ElephcEvalScope>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
+    eval_callable_with_optional_scope_and_array_receiver(
+        callback,
+        context,
+        lexical_scope,
+        values,
+    )
+    .map(|(callback, _)| callback)
+}
+
+/// Normalizes one callback while preserving ownership supplied by an array read.
+fn eval_callable_with_optional_scope_and_array_receiver(
+    callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    lexical_scope: Option<&ElephcEvalScope>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(EvaluatedCallable, Option<RuntimeCellHandle>), EvalStatus> {
     if let Some(owner) =
         crate::context::pcntl_runtime::begin_callable_use(callback, context)
     {
         let Some(owner_context) = (unsafe { owner.context_ptr().as_ref() }) else {
             return Err(EvalStatus::RuntimeFatal);
         };
-        let callback = eval_callable_with_optional_scope(callback, owner_context, None, values)?;
-        return Ok(EvaluatedCallable::ForeignContext {
-            callback: Box::new(callback),
-            owner,
-        });
+        let (callback, array_receiver) = eval_callable_with_optional_scope_and_array_receiver(
+            callback,
+            owner_context,
+            None,
+            values,
+        )?;
+        return Ok((
+            EvaluatedCallable::ForeignContext {
+                callback: Box::new(callback),
+                owner,
+            },
+            array_receiver,
+        ));
     }
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
-        return eval_object_callable(callback, context, values);
+        return eval_object_callable(callback, context, values).map(|callback| (callback, None));
     }
     if values.is_array_like(callback)? {
-        return eval_array_callable(callback, context, lexical_scope, values);
+        return eval_array_callable_with_receiver_owner(callback, context, lexical_scope, values);
     }
     eval_string_callable(callback, context, lexical_scope, values)
+        .map(|callback| (callback, None))
 }
 
 /// Normalizes one invokable eval object for dynamic callable dispatch.
@@ -305,13 +345,13 @@ fn eval_closure_object_target_callable(target: &EvalClosureObjectTarget) -> Eval
     }
 }
 
-/// Normalizes one two-element object-method or static-method callable array.
-pub(in crate::interpreter) fn eval_array_callable(
+/// Normalizes a callable array and identifies the owned object extracted for dispatch.
+fn eval_array_callable_with_receiver_owner(
     callback: RuntimeCellHandle,
     context: &ElephcEvalContext,
     lexical_scope: Option<&ElephcEvalScope>,
     values: &mut impl RuntimeValueOps,
-) -> Result<EvaluatedCallable, EvalStatus> {
+) -> Result<(EvaluatedCallable, Option<RuntimeCellHandle>), EvalStatus> {
     if values.array_len(callback)? != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -388,7 +428,11 @@ pub(in crate::interpreter) fn eval_array_callable(
     // Only an object-method result transfers the array read's receiver owner.
     // Special class strings resolve to a borrowed $this, not the temporary string cell.
     let receiver = match &result {
-        Ok(EvaluatedCallable::ObjectMethod { object, .. }) => Some(*object),
+        Ok(EvaluatedCallable::ObjectMethod { object, .. })
+            if !object.is_borrowed() && temporaries.contains(object) =>
+        {
+            Some(*object)
+        }
         _ => None,
     };
     let mut cleanup = Ok(());
@@ -406,7 +450,7 @@ pub(in crate::interpreter) fn eval_array_callable(
             }
             Err(status)
         }
-        (Ok(callable), Ok(())) => Ok(callable),
+        (Ok(callable), Ok(())) => Ok((callable, receiver)),
     }
 }
 

@@ -184,6 +184,20 @@ pub(in crate::interpreter) fn eval_runtime_string_array_to_vec(
     Ok(result)
 }
 
+/// Decodes and then releases an owned runtime string array on success or failure.
+pub(in crate::interpreter) fn eval_owned_runtime_string_array_to_vec(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let result = eval_runtime_string_array_to_vec(array, values);
+    let released = values.release(array);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(_), Err(status)) => Err(status),
+        (Ok(names), Ok(())) => Ok(names),
+    }
+}
+
 /// Returns whether one normalized class-like name exists in eval or runtime metadata.
 pub(in crate::interpreter) fn eval_class_relation_name_exists(
     name: &str,

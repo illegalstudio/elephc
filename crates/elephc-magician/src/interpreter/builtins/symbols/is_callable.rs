@@ -130,14 +130,18 @@ pub(in crate::interpreter) fn eval_is_callable_value(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let callback = match lexical_scope {
-        Some(scope) => eval_callable_from_scope(value, context, scope, values),
-        None => eval_callable(value, context, values),
-    };
-    let Ok(callback) = callback else {
+    let Ok((callback, receiver)) =
+        eval_callable_for_probe(value, context, lexical_scope, values)
+    else {
         return Ok(false);
     };
-    eval_callable_probe_exists(&callback, context, values)
+    let probed = eval_callable_probe_exists(&callback, context, values);
+    let released = receiver.map_or(Ok(()), |receiver| values.release(receiver));
+    match (probed, released) {
+        (Err(status), _) => Err(status),
+        (Ok(_), Err(status)) => Err(status),
+        (Ok(exists), Ok(())) => Ok(exists),
+    }
 }
 
 /// Evaluates `is_callable()` and writes PHP's display callable name when requested.

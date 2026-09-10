@@ -1771,3 +1771,21 @@ its first four successful calls. Both failures now include generated assembly
 in completed CI logs, so subsequent pushes will not discard that evidence.
 Do not interpret updated test assertions or successful compilation as runtime
 parity, clean ownership or review readiness.
+
+### Balance eval metadata and callable-probe temporary owners
+
+Cursor GPT 5.6 Sol implemented the independently diagnosed eval metadata leaks.
+Callable normalization now reports the owner extracted from a callable array,
+so is_callable can retire it after both successful and failed probes without
+consuming borrowed closure metadata, direct invokable objects or special-class
+receivers. Foreign-context probes keep their context lease through cleanup.
+Class relation builders release decoded runtime arrays, keys and values, and
+get_object_vars uses the shared owned-array builder on every result path.
+
+Keep the original failing metadata fixture unchanged. Add a nonempty native
+metadata/eval heap-debug and tagged regression plus unit coverage for failed
+insertions, malformed metadata and callable receiver ownership. Coordinator
+review removed a newly unused normalization wrapper. Cargo build and cargo
+check --tests pass without warnings; exporter regeneration, all builtin docs
+audits and diff hygiene pass. No local tests execute. Runtime leak cleanliness
+and destructor ordering remain for CI on the new commit.
