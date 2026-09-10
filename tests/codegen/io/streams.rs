@@ -7748,6 +7748,23 @@ echo $f === false ? "closed" : "open";
     assert_eq!(out, "P9;closed");
 }
 
+/// Named source order evaluates and roots the params hash before the context expression.
+/// Callback discovery must follow the staged ownership values back to that literal hash.
+#[test]
+fn test_stream_notification_callback_survives_wrapped_named_params() {
+    let out = compile_and_run(
+        r#"<?php
+$ctx = stream_context_set_params(
+    params: ['notification' => function($code) { echo "W" . $code . ";"; }],
+    context: stream_context_create()
+);
+$f = fopen('http://127.0.0.1:1/', 'r');
+echo $f === false ? "closed" : "open";
+"#,
+    );
+    assert_eq!(out, "W9;closed");
+}
+
 /// A userspace wrapper whose `stream_cast()` (vtable slot 10) returns a real
 /// underlying socket fd becomes select()-able: `stream_select` resolves the
 /// synthetic wrapper fd to that real fd (STREAM_CAST_FOR_SELECT) and reports it

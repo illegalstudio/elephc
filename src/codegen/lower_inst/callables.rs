@@ -2581,25 +2581,111 @@ fn descriptor_invoker_ready_label(ctx: &mut FunctionContext<'_>, op_name: &str) 
 /// Recognizes a prebuilt Mixed box through identity-preserving lifetime retains.
 fn descriptor_arg_is_prebuilt_mixed_box(
     ctx: &FunctionContext<'_>,
-    mut arg_mixed: ValueId,
+    arg_mixed: ValueId,
 ) -> Result<bool> {
     if ctx.value_php_type(arg_mixed)?.codegen_repr() != PhpType::Mixed {
         return Ok(false);
     }
+    let arg_mixed = transparent_descriptor_arg_source(ctx.function, arg_mixed)?;
+    let Some(value_ref) = ctx.function.value(arg_mixed) else {
+        return Err(CodegenIrError::missing_entry("value", arg_mixed.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let Some(inst) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    Ok(inst.op == Op::MixedBox)
+}
+
+/// Follows identity-preserving ownership operations used to stage descriptor arguments.
+fn transparent_descriptor_arg_source(
+    function: &crate::ir::Function,
+    mut arg_mixed: ValueId,
+) -> Result<ValueId> {
     loop {
-        let Some(value_ref) = ctx.function.value(arg_mixed) else {
+        let Some(value_ref) = function.value(arg_mixed) else {
             return Err(CodegenIrError::missing_entry("value", arg_mixed.as_raw()));
         };
         let ValueDef::Instruction { inst, .. } = value_ref.def else {
-            return Ok(false);
+            return Ok(arg_mixed);
         };
-        let Some(inst) = ctx.function.instruction(inst) else {
+        let Some(inst) = function.instruction(inst) else {
             return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
         };
-        if inst.op != Op::Acquire {
-            return Ok(inst.op == Op::MixedBox);
+        if !matches!(inst.op, Op::Acquire | Op::Move | Op::Borrow) {
+            return Ok(arg_mixed);
         }
         arg_mixed = expect_operand(inst, 0)?;
+    }
+}
+
+#[cfg(test)]
+mod descriptor_producer_tests {
+    use super::transparent_descriptor_arg_source;
+    use crate::ir::{Builder, Function, IrType, Op, Ownership};
+    use crate::types::PhpType;
+
+    /// Descriptor argument classification reaches a prebuilt Mixed box through the
+    /// ownership chain while invocation remains free to load the final staged operand.
+    #[test]
+    fn wrapped_prebuilt_mixed_box_keeps_its_box_producer() {
+        let mut function =
+            Function::new("wrapped_descriptor_arg".into(), IrType::Void, PhpType::Void);
+        let (mixed_box, wrapped) = {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let scalar = builder.emit_const_i64(1);
+            let mixed_box = builder
+                .emit(
+                    Op::MixedBox,
+                    vec![scalar],
+                    None,
+                    IrType::from_php(&PhpType::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let acquired = builder
+                .emit(
+                    Op::Acquire,
+                    vec![mixed_box],
+                    None,
+                    IrType::from_php(&PhpType::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let borrowed = builder
+                .emit(
+                    Op::Borrow,
+                    vec![acquired],
+                    None,
+                    IrType::from_php(&PhpType::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Borrowed,
+                )
+                .unwrap();
+            let moved = builder
+                .emit(
+                    Op::Move,
+                    vec![borrowed],
+                    None,
+                    IrType::from_php(&PhpType::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Borrowed,
+                )
+                .unwrap();
+            (mixed_box, moved)
+        };
+
+        assert_eq!(
+            transparent_descriptor_arg_source(&function, wrapped).unwrap(),
+            mixed_box
+        );
     }
 }
 

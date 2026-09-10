@@ -2050,3 +2050,18 @@ storage in the callable coercion fixtures. Cargo check --tests, exporter build,
 documentation audits, assembly-comment alignment and diff hygiene pass. No local
 tests execute. Existing CI heap and callback regressions remain the runtime gate;
 this change does not claim to add evaluation scopes to unrelated legacy surfaces.
+
+### Follow ownership forwarding when classifying callback producers
+
+An independent native audit found two producer checks that still treated argument
+staging as opaque. Stream notification discovery now follows Acquire, Move and
+Borrow to identify literal params hashes, their HashSet bases and descriptor
+producers. Descriptor invocation follows the same operations when recognizing an
+already boxed Mixed argument, avoiding a second box around that value.
+
+These are classification-only traversals: callback installation and invocation
+continue loading the original staged operands with their existing ownership.
+Add structural producer regressions and a named-order stream notification fixture
+whose params hash is evaluated before its context expression. Cargo check --tests,
+assembly-comment alignment and diff hygiene pass. No local tests or PHP programs
+execute; executable confirmation remains assigned to the new CI run.
