@@ -1626,3 +1626,22 @@ static method/property parameter-binding coverage, plus negative fixtures provin
 explicit null and never-initialized property arguments remain errors. Cargo build,
 test compilation and diff hygiene pass. No tests execute locally. CI on 6a86ca25f
 is still running; this checker correction and all new fixtures await CI validation.
+
+### Separate shell launch failures from output collection
+
+The curl-feature contract job on 6a86ca25f fails in Magician's process-dispatch
+fixture: dynamic passthru returns false without its expected output. The old
+runner discards the operating-system error, so this log cannot distinguish
+resource pressure from an error collecting a child that already started.
+Command::output combines those phases, but the retry loop treats both as failed
+spawns. Split spawn from wait_with_output and never retry after a child starts.
+Preserve the original error in a phase-specific warning rather than silently
+collapsing it to false. Keep the existing five-attempt bound unchanged.
+
+Add deterministic tests for transient recovery, bounded exhaustion, permanent
+launch errors and non-retriable collection errors. Keep the real process fixture
+and its expected output, adding warnings to failure diagnostics. Build, Magician
+test compilation with curl, generated-doc rendering and all required builtin
+audits pass. No tests run locally. This fixes the unsafe retry boundary and lost
+diagnostics; it does not claim that the CI process failure is resolved without a
+new exact-head run. The remaining array and eval ownership gates stay open.

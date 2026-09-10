@@ -585,7 +585,9 @@ return function_exists("passthru");"#,
 
     assert_eq!(
         values.output,
-        "shell:exec:systemempty:passnull:call:spread:dynsysdyn-empty:dynpassdyn-null:111"
+        "shell:exec:systemempty:passnull:call:spread:dynsysdyn-empty:dynpassdyn-null:111",
+        "process warnings: {:?}",
+        values.warnings,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -839,7 +841,9 @@ return function_exists("extension_loaded");"#,
 fn a_failed_spawn_reports_false_rather_than_an_empty_command() {
     for name in ["exec", "shell_exec", "system", "passthru"] {
         let mut values = FakeOps::default();
-        let result = eval_process_outcome_result(name, EvalShellOutcome::SpawnFailed, &mut values)
+        let error = std::io::Error::from_raw_os_error(libc::EAGAIN);
+        let expected_warning = format!("{name}(): Unable to start process: {error}");
+        let result = eval_process_outcome_result(name, EvalShellOutcome::SpawnFailed(error), &mut values)
             .expect("spawn failure must be a value, not a fatal");
         assert_eq!(
             values.get(result),
@@ -850,6 +854,22 @@ fn a_failed_spawn_reports_false_rather_than_an_empty_command() {
             values.output, "",
             "{name}() must not echo anything for a command that never ran"
         );
+        assert_eq!(values.warnings, [expected_warning]);
+    }
+}
+
+/// Reports collection failures separately from launch failures without inventing empty output.
+#[test]
+fn a_failed_process_output_collection_reports_its_original_error() {
+    for name in ["exec", "shell_exec", "system", "passthru"] {
+        let mut values = FakeOps::default();
+        let error = std::io::Error::from_raw_os_error(libc::ECHILD);
+        let expected_warning = format!("{name}(): Unable to collect process output: {error}");
+        let result = eval_process_outcome_result(name, EvalShellOutcome::OutputFailed(error), &mut values)
+            .expect("collection failure must return a PHP value");
+        assert_eq!(values.get(result), FakeValue::Bool(false));
+        assert_eq!(values.warnings, [expected_warning]);
+        assert!(values.output.is_empty());
     }
 }
 
