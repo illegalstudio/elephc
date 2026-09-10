@@ -8,6 +8,7 @@
 //! - Borrows source rows without changing their internal cursors or storage.
 //! - Presence checks preserve explicit nulls and skip missing keys or non-array rows.
 //! - Each result slot adopts one owned read cell; no callbacks or warnings are emitted.
+//! - Stamping result elements preserves the x86_64 heap marker used by boxing and cleanup.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -58,7 +59,7 @@ pub fn emit_array_column_boxed(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, arg1, 8);
     abi::emit_call_label(emitter, "__rt_array_new");
     ins(emitter, "ldr x9, [x0, #-8]", "mov r10, QWORD PTR [rax - 8]");
-    ins(emitter, "mov x10, #0x80ff", "mov r11, 0x80ff");
+    ins(emitter, "mov x10, #0x80ff", "mov r11, 0xffffffff000080ff");
     ins(emitter, "and x9, x9, x10", "and r10, r11");
     ins(emitter, "orr x9, x9, #0x700", "or r10, 0x700");
     ins(emitter, "str x9, [x0, #-8]", "mov QWORD PTR [rax - 8], r10");
@@ -136,6 +137,11 @@ mod tests {
             assert!(probe < read && read < append, "{target}");
             assert!(asm.contains("__rt_array_iter_next"), "{target}");
             assert!(asm.contains("__rt_hash_normalize_key"), "{target}");
+            if target == "linux-x86_64" {
+                assert!(asm.contains("mov r11, 0xffffffff000080ff"),
+                    "the result must remain recognizable to heap_kind and typed decref");
+                assert!(!asm.contains("mov r11, 0x80ff"), "do not erase the heap identity marker");
+            }
             assert!(!asm.contains("__rt_incref"), "{target}: the read already owns its cell");
             assert!(!asm.contains("__rt_decref"), "{target}: result slots adopt read owners");
         }

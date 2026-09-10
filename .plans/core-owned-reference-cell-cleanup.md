@@ -895,3 +895,14 @@ typed-variadic normalization remain follow-up work, not claims of full parity.
 CI on bbaffc6eb remains red in multiple shards. Its x86_64 shard 3 now reports
 only the declared-array callback checker failure, versus the additional opaque
 usort leak on the previous head; the full matrix and this new fix still need CI.
+
+### Boxed column result heap identity
+
+CI on bbaffc6eb caught a separate x86_64 emitter defect in the new column path:
+the Mixed-element stamp kept only the low kind/COW bits and erased the high heap
+identity marker. This made later declared-array boxing classify the result as
+null and made guarded decrefs ignore otherwise valid result containers. Preserve
+the high marker exactly as the existing indexed-array emitters do. The three
+new column heap fixtures already catch null results, nested COW and delayed
+object release; the all-target emitter test now also pins the preservation mask.
+No local tests were executed.
