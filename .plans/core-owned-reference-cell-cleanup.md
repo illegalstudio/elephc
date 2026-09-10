@@ -2207,3 +2207,16 @@ target-boundary audits, assembly comments and diff hygiene pass. No tests execut
 locally. The two metadata leak fixtures and the residual pair of 38-byte strings
 in the argument-throw fixture still have no confirmed cause; require evidence from
 the next exact-head CI and do not claim they are fixed by this batch.
+
+### Match structural assertions to the active callable routes
+
+The callback-root assertion only recognized an unprofiled ArrayAll target even
+though the active EIR uses the equivalent profiled target. Accept both typed
+forms without relaxing the root-order checks. The detached-capture fixture invokes
+two retained descriptors, not four ClosureCall operations; assert the actual two
+CallableDescriptorInvoke operations and preserve the distinct owner-slot checks.
+
+The same seven non-codegen failures were confirmed on Linux and macOS. These two
+are stale structural expectations, independent of the production owner repairs.
+Cargo check --tests, assembly-comment alignment and diff hygiene pass. No local
+tests execute; CI remains responsible for running these assertions.

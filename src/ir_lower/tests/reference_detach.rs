@@ -90,9 +90,9 @@ unset($text, $old, $fresh);
         assert_eq!(
             main.instructions
                 .iter()
-                .filter(|inst| inst.op == Op::ClosureCall)
+                .filter(|inst| inst.op == Op::CallableDescriptorInvoke)
                 .count(),
-            4,
+            2,
             "{name}: detached by-reference captures must invoke their retained descriptor cells",
         );
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();

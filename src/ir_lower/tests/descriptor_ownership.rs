@@ -228,9 +228,12 @@ fn callback_builtin_operands_have_unwind_scopes_on_all_targets() {
         let function = module.functions.iter().find(|function| function.name == "invoke_callback_root").unwrap();
         let call = function.instructions.iter().position(|inst| {
             inst.op == Op::RuntimeCall
-                && inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
-                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayAll),
-                ))
+                && matches!(inst.immediate, Some(crate::ir::Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayAll)
+                        | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                            target: crate::ir::RuntimeFnId::ArrayAll, ..
+                        },
+                )))
         }).expect("missing array_all callback invocation");
         let roots = function.instructions[..call].iter().enumerate().filter(|(_, inst)| {
             inst.op == Op::PushCallOperandOwner
