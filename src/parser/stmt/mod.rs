@@ -182,7 +182,9 @@ fn parse_stmt_dispatch(
                 assign::parse_static_var(tokens, pos, span)
             }
         }
-        Token::LBracket => assign::parse_list_unpack(tokens, pos, span),
+        Token::LBracket if starts_bracket_destructuring_assignment(tokens, *pos) => {
+            assign::parse_list_unpack(tokens, pos, span)
+        }
         Token::Identifier(_)
         | Token::Enum
         | Token::Self_
@@ -191,6 +193,7 @@ fn parse_stmt_dispatch(
         | Token::Question
         | Token::New
         | Token::LParen
+        | Token::LBracket
         | Token::Match => {
             if matches!(&tokens[*pos].0, Token::Identifier(name) if name.eq_ignore_ascii_case("list"))
                 && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LParen))
@@ -243,6 +246,24 @@ fn parse_stmt_dispatch(
             &format!("Unexpected token at statement position: {:?}", other),
         )),
     }
+}
+
+/// Distinguishes bracket destructuring from array expressions by the matching closing bracket.
+fn starts_bracket_destructuring_assignment(tokens: &[SpannedToken], start: usize) -> bool {
+    let mut depth = 0usize;
+    for (index, (token, _)) in tokens.iter().enumerate().skip(start) {
+        match token {
+            Token::LBracket => depth += 1,
+            Token::RBracket => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return matches!(tokens.get(index + 1).map(|entry| &entry.0), Some(Token::Assign));
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Parses the exit level for `break` or `continue` statements.

@@ -587,3 +587,13 @@ exact warning counts and clean heaps. Build, test compilation, assembly-comment
 checks and the complete builtin-document workflow pass; no tests ran locally.
 CI on 558d98274 still reports unrelated checker and ownership failures and a
 standalone spread parsing failure. The PR remains draft and unmerged.
+
+### Standalone array expression parsing
+
+Statement dispatch now selects bracket destructuring only when the matching
+outer bracket is immediately followed by assignment. Standalone array literals,
+spreads and indexed literal expressions reach the expression parser. Parser
+regressions retain nested/keyed destructuring and malformed-target rejection;
+the optimizer regression again uses the original unparenthesized source, as
+does the existing executable CI fixture. Build and test compilation pass,
+without local test execution.

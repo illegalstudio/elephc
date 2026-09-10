@@ -24,7 +24,7 @@ fn test_effect_analysis_keeps_dynamic_array_spread_observable() {
     );
     assert!(!expr_is_observable(&literal));
     let tokens = crate::lexer::tokenize(
-        "<?php try { ([...$items]); } catch (Error $error) { echo 'caught'; } finally { echo 'done'; }",
+        "<?php try { [...$items]; } catch (Error $error) { echo 'caught'; } finally { echo 'done'; }",
     ).unwrap();
     let program = crate::parser::parse(&tokens).unwrap();
     for optimized in [prune_constant_control_flow(program.clone()), eliminate_dead_code(program)] {
