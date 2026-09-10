@@ -10,6 +10,32 @@
 
 use crate::support::*;
 
+/// Rejected descriptor inputs retire both extracted boxes, including the valid sibling's hash.
+#[test]
+fn test_core_php_array_merge_rejected_descriptor_inputs_release_extractions() {
+    let source = r#"<?php
+function rejectMergeInputs(callable $callback, array $arguments): void {
+    try { call_user_func_array($callback, $arguments); }
+    catch (TypeError $error) {
+        echo strpos($error->getMessage(), "Argument #") !== false ? "type|" : "bad|";
+    }
+}
+$callback = array_merge(...);
+for ($i = 0; $i < 4; $i++) {
+    rejectMergeInputs($callback, [["value" => str_repeat("a", 24)], 42]);
+    rejectMergeInputs($callback, [42, ["value" => str_repeat("b", 24)]]);
+}
+unset($callback);
+echo "done";
+"#;
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    let expected = format!("{}done", "type|".repeat(8));
+    assert!(out.success, "{}\n{assembly}", out.stderr);
+    assert_eq!(out.stdout, expected, "{}\n{assembly}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
 /// Opaque callable invocation unpacks both arrays and preserves input/result owners on return and throw.
 #[test]
 fn test_core_php_array_merge_descriptor_unpack_and_arity_cleanup() {

@@ -10,7 +10,7 @@
 
 use super::*;
 
-/// Roots callback, aggregate-warning and XML-setter operands with independently owned results.
+/// Roots callback, validation and XML-setter operands with independently owned results.
 pub(super) fn root_non_aliasing_callback_operands(
     ctx: &mut LoweringContext<'_, '_>,
     def: &crate::builtins::registry::BuiltinDef,
@@ -28,6 +28,9 @@ pub(super) fn root_non_aliasing_callback_operands(
                 // an explicit callback operand. Their internal snapshot does not
                 // own the original temporary passed by this PHP activation.
                 || matches!(target, crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct)
+                // Descriptor merge wrappers extract owned Mixed cells from their variadic
+                // pack. Invalid runtime tags throw before ordinary post-call releases.
+                || target == crate::ir::RuntimeFnId::ArrayMerge
         }
         _ => matches!(
             def.spec.semantics.argument_lowering,

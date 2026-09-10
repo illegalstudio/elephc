@@ -1879,3 +1879,20 @@ independent inspection found no defect in the new authorization, slot typing,
 read path or ambiguity handling; refresh the one stale mechanism comment it
 identified. Cargo build, cargo check --tests, generated-docs synchronization and
 all builtin audits pass. No local tests execute; runtime claims still await CI.
+
+### Protect merge descriptor extractions while runtime validation can throw
+
+The exact 5fbf8314b CI still reports six live blocks in the original merge
+descriptor regression: one source hash, three strings and two Mixed cells.
+Source inspection finds that the synthetic wrapper extracts two independently
+owned cells from its variadic pack, but ArrayMerge was outside the scoped call
+operand ledger. A rejected runtime tag skips both ordinary post-call releases.
+Include ArrayMerge in the existing non-aliasing operand-root path, retaining
+each extraction through validation and retiring its root on return or unwind.
+
+Preserve the original arity/unpack regression. Add a five-target synthetic-wrapper
+test for two distinct registered owners and exact normal retirement, plus repeated
+invalid-first and invalid-second descriptor calls with heap-clean/tagged checks.
+Cargo build, cargo check --tests, exporter generation, builtin audits and diff
+hygiene pass. No tests execute locally; CI must confirm that the observed leak
+is gone and the new per-operand cleanup remains balanced.
