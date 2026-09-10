@@ -2027,6 +2027,10 @@ impl RuntimeFnId {
                 // Type names live in static data, never in the inspected value. A possible
                 // alias would suppress cleanup of boxed array/property read temporaries.
                 | RuntimeFnId::Gettype
+                // Class names come from metadata, including Closure and incomplete-class
+                // literals, not the inspected object's storage or its boxed read cell.
+                | RuntimeFnId::GetClass
+                | RuntimeFnId::GetParentClass
                 // `__rt_chunk_split` always writes into a reservation taken from
                 // `__rt_concat_reserve`, so the split result can never alias the subject or
                 // the separator. The default `MayAliasArguments` bucket kept an owned subject

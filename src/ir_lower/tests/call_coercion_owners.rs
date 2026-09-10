@@ -8,6 +8,38 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
+/// Class-name metadata cannot keep a boxed object read alive after introspection finishes.
+#[test]
+fn class_name_lookups_retire_boxed_read_arguments_on_all_targets() {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+    let source = r#"<?php
+class NameOwnerBase {}
+class NameOwnerChild extends NameOwnerBase {}
+function inspectNameOwner(array $items): string {
+    return get_class($items[0]) . ":" . get_parent_class($items[0]);
+}
+echo inspectNameOwner([new NameOwnerChild()]);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|f| f.name == "inspectNameOwner").unwrap();
+        for operation in [RuntimeFnId::GetClass, RuntimeFnId::GetParentClass] {
+            let call = function.instructions.iter().find(|inst| match inst.immediate {
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(id)
+                    | RuntimeCallTarget::ProfiledFunction { target: id, .. })) => id == operation,
+                _ => false,
+            }).unwrap();
+            assert!(function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands == [call.operands[0]]
+            }), "{target}: {operation:?} must retire its boxed argument");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Descriptor-only invocations emit one complete normalizer without requiring the eval bridge.
 #[test]
 fn callable_argument_normalizer_is_emitted_once_on_all_targets() {

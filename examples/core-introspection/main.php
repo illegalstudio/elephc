@@ -24,6 +24,13 @@ class DisplaySettings {
 echo 'Stored defaults: ', implode(', ', array_keys(get_class_vars(DisplaySettings::class))), "\n";
 echo 'Public methods: ', implode(', ', get_class_methods(DisplaySettings::class)), "\n";
 
+// A class name is independent of the object and array cell used to inspect it.
+function settings_objects(): array { return [new DisplaySettings()]; }
+$settingsObjects = settings_objects();
+$settingsName = get_class($settingsObjects[0]);
+unset($settingsObjects);
+echo 'Saved class name: ', $settingsName, "\n";
+
 // Returned PHP arrays can supply named arguments to a first-class builtin.
 function settings_introspection_args(): array {
     return ['class' => DisplaySettings::class];

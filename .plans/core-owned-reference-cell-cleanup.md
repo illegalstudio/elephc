@@ -906,3 +906,20 @@ the high marker exactly as the existing indexed-array emitters do. The three
 new column heap fixtures already catch null results, nested COW and delayed
 object release; the all-target emitter test now also pins the preservation mask.
 No local tests were executed.
+
+### Class-name argument independence
+
+The remaining ARM64 column object-owner failure is an introspection lifetime
+issue, not column storage: get_class on an owned Mixed read conservatively kept
+that read and its object alive after returning a name from static metadata.
+GetClass and GetParentClass now declare Independent result aliasing. The direct
+get_class_methods object-name projection uses that same no-argument-alias proof.
+Ordinary, Closure and incomplete-class name emitters all select independent
+metadata; they do not need fresh string allocations just to retire the input.
+
+Added all-target EIR release assertions and heap fixtures for boxed reads,
+retained names, throwing temporary destructors and special class names. The eval
+class-name bridge's separately allocated result-cell cleanup remains a distinct
+open issue. This change does not claim to resolve that bridge allocation.
+Build, test compilation, generated builtin documentation and all contract/site
+audits pass. No tests were executed locally.

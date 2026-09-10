@@ -87,7 +87,7 @@ fn lower_class_introspection_value(
             ctx,
             &[argument.value],
             Some(class_name.value),
-            &ReturnArgAlias::Unknown,
+            &ReturnArgAlias::None,
             expr.span,
         );
         take_owned_temp(ctx, &class_name_temp, expr.span)
