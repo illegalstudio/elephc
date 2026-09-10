@@ -59,6 +59,14 @@ class Formatter {
 $formatter = new Formatter();
 $format = $formatter->bracket(...);
 echo "method callable: " . $format("ok") . "\n";
+
+function render_callback(callable $format): void { echo $format("nested") . "\n"; }
+function dispatch_renderer(callable $renderer, mixed $format): void {
+    $renderer(format: $format);
+}
+echo "callable argument through a descriptor: ";
+dispatch_renderer(render_callback(...), [$formatter, "bracket"]);
+
 $formatted = array_map($format, ["a", "b"]);
 echo "method callable array_map: ";
 foreach ($formatted as $v) { echo $v . " "; }

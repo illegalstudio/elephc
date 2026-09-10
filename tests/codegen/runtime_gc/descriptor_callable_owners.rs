@@ -29,7 +29,7 @@ for ($i = 0; $i < 3; $i++) {
 }
 echo "done";
 "#);
-    assert!(out.success, "{}", out.stderr);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "called|drop|called|drop|called|drop|done", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
@@ -55,7 +55,71 @@ $callback();
 unset($callback, $error);
 echo "done";
 "#);
-    assert!(out.success, "{}", out.stderr);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "called|consumer|called|drop|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Boxed names, method pairs, invokable objects and descriptors share the typed callback boundary.
+#[test]
+fn test_descriptor_callable_arguments_normalize_php_callback_shapes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function descriptorShapeFunction(): void { echo "F"; }
+class DescriptorShapeObject {
+    public static function staticMethod(): void { echo "S"; }
+    public function method(): void { echo "M"; }
+    public function __invoke(): void { echo "I"; }
+    public function __destruct() { echo "drop|"; }
+}
+function consumeDescriptorShape(callable $callback): void { $callback(); }
+function dispatchDescriptorShape(callable $target, mixed $callback, bool $named): void {
+    if ($named) { $target(callback: $callback); } else { $target($callback); }
+}
+$object = new DescriptorShapeObject();
+$method = $object->method(...);
+$closure = function(): void { echo "C"; };
+for ($i = 0; $i < 2; $i++) {
+    dispatchDescriptorShape(consumeDescriptorShape(...), "DESCRIPTORSHAPEFUNCTION", $i > 0);
+    dispatchDescriptorShape(consumeDescriptorShape(...), "DescriptorShapeObject::staticMethod", $i > 0);
+    dispatchDescriptorShape(consumeDescriptorShape(...), ["DescriptorShapeObject", "staticMethod"], $i > 0);
+    dispatchDescriptorShape(consumeDescriptorShape(...), [$object, "method"], $i > 0);
+    dispatchDescriptorShape(consumeDescriptorShape(...), $object, $i > 0);
+    dispatchDescriptorShape(consumeDescriptorShape(...), $method, $i > 0);
+    dispatchDescriptorShape(consumeDescriptorShape(...), $closure, $i > 0);
+}
+unset($method, $closure, $object);
+echo "done";
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "FSSMIMCFSSMIMCdrop|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Invalid boxed callbacks throw before entering the callee and leave borrowed values alive.
+#[test]
+fn test_descriptor_callable_argument_type_errors_retire_prepared_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class InvalidDescriptorOwner {
+    public function __destruct() { echo "drop|"; }
+}
+function consumeInvalidDescriptor(InvalidDescriptorOwner $owner, callable $callback): void {
+    echo "unexpected|";
+}
+function rejectDescriptorShape(callable $target, mixed $callback, bool $named): void {
+    $owner = new InvalidDescriptorOwner();
+    try {
+        if ($named) { $target(owner: $owner, callback: $callback); }
+        else { $target($owner, $callback); }
+    } catch (TypeError $error) { echo "invalid|"; }
+    unset($error, $owner);
+}
+rejectDescriptorShape(consumeInvalidDescriptor(...), 42, false);
+rejectDescriptorShape(consumeInvalidDescriptor(...), "missingDescriptorCallback", true);
+rejectDescriptorShape(consumeInvalidDescriptor(...), null, false);
+rejectDescriptorShape(consumeInvalidDescriptor(...), ["InvalidDescriptorOwner", "missing", "extra"], true);
+echo "done";
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "invalid|drop|invalid|drop|invalid|drop|invalid|drop|done", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

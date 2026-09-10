@@ -299,7 +299,7 @@ pub fn generate_user_asm_from_ir_with_options(
         emitter.emit_text_prelude();
     }
     let mut data = DataSection::new();
-    block_emit::emit_module(
+    let shared = block_emit::emit_module(
         module,
         &mut emitter,
         &mut data,
@@ -314,14 +314,15 @@ pub fn generate_user_asm_from_ir_with_options(
         web,
         web_isolation,
     )?;
-    Ok(finalize_user_asm(
+    finalize_user_asm(
         module,
         emitter,
         data,
         emit,
         exported_functions,
         heap_debug,
-    ))
+        shared,
+    )
 }
 
 /// Appends literal data and the minimal user-runtime metadata needed by linked helpers.
@@ -332,7 +333,8 @@ fn finalize_user_asm(
     emit: Emit,
     exported_functions: &HashMap<String, ExportedFunction>,
     heap_debug: bool,
-) -> String {
+    mut shared: shared_state::SharedCodegenState,
+) -> Result<String> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
@@ -382,6 +384,9 @@ fn finalize_user_asm(
         );
         eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
         eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
+    }
+    if shared.callable_argument_normalizer || eval_callable_support.argument_normalizer_needed {
+        lower_inst::emit_callable_argument_normalizer(module, &mut emitter, &mut data, &mut shared)?;
     }
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
@@ -485,12 +490,12 @@ fn finalize_user_asm(
     } else {
         &[]
     };
-    crate::codegen::visibility::append_hidden_directives_with_extras(
+    Ok(crate::codegen::visibility::append_hidden_directives_with_extras(
         &user_asm,
         &exported,
         module.target.platform,
         additional_internal,
-    )
+    ))
 }
 
 #[cfg(test)]

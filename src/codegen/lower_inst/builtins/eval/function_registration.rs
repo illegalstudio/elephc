@@ -169,6 +169,8 @@ pub(super) fn emit_eval_native_function_invoker_inline(
     sig: &FunctionSig,
     name: &str,
 ) -> String {
+    ctx.shared.callable_argument_normalizer |=
+        crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     let label = ctx.next_global_label("eval_callable_invoker");
     let done_label = ctx.next_label("eval_callable_invoker_done");
     let captures: [(String, PhpType, bool); 0] = [];

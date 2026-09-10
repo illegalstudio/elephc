@@ -48,7 +48,7 @@ use super::shared_state::SharedCodegenState;
 use super::{CodegenIrError, Result};
 
 
-/// Emits all supported EIR functions and then the process-entry main function.
+/// Emits EIR bodies and the process entry, retaining shared state for deferred helper emission.
 ///
 /// `web` restructures the entry point: the top-level body is emitted as the
 /// C-callable `_elephc_web_handler` and the real entry becomes a stub that calls
@@ -69,7 +69,7 @@ pub(super) fn emit_module(
     regalloc_linear: bool,
     web: bool,
     web_isolation: WebIsolation,
-) -> Result<()> {
+) -> Result<SharedCodegenState> {
     let mut shared = SharedCodegenState::default();
     shared.counters = counters;
     shared.instrument = instrument;
@@ -131,7 +131,7 @@ pub(super) fn emit_module(
     // `Emit::Cdylib`, which returns before the main function is emitted.
     super::enum_singletons::emit_enum_case_materializers(emitter, module, data);
     if emit.is_library() {
-        return Ok(());
+        return Ok(shared);
     }
     let main = module
         .functions
@@ -163,7 +163,7 @@ pub(super) fn emit_module(
     if probe {
         emitter.raw(&format!("{PROBE_TEXT_END_LABEL}:"));
     }
-    Ok(())
+    Ok(shared)
 }
 
 /// Emits the static EIR Fiber wrappers needed for closure callbacks.

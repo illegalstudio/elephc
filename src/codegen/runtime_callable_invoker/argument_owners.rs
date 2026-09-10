@@ -71,6 +71,16 @@ impl InvokerArgumentOwners {
         abi::store_at_offset(emitter, scratch, self.offset(index));
     }
 
+    /// Roots an owned conversion input in the boxed-result slot before the native call starts.
+    pub(super) fn record_coercion_source(&self, emitter: &mut Emitter) {
+        abi::store_at_offset(emitter, abi::int_result_reg(emitter), self.offset(self.count));
+    }
+
+    /// Retires the conversion root before its normal release, preserving the converted result.
+    pub(super) fn clear_coercion_source(&self, emitter: &mut Emitter) {
+        self.clear_slot(self.count, emitter);
+    }
+
     /// Preserves the boxed result across cleanup and transfers it only after all releases finish.
     pub(super) fn finish_return(&self, emitter: &mut Emitter) {
         let result = abi::int_result_reg(emitter);

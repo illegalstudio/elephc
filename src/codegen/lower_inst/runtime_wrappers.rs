@@ -25,6 +25,8 @@ pub(super) fn emit_runtime_callable_invoker_with_string_owner(
     captures: &[(String, PhpType, bool)],
     owns_string_return: bool,
 ) -> String {
+    ctx.shared.callable_argument_normalizer |=
+        crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures, owns_string_return) {
         return label;
     }

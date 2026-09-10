@@ -872,3 +872,26 @@ fixture exercises a throwing comparator passed through a user-function boundary.
 This change protects callee execution and ABI materialization; it does not claim
 to fix temporaries abandoned while evaluating a later source argument. Build,
 test compilation and diff hygiene pass, without local test execution.
+
+### Callable argument ABI normalization
+
+Descriptor invokers now normalize boxed callback arguments before invoking an
+entry whose parameter uses the raw Callable ABI. The previous coercion whitelist
+left Mixed cells unchanged, so positional calls could dereference a box as a
+descriptor and named calls could record the wrong cleanup representation.
+
+One demand-driven helper reuses the existing closed-world callable selectors for
+descriptors, names, packed method pairs and invokable native objects. It returns
+one descriptor owner, stores its borrowed input in a stable frame slot and raises
+TypeError for invalid shapes. Both AOT and eval-generated invokers request the
+same helper without making AOT-only programs depend on Magician. Owned coercion
+inputs and partially populated indexed variadic arrays are now unwind-visible.
+
+Added all-target emitter/lowering coverage, heap tests for named and positional
+callback shapes and invalid argument cleanup, and a callback example. Build,
+test compilation and assembly-comment checks pass without local test execution.
+The existing selector's keyed-hash callback-pair limitation and associative
+typed-variadic normalization remain follow-up work, not claims of full parity.
+CI on bbaffc6eb remains red in multiple shards. Its x86_64 shard 3 now reports
+only the declared-array callback checker failure, versus the additional opaque
+usort leak on the previous head; the full matrix and this new fix still need CI.

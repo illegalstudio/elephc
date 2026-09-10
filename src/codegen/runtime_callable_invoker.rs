@@ -96,6 +96,14 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) owns_string_return: bool,
 }
 
+/// Reports whether regular or variadic callable parameters can require runtime normalization.
+pub(super) fn needs_callable_argument_normalizer(sig: &FunctionSig) -> bool {
+    sig.params.iter().any(|(_, ty)| {
+        ty.codegen_repr() == PhpType::Callable
+            || matches!(ty, PhpType::Array(element) if **element == PhpType::Callable)
+    })
+}
+
 /// Minimal state needed by the descriptor invoker emitter.
 struct InvokerEmitContext {
     label_prefix: String,
@@ -624,6 +632,9 @@ fn emit_loaded_indexed_array_callback_call(
         );
         abi::emit_call_label(emitter, "__rt_array_new");
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+        ctx.argument_owners.record_pushed(
+            regular_param_count, &PhpType::Array(Box::new(variadic_elem_ty.clone())), emitter,
+        );
         emitter.instruction(&format!(                                           // keep the new array pointer for the type stamp and copy loop
             "mov {}, {}",
             peek_reg,
@@ -1576,18 +1587,21 @@ fn push_materialized_mixed_hash_value_arg(
                 && can_coerce_result_to_type(&PhpType::Mixed, target_ty)
         });
     if release_mixed_after_coerce {
+        ctx.argument_owners.record_coercion_source(emitter);
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     }
-    let (pushed_ty, _boxed_to_mixed) =
+    let (pushed_ty, owns_coerced) =
         owned_value_args::coerce(emitter, ctx, data, &PhpType::Mixed, target_ty);
     // A borrowed hash cell and every unboxed heap payload need their own invoker lease.
-    // Newly boxed Mixed results already carry that owner.
-    if pushed_ty.is_refcounted()
+    // Newly boxed Mixed results and normalized callable descriptors already carry that owner.
+    if !owns_coerced
+        && (pushed_ty.is_refcounted() || pushed_ty == PhpType::Callable)
         && (!release_source_mixed_after_coerce || pushed_ty.codegen_repr() != PhpType::Mixed)
     {
         abi::emit_incref_if_refcounted(emitter, &pushed_ty);
     }
     if release_mixed_after_coerce {
+        ctx.argument_owners.clear_coercion_source(emitter);
         release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
     }
     abi::emit_push_result_value(emitter, &pushed_ty);
@@ -1861,7 +1875,7 @@ fn emit_unsupported_default_abort(
     }
 }
 
-/// Coerces the current result to a target argument type.
+/// Coerces the current result, returning its ABI type and whether conversion acquired an owner.
 fn coerce_current_value_to_target(
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -1870,6 +1884,12 @@ fn coerce_current_value_to_target(
     target_ty: Option<&PhpType>,
 ) -> (PhpType, bool) {
     let source_repr = source_ty.codegen_repr();
+    if source_repr != PhpType::Callable
+        && target_ty.is_some_and(|target| target.codegen_repr() == PhpType::Callable)
+    {
+        owned_value_args::normalize_callable(emitter, ctx, source_ty);
+        return (PhpType::Callable, true);
+    }
     let pushed_ty = target_ty
         .filter(|target_ty| can_coerce_result_to_type(source_ty, target_ty))
         .map(PhpType::codegen_repr)
@@ -1943,6 +1963,9 @@ fn coerce_result_to_type(
 
 /// Returns true if the invoker can coerce this source/target pair.
 fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
+    if target_ty.codegen_repr() == PhpType::Callable {
+        return true;
+    }
     if source_ty == target_ty {
         return true;
     }

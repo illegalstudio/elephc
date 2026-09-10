@@ -19,6 +19,8 @@ use crate::types::{FunctionSig, PhpType};
 /// Module-wide artifacts emitted once and reused by every function lowering context.
 #[derive(Default)]
 pub(crate) struct SharedCodegenState {
+    /// Descriptor argument adapters need the shared boxed-callable normalizer.
+    pub(super) callable_argument_normalizer: bool,
     runtime_string_descriptor_cases:
         Vec<(Option<PhpType>, Option<Vec<String>>, bool, Vec<RuntimeCallableCase>)>,
     runtime_static_method_descriptor_cases:

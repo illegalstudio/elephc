@@ -80,9 +80,10 @@ pub(super) fn emit_shared_helper(
 }
 
 /// Builds the minimal EIR function a `FunctionContext` needs to exist.
-fn helper_function(label: &str, return_php_type: PhpType) -> Function {
+pub(super) fn helper_function(label: &str, return_php_type: PhpType) -> Function {
     let return_ir_type = match return_php_type {
         PhpType::Str => IrType::Str,
+        PhpType::Callable => IrType::I64,
         _ => IrType::Void,
     };
     let mut function = Function::new(label.to_string(), return_ir_type, return_php_type);

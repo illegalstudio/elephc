@@ -8,6 +8,31 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
+/// Descriptor-only invocations emit one complete normalizer without requiring the eval bridge.
+#[test]
+fn callable_argument_normalizer_is_emitted_once_on_all_targets() {
+    let source = r#"<?php
+class CallableArgumentObject { public function __invoke(): void { echo "called"; } }
+function consumeCallableArgument(callable $callback): void { $callback(); }
+function dispatchCallableArgument(callable $target, mixed $callback): void {
+    $target($callback);
+    $target(callback: $callback);
+}
+dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObject());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert_eq!(asm.matches("_eir_callable_argument_normalizer:").count(), 1, "{target}");
+        assert!(asm.contains("__rt_callable_descriptor_retain"), "{target}: existing descriptors remain owned");
+        assert!(asm.contains("__rt_throw_current"), "{target}: invalid callbacks remain catchable");
+        assert!(!asm.contains("__elephc_eval_dynamic_callable_invoker"), "{target}: no eval dependency");
+    }
+}
+
 /// Temporary callable arguments are rooted around independent calls, unlike aliasing returns.
 #[test]
 fn user_callable_argument_owners_are_unwind_visible_on_all_targets() {

@@ -49,6 +49,7 @@ const AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET: i64 = 16;
 
 /// Callable descriptors available to eval constructor and method bridges.
 pub(super) struct EvalCallableDescriptorSupport {
+    pub(super) argument_normalizer_needed: bool,
     string_cases: Vec<RuntimeCallableCase>,
     instance_array_cases: Vec<EvalInstanceMethodCallableCase>,
     static_array_cases: Vec<RuntimeStaticMethodCallableCase>,
@@ -74,12 +75,13 @@ enum EvalInstanceCallableShape {
 /// Stable label allocator for eval bridge helper bodies emitted outside `FunctionContext`.
 struct EvalCallableEmitState {
     next_id: usize,
+    argument_normalizer_needed: bool,
 }
 
 impl EvalCallableEmitState {
     /// Creates an empty label state for one eval callable-support emission pass.
     fn new() -> Self {
-        Self { next_id: 0 }
+        Self { next_id: 0, argument_normalizer_needed: false }
     }
 
     /// Returns a unique global/local label for generated eval callable support.
@@ -162,6 +164,7 @@ pub(super) fn emit_eval_callable_descriptor_support(
 ) -> EvalCallableDescriptorSupport {
     if !needed {
         return EvalCallableDescriptorSupport {
+            argument_normalizer_needed: false,
             string_cases: Vec::new(),
             instance_array_cases: Vec::new(),
             static_array_cases: Vec::new(),
@@ -177,6 +180,7 @@ pub(super) fn emit_eval_callable_descriptor_support(
     let dynamic_descriptor_label = Some(eval_dynamic_callable_descriptor(data));
     emit_eval_dynamic_callable_invoker(module, emitter, data);
     EvalCallableDescriptorSupport {
+        argument_normalizer_needed: state.argument_normalizer_needed,
         string_cases,
         instance_array_cases,
         static_array_cases,
@@ -704,6 +708,8 @@ fn emit_eval_runtime_callable_invoker_inline(
     captures: &[(String, PhpType, bool)],
     owns_string_return: bool,
 ) -> String {
+    state.argument_normalizer_needed |=
+        super::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     let label = state.next_label("callable_invoker");
     let done_label = state.next_label("callable_invoker_done");
     let invoker = RuntimeCallableInvoker {
