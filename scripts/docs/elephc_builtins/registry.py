@@ -847,6 +847,10 @@ def slug(name: str) -> str:
 # `check_builtin()` arms (which sometimes narrow to the wrong type, e.g.
 # `array_shift` returns `mixed`, not the array element type).
 RETURN_TYPE_OVERRIDES: Dict[str, str] = {
+    # Numeric aggregates preserve integer overflow and floating-point values.
+    # Their neutral Mixed contract covers this union because TypeSpec has no union variant.
+    "array_sum": "int|float",
+    "array_product": "int|float",
     # getenv($name) returns the value string or `false` when the name is absent;
     # getenv() with no name returns the whole environment as an array. The
     # neutral contract records the union-covering `Mixed` because TypeSpec has

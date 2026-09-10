@@ -1367,3 +1367,19 @@ extend the array example. Builds, test compilation, assembly-comment checks and
 diff hygiene pass; no tests run locally. The generated docs are synchronized in
 the following documentation commit. Native and Magician ownership failures outside
 these AOT aggregates remain open, so the branch is not review-ready yet.
+
+### Aggregate and default-preparation documentation sync
+
+Run the complete update-builtin-docs workflow after both implementation commits.
+Expose the aggregate int|float return signature through the existing union display
+override mechanism, while the neutral contract retains its Mixed representation.
+Generated internals now report fresh aggregate results, observable warning effects
+and dynamic-target callable support. Adding the preparation policy shifts the
+shared lowering entry by two lines, so the generated internal source links and
+registry line references change mechanically across the catalog. Keep those
+changes in this documentation commit rather than editing generated pages by hand.
+
+The exporter build, forced render, module/comparison generation, builtin audit,
+site validation and enforced EIR architecture audit pass. A fresh fetch confirms
+origin/main remains c91beb3434681294e0a1dd29ef92f42f3365923a and is already
+an ancestor. No rebase, force push, local test execution or PR merge is performed.

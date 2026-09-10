@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_wstopsig.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_wstopsig.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:674](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L674) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

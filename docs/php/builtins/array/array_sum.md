@@ -1,6 +1,6 @@
 ---
 title: "array_sum()"
-description: "Calculate the sum of values in an array."
+description: "Calculate an integer or float sum of array values; an empty array returns integer 0."
 sidebar:
   order: 40
 ---
@@ -8,15 +8,15 @@ sidebar:
 ## array_sum()
 
 ```php
-function array_sum(array $array): int
+function array_sum(array $array): int|float
 ```
 
-Calculate the sum of values in an array.
+Calculate an integer or float sum of array values; an empty array returns integer 0.
 
 **Parameters**:
 - `$array` (`array`)
 
-**Returns**: `int`
+**Returns**: `int|float`
 
 ## Availability
 

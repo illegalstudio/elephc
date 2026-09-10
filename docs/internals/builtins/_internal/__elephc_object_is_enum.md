@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/__elephc_object_is_enum.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/__elephc_object_is_enum.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:674](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L674) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

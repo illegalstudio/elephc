@@ -1,6 +1,6 @@
 ---
 title: "array_product()"
-description: "Calculate the product of values in an array."
+description: "Calculate an integer or float product of array values; an empty array returns integer 1."
 sidebar:
   order: 29
 ---
@@ -8,15 +8,15 @@ sidebar:
 ## array_product()
 
 ```php
-function array_product(array $array): int
+function array_product(array $array): int|float
 ```
 
-Calculate the product of values in an array.
+Calculate an integer or float product of array values; an empty array returns integer 1.
 
 **Parameters**:
 - `$array` (`array`)
 
-**Returns**: `int`
+**Returns**: `int|float`
 
 ## Availability
 
