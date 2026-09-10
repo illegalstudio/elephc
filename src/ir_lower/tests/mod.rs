@@ -37,6 +37,7 @@ mod boxed_array_set_comparators;
 mod reference_loop_cleanup;
 mod static_callable_string_owners;
 mod reference_cells;
+mod reference_detach;
 mod static_properties;
 mod synthetic_arrays;
 mod throwable_constructors;

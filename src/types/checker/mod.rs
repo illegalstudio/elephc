@@ -303,9 +303,14 @@ pub(crate) struct Checker {
     /// the variable in front of it — and two DIFFERENT names at one position are two decisions,
     /// not one. See `CheckResult::local_bind_kill_sites`.
     pub local_bind_kill_sites: HashMap<Span, HashSet<String>>,
+    /// Unconditional reference unsets that may retire a promoted ordinary local's binding.
+    /// These do not relax escaped-reference type checking or ordinary kill eligibility.
+    pub local_ref_detach_sites: HashMap<Span, HashSet<String>>,
+    /// Removed detach keys still participate in cross-file ambiguity checks.
+    pub retired_ref_detach_sites: HashSet<(Span, String)>,
     /// Statement-form assignments the checker re-bound to a fresh binding of an incompatible
     /// type, as span -> the SET of local NAMES re-bound there. Carried in `CheckResult` from here
-    /// so the three decision maps travel together, keyed and shaped the same way.
+    /// so the binding-decision maps travel together, keyed and shaped the same way.
     pub local_retype_sites: HashMap<Span, HashSet<String>>,
     /// AST address of the expression that forms the ENTIRE expression-statement currently being
     /// checked, or `None` outside one.
@@ -464,6 +469,20 @@ impl Checker {
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
             && !self.typed_local_names.contains(name)
+    }
+
+    /// Authorizes storage detachment only outside conditional flow and name-addressed storage.
+    /// The original binding may have been created in a loop; only this unset must be unconditional.
+    pub(crate) fn local_reference_is_detachable(&self, name: &str) -> bool {
+        !self.body_contains_eval
+            && self.local_conditional_depth == 0
+            && self.ref_aliased_locals.contains(name)
+            && !self.active_ref_params.contains(name)
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+            && !self.typed_local_names.contains(name)
+            && !self.name_is_seeded_program_storage(name)
+            && !self.top_level_binding_is_program_global(name)
     }
 
     /// True when `name` is bound in a body's INCOMING environment by seeding rather than by
@@ -791,6 +810,8 @@ pub fn check_types_with_options(
     binding_decision_ambiguity::reject_ambiguous_local_binding_decisions(
         program,
         &checker.local_bind_kill_sites,
+        &checker.local_ref_detach_sites,
+        &checker.retired_ref_detach_sites,
         &checker.local_retype_sites,
         &checker.mixed_storage_store_sites,
         &checker.retired_mixed_storage_store_sites,
@@ -821,6 +842,7 @@ pub fn check_types_with_options(
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,
+        local_ref_detach_sites: checker.local_ref_detach_sites,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,
     })

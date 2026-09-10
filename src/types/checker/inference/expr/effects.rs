@@ -360,6 +360,21 @@ impl Checker {
                             let ExprKind::Variable(var) = &arg.kind else {
                                 continue;
                             };
+                            // Detaching a promoted reference is separate from killing its type
+                            // binding: escaped aliases still prohibit incompatible reassignments.
+                            if arg.span.identifies_a_node() {
+                                if env.contains_key(var) && self.local_reference_is_detachable(var) {
+                                    self.local_ref_detach_sites.entry(arg.span).or_default()
+                                        .insert(var.clone());
+                                } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {
+                                    if names.remove(var.as_str()) {
+                                        self.retired_ref_detach_sites.insert((arg.span, var.clone()));
+                                    }
+                                    if names.is_empty() {
+                                        self.local_ref_detach_sites.remove(&arg.span);
+                                    }
+                                }
+                            }
                             // A top-level name some other body declares `global` is NOT killable
                             // however eligible it otherwise looks: `global $a;` in a function binds
                             // the very cell this slot holds, so dropping the name here leaves the

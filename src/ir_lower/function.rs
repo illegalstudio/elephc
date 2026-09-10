@@ -91,6 +91,7 @@ pub(crate) fn lower_main(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         "main".to_string(),
@@ -217,6 +218,7 @@ pub(crate) fn lower_user_function(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         name.to_string(),
@@ -327,6 +329,7 @@ pub(crate) fn lower_class_method(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         name.clone(),
@@ -363,8 +366,10 @@ fn eval_aot_decision_maps() -> (
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    std::collections::HashMap<Span, std::collections::HashSet<String>>,
 ) {
     (
+        std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         std::collections::HashMap::new(),
@@ -401,7 +406,7 @@ pub(crate) fn lower_eval_aot_function(
     );
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
-    let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
+    let (bind_kill_sites, ref_detach_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -427,6 +432,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &bind_kill_sites,
+        &ref_detach_sites,
         &retype_sites,
         &mixed_storage_store_sites,
         "main".to_string(),
@@ -516,7 +522,7 @@ pub(crate) fn lower_eval_aot_scope_function(
             scope_flush_writes.clone(),
         )
     });
-    let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
+    let (bind_kill_sites, ref_detach_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -542,6 +548,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &bind_kill_sites,
+        &ref_detach_sites,
         &retype_sites,
         &mixed_storage_store_sites,
         "main".to_string(),
@@ -649,6 +656,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         function_name.clone(),
@@ -1008,6 +1016,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
         &check_result.local_bind_kill_sites,
+        &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
         function_name.clone(),
@@ -1179,6 +1188,7 @@ fn lower_closure_function_with_signature(
         parent.loop_storage_types,
         parent.string_incdec_locals,
         parent.bind_kill_sites,
+        parent.ref_detach_sites,
         parent.retype_sites,
         parent.mixed_storage_store_sites,
         loop_storage_scope,
@@ -1227,6 +1237,7 @@ fn lower_body_into_function(
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
     bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    ref_detach_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     retype_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     mixed_storage_store_sites: &std::collections::HashMap<
         Span,
@@ -1283,6 +1294,7 @@ fn lower_body_into_function(
         loop_storage_types,
         string_incdec_locals,
         bind_kill_sites,
+        ref_detach_sites,
         retype_sites,
         mixed_storage_store_sites,
         loop_storage_scope,

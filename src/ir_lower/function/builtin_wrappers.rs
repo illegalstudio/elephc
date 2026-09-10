@@ -120,6 +120,7 @@ fn lower_builtin_callable_body(
         &Default::default(),
         &Default::default(),
         &Default::default(),
+        &Default::default(),
         label.to_string(),
         &module.global_constants,
         None,

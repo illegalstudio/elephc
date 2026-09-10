@@ -118,3 +118,32 @@ unset($text, $saved);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
     assert_eq!(compile_and_run_tagged(source), out.stdout);
 }
+
+/// Unsetting and probing a captured string keeps old aliases independent of a newly captured binding.
+#[test]
+fn test_core_reference_capture_unset_rebind_preserves_old_and_new_strings() {
+    let source = r#"<?php
+function detachedStringCaptures(int $seed): void {
+    $text = str_repeat("x", $seed);
+    $old = function() use (&$text): string { return $text; };
+    unset($text);
+    echo isset($text) ? "bad|" : "unset|";
+    echo $old(), "|";
+    $text = "new" . $seed;
+    $fresh = function() use (&$text): string { return $text; };
+    echo $old(), ":", $fresh(), "|";
+    unset($text);
+    echo isset($text) ? "bad|" : "unset|";
+    echo $old(), ":", $fresh(), "|";
+    unset($old, $fresh);
+}
+detachedStringCaptures($argc);
+detachedStringCaptures($argc + 1);
+"#;
+    let expected = "unset|x|x:new1|unset|x:new1|unset|xx|xx:new2|unset|xx:new2|";
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "{}\n{assembly}", out.stderr);
+    assert_eq!(out.stdout, expected, "{}\n{assembly}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}

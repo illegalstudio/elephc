@@ -114,6 +114,8 @@ impl Checker {
             static_local_names: HashSet::new(),
             typed_local_names: HashSet::new(),
             local_bind_kill_sites: HashMap::new(),
+            local_ref_detach_sites: HashMap::new(),
+            retired_ref_detach_sites: HashSet::new(),
             local_retype_sites: HashMap::new(),
             statement_position_expr: None,
             body_contains_eval: false,

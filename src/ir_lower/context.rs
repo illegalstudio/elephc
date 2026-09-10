@@ -219,6 +219,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// point: nothing here re-derives eligibility. The value is a set because a `Span` names no
     /// file, so two different killed locals can share one position.
     pub bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
+    /// Checker-authorized reference detaches that preserve already lowered capture storage.
+    pub ref_detach_sites: &'m HashMap<Span, HashSet<String>>,
     /// Spans of statement-form assignments the CHECKER re-bound to a fresh binding of an
     /// incompatible type (`CheckResult::local_retype_sites`), each mapped to the SET of locals
     /// re-bound at that position. Carried alongside `bind_kill_sites` so both travel together;
@@ -319,6 +321,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
+        ref_detach_sites: &'m HashMap<Span, HashSet<String>>,
         retype_sites: &'m HashMap<Span, HashSet<String>>,
         mixed_storage_store_sites: &'m HashMap<Span, HashSet<String>>,
         loop_storage_scope: String,
@@ -332,7 +335,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         source_path: Option<String>,
         web: bool,
     ) -> Self {
-        // All three maps are keyed BY SPAN and consulted at every `unset` argument and every
+        // All decision maps are keyed BY SPAN and consulted at every `unset` argument and every
         // assignment. `Span::dummy()` identifies no node, so a decision filed under it would
         // answer for every compiler-generated node at once — abandoning a binding at each of the
         // hundreds of dummy-span assignments the synthetic-class and PDO/mysqli/curl preludes
@@ -341,6 +344,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         debug_assert!(
             !bind_kill_sites.contains_key(&Span::dummy()),
             "a local-binding kill was recorded at a span that names no node",
+        );
+        debug_assert!(
+            !ref_detach_sites.contains_key(&Span::dummy()),
+            "a reference detach was recorded at a span that names no node",
         );
         debug_assert!(
             !retype_sites.contains_key(&Span::dummy()),
@@ -376,6 +383,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             loop_storage_types,
             string_incdec_locals,
             bind_kill_sites,
+            ref_detach_sites,
             retype_sites,
             mixed_storage_store_sites,
             loop_storage_scope,
@@ -1245,6 +1253,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             self.local_type(name)
         };
+        if !uses_global && php_type == PhpType::Void && !self.local_slots.contains_key(name) {
+            // Probing an abandoned binding must not allocate a null slot that later widens
+            // a fresh string capture to Mixed. The absent local is already known to be null.
+            return self.emit_value(
+                Op::ConstNull, Vec::new(), None, PhpType::Void,
+                Op::ConstNull.default_effects(), span,
+            );
+        }
         let slot = self.declare_local(name, php_type.clone());
         let ir_type = value_ir_type(&php_type);
         let ownership = Ownership::for_php_type(&php_type);
@@ -2022,11 +2038,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
             return self.store_local(name, null, PhpType::Void, span);
         }
-        // The ref-bound arm. `abandons_binding` is structurally FALSE here and needs no test:
-        // `local_binding_slot_is_abandonable` refuses `is_ref_bound_local(name)` outright, which
-        // is the very condition that selects this arm. The kill therefore always takes the
-        // ref-cell path below, never the abandoning one — as it must, since a ref-bound name's
-        // value lives in a cell other names still reach, not in the slot.
+        // Reference detachment needs its own checker decision. Ordinary binding kills exclude
+        // escaped references, and branch-local mapping changes cannot be applied unconditionally.
+        let detaches_reference = span.is_some_and(|span| {
+            span.identifies_a_node()
+                && self.ref_detach_sites.get(&span).is_some_and(|names| names.contains(name))
+        }) && self.local_kinds.get(name) == Some(&LocalKind::PhpLocal)
+            && self.ref_cell_owner_locals.contains_key(name)
+            && !self.local_uses_global_storage(name)
+            && !self.extern_globals.contains_key(name)
+            && !self.eval_barrier_active
+            && self.eval_scope_read_param.is_none();
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
         self.clear_reflection_function_local(name);
@@ -2044,6 +2066,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.unmark_ref_bound_local(name);
+        if detaches_reference {
+            // UnsetLocal clears promotion state, but its null sentinel is not an inert raw
+            // string pointer. Zero the old storage without widening the capture's payload ABI.
+            self.emit_void(
+                Op::ZeroLocalSlot,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                Op::ZeroLocalSlot.default_effects(),
+                span,
+            );
+            self.reset_array_pointer_cursor(name);
+            self.ref_cell_owner_locals.remove(name);
+            self.initialized_slots.insert(slot);
+            self.abandon_local_binding(name);
+            return null;
+        }
         self.set_local_type(name, PhpType::Void);
         self.initialized_slots.insert(slot);
         null
@@ -2097,9 +2135,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// state a never-assigned name has (the checker seeds those `Void` too). PHP still allows
     /// `isset($a)` / `empty($a)` / `$a ?? …` on an unbound name, and those lower as an ordinary
     /// load: with no type fact at all the load would mint a `Mixed` slot and read uninitialized
-    /// storage as a pointer (`unset($a, $b); echo isset($a);` segfaulted, measured). A `Void`
-    /// slot is null, so the probe answers false. A re-binding store overrides it —
-    /// `store_local` ends by setting the name's type to the stored one.
+    /// storage as a pointer (`unset($a, $b); echo isset($a);` segfaulted, measured).
+    /// `load_local` emits `ConstNull` for an absent `Void` binding without creating storage.
+    /// The probe therefore answers false, and a later store creates a fresh slot at its own type.
     fn abandon_local_binding(&mut self, name: &str) {
         self.local_slots.remove(name);
         self.local_kinds.remove(name);

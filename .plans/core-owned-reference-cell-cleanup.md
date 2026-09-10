@@ -1854,3 +1854,28 @@ Keep that rejection policy and its existing error tests unchanged.
 
 Cargo check --tests and diff hygiene pass. No local tests execute; all strengthened
 structural assertions remain subject to the five-target CI emitter matrix.
+
+### Detach captured local bindings without rewriting their earlier payload ABI
+
+Exact CI assembly identifies the empty retained-string loop as a storage typing
+bug: its trailing reference unset widened the old string slot to Mixed after
+earlier closure captures had already selected the concrete string ABI. Add a
+separate checker authorization for unconditional ordinary reference detaches.
+Keep escaped-reference type restrictions and exclude conditional, global, static,
+typed, by-reference parameter and eval-visible storage. Carry the authorization
+through every lowering entry point and the optimizer's decision-cloning veto.
+
+Authorized unsets retire this binding's cell owner, clear its promotion state,
+zero its old concrete slot and abandon only the name mapping. An absent Void
+binding now reads as ConstNull without allocating a slot that would box a later
+fresh string capture. Old closure owners and their payload types remain intact.
+Live and retired detach keys participate in cross-file ambiguity rejection, so
+an ineligible later checker walk cannot silently erase a conflicting decision.
+
+Preserve the original failing loop. Add five-target EIR tests, checker guards,
+dummy-span and cross-file collision tests, and heap-debug/tagged coverage for
+old and new string captures separated by unset and isset. Cursor Opus 4.8's
+independent inspection found no defect in the new authorization, slot typing,
+read path or ambiguity handling; refresh the one stale mechanism comment it
+identified. Cargo build, cargo check --tests, generated-docs synchronization and
+all builtin audits pass. No local tests execute; runtime claims still await CI.

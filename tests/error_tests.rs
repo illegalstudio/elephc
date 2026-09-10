@@ -263,6 +263,8 @@ mod recovery;
 mod warnings;
 #[path = "error_tests/type_system.rs"]
 mod type_system;
+#[path = "error_tests/reference_detach.rs"]
+mod reference_detach;
 #[path = "error_tests/exceptions_enums_magic.rs"]
 mod exceptions_enums_magic;
 #[path = "error_tests/classes_traits.rs"]
