@@ -172,8 +172,8 @@ echo probeBorrowedInstanceof(new InstBorrowChild(), "InstBorrowBase") ? "1" : "0
 
 /// A post-eval dynamic class-name target releases its detached string operand on every target.
 ///
-/// This is the regression: after an opaque `eval()` widens the function's locals to boxed
-/// `Mixed` storage, `$target = get_parent_class($object)` is stored in a `Mixed` slot. Reading
+/// The target exists before opaque `eval()` widens live locals to boxed `Mixed` storage.
+/// The later `$target = get_parent_class($object)` keeps that widened slot. Reading
 /// it as the dynamic `instanceof` target detaches an owned `Str` copy that the backend entry and
 /// the eval introspection adapter only borrow, so the lowering must retire that exact copy. One
 /// such leak accrued per call in the original fixture.
@@ -183,6 +183,7 @@ fn post_eval_dynamic_target_releases_detached_class_name_string_on_all_targets()
 class InstEvalBase { public int $value = 7; }
 class InstEvalChild extends InstEvalBase { public function __destruct() {} }
 function probeEvalInstanceof(InstEvalChild $object, string $source): bool {
+    $target = "";
     eval($source);
     $target = get_parent_class($object);
     return $object instanceof $target;
@@ -309,6 +310,7 @@ function freshInstValue(): bool {
     return (new InstThrowValue()) instanceof (throwingInstTarget());
 }
 function detachedInstValue(string $source): bool {
+    $value = "";
     eval($source);
     $value = str_repeat("value", 3);
     return $value instanceof (throwingInstTarget());

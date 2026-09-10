@@ -46,6 +46,7 @@ sortPropertySlots(new MultisortPropertySlots());
 fn multisort_same_widened_local_retires_the_second_detached_payload_on_every_target() {
     let source = r#"<?php
 function sortWidenedTwice(string $source): void {
+    $values = [];
     eval($source);
     $values = [3, 1, 2];
     array_multisort($values, $values);

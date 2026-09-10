@@ -16,8 +16,8 @@ use crate::support::*;
 
 /// A post-eval dynamic class-name target retires its detached string without leaking on repeat.
 ///
-/// After an opaque `eval()` widens the callee's locals to boxed `Mixed` storage,
-/// `$target = get_parent_class($object)` sits in a `Mixed` slot. Reading it for
+/// The target exists before opaque `eval()` widens live locals to boxed `Mixed` storage.
+/// The later `$target = get_parent_class($object)` keeps that widened slot. Reading it for
 /// `$object instanceof $target` detaches an owned string copy the backend entry and the eval
 /// introspection adapter only borrow. Without the operand retirement this leaked one string per
 /// call; the destructor and borrowed object owner must stay balanced across three iterations.
@@ -33,6 +33,7 @@ class InstGcEvalChild extends InstGcEvalBase {
     }
 }
 function probeEvalInstanceofOwners(InstGcEvalChild $object, string $source): string {
+    $target = "";
     eval($source);
     $target = get_parent_class($object);
     $named = $object instanceof InstGcEvalBase ? "n" : "-";
@@ -123,6 +124,7 @@ function freshInstGcValue(): bool {
     return (new InstGcThrowValue()) instanceof (throwingInstGcTarget());
 }
 function detachedInstGcValue(string $source): bool {
+    $value = "";
     eval($source);
     $value = str_repeat("value", 3);
     return $value instanceof (throwingInstGcTarget());

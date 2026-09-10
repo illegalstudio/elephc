@@ -15,6 +15,9 @@ use crate::support::*;
 fn test_core_array_multisort_post_eval_same_and_distinct_receivers_keep_heap_clean() {
     let source = r#"<?php
 function multisortWidenedSlots(string $source): void {
+    $same = [];
+    $left = [];
+    $right = [];
     eval($source);
     $same = [3, 1, 2];
     $sameSnapshot = $same;

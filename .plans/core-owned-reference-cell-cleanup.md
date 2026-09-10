@@ -1983,3 +1983,13 @@ sorting contract and document boxed-walk callback/reference limits. Extend the
 array-parity example with declared-array sorting and COW-preserving value updates.
 The exporter build, builtin audit, site compatibility audit, target-boundary audit,
 assembly-comment alignment and diff hygiene pass. No local tests execute.
+
+### Make widened-storage regressions establish their locals before eval
+
+CI on c189c0908 shows that several new fixtures assert Mixed storage for locals
+created only after eval. The eval barrier widens existing local slots, not future
+declarations. Initialize the multisort and instanceof fixture locals before the
+barrier so they exercise the intended detached-Mixed paths. Keep the exact type,
+output, exception and zero-live-block assertions. Cargo check --tests and diff
+hygiene pass. No tests or PHP programs execute locally; runtime validation stays
+on CI.
