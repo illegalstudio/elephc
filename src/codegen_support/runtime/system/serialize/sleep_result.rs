@@ -172,10 +172,17 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_sleep_result(&mut emitter);
+            let arch = emitter.target.arch;
             let asm = emitter.output();
             let (owner, body) = asm.split_once("__rt_serialize_sleep_body:").unwrap();
             assert_eq!(owner.matches("__rt_cleanup_invoke").count(), 3, "{name}");
-            assert_eq!(owner.matches("__rt_decref_any").count(), 2, "{name}");
+            // ARM64 materializes one address with adrp/add; x86_64 uses one lea.
+            // Count address starts, not every textual reference to the release symbol.
+            let address_start = if arch == Arch::AArch64 { "adrp x0," } else { "lea rdi," };
+            let releases = owner.lines().filter(|line| {
+                line.trim_start().starts_with(address_start) && line.contains("__rt_decref_any")
+            }).count();
+            assert_eq!(releases, 2, "{name}");
             assert!(body.find("__rt_heap_kind").unwrap() < body.find("__rt_mixed_unbox").unwrap(), "{name}");
             assert!(body.contains("__rt_array_iter_next"), "{name}");
             assert!(body.contains("__rt_serialize_named_prop"), "{name}");

@@ -558,3 +558,14 @@ and lets the SysV instruction walker follow both paths without merging their
 different recorded stack depths. No alignment allowlist was expanded. Added
 all-target structural coverage for both return sites. Build, test compilation,
 assembly-comment alignment and diff hygiene pass; executable CI remains required.
+
+### Structural fixture repairs
+
+The sleep-result owner assertion now counts address materializations rather
+than symbol mentions: ARM64 adrp/add references each cleanup target twice,
+while x86_64 lea references it once. It still requires two distinct release
+targets and three guarded invocations. The discarded-spread effect fixture
+now parenthesizes its array expression so the statement parser does not select
+the destructuring path before the optimizer runs. Its catch/finally and
+observable-spread assertions are unchanged. Test compilation and static
+hygiene pass; no local test execution was performed.
