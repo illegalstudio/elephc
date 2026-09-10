@@ -34,6 +34,12 @@ $queueSnapshot = $queue;
 takeQueueEdges($queue);
 echo 'remaining: ', implode(', ', $queue), '; snapshot: ', implode(', ', $queueSnapshot), "\n";
 
+// --- prepend to a shared queue through a declared array reference ---
+function prependQueueEvent(array &$queue, string $event): int {
+    return array_unshift($queue, $event);
+}
+echo 'queued: ', prependQueueEvent($queue, 'reopened'), ': ', implode(', ', $queue), "\n";
+
 // --- callbacks preserve keys through the same PHP array boundary ---
 function labelEvents(array $events): array {
     return array_map(fn(mixed $event): string => "event:" . $event, $events);

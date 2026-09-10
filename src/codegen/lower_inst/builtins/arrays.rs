@@ -41,6 +41,7 @@ mod boxed_merge;
 mod boxed_membership;
 mod boxed_reverse;
 mod boxed_mutation;
+mod boxed_unshift;
 mod filter;
 mod map_dispatch;
 mod map_results;

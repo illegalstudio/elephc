@@ -498,3 +498,21 @@ extracted callback. Build, test compilation and diff hygiene pass; no tests
 were executed locally. Invalid dynamic-call diagnostics and ownership during
 argument-evaluation throws remain separate audit concerns, not newly claimed
 parity. Current CI still reports boxed unshift/sort checker failures.
+
+### Boxed array prepend
+
+Declared PHP array references now reach a boxed array_unshift path. It validates
+the receiver before allocating, retains a prefix before separating the outer
+cell, and reuses the two-layout merge helper to renumber numeric keys while
+preserving string keys. The fresh hash is published before retiring the old
+payload. Retaining the prefix first is required when an argument contains the
+receiver itself. The concrete scalar fast path is unchanged.
+
+Regressions cover zero values, empty receivers, growth, mixed keys, COW aliases,
+self-prepending, nested/object/scalar payloads and clean heaps. All-target
+structural coverage pins retain-before-COW-before-merge ordering. Build, test
+compilation, assembly-comment alignment, generated-document audits and diff
+hygiene pass; generated docs are unchanged and no local tests were run.
+CI on 4f4be08d9 now reports only the known hydration cleanup-throw failure in
+Linux x86_64 shard 15, with the earlier returned-array usort leak absent.
+All six web shards are green, including the previously timed-out macOS job.

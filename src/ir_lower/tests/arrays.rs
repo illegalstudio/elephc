@@ -10,6 +10,28 @@
 
 use crate::ir::print_module;
 
+/// Boxed prepends retain a prefix before COW and publish a merged payload on every target.
+#[test]
+fn boxed_array_unshift_emits_owned_prefix_and_merge_on_every_target() {
+    let source = r#"<?php
+function prependBoxed(array &$values): int { return array_unshift($values, $values, "prefix", 1.25); }
+$values = [1, 2];
+echo prependBoxed($values), count($values);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let prefix = asm.find("__rt_array_push_refcounted").expect("retained prefix");
+        let split = asm.find("__rt_array_cell_ensure_unique").expect("boxed receiver COW");
+        let merge = asm.find("__rt_array_merge_boxed").expect("PHP key renumbering");
+        assert!(prefix < split && split < merge, "{target}");
+        assert!(asm[merge..].contains("__rt_decref_any"), "{target}");
+    }
+}
+
 /// Concrete string pop/shift transfer the removed slot instead of retaining it through borrowed boxing.
 #[test]
 fn concrete_array_take_transfers_removed_strings_on_every_target() {
