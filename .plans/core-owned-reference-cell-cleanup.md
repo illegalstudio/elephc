@@ -1686,3 +1686,10 @@ CI also exposes an empty-string result in the new retained-reference loop test.
 Its heap summary is clean, so that is a value/ABI correctness gate rather than
 proof of an owner leak. It remains open alongside boxed comparator, multisort,
 descriptor arity and eval metadata failures. The PR is not ready to merge.
+
+### Expose retained-string closure assembly in CI diagnostics
+
+Both Linux architectures report empty strings in the retained-reference loop,
+with balanced allocation and release counts. Preserve the exact source and
+expected values, and include the generated program assembly in failure output.
+This is diagnostic coverage, not a claimed fix. No tests execute locally.

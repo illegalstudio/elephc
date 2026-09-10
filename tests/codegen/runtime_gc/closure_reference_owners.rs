@@ -112,9 +112,9 @@ for ($i = 0; $i < 4; $i++) {
 }
 unset($text, $saved);
 "#;
-    let out = compile_and_run_with_heap_debug(source);
-    assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "x:x|xx:xx|xxx:xxx|xxxx:xxxx|", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "{}\n{assembly}", out.stderr);
+    assert_eq!(out.stdout, "x:x|xx:xx|xxx:xxx|xxxx:xxxx|", "{}\n{assembly}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
     assert_eq!(compile_and_run_tagged(source), out.stdout);
 }
