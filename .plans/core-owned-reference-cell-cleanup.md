@@ -1005,3 +1005,11 @@ and names retained after the inspected object is unset. Extended the Core
 introspection example with a post-eval class-name read. Test compilation, the
 builtin documentation workflow and assembly-comment checks pass; no executable
 tests were run locally. CI must confirm the runtime ownership behavior.
+
+### Opaque callback example boundary
+
+Keep the callback example's descriptor target Mixed, matching the already
+corrected regression fixtures. A Callable declaration lets interprocedural
+checking specialize the target and reject the Mixed callback before descriptor
+normalization. This example is intended to demonstrate the runtime descriptor
+boundary, not relax static callback argument checking. No tests were executed.

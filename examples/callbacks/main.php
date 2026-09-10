@@ -71,7 +71,7 @@ $format = $formatter->bracket(...);
 echo "method callable: " . $format("ok") . "\n";
 
 function render_callback(callable $format): void { echo $format("nested") . "\n"; }
-function dispatch_renderer(callable $renderer, mixed $format): void {
+function dispatch_renderer(mixed $renderer, mixed $format): void {
     $renderer(format: $format);
 }
 echo "callable argument through a descriptor: ";
