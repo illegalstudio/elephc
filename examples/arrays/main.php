@@ -174,6 +174,16 @@ foreach ($names as $name) {
 }
 echo "\n";
 
+// Key sorting updates a row inside a declared array property without changing its aliases.
+class ScoreReport {
+    public array $rows = ["scores" => ["Linus" => 12, "Ada" => 10]];
+}
+$report = new ScoreReport();
+$unsorted = $report->rows;
+ksort($report->rows["scores"]);
+echo "Sorted names: " . implode(", ", array_keys($report->rows["scores"])) . "\n";
+echo "Original order: " . implode(", ", array_keys($unsorted["scores"])) . "\n";
+
 // String array
 $langs = ["PHP", "Rust", "ARM64"];
 echo "Compiled " . $langs[0] . " to " . $langs[2] . " with " . $langs[1] . "\n";

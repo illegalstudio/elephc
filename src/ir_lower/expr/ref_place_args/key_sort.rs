@@ -42,6 +42,7 @@ pub(super) fn lower_key_sort_ref_place_call(
     lower_mixed_array_element_key_sort(ctx, name, sig, args, expr, sort)
 }
 
+/// Specializes descending key order for concrete property containers without generic write hooks.
 fn lower_direct_property_krsort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -144,6 +145,9 @@ fn lower_mixed_array_element_key_sort(
     let ExprKind::ArrayAccess { array, index } = &place.kind else {
         return None;
     };
+    if static_place_type(ctx, array).is_some_and(|ty| ty.is_php_array()) {
+        return Some(lower_boxed_parent_element_key_sort(ctx, name, place, expr));
+    }
     let ExprKind::Variable(parent_name) = &array.kind else {
         return lower_non_local_mixed_array_element_key_sort(
             ctx, name, sig, arg, place, array, index, expr, sort,
@@ -227,6 +231,33 @@ fn lower_mixed_array_element_key_sort(
         );
     }
     lower_attached_mixed_cell_key_sort(ctx, name, cell, expr, sort)
+}
+
+/// Sorts a declared PHP array's child through a rooted cell and the guarded boxed backend.
+/// The ordinary assignment path publishes it with parent COW only after validation succeeds.
+fn lower_boxed_parent_element_key_sort(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    place: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let place = super::stabilize_place(ctx, place);
+    let child = lower_expr(ctx, &place);
+    let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    ctx.store_local(&temp, child, PhpType::Mixed, Some(place.span));
+    let child = ctx.load_local(&temp, Some(place.span));
+    let result = super::super::emit_builtin_call_value(
+        ctx, name, vec![child.value], PhpType::Bool, expr.span, None,
+    );
+    super::lower_non_local_assignment_write(
+        ctx, &place, &Expr::new(ExprKind::Variable(temp.clone()), place.span), place.span,
+    );
+    let slot = ctx.declare_local(&temp, PhpType::Mixed);
+    ctx.emit_void(
+        Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(), Some(expr.span),
+    );
+    result
 }
 
 /// Sorts a Mixed child of a property or nested parent through a retained local parent copy.

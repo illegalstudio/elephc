@@ -684,6 +684,56 @@ echo implode(',', array_keys($items));
     }
 }
 
+/// Declared PHP array children use writable Mixed temporaries and guarded key sorting on every target.
+#[test]
+fn boxed_nested_array_key_sorts_use_guarded_writeback_on_every_target() {
+    use crate::codegen::platform::Target;
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId, ValueDef};
+    use crate::types::PhpType;
+    use std::path::Path;
+
+    let source = r#"<?php
+class DeclaredNestedSortTarget {
+    public array $rows = [["b" => 2, "a" => 1], 7];
+    public static array $shared = ["row" => [1, 2]];
+    public function sort(): void { ksort($this->rows[0]); }
+}
+function reverseDeclaredNestedTarget(array &$items): void { krsort($items["row"]); }
+$owner = new DeclaredNestedSortTarget();
+$owner->sort();
+krsort(DeclaredNestedSortTarget::$shared["row"]);
+$items = ["row" => [1, $argc]];
+reverseDeclaredNestedTarget($items);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let mut sorts = 0;
+        for function in &module.functions {
+            for (index, inst) in function.instructions.iter().enumerate() {
+                if !matches!(inst.immediate, Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::Ksort | RuntimeFnId::Krsort,
+                )))) { continue; }
+                sorts += 1;
+                let receiver = function.value(inst.operands[0]).unwrap();
+                assert_eq!(receiver.php_type.codegen_repr(), PhpType::Mixed, "{name}");
+                let ValueDef::Instruction { inst: producer, .. } = receiver.def else { panic!("{name}"); };
+                let load = &function.instructions[producer.as_raw() as usize];
+                assert_eq!(load.op, Op::LoadLocal, "{name}: sortable children need a writable slot");
+                assert!(function.instructions[index + 1..].iter().any(|candidate| {
+                    candidate.op == Op::ReleaseLocalSlot && candidate.immediate == load.immediate
+                }), "{name}: retire the work cell after write-back");
+            }
+        }
+        assert_eq!(sorts, 3, "{name}");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.matches("__rt_array_cell_ensure_unique").count() >= 3, "{name}");
+        assert!(assembly.matches("__rt_mixed_cell_promote_to_hash").count() >= 3, "{name}");
+    }
+}
+
 /// Boxed user sorts use a private working array and an exception finalizer on every target.
 #[test]
 fn boxed_usort_publishes_private_arrays_on_every_target() {

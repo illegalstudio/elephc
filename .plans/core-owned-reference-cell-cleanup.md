@@ -1461,3 +1461,27 @@ the import is corrected and compilation passes. No tests are executed locally.
 CI on bddaf19c6 is still running, with no failed jobs in the latest poll. Runtime
 validation of this constructor change and the outstanding callback, sorting and
 ownership failures remains assigned to CI after push.
+
+### Key sorting children of declared PHP arrays
+
+The remaining nested-property key-sort CI fixture is rejected because its parent
+has the declared PHP array type, whose backend representation is Mixed. The old
+checker and nested-place specializer recognize only concrete packed or associative
+parents. Accept integer/string-compatible keys on declared array parents and stage
+the selected child in a rooted writable Mixed local. Reuse the boxed sorter for
+runtime array validation, cell/payload COW and key relinking, then publish through
+ordinary array/property assignment and immediately retire the temporary owner.
+Do not widen this checker rule to arbitrary Mixed variables or remove scalar guards.
+
+Keep the original failing property fixture unchanged. Add native heap/tagged tests
+for instance/static properties, declared-array parameters, packed/hash children,
+parent aliases, case-insensitive named calls, one-time index evaluation and scalar
+TypeErrors that do not modify the parent. Add a five-target EIR/emitter gate that
+requires writable Mixed receiver slots and explicit retirement after write-back.
+Extend the array example with a nested score report and its unchanged alias.
+
+Cargo build and test compilation pass. The update-builtin-docs exporter build,
+forced rendering, module/comparison generation and all audits pass without changing
+generated pages or catalog membership. Assembly-comment and diff checks pass. No
+tests are executed locally. The d0bdfb3b0 CI run is still in progress; executable
+confirmation of both constructor and nested-sort fixes remains pending.
