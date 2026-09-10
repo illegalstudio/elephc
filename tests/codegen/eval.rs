@@ -17335,52 +17335,79 @@ abstract class EvalIfaceInheritedPropertyChild extends EvalIfaceInheritedPropert
     );
 }
 
-/// Verifies eval rejects PHP-forbidden callable/static type atoms by declaration position.
-#[test]
-fn test_eval_rejects_invalid_property_and_parameter_type_atoms() {
-    for source in [
-        r#"<?php
+/// Keeps each forbidden declaration in its own compile/link/run budget and CI shard.
+macro_rules! eval_invalid_type_atom_case {
+    ($name:ident, $source:expr $(,)?) => {
+        /// Verifies one declaration-position rejection without batching native compiler runs.
+        #[test]
+        fn $name() {
+            let err = compile_and_run_expect_failure($source);
+            assert!(
+                err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+                "stderr did not contain eval unsupported-construct diagnostic: {err}"
+            );
+        }
+    };
+}
+
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_callable_property,
+    r#"<?php
 eval('class EvalBadCallableProperty {
     public callable $value;
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_callable_interface_property,
+    r#"<?php
 eval('interface EvalBadCallableInterfaceProperty {
     public callable $value { get; }
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_callable_promoted,
+    r#"<?php
 eval('class EvalBadCallablePromoted {
     public function __construct(public callable $value) {}
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_parameter,
+    r#"<?php
 eval('function eval_bad_static_parameter(static $value) {}');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_self_return,
+    r#"<?php
 eval('function eval_bad_self_return(): self {}');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_return,
+    r#"<?php
 eval('function eval_bad_static_return(): static {}');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_method_parameter,
+    r#"<?php
 eval('class EvalBadStaticMethodParam {
     public function read(static $value) {}
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_promoted,
+    r#"<?php
 eval('class EvalBadStaticPromoted {
     public function __construct(public static $value) {}
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-            "stderr did not contain eval unsupported-construct diagnostic: {err}"
-        );
-    }
-}
+);
 
 /// Verifies eval-declared plain abstract properties can be concretized by child storage.
 #[test]

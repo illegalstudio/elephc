@@ -1906,3 +1906,12 @@ same initializer through a declared array factory, matching this fixture's boxed
 storage purpose. Preserve both callback mutations, exact output, exception cases
 and heap-clean/tagged assertions. Grok independently reviewed the narrow fixture
 change. Cargo check --tests passes; no local test executes.
+
+### Give invalid eval declarations independent CI timeout budgets
+
+The exact 5fbf8314b CI times out when one test compiles all eight forbidden type
+declarations under a single 180-second budget. Split that loop into eight named
+tests without changing a PHP source or diagnostic assertion. Static comparison
+confirms that all eight source strings are identical to the previous fixture.
+The existing timeout prefix still matches each case. Prior test compilation and
+diff hygiene pass; executable validation remains CI-only.
