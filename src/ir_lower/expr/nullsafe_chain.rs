@@ -29,6 +29,11 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Option<Lo
     lower_with_missing_warning(ctx, expr, true)
 }
 
+/// Reports the boxed representation shared by successful and short-circuited postfix chains.
+pub(super) fn result_storage_type(expr: &Expr) -> Option<PhpType> {
+    flatten_nullsafe_postfix_chain(expr).map(|_| PhpType::Mixed)
+}
+
 /// Lowers a nullsafe postfix chain while configuring native array-miss warnings.
 pub(super) fn lower_with_missing_warning(
     ctx: &mut LoweringContext<'_, '_>,

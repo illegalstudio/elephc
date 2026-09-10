@@ -459,6 +459,9 @@ pub(super) fn array_literal_element_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     item: &Expr,
 ) -> PhpType {
+    if let Some(storage) = nullsafe_chain::result_storage_type(item) {
+        return storage;
+    }
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
         ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
@@ -500,11 +503,6 @@ pub(super) fn array_literal_element_type_for_ir(
         // or an object result is cast into an incorrectly stamped scalar array.
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
-                .and_then(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
-        }
-        ExprKind::NullsafeMethodCall { object, method, .. } => {
-            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
                 .and_then(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }

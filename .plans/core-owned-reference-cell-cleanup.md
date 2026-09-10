@@ -624,3 +624,17 @@ diff hygiene pass. No tests were executed locally. CI on the previous head
 still reports other boxed-array checker/callback issues, native/eval Throwable
 leaks, nullable property reads and unserialize ownership failures; this is not
 a review-ready or green-CI claim.
+
+### Nullsafe literal storage
+
+Indexed and associative literals now ask the nullsafe-chain lowerer for its
+actual boxed result representation. A nullable property receiver previously
+lost its class during a separate syntactic lookup, falling back to integer
+array slots and coercing object/null results. The shared chain predicate also
+covers ordinary property/index suffixes and non-nullable receivers, whose
+chain lowering still returns Mixed. Added executable object/null/scalar and
+heap regressions plus all-target EIR slot assertions. Build, test compilation
+and diff hygiene pass without local test execution.
+
+The latest fetch adds only main's c91beb343 traffic-statistics commit. Rebase
+the clean thematic history onto that main tip before the next protected push.

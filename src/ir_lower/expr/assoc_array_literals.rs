@@ -91,6 +91,9 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     value: &Expr,
 ) -> PhpType {
+    if let Some(storage) = nullsafe_chain::result_storage_type(value) {
+        return storage;
+    }
     match &value.kind {
         ExprKind::Null => PhpType::Mixed,
         ExprKind::ConstRef(name) => ctx
@@ -121,11 +124,6 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         }
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
-                .and_then(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
-        }
-        ExprKind::NullsafeMethodCall { object, method, .. } => {
-            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
                 .and_then(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }

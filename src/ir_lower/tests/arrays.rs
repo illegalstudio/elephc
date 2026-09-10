@@ -10,6 +10,39 @@
 
 use crate::ir::print_module;
 
+/// Literal storage follows the boxed nullsafe-chain result instead of guessing scalar metadata.
+#[test]
+fn nullsafe_literal_results_use_mixed_slots_on_every_target() {
+    use crate::ir::Op;
+    use crate::types::PhpType;
+    let source = r#"<?php
+class ArrayProbeLeaf { public function __construct(public string $name) {} }
+class ArrayProbeFactory { public function leaf(): ArrayProbeLeaf { return new ArrayProbeLeaf("leaf"); } }
+class ArrayProbeHolder { public function __construct(public ?ArrayProbeFactory $factory) {} }
+function nullsafeListProbe(?ArrayProbeHolder $holder): array { return [$holder?->factory?->leaf()]; }
+function nullsafeMapProbe(?ArrayProbeHolder $holder): array { return ["leaf" => $holder?->factory?->leaf()]; }
+echo count(nullsafeListProbe(null)), count(nullsafeMapProbe(null));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["nullsafeListProbe", "nullsafeMapProbe"] {
+            let function = module.functions.iter().find(|function| function.name.as_str() == name).unwrap();
+            let literal = function.instructions.iter().find(|inst| matches!(inst.op, Op::ArrayNew | Op::HashNew)).unwrap();
+            let element = match literal.result_php_type.codegen_repr() {
+                PhpType::Array(element) => element,
+                PhpType::AssocArray { value, .. } => value,
+                other => panic!("{target}: {name}: {other:?}"),
+            };
+            assert_eq!(element.codegen_repr(), PhpType::Mixed, "{target}: {name}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Splice separates the outer cell before consuming and mutating its packed payload owner.
 #[test]
 fn boxed_array_splice_separates_receiver_before_payload_on_every_target() {
