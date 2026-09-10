@@ -1139,3 +1139,24 @@ Build and test compilation pass. The builtin-doc skill workflow passes, includin
 regenerated XML source anchors, and diff hygiene passes. No tests were executed locally;
 the new runtime and oracle assertions still require CI. Other CI failures remain
 open and are not claimed fixed by this XML boundary change.
+
+### Echo cleanup for widened string locals
+
+The class-name fixture's user assembly from CI job 102753928918 identifies
+the remaining six string owners: the two echo reads after object unset call
+mixed_cast_string, then print the detached copies without a release. The
+introspection bridge cells and the earlier immediate class-name results are
+already retired in the same assembly. Three iterations therefore leave two
+unreleased local-read copies each.
+
+Echo and discarded expression statements now use the existing deferred-use
+cleanup query instead of the stricter move-ownership query. This emits a
+provisional release for a string load; final slot analysis keeps it only when
+the slot widened to Mixed and the backend actually detached a string. Concrete
+string borrows remain borrowed and their releases are pruned.
+
+Added all-target EIR/assembly assertions for both storage paths and repeated
+heap coverage with a borrowed string callee between two reads. The original
+eval class-name fixture remains unchanged. Build, test compilation and diff
+hygiene pass; executable results remain pending CI and no local tests ran.
+The separate eval parameter-shadow leak still needs its own diagnosis.

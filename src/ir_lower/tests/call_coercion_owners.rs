@@ -88,6 +88,55 @@ echo get_class($object), ":", get_parent_class($object);
     }
 }
 
+/// Echo retires widened-slot string copies while concrete parameter reads remain borrowed.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows() {
+    use crate::ir::{Immediate, Op};
+    use crate::types::PhpType;
+    let source = r#"<?php
+class EchoStringName {}
+$source = 'return new EchoStringName(); // ' . $argc;
+for ($i = 0; $i < 2; $i++) {
+    $object = eval($source);
+    $name = get_class($object);
+    echo $name;
+    unset($name, $object);
+}
+function echoConcreteString(string $text): void { echo $text, $text; }
+echoConcreteString("borrowed");
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let mut detached_reads = 0;
+        let mut borrowed_reads = 0;
+        for function in &module.functions {
+            for echo in function.instructions.iter().filter(|inst| inst.op == Op::EchoValue) {
+                let value = echo.operands[0];
+                let Some(load) = function.instructions.iter().find(|inst| inst.result == Some(value)) else {
+                    continue;
+                };
+                if load.op != Op::LoadLocal || load.result_php_type != PhpType::Str { continue; }
+                let Some(Immediate::LocalSlot(slot)) = load.immediate else { continue; };
+                let released = function.instructions.iter().any(|inst| {
+                    inst.op == Op::Release && inst.operands == [value]
+                });
+                if function.locals[slot.as_raw() as usize].php_type.codegen_repr() == PhpType::Mixed {
+                    detached_reads += 1;
+                    assert!(released, "{target}: a widened string read owns its detached copy");
+                } else if function.name == "echoConcreteString" {
+                    borrowed_reads += 1;
+                    assert!(!released, "{target}: concrete string reads must retain their caller owner");
+                }
+            }
+        }
+        assert!(detached_reads > 0 && borrowed_reads > 0, "{target}: both storage paths must be exercised");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Class-name metadata cannot keep a boxed object read alive after introspection finishes.
 #[test]
 fn class_name_lookups_retire_boxed_read_arguments_on_all_targets() {

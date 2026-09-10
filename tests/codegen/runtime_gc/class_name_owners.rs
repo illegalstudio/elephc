@@ -10,6 +10,34 @@
 
 use crate::support::*;
 
+/// Echo releases detached string reads from widened locals without consuming concrete borrows.
+#[test]
+fn test_core_echo_widened_class_names_preserves_borrowed_strings() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class EchoNameParent {}
+class EchoNameChild extends EchoNameParent {}
+function echoBorrowedName(string $name): void { echo $name, ":", $name, "|"; }
+$source = 'return new EchoNameChild(); // ' . $argc;
+for ($i = 0; $i < 3; $i++) {
+    $object = eval($source);
+    $name = get_class($object);
+    $parent = get_parent_class($object);
+    unset($object);
+    echo $name, ":", $parent, "|";
+    echoBorrowedName($name);
+    echo $name, ":", $parent, "|";
+    unset($name, $parent);
+}
+unset($source);
+echo "done";
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout,
+        "EchoNameChild:EchoNameParent|EchoNameChild:EchoNameChild|EchoNameChild:EchoNameParent|".repeat(3) + "done",
+        "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// AOT class-name reads retire eval bridge cells and preserve names after their objects die.
 #[test]
 fn test_core_eval_class_name_bridge_results_have_independent_owners() {
