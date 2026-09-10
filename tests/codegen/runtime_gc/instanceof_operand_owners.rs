@@ -14,6 +14,31 @@
 
 use crate::support::*;
 
+/// Returns one bounded user-function region for ownership diagnostics on CI failures.
+fn bounded_user_symbol_assembly(assembly: &str, symbol: &str) -> String {
+    let label = format!("{symbol}:\n");
+    let Some((_, tail)) = assembly.split_once(&label) else {
+        return "<function assembly not found>".to_string();
+    };
+    let mut body = label;
+    for line in tail.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(".globl ") || trimmed.starts_with(".global ") {
+            break;
+        }
+        let line = line.split_once(" // ").map_or(line, |(instruction, _)| instruction);
+        let line = line.split_once(" # ").map_or(line, |(instruction, _)| instruction);
+        if !line.trim().is_empty()
+            && !line.trim_start().starts_with("//")
+            && !matches!(line.trim_start().as_bytes().first(), Some(b'#'))
+        {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    body.chars().take(128_000).collect()
+}
+
 /// A post-eval dynamic class-name target retires its detached string without leaking on repeat.
 ///
 /// The target exists before opaque `eval()` widens live locals to boxed `Mixed` storage.
@@ -50,10 +75,14 @@ for ($i = 0; $i < 3; $i++) {
 unset($source);
 "#;
     let expected = "nd:InstGcEvalBase|static|D|".repeat(3);
-    let out = compile_and_run_with_heap_debug(source);
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, expected, "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    let probe = bounded_user_symbol_assembly(&assembly, "_fn_probeEvalInstanceofOwners");
+    let classify = bounded_user_symbol_assembly(&assembly, "_method_InstGcEvalChild_classifyStatic");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nprobeEvalInstanceofOwners assembly:\n{}\nclassifyStatic assembly:\n{}",
+        out.stderr, probe, classify);
     assert_eq!(compile_and_run_tagged(source), expected);
 }
 

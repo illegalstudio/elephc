@@ -2293,3 +2293,18 @@ profiles. No blanket timeout increase and no change to heap or output assertions
 Validate TOML syntax and diff hygiene. No local tests execute. CI must demonstrate
 these fixtures finish within the bounded budget; the timeout adjustment alone
 does not establish runtime correctness or exclude a macOS-specific stall.
+
+### Capture bounded user assembly for the two unresolved metadata leaks
+
+The exact deb330029 CI still reports three live strings in the metadata-query
+fixture and six in the post-eval instanceof fixture. Static review has not found
+a confirmed missing release, and passing controls rule out several generic eval
+source/class-name hypotheses. Do not mark these leaks fixed by unrelated repairs.
+
+Keep heap and output assertions unchanged. Reuse the heap-debug helper that also
+returns assembly, and include only the relevant user function bodies on failure.
+Strip comments and blank lines, cap each body at 128,000 Unicode characters, and
+exclude runtime bodies. This adds no extra compile/run cycle and no runtime
+payload inspection. Native Sol implemented this test-only diagnostic for the
+next CI evidence. Cargo check --tests, assembly-comment alignment and diff hygiene
+pass. No tests or repros execute locally. Both leaks remain open pending CI.

@@ -10,6 +10,31 @@
 
 use crate::support::*;
 
+/// Returns one bounded user-function region for ownership diagnostics on CI failures.
+fn bounded_user_function_assembly(assembly: &str, function: &str) -> String {
+    let label = format!("_fn_{function}:\n");
+    let Some((_, tail)) = assembly.split_once(&label) else {
+        return "<function assembly not found>".to_string();
+    };
+    let mut body = label;
+    for line in tail.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(".globl ") || trimmed.starts_with(".global ") {
+            break;
+        }
+        let line = line.split_once(" // ").map_or(line, |(instruction, _)| instruction);
+        let line = line.split_once(" # ").map_or(line, |(instruction, _)| instruction);
+        if !line.trim().is_empty()
+            && !line.trim_start().starts_with("//")
+            && !matches!(line.trim_start().as_bytes().first(), Some(b'#'))
+        {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    body.chars().take(128_000).collect()
+}
+
 /// Failed and matched native catch predicates release the temporary boxes used to query eval.
 #[test]
 fn test_core_eval_catch_predicate_boxes_release_mismatched_and_unbound_throwables() {
@@ -60,10 +85,12 @@ for ($i = 0; $i < 3; $i++) {
 unset($source);
 "#;
     let expected = "named:dynamic:MetadataOwnerChild:MetadataOwnerBase:1:1:1:1:0:0|7|D|".repeat(3);
-    let out = compile_and_run_with_heap_debug(source);
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, expected, "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\ninspectEvalMetadataOwners assembly:\n{}", out.stderr,
+        bounded_user_function_assembly(&assembly, "inspectEvalMetadataOwners"));
     assert_eq!(compile_and_run_tagged(source), expected);
 }
 
