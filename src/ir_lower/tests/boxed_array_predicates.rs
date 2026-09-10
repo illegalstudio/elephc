@@ -58,6 +58,11 @@ function targetArrayFilter(array $values, int $mode): void {
     echo count($plain), count($null), count($callback);
 }
 targetArrayFilter(["item" => false], 1);
+$filter = array_filter(...);
+$first = $filter([0, "kept"]);
+$second = call_user_func("array_filter", ["key" => true]);
+$third = $filter(array: [1 => "kept"], callback: null);
+echo count($first), count($second), count($third);
 "#;
     assert_eq!(RuntimeFnId::ArrayFilter.result_ownership(),
         crate::builtins::semantics::BuiltinResultOwnership::Fresh);
@@ -69,7 +74,7 @@ targetArrayFilter(["item" => false], 1);
             .filter(|inst| matches!(inst.immediate,
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayFilter)))))
             .collect();
-        assert_eq!(calls.len(), 3, "{name}");
+        assert_eq!(calls.len(), 6, "{name}");
         for inst in calls {
             assert_eq!(inst.operands.len(), 3, "{name}: callback and mode defaults must be materialized");
             assert_eq!(inst.result_php_type.codegen_repr(), PhpType::Mixed, "{name}");
@@ -77,7 +82,7 @@ targetArrayFilter(["item" => false], 1);
         }
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        assert_eq!(asm.matches("__rt_array_predicate_boxed").count(), 3, "{name}");
+        assert_eq!(asm.matches("__rt_array_predicate_boxed").count(), 6, "{name}");
         assert!(!asm.contains("__rt_array_filter"), "{name}: no scalar-only filter runtime");
     }
 }

@@ -93,9 +93,9 @@ class FilterKeptObject {
     public function __destruct() { echo "released|"; }
 }
 for ($i = 0; $i < 3; $i++) {
-    $values = ["left" => new FilterKeptObject()];
-    $kept = array_filter($values);
-    unset($values);
+    $objects = ["left" => new FilterKeptObject()];
+    $kept = array_filter($objects);
+    unset($objects);
     echo $kept["left"]->text, "|";
     unset($kept);
     $values = ["a" => 1, "b" => 2];
@@ -106,6 +106,24 @@ for ($i = 0; $i < 3; $i++) {
     unset($values, $kept);
 }
 "#, &"owned|released|12:99|".repeat(3));
+}
+
+/// Static callable dispatch preserves boxed sparse results and nested owners after source cleanup.
+#[test]
+fn test_array_filter_callable_results_preserve_keys_and_nested_owners() {
+    assert_filter_output(r#"<?php
+function filterCallableRows(): array { return ["drop" => null, "keep" => [str_repeat("x", 24)]]; }
+for ($iteration = 0; $iteration < 3; $iteration++) {
+    $callback = array_filter(...);
+    $first = $callback(filterCallableRows());
+    $second = call_user_func("array_filter", [0, "ok"]);
+    $third = $callback(array: ["empty" => "", "kept" => false], callback: static fn($value): bool => true);
+    echo implode(",", array_keys($first)), ":", strlen($first["keep"][0]), "|";
+    echo implode(",", array_keys($second)), ":", $second[1], "|";
+    echo implode(",", array_keys($third)), ":", count($third), "|";
+    unset($callback, $first, $second, $third);
+}
+"#, &"keep:24|1:ok|empty,kept:2|".repeat(3));
 }
 
 /// Throws after a kept entry retire the partial hash, callback result and temporary source owners.

@@ -1662,3 +1662,27 @@ source control. Add a five-target EIR/emitter gate requiring balanced owner-ledg
 publication and retirement. Extend the array example with a throwing aggregate
 warning handler. Test compilation and diff hygiene pass; runtime validation stays
 with CI and no tests execute locally.
+
+### Give callable filters the same boxed result contract
+
+The filter callable/default fixture on 6a86ca25f terminates with a bad-refcount
+diagnostic before its first echo. A direct filter returns the checker's boxed
+PHP-array type; a static FCC or CUF call has no checked builtin call-site type
+and falls back to the catalog's raw Array(Mixed) representation. The helper
+actually returns a Mixed cell in both cases. Make the AOT semantic descriptor
+resolve its result through one shared boxed-array resolver, independent of the
+dispatching expression's checker metadata. Regenerate the registry and internal
+builtin page to expose the shared result contract.
+
+Keep the original callable regression, and add sparse/nested callable ownership
+coverage plus FCC, CUF and named cases to the five-target EIR gate. Correct an old
+GC fixture that indexed filter survivors as a reindexed array: assert keys 1 and
+2 explicitly while keeping both nested-value lifetime assertions. Split object
+and integer source variables in the new snapshot fixture so two independent
+filter scenarios do not demand an unrelated concrete-local element-type change.
+Test compilation, generated-doc audits and diff hygiene pass; no local tests run.
+
+CI also exposes an empty-string result in the new retained-reference loop test.
+Its heap summary is clean, so that is a value/ABI correctness gate rather than
+proof of an owner leak. It remains open alongside boxed comparator, multisort,
+descriptor arity and eval metadata failures. The PR is not ready to merge.

@@ -9,6 +9,7 @@
 //! - Result storage is boxed because indexed inputs may acquire holes or retain string keys.
 
 use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::semantics::{BuiltinArgumentLowering, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics};
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
@@ -17,10 +18,20 @@ builtin! {
     contract: "array_filter",
     check: check,
     lazy_check: true,
-    semantics: crate::builtins::semantics::with_argument_lowering(
-        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayFilter),
-        crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults,
-    ),
+    semantics: semantics(),
+}
+
+/// Keeps direct, synthetic and callable filter results on the same boxed PHP-array ABI.
+const fn semantics() -> BuiltinSemantics {
+    let mut semantics = crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayFilter);
+    semantics.argument_lowering = BuiltinArgumentLowering::MaterializeDefaults;
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Filtering may retain either integer or string keys, regardless of the input's physical layout.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::php_array()
 }
 
 /// Validates array storage and callback context while leaving dynamic mode dispatch to the runtime.
