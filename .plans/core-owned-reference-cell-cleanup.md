@@ -597,3 +597,13 @@ regressions retain nested/keyed destructuring and malformed-target rejection;
 the optimizer regression again uses the original unparenthesized source, as
 does the existing executable CI fixture. Build and test compilation pass,
 without local test execution.
+
+### Sleep warning ABI
+
+The serializer's class-qualified warning builder now passes its pointer and
+length in rdi/rsi on x86_64, matching the diagnostic dispatcher. ARM64 retains
+x1/x2. The previous x86_64 sequence used the wrong argument registers for all
+three fragments. Added an exact handler-message regression and all-target
+emitter assertions; existing throwing-handler tests remain in place. Build,
+test compilation, assembly-comment alignment and diff hygiene pass. Runtime
+confirmation is delegated to CI; no local tests ran.

@@ -139,8 +139,10 @@ pub(super) fn emit_sleep_result(emitter: &mut Emitter) {
 
 /// Formats a class-qualified warning without releasing any of the callback's borrowed operands.
 fn emit_names_warning(emitter: &mut Emitter) {
-    let ptr = abi::int_arg_reg_name(emitter.target, 1);
-    let len = abi::int_arg_reg_name(emitter.target, 2);
+    let (ptr, len) = match emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
     abi::emit_symbol_address(emitter, ptr, "_sleep_warning_prefix");
@@ -165,6 +167,27 @@ fn emit_names_warning(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Warning fragments use the diagnostic ABI, not the ordinary string result registers.
+    #[test]
+    fn sleep_warning_arguments_match_each_target_diagnostic_abi() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_names_warning(&mut emitter);
+            let arch = emitter.target.arch;
+            let asm = emitter.output();
+            let (address, length, class_name) = if arch == Arch::AArch64 {
+                ("adrp x1,", "mov x2,", "ldr x1, [x10]")
+            } else {
+                ("lea rdi,", "mov rsi,", "mov rdi, QWORD PTR [r10]")
+            };
+            for symbol in ["_sleep_warning_prefix", "_sleep_warning_suffix"] {
+                assert!(asm.lines().any(|line| line.trim_start().starts_with(address) && line.contains(symbol)), "{name}: {asm}");
+            }
+            assert!(asm.contains(length), "{name}: {asm}");
+            assert!(asm.contains(class_name), "{name}: {asm}");
+        }
+    }
 
     /// Every ABI owns conversion results across nested hooks and distinguishes boxed arrays from headers.
     #[test]

@@ -199,6 +199,26 @@ echo serialize(9);
     assert_clean_magic_result(source, "warning|i:9;");
 }
 
+/// Class-qualified sleep warnings arrive intact on both native ABIs before a handled null result.
+#[test]
+fn test_core_serialize_sleep_warning_handler_receives_class_and_message() {
+    let source = r#"<?php
+function invalidNames(): mixed { return str_repeat('bad', 2); }
+class WarningSleep {
+    public function __sleep() { return invalidNames(); }
+}
+set_error_handler(function (int $level, string $message): bool {
+    echo $level, ':', str_contains($message, 'WarningSleep::__sleep()') ? 'class' : 'bad', '|';
+    return true;
+});
+$object = new WarningSleep();
+echo serialize($object);
+restore_error_handler();
+unset($object);
+"#;
+    assert_clean_magic_result(source, "2:class|N;");
+}
+
 /// Invalid sleep returns replace only the provisional object prefix after a handled warning.
 #[test]
 fn test_core_serialize_sleep_invalid_return_preserves_outer_concat_prefix() {
