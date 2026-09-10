@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_curl_adapter_addr(): mixed
+function __elephc_curl_adapter_addr(): pointer
 ```
 
 ## What the type checker enforces
