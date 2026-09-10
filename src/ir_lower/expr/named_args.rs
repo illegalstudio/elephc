@@ -58,8 +58,8 @@ pub(super) fn lower_named_args_with_signature_options(
         return lower_args(ctx, &normalized);
     }
     let mut source_values = Vec::with_capacity(plan.source_args.len());
-    for source_arg in &plan.source_args {
-        source_values.push(lower_call_source_arg(ctx, source_arg));
+    for source_index in 0..plan.source_args.len() {
+        source_values.push(lower_planned_source_arg(ctx, sig, &plan, source_index));
     }
 
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
@@ -84,6 +84,25 @@ pub(super) fn lower_named_args_with_signature_options(
         operands.push(lower_named_variadic_tail_array(ctx, sig, &plan.source_values, &source_values).value);
     }
     operands
+}
+
+/// Preserves a regular reference argument's place while consuming the shared source-order plan.
+fn lower_planned_source_arg(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    source_index: usize,
+) -> crate::ir::ValueId {
+    if let Some(source) = plan.source_values.iter()
+        .find(|source| source.source_index() == source_index)
+    {
+        if let Some(param_index) = source.param_idx() {
+            if sig.ref_params.get(param_index).copied().unwrap_or(false) {
+                return lower_arg_with_signature(ctx, sig, param_index, source.expr());
+            }
+        }
+    }
+    lower_call_source_arg(ctx, &plan.source_args[source_index])
 }
 
 /// Lowers dynamic associative prefix spreads for variadic calls far enough to preserve duplicate fatals.
@@ -116,7 +135,7 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
         if matches!(source_arg.kind, ExprKind::Spread(_)) {
             return None;
         }
-        source_values[source_index] = Some(lower_call_source_arg(ctx, source_arg));
+        source_values[source_index] = Some(lower_planned_source_arg(ctx, sig, plan, source_index));
     }
     emit_dynamic_named_prefix_duplicate_guards(ctx, sig, plan, &prefix_temp, first_named_pos);
 
@@ -298,8 +317,8 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
             .and_then(|source| Some((source.param_idx()?, source.expr())));
         let value = match planned {
             Some((param_idx, expr)) => hinted(ctx, param_idx, expr)
-                .unwrap_or_else(|| lower_call_source_arg(ctx, source_arg)),
-            None => lower_call_source_arg(ctx, source_arg),
+                .unwrap_or_else(|| lower_planned_source_arg(ctx, sig, plan, source_index)),
+            None => lower_planned_source_arg(ctx, sig, plan, source_index),
         };
         source_values[source_index] = Some(value);
     }

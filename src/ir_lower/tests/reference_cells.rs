@@ -12,6 +12,37 @@ use crate::codegen::platform::Target;
 use crate::ir::{Effects, Immediate, LocalKind, Op};
 use std::path::Path;
 
+/// Named regular references use caller element addresses for direct, method and spread calls.
+#[test]
+fn named_array_element_references_preserve_places_on_every_target() {
+    let source = r#"<?php
+function namedReference(int $prefix, mixed &$value): void { $value = "changed"; }
+class NamedReferenceWriter {
+    public function write(int $prefix, mixed &$value): void { $value = "method"; }
+    public static function writeStatic(int $prefix, mixed &$value): void { $value = "static"; }
+}
+$direct = [1]; namedReference(value: $direct[0], prefix: 0);
+$writer = new NamedReferenceWriter();
+$method = [2]; $writer->write(value: $method[0], prefix: 0);
+$static = [3]; NamedReferenceWriter::writeStatic(value: $static[0], prefix: 0);
+$spread = [4]; namedReference(...[0], value: $spread[0]);
+echo $direct[0], $method[0], $static[0], $spread[0];
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let addresses = module.functions.iter().flat_map(|function| &function.instructions)
+            .filter(|inst| inst.op == Op::ArrayElemAddr).collect::<Vec<_>>();
+        assert_eq!(addresses.len(), 4, "{name}: each named place needs its actual element address");
+        for address in addresses {
+            assert_eq!(address.result_php_type, crate::types::PhpType::Pointer(None), "{name}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Captured locals receive explicit cell owners before any descriptor can borrow their addresses.
 #[test]
 fn closure_local_reference_cells_have_frame_owners_on_every_target() {

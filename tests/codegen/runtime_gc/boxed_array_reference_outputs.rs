@@ -63,6 +63,44 @@ unset($named, $namedCopy, $fcc, $fccCopy);
     assert_eq!(compile_and_run_tagged(source), "updated:1|updated:2");
 }
 
+/// Reordered named places and spread prefixes evaluate once and mutate only the selected COW copy.
+#[test]
+fn test_core_named_element_references_preserve_source_order_and_spread_prefixes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function referenceIndex(): int { echo "i"; return 0; }
+function referenceMark(string $label, int $value): int { echo $label; return $value; }
+function replaceNamedElement(int $prefix, mixed &$value, int $suffix): void {
+    echo $prefix, ":", $suffix, "|";
+    $value = "changed";
+}
+class NamedElementWriter {
+    public function write(int $prefix, mixed &$value, int $suffix): void {
+        $value = "method";
+    }
+    public static function writeStatic(int $prefix, mixed &$value, int $suffix): void {
+        $value = "static";
+    }
+}
+$values = [1]; $copy = $values;
+replaceNamedElement(suffix: referenceMark("s", 2), value: $values[referenceIndex()], prefix: referenceMark("p", 1));
+echo $values[0], ":", $copy[0], "|";
+$writer = new NamedElementWriter();
+$method = [2]; $methodCopy = $method;
+$writer->write(suffix: 2, value: $method[0], prefix: 1);
+echo $method[0], ":", $methodCopy[0], "|";
+$static = [3]; $staticCopy = $static;
+NamedElementWriter::writeStatic(suffix: 2, value: $static[0], prefix: 1);
+echo $static[0], ":", $staticCopy[0], "|";
+$spread = [4]; $spreadCopy = $spread;
+replaceNamedElement(...[1], value: $spread[referenceIndex()], suffix: referenceMark("s", 2));
+echo $spread[0], ":", $spreadCopy[0];
+unset($values, $copy, $writer, $method, $methodCopy, $static, $staticCopy, $spread, $spreadCopy);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "sip1:2|changed:1|method:2|static:3|is1:2|changed:4", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Element references carry addresses while their parent arrays own boxed, string and scalar values.
 #[test]
 fn test_core_array_element_reference_addresses_preserve_pointee_storage() {

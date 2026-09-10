@@ -767,3 +767,18 @@ cover empty/full removal, nested values, replacement growth and aliases.
 Build, test compilation, generated builtin documentation and contract audits
 pass. No local tests ran. This typing correction does not expand the runtime's
 existing indexed-only splice implementation to boxed associative arrays.
+
+### Named reference places
+
+Named source arguments now use the shared plan's parameter mapping to apply the
+same reference-place lowering as positional arguments. Element addresses and
+required container widening survive source-order evaluation, parameter reordering
+and named arguments after a spread prefix. Ordinary value arguments keep their
+previous conversion path. Added heap coverage for direct, instance, static and
+spread calls with COW snapshots and observable source-order markers, plus
+all-target EIR address assertions.
+
+Build, test compilation and diff hygiene pass without local execution. CI on
+22ef9aecb now confirms codegen shard 8 and eval shard 15 on all three executable
+targets. The current branch already contains origin/main; no rebase is required.
+The remaining failed shards are still merge blockers.
