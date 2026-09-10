@@ -2232,3 +2232,18 @@ heap-balance fixtures remain the executable gate.
 
 Native Sol traced the register mismatch. Cargo check --tests, assembly-comment
 alignment and diff hygiene pass. No local tests or compiler repros execute.
+
+### Guard promoted references only after their caller storage exists
+
+The preallocation escape guard rejects valid constructor defaults and property
+reads because those operands do not yet denote caller reference cells. Preflight
+only local-cell and array-element addresses. Leave constants and property reads
+to the existing persistent-cell materializer and the constructor's bind guard.
+Add five-target coverage for default and property-source promotion. Keep dynamic
+constructor and unmanaged-walk-reference regressions as executable controls.
+
+The new managed-return fixtures also passed a concrete string to a Mixed reference
+parameter. Establish actual Mixed storage with a declared Mixed seed function,
+without weakening type checks. Native Sol implemented both bounded corrections.
+Cargo check --tests, assembly-comment alignment and diff hygiene pass. No local
+tests execute; CI must run the constructor and reference-return regressions.

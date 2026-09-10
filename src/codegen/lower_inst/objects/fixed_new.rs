@@ -168,7 +168,12 @@ fn reject_unmanaged_promoted_reference_args(
             CodegenIrError::invalid_module("promoted reference parameter has no constructor operand")
         })?;
         let source = peel_argument_owner_aliases(ctx, value)?;
-        super::super::materialize_local_ref_arg_address(ctx, source)?;
+        if !materialize_existing_promoted_reference_address(ctx, source)? {
+            // Defaults and property reads do not expose a caller cell yet. The constructor
+            // argument materializer gives those operands a persistent cell before the call,
+            // and the promoted-property bind validates that actual cell inside the constructor.
+            continue;
+        }
         abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
         let safe = ctx.next_label("promoted_reference_argument_managed");
         abi::emit_branch_if_int_result_zero(ctx.emitter, &safe);
@@ -176,6 +181,34 @@ fn reject_unmanaged_promoted_reference_args(
         ctx.emitter.label(&safe);
     }
     Ok(())
+}
+
+/// Materializes an address only when the constructor operand already denotes caller storage.
+fn materialize_existing_promoted_reference_address(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
+    let Some(value_info) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_info.def else {
+        return Ok(false);
+    };
+    let instruction = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match instruction.op {
+        Op::LoadLocal | Op::LoadRefCell => {
+            super::super::materialize_local_ref_arg_address(ctx, value)?;
+            Ok(true)
+        }
+        Op::ArrayElemAddr => {
+            ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 /// Peels ownership-only wrappers while preserving the original local source slot.

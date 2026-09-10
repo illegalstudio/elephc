@@ -48,6 +48,28 @@ $second = new OrdinaryLeaseChild($argc);
     }
 }
 
+/// Promoted borrowed properties defer constants and property reads to persistent cells.
+#[test]
+fn promoted_reference_guards_accept_materialized_cells_on_every_target() {
+    let source = r#"<?php
+class PromotedReferenceCell {
+    public function __construct(public int &$value = 1) {}
+}
+class PromotedReferenceSource { public int $value = 7; }
+$default = new PromotedReferenceCell();
+$source = new PromotedReferenceSource();
+$property = new PromotedReferenceCell($source->value);
+echo $default->value, $property->value;
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Native omitted references use managed cells and scoped owners on every supported ABI.
 #[test]
 fn omitted_reference_defaults_have_managed_unwind_leases_on_every_target() {
@@ -260,11 +282,12 @@ function &relayReturnedReference(mixed &$value): mixed {
     $value = 'relayed';
     return $value;
 }
+function returnedReferenceSeed(): mixed { return 'start'; }
 function consumeReturnedReference(): void {
     $alias = &createReturnedReference();
     $copy = createReturnedReference();
     $method = &(new ReturningReferenceOwner())->reference();
-    $managed = 'start';
+    $managed = returnedReferenceSeed();
     $relayed = &relayReturnedReference($managed);
     echo $alias, $copy, $method, $relayed;
 }

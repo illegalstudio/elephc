@@ -103,8 +103,9 @@ function &managedReferenceRelay(mixed &$value): mixed {
     $value = "relayed";
     return $value;
 }
+function managedReferenceSeed(): mixed { return "start"; }
 
-$source = "start";
+$source = managedReferenceSeed();
 $alias = &managedReferenceRelay($source);
 unset($source);
 echo $alias, "|";
