@@ -90,7 +90,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Ptr,
         by_ref_return: false,
         summary: "Reports the address of the codegen libcurl-callback adapter.",
         examples: &[

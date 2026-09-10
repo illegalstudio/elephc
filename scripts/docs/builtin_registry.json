@@ -298,7 +298,7 @@
     },
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "since": null,

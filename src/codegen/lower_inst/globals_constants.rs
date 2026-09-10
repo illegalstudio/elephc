@@ -193,11 +193,30 @@ pub(super) fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
-/// Clones a boxed Mixed zval cell so later mutation cannot rewrite an aliased source cell.
+/// Produces an owned Mixed cell whose storage is independent from the assignment source.
+///
+/// Lowering initially inserts `MixedClone` for a boxed result, but optimization may narrow its
+/// producer to a scalar constant. The final SSA storage type is authoritative: clone an existing
+/// Mixed cell, otherwise box the current scalar, string, heap payload, or tagged nullable value.
 pub(super) fn lower_mixed_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    load_value_to_first_int_arg(ctx, value)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    let source_ir_type = ctx.value_ir_type(value)?;
+    if matches!(
+        source_ir_type,
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
+    ) {
+        load_value_to_first_int_arg(ctx, value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    } else {
+        let source_ty = ctx.load_value_to_result(value)?;
+        let raw_source_ty = ctx.raw_value_php_type(value)?;
+        let box_ty = if matches!(raw_source_ty, PhpType::Resource(_)) {
+            raw_source_ty
+        } else {
+            source_ty
+        };
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+    }
     store_if_result(ctx, inst)
 }
 
