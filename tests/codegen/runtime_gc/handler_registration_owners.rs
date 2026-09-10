@@ -9,6 +9,37 @@
 
 use crate::support::*;
 
+/// Throwing captured destructors do not skip previous-handler restoration or leave detached owners.
+#[test]
+fn test_core_handler_restore_finishes_cleanup_before_propagating_destructor_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowingHandlerOwner {
+    public function __destruct() { echo "drop|"; throw new Exception("release"); }
+}
+set_error_handler(function(int $level, string $message): bool { echo "previous|"; return true; });
+$owner = new ThrowingHandlerOwner();
+set_error_handler(function(int $level, string $message) use ($owner): bool { return true; });
+unset($owner);
+try { restore_error_handler(); } catch (Exception $error) { echo $error->getMessage(), "|"; }
+trigger_error("after", E_USER_WARNING);
+restore_error_handler();
+set_exception_handler(function(Throwable $error): void { echo "exception|"; });
+$owner = new ThrowingHandlerOwner();
+set_exception_handler(function(Throwable $error) use ($owner): void {});
+unset($owner);
+try { restore_exception_handler(); } catch (Exception $error) { echo $error->getMessage(), "|"; }
+$previous = set_exception_handler(null);
+$previous(new Exception("after"));
+restore_exception_handler();
+restore_exception_handler();
+unset($previous, $error);
+echo "done";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "drop|release|previous|drop|release|exception|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Restoring a temporary error handler destroys its captured owner after the registration releases it.
 #[test]
 fn test_core_error_handler_registration_releases_internal_temporaries() {

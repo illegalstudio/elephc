@@ -711,3 +711,18 @@ Build, test compilation and assembly-comment checks pass, with no local executio
 CI on 9b85ed40a confirms the handler/legacy-cell leak still present on that older
 head, as well as boxed callback checker failures, array_sum rejection and usort
 exception cleanup leaks. These results are not a green-CI or review-ready claim.
+
+### Handler restoration after destructor throws
+
+Handler release now guards each detached callback, descriptor and eval-context owner.
+A nested guard in pop lets the preceding registration and linked node be restored
+and retired before a pending destructor exception propagates. Added executable
+coverage for both error and exception handlers and all-target emission assertions.
+Build, test compilation, assembly-comment checks and diff hygiene pass; no local
+tests were executed.
+
+CI on 9b85ed40a passed the Linux x86_64 eval shard containing the native heap-reference
+regression. The named middle-default leak remains on both Linux architectures:
+its raw cell comes from constructor MayOutliveCall staging, not the descriptor
+invoker. Constructor-promoted reference properties still borrow those fallback
+cells, so deleting the heap fallback or using caller-stack storage is not a safe fix.
