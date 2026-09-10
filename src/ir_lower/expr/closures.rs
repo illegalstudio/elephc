@@ -147,6 +147,10 @@ pub(super) fn lower_closure_with_context(
             } else {
                 None
             };
+            if by_ref && !ctx.is_ref_bound_local(capture) {
+                // Keep a local cell owner independent of the descriptor's capture lease.
+                ctx.promote_local_ref_cell(capture, Some(expr.span));
+            }
             let captured = ctx.load_local(capture, Some(expr.span));
             let php_type = php_type_override
                 .unwrap_or_else(|| ctx.builder.value_php_type(captured.value));
@@ -773,4 +777,3 @@ pub(super) fn callable_target_contains_eval_call(target: &CallableTarget) -> boo
 pub(super) fn is_eval_call_name(name: &Name) -> bool {
     php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval"
 }
-

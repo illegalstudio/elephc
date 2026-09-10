@@ -12,6 +12,38 @@ use crate::codegen::platform::Target;
 use crate::ir::{Effects, Immediate, LocalKind, Op};
 use std::path::Path;
 
+/// Captured locals receive explicit cell owners before any descriptor can borrow their addresses.
+#[test]
+fn closure_local_reference_cells_have_frame_owners_on_every_target() {
+    let source = r#"<?php
+function localReferenceClosure(string $text): callable {
+    $counter = 0;
+    return function() use (&$text, &$counter): string { $counter++; return $text; };
+}
+$callback = localReferenceClosure("owned");
+echo $callback();
+unset($callback);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "localReferenceClosure").unwrap();
+        let promotions = function.instructions.iter().enumerate().filter(|(_, inst)| inst.op == Op::PromoteLocalRefCell)
+            .collect::<Vec<_>>();
+        assert_eq!(promotions.len(), 2, "{name}");
+        let closure = function.instructions.iter().position(|inst| inst.op == Op::ClosureNew).unwrap();
+        for (index, inst) in promotions {
+            let Some(Immediate::LocalSlotPair { second: owner, .. }) = inst.immediate else { panic!("{name}: missing owner"); };
+            assert_eq!(function.locals[owner.as_raw() as usize].kind, LocalKind::RefCell, "{name}");
+            assert!(index < closure, "{name}: promote before capturing the cell address");
+        }
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_reference_cell_new"), "{name}");
+        assert!(asm.contains("__rt_local_ref_cell_release"), "{name}");
+    }
+}
+
 /// Closure construction retains any managed cell behind a captured native reference argument.
 #[test]
 fn closures_retain_managed_reference_arguments_on_every_target() {

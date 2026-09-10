@@ -230,8 +230,12 @@ pub(super) fn promote_local_slot_for_ref_capture_unchecked(
     abi::emit_load(ctx.emitter, &local_ty, offset);
     retain_promoted_ref_cell_value(ctx, &local_ty);
     abi::emit_push_result_value(ctx.emitter, &local_ty);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        crate::codegen_support::runtime::reference_cells::payload_tag(&local_ty),
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
     let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.emitter.instruction(&format!(                                           // keep the promoted closure capture cell while restoring its value
         "mov {}, {}",

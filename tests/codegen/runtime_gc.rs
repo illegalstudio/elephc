@@ -61,6 +61,7 @@ mod boxed_array_usort;
 mod reference_cell_owners;
 mod descriptor_reference_args;
 mod handler_registration_owners;
+mod closure_reference_owners;
 mod boxed_array_call_results;
 mod mixed_parameters;
 mod native_string_arguments;

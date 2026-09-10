@@ -697,3 +697,17 @@ boxed callbacks, plus structural checks across all supported targets. Build, tes
 compilation, generated builtin docs and audits pass without local test execution.
 The latest CI remains in progress; captured local cells require a separate ownership
 fix and the other recorded failures are still open.
+
+### Captured local reference cells
+
+Closure lowering now promotes a captured local through an explicit EIR owner slot
+before taking its address. Promoted local cells use the managed typed allocator,
+so descriptor capture leases and local/alias retirement share one cell lifetime.
+Existing borrowed incoming references remain borrowed. Regression coverage includes
+escaping closures, multiple descriptors sharing mutable state, captured objects,
+repeated handler registrations, and structural owner checks on every target.
+
+Build, test compilation and assembly-comment checks pass, with no local execution.
+CI on 9b85ed40a confirms the handler/legacy-cell leak still present on that older
+head, as well as boxed callback checker failures, array_sum rejection and usort
+exception cleanup leaks. These results are not a green-CI or review-ready claim.
