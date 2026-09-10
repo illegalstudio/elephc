@@ -18,7 +18,7 @@ pub(super) fn eval_indexed_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.array_new(elements.len())?;
-    context.clear_array_element_aliases(array);
+    context.clear_array_metadata(array);
     let result = (|| {
         for (index, element) in elements.iter().enumerate() {
             eval_indexed_literal_element(&mut array, index, element, context, scope, values)?;
@@ -26,7 +26,7 @@ pub(super) fn eval_indexed_array(
         Ok(array)
     })();
     if result.is_err() {
-        context.clear_array_element_aliases(array);
+        context.clear_array_metadata(array);
         let _ = eval_release_value(context, values, array);
     }
     result
@@ -72,7 +72,7 @@ pub(super) fn eval_assoc_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.assoc_new(elements.len())?;
-    context.clear_array_element_aliases(array);
+    context.clear_array_metadata(array);
     let mut next_key = None;
     let result = (|| {
         for element in elements {
@@ -82,7 +82,7 @@ pub(super) fn eval_assoc_array(
     })();
     let cleanup = if let Some(key) = next_key { values.release(key) } else { Ok(()) };
     if let Err(status) = result.and(cleanup) {
-        context.clear_array_element_aliases(array);
+        context.clear_array_metadata(array);
         let _ = eval_release_value(context, values, array);
         return Err(status);
     }

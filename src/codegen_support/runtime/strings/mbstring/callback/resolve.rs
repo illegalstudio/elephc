@@ -12,7 +12,7 @@ use super::*;
 
 /// Emits callback resolution with a live eval-context branch only when that bridge is linked.
 pub(super) fn emit(emitter: &mut Emitter, eval: bool) {
-    emitter.label("__rt_mbstring_callback_resolve_body");
+    emitter.label_shared("__rt_mbstring_callback_resolve_body");
     enter(emitter, 96);
     if eval {
         load_result(emitter, 0);

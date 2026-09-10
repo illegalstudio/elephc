@@ -77,10 +77,26 @@ fn lower_source_at_for_target(
     let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let (ast, _) = crate::opcache_prelude::inject_if_used(
+        ast,
+        crate::php_version::PhpVersion::default(),
+        false,
+        None,
+        &[],
+        &[],
+        None,
+        false,
+        &mut prelude_inventory,
+    );
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::version_prelude::inject_if_used(
+        ast,
+        crate::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(
         ast,

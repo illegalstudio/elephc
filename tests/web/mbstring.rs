@@ -10,9 +10,6 @@
 
 use super::*;
 
-#[path = "../support/managed_pcre2.rs"]
-mod managed_pcre2;
-
 /// Restores compiled INI defaults after runtime setting mutations in the same prefork worker.
 #[test]
 fn web_mbstring_startup_configuration_reset() {

@@ -93,7 +93,7 @@ pub(super) fn with_owned_receiver<V: RuntimeValueOps>(
     }
 }
 
-/// Copies a variable's value and preserves legacy reference metadata on array copies.
+/// Copies a variable's value and preserves array side metadata.
 pub(super) fn copy_scope_value(
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -104,7 +104,7 @@ pub(super) fn copy_scope_value(
     } else {
         values.copy_value(value)?
     };
-    context.copy_array_element_aliases(value, copied);
+    context.copy_array_metadata(value, copied);
     Ok(copied)
 }
 

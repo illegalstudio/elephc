@@ -503,10 +503,10 @@ mod tests {
     /// Verifies unknown package and version inputs fail closed.
     #[test]
     fn catalog_rejects_unknown_selection() {
-        assert!(package("libfoo")
-            .unwrap_err()
-            .to_string()
-            .contains("known packages: pcre2, zlib, openssl, nghttp2, libssh2, curl, libxml2"));
+        assert_eq!(
+            package("libfoo").unwrap_err().to_string(),
+            "native catalog error: unknown native package 'libfoo'; known packages: pcre2, zlib, openssl, nghttp2, libssh2, curl, oniguruma, libxml2"
+        );
         assert!(version("pcre2", Some("10.46")).is_err());
     }
 

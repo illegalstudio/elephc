@@ -18,6 +18,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2;
+
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
@@ -55,6 +58,7 @@ fn compile_web_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) 
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd.arg("--web").args(flags).arg(&php);
+    managed_pcre2::configure_host_managed_pcre2(&mut cmd, dir);
     let output = cmd.output().expect("failed to spawn elephc");
     assert!(
         output.status.success(),

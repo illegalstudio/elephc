@@ -103,7 +103,7 @@ fn evaluate_call_arguments(
                 }
                 let index = owners.iter().position(|value| *value == spread).expect("captured spread owner");
                 owners.remove(index);
-                context.clear_array_element_aliases(spread);
+                context.clear_array_metadata(spread);
                 eval_release_value(context, values, spread)?;
             } else {
                 append_unpacked_call_arg_values(spread, evaluated_args, &mut saw_named, context, values)?;

@@ -10,6 +10,8 @@
 //! - Besides the borrowed payload, the lookup returns the matching entry's ADDRESS
 //!   (`x4` / `r8`, null on a miss) so callers that must write the slot back can reach
 //!   it; the probe already computes that address (issue #580).
+//! - Empty option maps can use indexed-array storage, so an empty container must miss
+//!   before the hash-specific entry-storage pointer is read.
 
 use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
@@ -61,6 +63,8 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     );
     emitter.instruction("cmp x0, x5");                                          // does the receiver carry the in-band null-container sentinel?
     emitter.instruction("b.eq __rt_hash_get_not_found");                        // sentinel-null receivers from missed reads cannot contain the key
+    emitter.instruction("ldr x5, [x0]");                                        // load the logical entry count before reading hash-specific fields
+    emitter.instruction("cbz x5, __rt_hash_get_not_found");                     // empty option maps may use indexed storage and always miss safely
     emitter.instruction("ldr x5, [x0, #8]");                                    // load capacity before hashing to avoid division by zero on empty tables
     emitter.instruction("cbz x5, __rt_hash_get_not_found");                     // zero-capacity tables cannot contain the requested key
 
@@ -172,6 +176,9 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     );
     emitter.instruction("cmp rdi, r11");                                        // does the receiver carry the in-band null-container sentinel?
     emitter.instruction("je __rt_hash_get_not_found");                          // sentinel-null receivers from missed reads cannot contain the key
+    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the logical entry count before reading hash-specific fields
+    emitter.instruction("test r11, r11");                                       // determine whether the container has any live entries
+    emitter.instruction("jz __rt_hash_get_not_found");                          // empty option maps may use indexed storage and always miss safely
     emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                        // load capacity before hashing to avoid division by zero on empty tables
     emitter.instruction("test r11, r11");                                       // zero capacity means there are no live entries to probe
     emitter.instruction("jz __rt_hash_get_not_found");                          // return a miss for empty hash tables

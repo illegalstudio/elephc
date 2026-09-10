@@ -54,7 +54,7 @@ pub(in crate::interpreter) fn eval_builtin_call_array_value(
     with_owned_builtin_arguments(name, true, context, values,
         |contract, context, values, owners, evaluated| {
             let copy = values.copy_value(array)?;
-            context.copy_array_element_aliases(array, copy);
+            context.copy_array_metadata(array, copy);
             owners.push(copy);
             capture_array(contract, copy, context, values, owners, evaluated)
         })
@@ -90,7 +90,7 @@ fn capture_array(
     }
     let index = owners.iter().position(|owner| *owner == array).expect("owned callback array");
     owners.remove(index);
-    context.clear_array_element_aliases(array);
+    context.clear_array_metadata(array);
     eval_release_value(context, values, array)
 }
 
@@ -107,7 +107,7 @@ fn capture_callback_argument(
     }
     let old = argument.value;
     let copy = values.copy_value(old)?;
-    context.copy_array_element_aliases(old, copy);
+    context.copy_array_metadata(old, copy);
     argument.value = copy;
     argument.ref_target = None;
     owners.push(copy);
@@ -125,13 +125,26 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
     let mut owners = Vec::new();
     let mut evaluated = Vec::new();
     let mut ordered = Vec::new();
+    let mut callback_reference_metadata = Vec::new();
     let result = (|| {
         let contract = elephc_builtin_contract::lookup(name).ok_or(EvalStatus::UnsupportedConstruct)?;
         evaluate(contract, context, values, &mut owners, &mut evaluated)?;
         ordered = bind_builtin_arguments(name, evaluated.clone(), values, Some(&mut owners))?;
-        if callback { adapt_callback_references(contract, &mut ordered, &mut owners, context, values)?; }
+        if callback {
+            adapt_callback_references(
+                contract,
+                &mut ordered,
+                &mut owners,
+                &mut callback_reference_metadata,
+                context,
+                values,
+            )?;
+        }
         eval_builtin_with_values(name, &ordered, context, values)?.ok_or(EvalStatus::UnsupportedConstruct)
     })();
+    for reference in callback_reference_metadata {
+        context.clear_array_metadata(reference);
+    }
     if ordered.is_empty() {
         // Partial evaluation still destroys captured PHP arguments in parameter order.
         let names = eval_builtin_param_names(name).unwrap_or(&[]);
@@ -164,6 +177,7 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
 /// Warns for callback values sent to reference parameters and transfers their owners into temporary wrappers.
 fn adapt_callback_references(
     contract: &BuiltinContract, arguments: &mut [RuntimeCellHandle], owners: &mut Vec<RuntimeCellHandle>,
+    callback_reference_metadata: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for (index, (argument, parameter)) in arguments.iter_mut().zip(contract.params).enumerate() {
@@ -171,7 +185,12 @@ fn adapt_callback_references(
         values.warning(&format!("Warning: {}(): Argument #{} (${}) must be passed by reference, value given\n",
             contract.name, index + 1, parameter.name))?;
         let old = *argument;
+        let carries_array_metadata = values.is_array_like(old)?;
         let reference = values.reference_new(old)?;
+        if carries_array_metadata {
+            context.copy_array_metadata(old, reference);
+            callback_reference_metadata.push(reference);
+        }
         owners.push(reference);
         *argument = reference;
         let position = owners.iter().position(|owner| *owner == old).expect("owned callback argument");

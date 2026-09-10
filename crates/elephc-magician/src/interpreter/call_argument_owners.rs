@@ -48,14 +48,14 @@ fn with_array_call_argument_result<R, V: RuntimeValueOps>(
 ) -> Result<R, EvalStatus> {
     if !values.is_array_like(array)? { return Err(EvalStatus::RuntimeFatal); }
     let copy = values.copy_value(array)?;
-    context.copy_array_element_aliases(array, copy);
+    context.copy_array_metadata(array, copy);
     let mut owners = vec![copy];
     let mut arguments = Vec::new();
     let mut saw_named = false;
     let result = append_unpacked_call_arg_values_with_owners(
         copy, &mut arguments, &mut saw_named, context, values, Some(&mut owners),
     ).and_then(|()| invoke(arguments, context, values));
-    context.clear_array_element_aliases(copy);
+    context.clear_array_metadata(copy);
     let mut cleanup = Ok(());
     for value in owners.into_iter().rev() {
         if let Err(status) = eval_release_value(context, values, value) { cleanup = Err(status); }

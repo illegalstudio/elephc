@@ -152,6 +152,7 @@ pub(super) fn commit(emitter: &mut Emitter) {
         emitter.label("__rt_stdout_response_fatal");
         emitter.instruction("mov x0, #1");                                      // preserve a nonzero exit status for a fatal bridge failure
         emitter.bl_c("exit");
+        emitter.instruction("brk #0");                                          // trap if the terminal process exit unexpectedly returns
     } else {
         emitter.instruction("sub rsp, 16");                                     // reserve aligned saved argument slots across response commitment
         emitter.instruction("mov QWORD PTR [rsp], rdi");                        // retain the original output pointer
@@ -167,6 +168,7 @@ pub(super) fn commit(emitter: &mut Emitter) {
         emitter.label("__rt_stdout_response_fatal");
         emitter.instruction("mov edi, 1");                                      // preserve nonzero process status for a fatal host boundary
         emitter.bl_c("exit");
+        emitter.instruction("ud2");                                             // trap if the terminal process exit unexpectedly returns
     }
     emitter.label("__rt_stdout_response_ready");
 }
