@@ -153,10 +153,20 @@ mod tests {
             assert_eq!(owners.release_entry(1), "__rt_decref_any");
             assert_eq!(owners.release_entry(2), "__rt_decref_any");
             owners.finish_return(&mut emitter);
+            let normal = emitter.output();
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
             owners.release_all(&mut emitter);
-            let asm = emitter.output();
-            assert_eq!(asm.matches("__rt_callable_descriptor_release").count(), 2, "{name}");
-            assert_eq!(asm.matches("__rt_cleanup_invoke").count(), 3, "{name}");
+            let unwind = emitter.output();
+            // Normal cleanup calls the descriptor release once. Unwind cleanup materializes its
+            // address once, using one x86_64 instruction or the AArch64 adrp/add pair. Keep each
+            // path exact so an extra release cannot hide behind a target-independent lower bound.
+            assert_eq!(normal.matches("__rt_callable_descriptor_release").count(), 1, "{name}: {normal}");
+            let address_mentions = if name == "linux-x86_64" { 1 } else { 2 };
+            assert_eq!(
+                unwind.matches("__rt_callable_descriptor_release").count(), address_mentions,
+                "{name}: {unwind}"
+            );
+            assert_eq!(unwind.matches("__rt_cleanup_invoke").count(), 3, "{name}: {unwind}");
         }
     }
 

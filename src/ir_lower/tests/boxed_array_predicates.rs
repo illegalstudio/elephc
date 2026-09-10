@@ -31,7 +31,13 @@ targetArrayPredicates(["item" => false]);
         let mut calls = 0;
         for function in &module.functions {
             for inst in &function.instructions {
-                let Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) = inst.immediate else { continue; };
+                // String-callback predicates carry a strict-PHP visibility profile, so backend-neutral
+                // lowering upgrades them to `ProfiledFunction`; accept both spellings of the same target.
+                let target = match inst.immediate {
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
+                    | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. })) => target,
+                    _ => continue,
+                };
                 if !matches!(target, RuntimeFnId::ArrayFind | RuntimeFnId::ArrayAny | RuntimeFnId::ArrayAll) { continue; }
                 calls += 1;
                 assert!(inst.effects.contains(Effects::MAY_THROW | Effects::REFCOUNT_OP), "{name}");
@@ -70,9 +76,14 @@ echo count($first), count($second), count($third);
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
+        // `array_filter` inspects a string-callable operand, so its call site carries the strict-PHP
+        // profile and lowers as `ProfiledFunction`; match both spellings of the same runtime target.
         let calls: Vec<_> = module.functions.iter().flat_map(|function| &function.instructions)
             .filter(|inst| matches!(inst.immediate,
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayFilter)))))
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayFilter)))
+                | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                    target: RuntimeFnId::ArrayFilter, ..
+                }))))
             .collect();
         assert_eq!(calls.len(), 6, "{name}");
         for inst in calls {

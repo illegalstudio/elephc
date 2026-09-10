@@ -1742,3 +1742,32 @@ cause. It narrowed the missing evidence to dynamic promotion of the string pair
 and the Acquire(LoadRefCell) return/invoker boundary. Do not implement the proposed
 fallback based on conjecture: repersisting an owned return could introduce a leak.
 The unchanged original regression now reports its generated assembly in CI.
+
+### Align focused emitter and EIR assertions with the current representations
+
+Cursor Opus 4.8 repaired four narrowly assigned test surfaces. The large-frame
+address fixture now reserves SSA slots before its operands, rather than locals
+which are placed after those slots. Its original index-before-base anti-clobber
+assertion remains and all failures include assembly. Predicate tests recognize
+both plain and strict-profiled runtime targets without removing operand, result,
+effect or backend-helper checks. The recursive array-return rejection expects
+the current PHP-array union diagnostic and still requires the invalid string
+return to fail.
+
+The coordinator strengthened the proposed descriptor-count correction: normal
+and exceptional cleanup are checked separately with exact target-aware symbol
+counts, accounting for AArch64 address materialization without accepting extra
+releases. Existing slot-specific release-entry checks remain authoritative.
+The agent's test-compilation and diff checks passed. No tests execute locally.
+
+Grok completed supplied-log triage while Opus wrote and Sol independently
+investigated eval metadata owners. Read-only diagnoses may run in parallel with
+one writer; only the coordinator reviews, commits and pushes. CI at bf4035bde
+passed the generated-builtin-docs gate but still failed executable shards: the
+broad typed-callback fixture now reaches an unsupported array_walk Mixed path.
+The completed ARM64 shard also retains the empty captured-string regression and
+exposes a failure in the runtime-selected comparator-descriptor fixture after
+its first four successful calls. Both failures now include generated assembly
+in completed CI logs, so subsequent pushes will not discard that evidence.
+Do not interpret updated test assertions or successful compilation as runtime
+parity, clean ownership or review readiness.
