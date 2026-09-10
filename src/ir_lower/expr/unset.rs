@@ -72,7 +72,7 @@ pub(super) fn unset_array_access_has_local_array_receiver(
         return true;
     }
     if ctx.is_ref_bound_local(name) {
-        return false;
+        return ctx.local_type(name).codegen_repr() == PhpType::Mixed;
     }
     matches!(
         ctx.local_type(name).codegen_repr(),
@@ -109,7 +109,10 @@ pub(super) fn lower_unset_array_access(
     expr: &Expr,
 ) {
     if let ExprKind::Variable(name) = &array.kind {
-        if ctx.local_type(name).is_php_array() {
+        if ctx.local_type(name).is_php_array()
+            || (ctx.is_ref_bound_local(name)
+                && ctx.local_type(name).codegen_repr() == PhpType::Mixed)
+        {
             lower_unset_boxed_array_element(ctx, name, array.span, index, expr);
             return;
         }

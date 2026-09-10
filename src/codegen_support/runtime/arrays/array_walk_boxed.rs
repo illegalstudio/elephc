@@ -197,8 +197,8 @@ fn emit_visitor(emitter: &mut Emitter) {
     abi::emit_branch_if_int_result_zero(emitter, "__rt_array_walk_boxed_visit_invoke");
     abi::load_at_offset(emitter, result, VISIT_CELL_VALUE);
     load_indirect(emitter, scratch, result);
-    ins(emitter, "sub x9, x9, #4", "sub r10, 4");
-    ins(emitter, "cmp x9, #1", "cmp r10, 1");
+    ins(emitter, "sub x10, x10, #4", "sub r10, 4");
+    ins(emitter, "cmp x10, #1", "cmp r10, 1");
     ins(
         emitter,
         "b.hi __rt_array_walk_boxed_visit_invoke",
@@ -585,6 +585,10 @@ mod tests {
                 "str x0, [x9, #24]"
             };
             assert!(asm.contains(transferred), "{name}: {asm}");
+            if target.arch == Arch::AArch64 {
+                assert!(asm.contains("sub x10, x10, #4"), "{name}: {asm}");
+                assert!(asm.contains("cmp x10, #1"), "{name}: {asm}");
+            }
             let owner_pair = if target.arch == Arch::X86_64 {
                 "lea rcx, [rbp - 64]"
             } else {

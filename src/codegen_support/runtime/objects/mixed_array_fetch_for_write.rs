@@ -97,7 +97,8 @@ fn emit_mixed_new_empty_array_cell_aarch64(emitter: &mut Emitter) {
 /// Tag 4 builds a fresh hash from the indexed entries (`__rt_array_to_hash`
 /// retains payloads, `__rt_hash_to_mixed` boxes raw scalar entries), installs
 /// it, and releases the replaced indexed payload once. Tag 5 ensures its hash
-/// is unique and republishes that result in the cell before returning its borrow.
+/// is unique, normalizes raw typed entries to Mixed cells, and republishes that
+/// result in the cell before returning its borrow.
 fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cell_promote_to_hash ---");
@@ -141,9 +142,9 @@ fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
         "x9",
         "__rt_mixed_cell_promote_to_hash_invalid",
     );
-    emitter.instruction("bl __rt_hash_ensure_unique");                          // split a shared child hash while consuming the cell's old owner reference
+    emitter.instruction("bl __rt_hash_to_mixed");                               // COW-split and normalize entries while consuming the cell's old owner
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the Mixed cell clobbered by the COW helper call
-    emitter.instruction("str x0, [x9, #8]");                                    // republish the unique-or-original hash into the child cell
+    emitter.instruction("str x0, [x9, #8]");                                    // republish the unique normalized hash into the child cell
     emitter.instruction("b __rt_mixed_cell_promote_to_hash_done");              // return the borrow from the cell's current hash owner
 
     emitter.label("__rt_mixed_cell_promote_to_hash_invalid");
@@ -479,10 +480,10 @@ fn emit_mixed_cell_promote_to_hash_x86_64(emitter: &mut Emitter) {
         "r10",
         "__rt_mixed_cell_promote_to_hash_invalid",
     );
-    emitter.instruction("mov rdi, rax");                                        // pass the installed child hash to the SysV COW helper
-    emitter.instruction("call __rt_hash_ensure_unique");                        // split a shared child hash while consuming the cell's old owner reference
+    emitter.instruction("mov rdi, rax");                                        // pass the installed child hash to the Mixed-entry conversion helper
+    emitter.instruction("call __rt_hash_to_mixed");                             // COW-split and normalize entries while consuming the cell's old owner
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the Mixed cell clobbered by the COW helper call
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // republish the unique-or-original hash into the child cell
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // republish the unique normalized hash into the child cell
     emitter.instruction("jmp __rt_mixed_cell_promote_to_hash_done");            // return the borrow from the cell's current hash owner
 
     emitter.label("__rt_mixed_cell_promote_to_hash_invalid");
@@ -759,6 +760,20 @@ mod tests {
             assert!(typed.contains("__rt_mixed_from_value"), "{name}");
             assert!(typed.contains("__rt_mixed_array_gfw_assoc_install"), "{name}");
             assert!(!typed.contains("__rt_mixed_array_gfw_return"), "{name}");
+            let promote_hash = asm
+                .split("__rt_mixed_cell_promote_to_hash_hash:\n")
+                .nth(1)
+                .unwrap()
+                .split("__rt_mixed_cell_promote_to_hash_invalid:\n")
+                .next()
+                .unwrap();
+            let normalize = promote_hash.find("__rt_hash_to_mixed").unwrap();
+            let republish = if name == "linux-x86_64" {
+                promote_hash.find("mov QWORD PTR [r10 + 8], rax").unwrap()
+            } else {
+                promote_hash.find("str x0, [x9, #8]").unwrap()
+            };
+            assert!(normalize < republish, "{name}: {promote_hash}");
         }
     }
 }

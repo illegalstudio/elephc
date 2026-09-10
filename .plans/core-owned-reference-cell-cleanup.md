@@ -2120,3 +2120,20 @@ signature checks, five-target EIR owner-retirement assertions and a heap-debug
 regression proving returned objects survive the caller's original unset. Cargo
 check --tests and diff hygiene pass. No local tests execute; the existing Curl
 matrix remains the runtime validation gate.
+
+### Normalize boxed walk entries before exposing writable cells
+
+The existing tag-5 promotion path only made a typed hash unique. The walk visitor
+then treated its native scalar entries as Mixed pointers, causing callback crashes
+and storing boxed pointers into still-string-typed slots. Normalize the unique
+hash through hash_to_mixed, which consumes the original owner, preserves COW and
+stamps each entry before the visitor reads or mutates it. Keep direct callback
+argument publication unchanged. Correct the ARM64 recursive tag-test register.
+
+Route captured ref-bound Mixed offset unsets through the existing boxed-array
+operation. Reject unmanaged promoted-property references before fixed-class
+allocation, preserving argument evaluation order and avoiding an allocation leak
+when that diagnostic is caught. Native Sol confirmed and implemented these causes.
+Five-target emitter assertions and existing exact output, tagged, COW and heap
+regressions cover the changed paths. Cargo check --tests, assembly-comment audit
+and diff hygiene pass. No tests execute locally.
