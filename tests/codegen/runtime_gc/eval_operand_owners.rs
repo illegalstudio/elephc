@@ -31,6 +31,30 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Reversing borrowed, temporary and nested eval strings allocates only the returned value.
+#[test]
+fn test_core_eval_strrev_borrows_input_bytes_without_leaking_cast_copies() {
+    let source = r#"<?php
+function evalReverseStringOwners(string $source): void { eval($source); }
+$source = '$text = "owned";
+echo strrev(strrev($text)), ":", $text, ":";
+echo strrev(""), strrev(123), ":", strrev(true), ":", strrev(1.25), ":";
+echo strrev("a\0b") === "b\0a" ? "binary:" : "bad:";
+echo strrev(string: "named"), ":", call_user_func("strrev", "call"), ":";
+$reverse = strrev(...);
+echo $reverse("first"), "|";
+unset($reverse, $text); // ' . $argc;
+for ($i = 0; $i < 3; $i++) { evalReverseStringOwners($source); }
+unset($source);
+"#;
+    let expected = "owned:owned:321:1:52.1:binary:deman:llac:tsrif|".repeat(3);
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
 /// Positional strlen releases extracted strings and agrees with named and callable argument owners.
 #[test]
 fn test_core_eval_strlen_releases_extracted_and_callable_string_arguments() {

@@ -213,6 +213,34 @@ mod tests {
         }
     }
 
+    /// String reversal borrows existing bytes and boxes only its result on every supported target.
+    #[test]
+    fn strrev_borrows_string_inputs_before_scalar_cast_fallback_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let asm = emit_for(target);
+            let start = format!("{}:\n", target.extern_symbol("__elephc_eval_value_strrev"));
+            let end = format!("{}:\n", target.extern_symbol("__elephc_eval_value_fdiv"));
+            let wrapper = asm.split_once(&start).unwrap().1.split_once(&end).unwrap().0;
+            let unbox = wrapper.find("__rt_mixed_unbox").unwrap();
+            let cast = wrapper.find("__rt_mixed_cast_string").unwrap();
+            let reverse = wrapper.find("__elephc_eval_value_strrev_reverse:").unwrap();
+            assert!(unbox < cast && cast < reverse, "{name}: inspect before scalar fallback");
+            assert_eq!(wrapper.matches("__rt_mixed_from_value").count(), 1, "{name}");
+            assert!(!wrapper.contains("__rt_str_persist"), "{name}");
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(wrapper.contains("b.eq __elephc_eval_value_strrev_reverse"), "{name}");
+                    assert!(wrapper.contains("sub sp, sp, #32") && wrapper.contains("add sp, sp, #32"));
+                }
+                Arch::X86_64 => {
+                    assert!(wrapper.contains("mov rax, rdi\n    jmp __elephc_eval_value_strrev_reverse"));
+                    assert!(wrapper.contains("sub rsp, 16") && wrapper.contains("add rsp, 16"));
+                }
+            }
+        }
+    }
+
     /// Resource and backtrace inventory adapters export their C ABI on every supported target.
     #[test]
     fn core_inventory_wrappers_apply_platform_c_symbol_mangling() {

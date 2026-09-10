@@ -1383,3 +1383,22 @@ The exporter build, forced render, module/comparison generation, builtin audit,
 site validation and enforced EIR architecture audit pass. A fresh fetch confirms
 origin/main remains c91beb3434681294e0a1dd29ef92f42f3365923a and is already
 an ancestor. No rebase, force push, local test execution or PR merge is performed.
+
+### Borrowed string inputs in the eval reversal adapter
+
+The shared-runtime operand fixture still leaks six string blocks over three
+iterations in CI on f44e4e5f1. The strrev bridge calls mixed_cast_string on each
+input, whose string arm allocates a detached copy, then abandons that copy after
+reversal. Preserve the interpreter's input lease and unbox existing strings into
+borrowed pointer/length pairs instead. Only non-string values reach the formatting
+fallback, whose results are borrowed. The reversed output still gets its own boxed
+string owner. Apply the same boundary to AArch64 and x86_64 without changing the
+shared cast helper's existing ownership contract.
+
+Add an all-target emitter gate and a native heap/tagged regression isolating nested
+reversal, borrowed locals, scalar coercion, empty and binary strings, named calls,
+CUF and FCC. Keep the original shared-runtime regression unchanged. Cargo build,
+test compilation, assembly-comment alignment and diff hygiene pass. No tests are
+executed locally. Exact-head CI on 2db3d0107 is still running and already reports
+the known declared-PHP-array callback failure; runtime confirmation of this new
+adapter fix remains pending its push.
