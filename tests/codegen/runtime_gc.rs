@@ -79,6 +79,7 @@ mod handler_registration_owners;
 mod closure_reference_owners;
 mod boxed_array_call_results;
 mod mixed_parameters;
+mod object_mixed_return_owners;
 mod native_string_arguments;
 mod native_property_unset;
 mod eval_closure_receivers;

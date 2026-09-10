@@ -64,13 +64,16 @@ impl FunctionSig {
 
     /// Returns whether forwarding this parameter by value produces an independent result owner.
     /// Reference parameters keep caller storage, but value returns acquire or clone its payload.
-    /// A callable returned as Mixed is boxed with its own descriptor retain, not transferred raw.
+    /// A callable or object returned as Mixed is boxed with its own payload retain, not transferred raw.
     pub(crate) fn returned_parameter_has_independent_owner(&self, index: usize) -> bool {
         self.param_is_callee_owned(index)
             || (!self.by_ref_return
                 && self.return_type.codegen_repr() == PhpType::Mixed
                 && self.params.get(index).is_some_and(|(_, php_type)| {
-                    php_type.codegen_repr() == PhpType::Callable
+                    matches!(
+                        php_type.codegen_repr(),
+                        PhpType::Callable | PhpType::Object(_)
+                    )
                 }))
             || (!self.by_ref_return
                 && self.ref_params.get(index).copied().unwrap_or(false)
@@ -269,6 +272,23 @@ mod tests {
         assert!(sig.returned_parameter_has_independent_owner(0));
         assert!(!sig.returned_parameter_has_independent_owner(1));
         sig.return_type = PhpType::Callable;
+        assert!(!sig.returned_parameter_has_independent_owner(0));
+        sig.return_type = PhpType::Mixed;
+        sig.by_ref_return = true;
+        assert!(!sig.returned_parameter_has_independent_owner(0));
+    }
+
+    /// Mixed object returns retain the payload in a fresh box; raw and reference returns can transfer.
+    #[test]
+    fn boxed_object_returns_do_not_transfer_the_argument_payload() {
+        let mut sig = variadic_sig(vec![(
+            "object".to_string(),
+            PhpType::Object("Owner".to_string()),
+        )]);
+        sig.variadic = None;
+        assert!(sig.returned_parameter_has_independent_owner(0));
+        assert!(!sig.returned_parameter_has_independent_owner(1));
+        sig.return_type = PhpType::Object("Owner".to_string());
         assert!(!sig.returned_parameter_has_independent_owner(0));
         sig.return_type = PhpType::Mixed;
         sig.by_ref_return = true;

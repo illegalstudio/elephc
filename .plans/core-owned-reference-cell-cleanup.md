@@ -2105,3 +2105,18 @@ Add negative cases for concrete unsupported storage and retain the widened
 receiver runtime and five-target EIR regressions. Cargo check --tests, exporter
 build, generated documentation refresh, builtin/site/target-boundary audits and
 diff hygiene pass. Generated files are unchanged. No local tests execute.
+
+### Retire object arguments independently of boxed Mixed returns
+
+Curl CI leaks one complete handle graph per request after a multi-argument
+getinfo call. Source evaluation transfers a retained object to the final call,
+but an unknown return-alias summary suppresses cleanup even though the Mixed
+return owns a separate payload reference. Extend the existing callable-to-Mixed
+independence rule to concrete objects, without changing raw or by-reference
+returns or broadening other parameter representations.
+
+Native Sol traced the shared call-boundary cause and implemented the fix. Add
+signature checks, five-target EIR owner-retirement assertions and a heap-debug
+regression proving returned objects survive the caller's original unset. Cargo
+check --tests and diff hygiene pass. No local tests execute; the existing Curl
+matrix remains the runtime validation gate.

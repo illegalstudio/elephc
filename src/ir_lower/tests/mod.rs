@@ -30,6 +30,7 @@ mod effects;
 mod eval_ownership;
 mod exhaustive;
 mod ownership;
+mod object_mixed_return_owners;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
