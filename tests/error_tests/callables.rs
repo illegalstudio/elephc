@@ -9,6 +9,34 @@
 
 use super::*;
 
+/// Final-pass callable argument errors remain fatal even beside calls whose metadata stabilized.
+#[test]
+fn test_error_callable_property_metadata_does_not_hide_invalid_arguments() {
+    for source in [
+        r#"<?php
+class CallableParameterGuard {
+    public $callback;
+    public function install(): void { $this->callback = static fn(): int => 1; }
+    public function accept(callable $callback): void {}
+}
+$guard = new CallableParameterGuard();
+$guard->install();
+$guard->accept($guard->callback);
+$guard->accept(null);
+"#,
+        r#"<?php
+class CallableParameterGuard {
+    public $callback;
+    public function accept(callable $callback): void {}
+}
+$guard = new CallableParameterGuard();
+$guard->accept($guard->callback);
+"#,
+    ] {
+        expect_error(source, "parameter $callback expects Callable, got Void");
+    }
+}
+
 /// Declaration defaults do not permit explicit literal arguments to bind by reference.
 #[test]
 fn test_error_named_reference_defaults_still_reject_supplied_literals() {

@@ -1609,3 +1609,20 @@ The preceding run was cancelled after the push; its completed shards also expose
 a callable-property checker failure (an untyped property written inside a method
 is still read as Void). That and the previously recorded failures remain separate
 work. Runtime confirmation of the reference-loop fix is pending the next CI head.
+
+### Discard superseded callable parameter diagnostics
+
+The callable-property regression is rejected by an initial-pass diagnostic rather
+than missing final metadata. Method-body checking refines the property from Void
+to Callable, and the final main pass accepts the copied property at the callable
+parameter. The driver nevertheless retains the initial method-parameter mismatch
+because its provisional-diagnostic allowlist covers direct invocation but not
+binding a callable parameter. Permit that specific Void-to-Callable diagnostic to
+expire only when the final statement has no errors. Do not change parameter type
+compatibility, property storage, or final-pass diagnostics.
+
+Keep the original failing heap/tagged property fixture unchanged. Add instance and
+static method/property parameter-binding coverage, plus negative fixtures proving
+explicit null and never-initialized property arguments remain errors. Cargo build,
+test compilation and diff hygiene pass. No tests execute locally. CI on 6a86ca25f
+is still running; this checker correction and all new fixtures await CI validation.
