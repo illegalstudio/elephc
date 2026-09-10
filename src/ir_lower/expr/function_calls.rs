@@ -56,9 +56,6 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
         return value;
     }
-    if let Some(value) = lower_static_array_reduce(ctx, canonical, args, expr) {
-        return value;
-    }
     if let Some(value) = lower_static_array_walk(ctx, canonical, args, expr) {
         return value;
     }

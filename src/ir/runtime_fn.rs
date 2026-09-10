@@ -1307,13 +1307,15 @@ impl RuntimeFnId {
             | RuntimeFnId::ArrayFilter
             | RuntimeFnId::ArrayFind
             | RuntimeFnId::ArrayMap
-            | RuntimeFnId::ArrayReduce
             | RuntimeFnId::ArrayWalk
             | RuntimeFnId::ArrayWalkRecursive
             | RuntimeFnId::ArrayUdiff
             | RuntimeFnId::ArrayUintersect => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
+            // Replacing an arbitrary carry can invoke a destructor independently of the
+            // selected callback's effect summary. Validation and cleanup may also throw.
+            RuntimeFnId::ArrayReduce => E::all(),
             RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
             ),
@@ -1852,6 +1854,7 @@ impl RuntimeFnId {
                 // the box is independently owned and never aliases the receiving array.
                 | RuntimeFnId::ArrayPtrKey
                 | RuntimeFnId::ArrayPtrValue
+                | RuntimeFnId::ArrayReduce
                 | RuntimeFnId::ArrayReplace
                 | RuntimeFnId::ArrayReplaceRecursive
                 | RuntimeFnId::ArrayReverse

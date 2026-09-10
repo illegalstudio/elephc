@@ -16583,7 +16583,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -16604,7 +16604,7 @@
       "target_support_kind": "all",
       "validation": {
         "kind": "checker_hook",
-        "lazy": false
+        "lazy": true
       }
     },
     "sig": {
@@ -16631,7 +16631,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,

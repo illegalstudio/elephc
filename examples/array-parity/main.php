@@ -67,6 +67,13 @@ function labelEvents(array $events): array {
 }
 echo implode(", ", labelEvents([10 => "opened", "note" => "reviewed"])), "\n";
 
+// Reduction keeps a string carry through a declared PHP array boundary.
+function eventSummary(array $events): mixed {
+    return array_reduce($events, fn($summary, $event) => $summary . " " . $event, "events:");
+}
+echo eventSummary([10 => "opened", "note" => "reviewed"]), "\n";
+echo eventSummary([]), "\n";
+
 // --- keep captured formatters in a returned PHP array ---
 function eventFormatters(string $prefix): array {
     return [function(string $event) use ($prefix): string { return $prefix . $event; }];

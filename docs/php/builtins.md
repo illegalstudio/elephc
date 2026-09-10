@@ -42,7 +42,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`array_product()`](./builtins/array/array_product.md) | `(array $array): int` | `int` | ✓ | ✓ |
 | [`array_push()`](./builtins/array/array_push.md) | `(array $array, ...$values): void` | `void` | ✓ | ✓ |
 | [`array_rand()`](./builtins/array/array_rand.md) | `(array $array): int` | `int` | ✓ | ✓ |
-| [`array_reduce()`](./builtins/array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): int` | `int` | ✓ | ✓ |
+| [`array_reduce()`](./builtins/array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): mixed` | `mixed` | ✓ | ✓ |
 | [`array_replace()`](./builtins/array/array_replace.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | — |
 | [`array_replace_recursive()`](./builtins/array/array_replace_recursive.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | — |
 | [`array_reverse()`](./builtins/array/array_reverse.md) | `(array $array, bool $preserve_keys = false): array` | `array` | ✓ | ✓ |

@@ -77,6 +77,7 @@ mod random_u32;
 mod random_uniform;
 mod random_uniform64;
 mod array_reduce;
+mod array_reduce_boxed;
 mod array_reduce_str;
 mod array_replace;
 mod array_replace_recursive;
@@ -333,6 +334,7 @@ pub use random_uniform::emit_random_uniform;
 pub use random_uniform64::{emit_random_u64, emit_random_uniform64};
 /// Emit uniform random integer helper.
 pub use array_reduce::emit_array_reduce;
+pub use array_reduce_boxed::emit_array_reduce_boxed;
 /// Emit string-array reduce helper.
 pub use array_reduce_str::emit_array_reduce_str;
 /// Emit array reduce helper.

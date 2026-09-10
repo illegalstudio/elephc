@@ -39,6 +39,7 @@ mod basic;
 mod boxed_map_callback;
 mod boxed_merge;
 mod boxed_membership;
+mod boxed_reduce;
 mod boxed_reverse;
 mod boxed_mutation;
 mod boxed_unshift;
@@ -95,10 +96,11 @@ pub(crate) use map_dispatch::{
     lower_array_map,
 };
 pub(crate) use reduce_sets::{
-    lower_array_reduce, lower_array_walk, lower_array_merge, lower_array_diff,
+    lower_array_walk, lower_array_merge, lower_array_diff,
     lower_array_intersect, lower_array_diff_key, lower_array_intersect_key, lower_array_slice,
     lower_array_splice,
 };
+pub(crate) use boxed_reduce::lower_array_reduce;
 pub(crate) use misc_dispatch::{
     lower_array_values, lower_array_keys, lower_array_rand, lower_range,
     lower_array_pop, lower_array_shift, lower_array_unshift, lower_sort,
@@ -171,38 +173,6 @@ fn array_count_values_element_tag(source_ty: &PhpType) -> Result<u8> {
             "array_count_values for PHP type {:?}",
             other
         ))),
-    }
-}
-
-/// Returns the indexed-array element type accepted by the `array_reduce()` runtimes.
-///
-/// String elements are allowed because `__rt_array_reduce_str` reads the 16-byte
-/// `[ptr][len]` payload slots and hands the callback a pointer/length pair; every
-/// other accepted element kind is a single 8-byte payload consumed by
-/// `__rt_array_reduce`. The accumulator is validated separately and must still fit
-/// in one integer register, so no intermediate string ever needs persisting.
-fn array_reduce_callback_array_element_type(ty: PhpType) -> Result<PhpType> {
-    match ty.codegen_repr() {
-        PhpType::Array(elem) => {
-            let elem = elem.codegen_repr();
-            if elem == PhpType::Str {
-                return Ok(elem);
-            }
-            eight_byte_callback_value_type(elem, "array_reduce")
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "array_reduce for PHP type {:?}",
-            other
-        ))),
-    }
-}
-
-/// Returns the `array_reduce()` runtime helper matching the source element width.
-fn array_reduce_runtime_label(elem_ty: &PhpType) -> &'static str {
-    if elem_ty.codegen_repr() == PhpType::Str {
-        "__rt_array_reduce_str"
-    } else {
-        "__rt_array_reduce"
     }
 }
 

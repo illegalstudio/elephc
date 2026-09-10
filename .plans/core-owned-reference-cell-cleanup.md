@@ -1281,3 +1281,38 @@ CI on bc9041f15 now passes the Magician unit suite with 1306 tests, including
 the corrected operand-replacement fixture (job 102768827396). Builtins docs
 also pass there. Its executable matrix is still running, so these results do
 not certify the new write-owner or static-string fixes.
+
+### Boxed reduction with dynamic carries
+
+The existing empty returned-string-array reduction fails before execution because
+the old backend only accepts concrete indexed arrays. Its checker also forces an
+integer result and three arguments, despite the catalog's optional null initial.
+Replace that entry with a uniform boxed reducer: validate the actual source layout,
+resolve and own the callback descriptor, retain a source payload snapshot, and walk
+packed or associative entries through the shared logical iterator. Each iteration
+owns its Mixed carry and input and transfers its argument array to the existing
+consuming descriptor invocation boundary. Unbox and rebox borrowed stack triples
+instead of cloning them, preserving string high words and canonical resources.
+
+Install a native exception boundary before acquiring snapshot or carry ownership.
+Zero owner slots before releases, retain the next carry while retiring the old one,
+and clean both when a destructor throws. Model arbitrary carry destruction as an
+observable effect even when the selected callback itself is pure. Remove the
+separate literal reducer so direct, named and callable paths do not disagree about
+Mixed carries, normalization, ownership or default arguments.
+
+Add all-target EIR and emitter coverage plus executable regressions for empty
+initial values, dynamic carry types, packed and associative layouts, callback shapes,
+CUF/FCC calls, source mutation, resources and exceptional cleanup. Keep the original
+empty string-array regression unchanged. Update arity errors, the array example and
+the generated builtin signature and ownership metadata through the builtin-doc skill.
+Build, test compilation, docs and EIR audits, assembly-comment checks and diff hygiene
+pass. No local tests are executed; runtime results remain pending CI.
+
+CI on 1ea156162 now completes x86_64 codegen shard 11 with 537 of 538 tests passing
+(job 102771946174). Its only failure is the existing native Throwable wrapped by
+eval leak, so the original static-descriptor/COW map regression no longer fails.
+Shard 2 still rejects the declared PHP array passed to array_sum. Other callback,
+sorting and ownership failures remain open; this is not a green-CI claim. A fresh
+fetch finds origin/main unchanged at c91beb3434681294e0a1dd29ef92f42f3365923a,
+already an ancestor of this branch, so no further rebase is needed here.

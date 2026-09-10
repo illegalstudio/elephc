@@ -3,6 +3,7 @@
 //!
 //! Called from:
 //! - `super::callback_builtins::lower_in_array_with_mode()`.
+//! - `super::boxed_reduce::lower_array_reduce()` for borrowed argument cells.
 //!
 //! Key details:
 //! - Stack cells borrow EIR operands and never acquire or release their payloads.
@@ -61,7 +62,7 @@ pub(super) fn lower_dynamic_membership(
 }
 
 /// Writes a borrowed tag/payload triple without allocating a managed Mixed cell.
-fn store_borrowed_cell(ctx: &mut FunctionContext<'_>, value: ValueId, offset: usize) -> Result<()> {
+pub(super) fn store_borrowed_cell(ctx: &mut FunctionContext<'_>, value: ValueId, offset: usize) -> Result<()> {
     let ty = ctx.value_php_type(value)?.codegen_repr();
     ctx.load_value_to_result(value)?;
     let result = abi::int_result_reg(ctx.emitter);
@@ -88,7 +89,7 @@ fn store_borrowed_cell(ctx: &mut FunctionContext<'_>, value: ValueId, offset: us
     }
     abi::emit_load_int_immediate(ctx.emitter, tag, crate::codegen::runtime_value_tag(&ty) as i64);
     if ty == PhpType::Iterable || matches!(&ty, PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed) {
-        let ready = ctx.next_label("in_array_borrowed_tag_ready");
+        let ready = ctx.next_label("borrowed_array_tag_ready");
         abi::emit_load_int_immediate(ctx.emitter, tag, 4);
         crate::codegen_support::sentinels::emit_branch_if_null_container(
             ctx.emitter, result, abi::tertiary_scratch_reg(ctx.emitter), &ready,

@@ -567,12 +567,16 @@ fn test_error_array_filter_wrong_args() {
     );
 }
 
-/// Verifies that error array reduce wrong args.
+/// Reduction requires a callback but its initial value is optional.
 #[test]
 fn test_error_array_reduce_wrong_args() {
     expect_error(
-        r#"<?php array_reduce([], "fn");"#,
-        "array_reduce() takes exactly 3 arguments",
+        r#"<?php array_reduce([]);"#,
+        "array_reduce() takes 2 or 3 arguments",
+    );
+    expect_error(
+        r#"<?php array_reduce([], "fn", null, 1);"#,
+        "array_reduce() takes 2 or 3 arguments",
     );
 }
 

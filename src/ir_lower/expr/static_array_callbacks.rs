@@ -1,5 +1,5 @@
 //! Purpose:
-//! Static array callback lowering for map, reduce, and walk.
+//! Static array callback lowering for map and walk.
 //!
 //! Called from:
 //! - `crate::ir_lower::expr`.
@@ -50,47 +50,6 @@ pub(super) fn lower_static_array_map(
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_type), value, item.span);
     }
     Some(array)
-}
-
-/// Lowers `array_reduce()` for a static callback and immediate indexed-array literal.
-pub(super) fn lower_static_array_reduce(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    args: &[Expr],
-    expr: &Expr,
-) -> Option<LoweredValue> {
-    if php_symbol_key(name.trim_start_matches('\\')) != "array_reduce" || args.len() != 3 {
-        return None;
-    }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
-        return None;
-    }
-    if matches!(args[1].kind, ExprKind::Variable(_)) {
-        return None;
-    }
-    let ExprKind::ArrayLiteral(items) = &args[0].kind else {
-        return None;
-    };
-    if !items.iter().all(static_callback_array_item_can_inline) {
-        return None;
-    }
-    let callback = static_call_user_func_callback(ctx, &args[1])?;
-    let result_type = fallback_expr_type(expr);
-    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
-    let initial = lower_expr(ctx, &args[2]);
-    store_value_into_temp(ctx, &temp_name, result_type.clone(), initial, expr.span);
-    for item in items {
-        let carry = ctx.load_local(&temp_name, Some(expr.span));
-        let item_value = lower_expr(ctx, item);
-        let reduced = lower_static_callable_value_call(
-            ctx,
-            callback.clone(),
-            vec![carry.value, item_value.value],
-            expr,
-        )?;
-        store_value_into_temp(ctx, &temp_name, result_type.clone(), reduced, expr.span);
-    }
-    Some(take_owned_temp(ctx, &temp_name, expr.span))
 }
 
 /// Lowers `array_walk()` for a static callback and immediate indexed-array literal.

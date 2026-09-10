@@ -1,5 +1,5 @@
 //! Purpose:
-//! Array reduce, walk, merge, set operations, slice, and splice entry points.
+//! Array walk, merge, set operations, slice, and splice entry points.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::arrays`.
@@ -9,91 +9,6 @@
 
 use super::*;
 use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
-
-/// Lowers `array_reduce()` through the callback-driven runtime helper.
-pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_reduce", 3)?;
-    let array = expect_operand(inst, 0)?;
-    let callback = expect_operand(inst, 1)?;
-    let initial = expect_operand(inst, 2)?;
-    let elem_ty = array_reduce_callback_array_element_type(ctx.value_php_type(array)?)?;
-    let initial_ty =
-        eight_byte_callback_value_type(ctx.value_php_type(initial)?, "array_reduce initial")?;
-    let reduce_helper = array_reduce_runtime_label(&elem_ty);
-    match ctx.value_php_type(callback)?.codegen_repr() {
-        PhpType::Callable => {
-            lower_descriptor_callback_runtime(
-                ctx,
-                callback,
-                vec![initial_ty.clone(), elem_ty.clone()],
-                PhpType::Int,
-                |ctx, wrapper_label, env_bytes| {
-                    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-                    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-                    let initial_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-                    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-                    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
-                    ctx.load_value_to_reg(array, array_arg_reg)?;
-                    ctx.load_value_to_reg(initial, initial_arg_reg)?;
-                    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, reduce_helper);
-                    Ok(())
-                },
-            )?;
-            box_int_result_for_mixed_builtin(ctx, inst);
-            store_if_result(ctx, inst)?;
-            return Ok(());
-        }
-        PhpType::Str => {
-            lower_runtime_string_descriptor_callback(
-                ctx,
-                callback,
-                Some(&PhpType::Array(Box::new(elem_ty.clone()))),
-                vec![initial_ty.clone(), elem_ty.clone()],
-                PhpType::Int,
-                super::super::instruction_strict_php_profile(inst),
-                "array_reduce",
-                |ctx, wrapper_label, env_bytes| {
-                    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-                    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-                    let initial_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-                    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-                    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
-                    ctx.load_value_to_reg(array, array_arg_reg)?;
-                    ctx.load_value_to_reg(initial, initial_arg_reg)?;
-                    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, reduce_helper);
-                    Ok(())
-                },
-            )?;
-            box_int_result_for_mixed_builtin(ctx, inst);
-            store_if_result(ctx, inst)?;
-            return Ok(());
-        }
-        _ => {}
-    }
-    let callback_binding = static_sort_callback_binding(
-        ctx,
-        callback,
-        "array_reduce callback",
-        Some(&[initial_ty.clone(), elem_ty]),
-    )?;
-    let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
-    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let initial_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
-    ctx.load_value_to_reg(array, array_arg_reg)?;
-    ctx.load_value_to_reg(initial, initial_arg_reg)?;
-    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(ctx.emitter, reduce_helper);
-    if env_bytes != 0 {
-        abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
-    }
-    box_int_result_for_mixed_builtin(ctx, inst);
-    store_if_result(ctx, inst)
-}
 
 /// Lowers `array_walk()` through the callback-driven runtime helper.
 pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {

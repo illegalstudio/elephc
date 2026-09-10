@@ -8,7 +8,7 @@ sidebar:
 ## array_reduce()
 
 ```php
-function array_reduce(array $array, callable $callback, mixed $initial = null): int
+function array_reduce(array $array, callable $callback, mixed $initial = null): mixed
 ```
 
 Iteratively reduces an array to a single value using a callback function.
@@ -18,7 +18,7 @@ Iteratively reduces an array to a single value using a callback function.
 - `$callback` (`callable`)
 - `$initial` (`mixed`), default `null`, optional
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 

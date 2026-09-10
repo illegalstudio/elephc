@@ -239,18 +239,6 @@ pub(super) fn eight_byte_callback_value_type(ty: PhpType, name: &str) -> Result<
     }
 }
 
-/// Boxes the integer runtime result when the EIR builtin result slot is Mixed-like.
-pub(super) fn box_int_result_for_mixed_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
-    if inst.result.is_some()
-        && matches!(
-            inst.result_php_type.codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
-        )
-    {
-        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
-    }
-}
-
 /// Stores the void sentinel, boxing it when the EIR builtin result slot is Mixed-like.
 pub(super) fn store_void_builtin_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     abi::emit_load_int_immediate(
