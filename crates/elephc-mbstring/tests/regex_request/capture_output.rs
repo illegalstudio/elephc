@@ -2,7 +2,7 @@
 //! Replays PHP reference-initialization callbacks around the shared mb_ereg/mb_eregi engine.
 //!
 //! Called from:
-//! - The regex_request integration binary with the managed Oniguruma provider.
+//! - The regex_request integration test binary with the managed Oniguruma provider.
 //!
 //! Key details:
 //! - The modeled host retains array construction identity across destructor-created aliases.
@@ -97,7 +97,7 @@ fn replay(case: &Value) -> Value {
 #[ignore = "requires managed Oniguruma archives or pinned 6.9.10 native development files"]
 fn regex_capture_output_callbacks_match_php() {
     assert!(unsafe { install_provider(regex_provider::provider()) });
-    let reader = flate2::read::GzDecoder::new(include_bytes!("fixtures/regex_output.jsonl.gz").as_slice());
+    let reader = flate2::read::GzDecoder::new(include_bytes!("../fixtures/regex_output.jsonl.gz").as_slice());
     let mut count = 0;
     for line in BufReader::new(reader).lines() {
         let case: Value = serde_json::from_str(&line.unwrap()).unwrap();

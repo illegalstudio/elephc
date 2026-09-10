@@ -10,7 +10,7 @@
 
 #[path = "support/regex_provider.rs"]
 mod regex_provider;
-#[path = "regex_capture_output.rs"]
+#[path = "regex_request/capture_output.rs"]
 mod capture_output;
 #[path = "regex_request/replace_callback.rs"]
 mod replace_callback;

@@ -55,8 +55,10 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_ob_pop_native");                             // consume the descriptor through its typed release operation
     abi::emit_symbol_address(emitter, "x13", "__rt_ob_eval_trampoline");
     emitter.instruction("cmp x12, x13");                                        // eval handlers own a registry identity
-    emitter.instruction("b.eq __rt_ob_release_eval_handler");                   // detach the registration and release its callback outside the registry lock
+    emitter.instruction("b.eq __rt_ob_pop_eval");                               // keep the conditional transfer inside the current Mach-O atom
     emitter.instruction("ret");                                                 // the default handler owns no callback
+    emitter.label("__rt_ob_pop_eval");
+    emitter.instruction("b __rt_ob_release_eval_handler");                      // detach the registration and release its callback outside the registry lock
     emitter.label("__rt_ob_pop_native");
     emitter.instruction("b __rt_callable_descriptor_release");                  // propagate destructor exceptions only after buffer cleanup has completed
     emitter.label("__rt_ob_pop_empty");
