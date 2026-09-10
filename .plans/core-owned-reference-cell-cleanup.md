@@ -1187,3 +1187,24 @@ Added focused scan and round-trip regressions, plus transcription coverage.
 Build and test compilation pass, and the builtin-doc skill regeneration and
 audits pass without generated-file changes. No tests ran locally. The remote
 parity gates and the remaining ownership failures still need CI validation.
+
+### Shared-runtime eval builtin argument leases
+
+The direct registry fast path evaluated shared-runtime arguments with eval_expr
+and returned without releasing them. The parameter-shadow fixture calls
+array_key_exists with a temporary string key, accounting for its remaining
+Mixed cell and string allocation (80 bytes on Linux x86_64). Native parameter
+cleanup and the consuming array setter were not the missing retirement sites.
+
+Use the existing operand-lease scope for shared-runtime direct calls. Retain
+borrowed inputs before later arguments can replace storage, release all inputs
+on success and failure, and reuse the evaluated-value dispatcher for capability
+or arity adapters instead of evaluating expressions twice. Borrowed results gain
+their own lease before argument cleanup; primary failures remain authoritative.
+
+Added owner-count coverage for nested calls, borrowed and overwritten locals,
+the intval base adapter, later-argument failures, runtime failures and cleanup
+exceptions. Added repeated native heap coverage through opaque eval. Build and
+test compilation and builtin-doc regeneration/audits pass without generated
+changes. No tests ran locally; the original parameter-shadow fixture remains
+unchanged and its clean-heap result is still pending CI.

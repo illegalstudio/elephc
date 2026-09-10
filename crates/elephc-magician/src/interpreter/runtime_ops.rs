@@ -39,6 +39,9 @@ pub trait RuntimeValueOps {
     }
 
     /// Calls a typed boxed-cell runtime builtin when this implementation supports it.
+    /// Arguments are borrowed for the call. A successful result owns an independent
+    /// lease, or carries borrowed provenance so its caller can retain it before cleanup.
+    /// Returning `None` declines dispatch without consuming any argument.
     ///
     /// Test and embedding implementations inherit this adapter over the existing
     /// value-operation contract. The generated-runtime adapter overrides it with

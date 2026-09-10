@@ -10,6 +10,27 @@
 
 use crate::support::*;
 
+/// Shared-runtime builtin inputs have one call lease, including nested calls and overwritten locals.
+#[test]
+fn test_core_eval_shared_runtime_builtins_retire_argument_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function sharedRuntimeOperandOwners(string $source): void { eval($source); }
+$source = '$key = "held";
+$items = ["held" => 1];
+echo array_key_exists("missing", $items) ? "bad:" : "missing:";
+echo array_key_exists($key, $items), ":";
+echo strrev(strrev("owned")), ":";
+echo intval("17"), ":", round(2.6), ":";
+echo array_key_exists($key, ($key = [])) ? "bad|" : "stable|";
+unset($key, $items); // ' . $argc;
+for ($i = 0; $i < 3; $i++) { sharedRuntimeOperandOwners($source); }
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "missing:1:owned:17:3:stable|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Positional strlen releases extracted strings and agrees with named and callable argument owners.
 #[test]
 fn test_core_eval_strlen_releases_extracted_and_callable_string_arguments() {
