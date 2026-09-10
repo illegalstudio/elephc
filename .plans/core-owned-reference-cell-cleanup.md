@@ -1096,3 +1096,24 @@ fixture. Include only user assembly in their failure diagnostics so the next
 remote run identifies the remaining allocation and retirement paths. Preserve
 all existing output and clean-heap assertions; this is instrumentation, not a
 claim that either remaining leak is fixed.
+
+### Completed-array unserialize references
+
+The recursive decoder reserved reference indices for arrays but left their
+registry slots empty. A later R reference therefore returned a failed value,
+including the existing hydration-data regression that printed kept| instead
+of kept|kept. Publish completed array boxes with a parser-context lease, using
+the existing depth-aware deferred-owner list so nested decoders and discarded
+or replaced hydration data cannot invalidate the registry pointer.
+
+Replace the hand-copied reference box with the shared Mixed clone helper, which
+retains array payloads as well as objects. Keep lowercase object-identity
+references restricted to objects. This change covers later reads of completed
+arrays, not reconstruction of recursive arrays or full writable-reference parity.
+
+Added all-target publication/ownership gates and heap fixtures for a replaced
+duplicate key and an invalid object-identity target. The original hydration
+regression remains unchanged. Build and test compilation pass; executable
+validation remains delegated to CI, with no local test execution.
+The builtin-doc generation and audits pass without generated-file changes;
+assembly-comment alignment and git diff hygiene also pass.

@@ -10,6 +10,35 @@
 
 use crate::support::*;
 
+/// A later array reference survives replacement of the earlier key that originally owned its box.
+#[test]
+fn test_unserialize_completed_array_reference_survives_duplicate_key_replacement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    $value = unserialize('a:3:{i:0;a:1:{s:4:"name";s:4:"kept";}i:0;i:5;i:1;R:2;}');
+    echo $value[0], ":", $value[1]["name"], "|";
+    unset($value);
+}
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "5:kept|5:kept|5:kept|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Publishing array targets must not allow lowercase object-identity references to read them.
+#[test]
+fn test_unserialize_completed_array_rejects_object_identity_reference() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$value = @unserialize('a:2:{i:0;a:0:{}i:1;r:2;}');
+var_dump($value);
+unset($value);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Untyped user hooks share the boxed signature for explicit method calls and decoder invocation.
 #[test]
 fn test_unserialize_untyped_hook_matches_direct_call_array_storage() {

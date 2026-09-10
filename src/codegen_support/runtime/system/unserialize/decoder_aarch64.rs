@@ -348,6 +348,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the hash pointer
     emitter.instruction("str x9, [x0, #8]");                                    // store the hash pointer (ownership transferred, no incref)
     emitter.instruction("str xzr, [x0, #16]");                                  // clear the high payload word
+    emitter.instruction("ldr x1, [sp, #88]");                                   // pass this array's reserved zero-based index beside its box
+    emitter.instruction("bl __rt_unserialize_register_array");                  // retain a context lease for references after hydration
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload position (at the closing '}')
     emitter.instruction("add x1, x1, #1");                                      // newpos skips the '}'
     emitter.instruction("b __rt_unser_at_ret");                                 // return the box and new position
@@ -609,10 +611,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // non-zero failure status
     emitter.syscall(1);                                                          // terminate the hostile parse immediately
 
-    // -- back-reference: r:N; / R:N; -> a fresh box aliasing the Nth parsed value.
-    //    N is 1-based (PHP's value index); objects are retained so refcounts stay
-    //    balanced. An out-of-range or never-registered index yields null. --
+    // Back-references clone a registered value with its payload retain. Lowercase r
+    // accepts object identity only; uppercase R can also read a completed array.
     emitter.label("__rt_unser_at_ref");
+    emitter.instruction("str x9, [sp, #64]");                                   // preserve the reference marker across index parsing
     emitter.instruction("ldr x10, [sp, #0]");                                   // base
     emitter.instruction("ldr x11, [sp, #8]");                                   // position
     emitter.instruction("add x10, x10, x11");                                   // pointer to the leading 'r'/'R'
@@ -647,25 +649,15 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_values");
     emitter.instruction("ldr x13, [x9, x12, lsl #3]");                          // the registered value box (0 if none)
     emitter.instruction("cbz x13, __rt_unser_at_ref_fail");                     // reserved but unpublished registry slot → null
-    emitter.instruction("str x13, [sp, #64]");                                  // save the source box across the alloc
-    emitter.instruction("mov x0, #24");                                         // a fresh boxed Mixed cell
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate it
-    emitter.instruction("ldr x13, [sp, #64]");                                  // reload the source box
-    emitter.instruction("ldur x9, [x13, #-8]");                                 // source heap header
-    emitter.instruction("str x9, [x0, #-8]");                                   // copy the heap header
-    emitter.instruction("ldr x9, [x13]");                                       // source value tag
-    emitter.instruction("str x9, [x0]");                                        // copy the value tag
-    emitter.instruction("ldr x10, [x13, #8]");                                  // source low payload (object pointer)
-    emitter.instruction("str x10, [x0, #8]");                                   // copy the low payload
-    emitter.instruction("ldr x11, [x13, #16]");                                 // source high payload
-    emitter.instruction("str x11, [x0, #16]");                                  // copy the high payload
-    emitter.instruction("cmp x9, #6");                                          // does the alias point at an object?
-    emitter.instruction("b.ne __rt_unser_at_ref_boxed");                        // non-objects need no retain
-    emitter.instruction("str x0, [sp, #64]");                                   // save the fresh box across the retain
-    emitter.instruction("mov x0, x10");                                         // object pointer
-    emitter.instruction("bl __rt_incref");                                      // retain the shared object
-    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the fresh box
-    emitter.label("__rt_unser_at_ref_boxed");
+    emitter.instruction("ldr x10, [sp, #64]");                                  // recover the original reference marker
+    emitter.instruction("cmp x10, #114");                                       // lowercase r denotes object identity, not an array reference
+    emitter.instruction("b.ne __rt_unser_at_ref_clone");                        // uppercase R accepts any published value shape
+    emitter.instruction("ldr x10, [x13]");                                      // inspect the published value tag
+    emitter.instruction("cmp x10, #6");                                         // require an object for lowercase r
+    emitter.instruction("b.ne __rt_unser_at_ref_fail");                         // reject a non-object identity target
+    emitter.label("__rt_unser_at_ref_clone");
+    emitter.instruction("mov x0, x13");                                         // supply the borrowed registry cell to the shared clone helper
+    emitter.instruction("bl __rt_mixed_clone");                                 // detach a result box and retain its object or array payload
     emitter.instruction("ldr x1, [sp, #8]");                                    // newpos past the ';'
     emitter.instruction("b __rt_unser_at_ret");                                 // return the aliasing box
     emitter.label("__rt_unser_at_ref_fail");

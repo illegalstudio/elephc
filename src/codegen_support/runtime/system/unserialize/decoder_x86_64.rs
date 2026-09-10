@@ -329,6 +329,9 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax], 5");                              // value tag 5 = associative array (hash)
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the hash pointer (ownership transferred)
     emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // clear the high payload word
+    emitter.instruction("mov rdi, rax");                                        // pass the completed array box to registry publication
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 88]");                       // pass this array's reserved zero-based index
+    emitter.instruction("call __rt_unserialize_register_array");                // retain a context lease for references after hydration
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload position (at the closing '}')
     emitter.instruction("add rdx, 1");                                          // newpos skips the '}'
     emitter.instruction("jmp __rt_unser_at_ret");                               // return box and new position
@@ -593,9 +596,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 60");                                         // Linux exit syscall number
     emitter.instruction("syscall");                                             // terminate without returning to the overflowing caller
 
-    // -- back-reference: r:N; / R:N; -> a fresh box aliasing the Nth parsed value
-    //    (1-based); objects are retained. Out-of-range/unregistered index -> null. --
+    // Back-references clone a registered value with its payload retain. Lowercase r
+    // accepts object identity only; uppercase R can also read a completed array.
     emitter.label("__rt_unser_at_ref");
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // preserve the reference marker across index parsing
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // base
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // position
     emitter.instruction("add r10, r11");                                        // pointer to the leading 'r'/'R'
@@ -630,25 +634,13 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9 + r11*8]");                      // the registered value box (0 if none)
     emitter.instruction("test r9, r9");                                         // was this reserved registry slot left unpublished?
     emitter.instruction("jz __rt_unser_at_ref_fail");                           // → null
-    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // save the source box across the alloc
-    emitter.instruction("mov rax, 24");                                         // a fresh boxed Mixed cell
-    emitter.instruction("call __rt_heap_alloc");                                // allocate it
-    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the source box
-    emitter.instruction("mov r10, QWORD PTR [r9 - 8]");                         // source heap header
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // copy the heap header
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // source value tag
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // copy the value tag
-    emitter.instruction("mov r10, QWORD PTR [r9 + 8]");                         // source low payload (object pointer)
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // copy the low payload
-    emitter.instruction("mov r10, QWORD PTR [r9 + 16]");                        // source high payload
-    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // copy the high payload
-    emitter.instruction("cmp QWORD PTR [rax], 6");                              // does the alias point at an object?
-    emitter.instruction("jne __rt_unser_at_ref_boxed");                         // non-objects need no retain
-    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the fresh box across the retain
-    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // move the object pointer into incref's x86_64 input register
-    emitter.instruction("call __rt_incref");                                    // retain the shared object before the source box releases it
-    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the fresh box
-    emitter.label("__rt_unser_at_ref_boxed");
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 114");                       // lowercase r denotes object identity, not an array reference
+    emitter.instruction("jne __rt_unser_at_ref_clone");                         // uppercase R accepts any published value shape
+    emitter.instruction("cmp QWORD PTR [r9], 6");                               // require an object for lowercase r
+    emitter.instruction("jne __rt_unser_at_ref_fail");                          // reject a non-object identity target
+    emitter.label("__rt_unser_at_ref_clone");
+    emitter.instruction("mov rax, r9");                                         // supply the borrowed registry cell to the shared clone helper
+    emitter.instruction("call __rt_mixed_clone");                               // detach a result box and retain its object or array payload
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // newpos past the ';'
     emitter.instruction("jmp __rt_unser_at_ret");                               // return the aliasing box
     emitter.label("__rt_unser_at_ref_fail");
