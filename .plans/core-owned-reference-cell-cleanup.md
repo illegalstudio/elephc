@@ -1044,3 +1044,11 @@ rejections, boxed-map static-descriptor owners, eval exception transfers and
 eval parameter-shadow owners. Job 102742016924 also reports the escaping
 descriptor default reference capture returning 1:1 instead of 2:3, with six
 live blocks. None of these distinct failures is claimed fixed by the key root.
+
+### Escaping reference-capture isolation
+
+Attach user assembly to the failing descriptor-default capture fixture and add
+an explicit direct-reference control. Both require the closure's writes to use
+one mutable array cell, with unchanged value and heap assertions. These separate
+default-cell staging from reference capture and mutation after return. This is
+diagnostic coverage for the still-open 1:1 versus 2:3 regression, not its fix.

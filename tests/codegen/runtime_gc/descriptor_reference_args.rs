@@ -32,7 +32,7 @@ echo "done";
 /// A closure capturing an omitted reference keeps its cell alive after the invoker retires its lease.
 #[test]
 fn test_core_descriptor_reference_default_survives_escaping_capture() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 function descriptorCapture(array &$items = [], int $value = 0): callable {
     $items[] = $value;
     return function() use (&$items): int { $items[] = 7; return count($items); };
@@ -44,8 +44,28 @@ echo $callback(), ":", $callback();
 unset($callback);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "2:3", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(out.stdout, "2:3", "{}\nuser assembly:\n{}", out.stderr, assembly);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nuser assembly:\n{}", out.stderr, assembly);
+}
+
+/// Direct explicit reference arguments separate closure-cell mutation from descriptor default staging.
+#[test]
+fn test_core_direct_reference_capture_preserves_array_mutations() {
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+function directReferenceCapture(array &$items): callable {
+    $items[] = 3;
+    return function() use (&$items): int { $items[] = 7; return count($items); };
+}
+$items = [];
+$callback = directReferenceCapture($items);
+echo $callback(), ":", $callback(), ":", count($items);
+unset($callback, $items);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{}", out.stdout, out.stderr, assembly);
+    assert_eq!(out.stdout, "2:3:3", "{}\nuser assembly:\n{}", out.stderr, assembly);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nuser assembly:\n{}", out.stderr, assembly);
 }
 
 /// Native throws still release default reference cells and every value written into them.
