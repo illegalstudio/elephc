@@ -10,6 +10,63 @@
 
 use crate::support::*;
 
+/// Failed and matched native catch predicates release the temporary boxes used to query eval.
+#[test]
+fn test_core_eval_catch_predicate_boxes_release_mismatched_and_unbound_throwables() {
+    let source = r#"<?php
+function inspectEvalCatchPredicateOwners(string $source): void {
+    try { eval($source); }
+    catch (LogicException $wrong) { echo "wrong|"; }
+    catch (RuntimeException $right) { echo $right->getMessage(), "|"; unset($right); }
+    try { eval($source); }
+    catch (LogicException) { echo "wrong|"; }
+    catch (RuntimeException) { echo "unbound|"; }
+}
+$source = 'throw new RuntimeException("right"); // ' . $argc;
+for ($i = 0; $i < 3; $i++) { inspectEvalCatchPredicateOwners($source); }
+unset($source);
+"#;
+    let expected = "right|unbound|".repeat(3);
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
+/// Post-eval metadata queries release adapter boxes without consuming the caller's object owner.
+#[test]
+fn test_core_eval_metadata_queries_balance_native_and_borrowed_object_inputs() {
+    let source = r#"<?php
+class MetadataOwnerBase { public int $value = 7; public function method(): void {} }
+class MetadataOwnerChild extends MetadataOwnerBase { public function __destruct() { echo "D|"; } }
+function inspectEvalMetadataOwners(MetadataOwnerChild $object, string $source): void {
+    eval($source);
+    $target = get_parent_class($object);
+    echo $object instanceof MetadataOwnerBase ? "named:" : "wrong:";
+    echo $object instanceof $target ? "dynamic:" : "wrong:";
+    echo get_class($object), ":", $target, ":";
+    echo method_exists($object, "method"), ":", property_exists($object, "value"), ":";
+    echo is_callable([$object, "method"]), ":";
+    echo count(class_parents($object)), ":", count(class_implements($object)), ":", count(class_uses($object)), "|";
+}
+$source = 'return null; // ' . $argc;
+for ($i = 0; $i < 3; $i++) {
+    $object = new MetadataOwnerChild();
+    inspectEvalMetadataOwners($object, $source);
+    echo $object->value, "|";
+    unset($object);
+}
+unset($source);
+"#;
+    let expected = "named:dynamic:MetadataOwnerChild:MetadataOwnerBase:1:1:1:1:0:0|7|D|".repeat(3);
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
 /// A native exception thrown inside an eval catch must execute, and may be overridden by, finally.
 #[test]
 fn test_core_eval_finally_runs_after_native_throw_from_catch() {

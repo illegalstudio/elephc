@@ -1402,3 +1402,36 @@ test compilation, assembly-comment alignment and diff hygiene pass. No tests are
 executed locally. Exact-head CI on 2db3d0107 is still running and already reports
 the known declared-PHP-array callback failure; runtime confirmation of this new
 adapter fix remains pending its push.
+
+### Retire eval metadata operand adapters
+
+The native/eval Throwable leak is also visible in the failed CI assembly: native
+catch matching routes through lower_eval_object_is_a when an eval context exists.
+store_eval_object_operand boxes the raw CatchCurrent object and retains its payload,
+but the predicate discards that adapter without releasing it. The abandoned box
+keeps the exception and its message or previous chain alive after the catch owner
+is unset. This is separate from ownership transfer at the eval execution boundary.
+
+Retire only adapter boxes created for non-Mixed operands. Preserve C predicate or
+status results across cleanup; borrowed Mixed arguments keep their existing owner.
+Apply the same rule to named and dynamic relations, callable and member probes,
+class relations and class-name lookups. Cover both false and invalid-target exits,
+and release class-name inputs before interpreting the result status. These metadata
+operations do not invoke user code, so the original EIR payload owner remains live
+while its adapter is retired. Callable invocation adapters remain a separate audit.
+
+Add an all-target catch-predicate emitter gate, a repeated native heap/tagged test
+for mismatched and unbound catches, and a metadata-query fixture that keeps using
+the original object and checks destructor timing. Preserve the earlier failing
+native/eval exception regressions. Cargo build and test compilation pass, as do
+assembly-comment and diff checks. The full builtin-doc generation and audits pass
+without generated changes. No tests are run locally.
+
+Exact-head CI on 2db3d0107 now completes x86_64 codegen shards 2, 4, 10, 13 and 14
+successfully. These previously included aggregate typing and omitted-reduction
+failures. Other ownership and array callback/sorting failures remain, and the
+remaining jobs are still running. In particular, the named middle-reference-default
+fixture still leaks five blocks: constructor call sites conservatively select the
+persistent reference-cell fallback even for ordinary non-promoting constructors.
+That lifetime distinction needs a separate fix and must not be confused with the
+metadata adapters corrected here. CI confirmation of the new commits is pending.

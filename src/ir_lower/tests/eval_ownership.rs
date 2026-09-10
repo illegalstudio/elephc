@@ -10,6 +10,36 @@
 
 use crate::ir::{Immediate, Op, Ownership};
 
+/// Catch predicates retire their native-object adapter boxes before branching on every target.
+#[test]
+fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_on_all_targets() {
+    let source = r#"<?php
+function inspectCatchPredicateOwners(string $source): void {
+    try { eval($source); }
+    catch (LogicException $wrong) { echo "wrong"; }
+    catch (RuntimeException $right) { echo $right->getMessage(); }
+}
+inspectCatchPredicateOwners('throw new RuntimeException("right"); // ' . $argc);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let symbol = target.extern_symbol("__elephc_eval_object_is_a");
+        let mut probes = 0;
+        for path in asm.split(&format!("{symbol}\n")).skip(1) {
+            let restore = if name == "linux-x86_64" { "add rsp, 96" } else { "add sp, sp, #96" };
+            let cleanup = path.split_once(restore).expect("predicate scratch restoration").0;
+            assert!(cleanup.contains("retire temporary eval metadata operand box"), "{name}: {cleanup}");
+            assert!(cleanup.contains("__rt_decref_mixed"), "{name}: {cleanup}");
+            probes += 1;
+        }
+        assert!(probes >= 2, "{name}: both failed and matched catch predicates need coverage");
+    }
+}
+
 /// Every ABI publishes eval scope writes before propagating an exception, with bounded cleanup.
 #[test]
 fn eval_throw_writeback_is_bounded_before_unwinding_on_all_targets() {
