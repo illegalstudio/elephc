@@ -77,8 +77,9 @@ fn adopt(emitter: &mut Emitter) {
     } else {
         emitter.instruction("leave");                                           // restore the caller's stack and frame
     }
+    emitter.instruction("ret");                                                 // return after publishing the transferred owner
     emitter.label(&format!("{ADOPT}_done"));
-    emitter.instruction("ret");                                                 // return without releasing or cloning the adopted value
+    emitter.instruction("ret");                                                 // return without allocating for an absent owner
 }
 
 /// Releases all adopted roots while keeping PHP exceptions contained until the queue is empty.

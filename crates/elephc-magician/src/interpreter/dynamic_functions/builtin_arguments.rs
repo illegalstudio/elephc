@@ -47,7 +47,7 @@ pub(super) fn append_spread(
             evaluated.push(argument);
         } else {
             let value = values.copy_value(argument.value)?;
-            context.copy_array_element_aliases(argument.value, value);
+            context.copy_array_metadata(argument.value, value);
             owners.push(value);
             evaluated.push(EvaluatedCallArg { value, ref_target: None, ..argument });
         }

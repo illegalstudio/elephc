@@ -88,7 +88,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.bl_c("elephc_mbstring_call_v1");
     emitter.instruction("ldp x0, x1, [sp, #80]");                               // restore the argument array and supplied count after Rust returns
     emitter.instruction("bl __rt_mbstring_release_array_arguments");            // release array wire owners before diagnostics or exception construction
-    emitter.label("__rt_mbstring_status_diagnostics");
+    emitter.label_shared("__rt_mbstring_status_diagnostics");
     emitter.instruction("ldp x1, x2, [sp, #32]");                               // load complete diagnostic lines and their byte length
     emitter.instruction("cbz x2, __rt_mbstring_status_result");                 // skip diagnostic output when the bridge reported none
     emitter.instruction("bl __rt_diag_warning");                                // emit diagnostics with the runtime suppression policy
@@ -209,7 +209,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rsp + 80]");                       // restore the mutable argument array after Rust returns
     emitter.instruction("mov rsi, QWORD PTR [rsp + 88]");                       // restore the supplied argument count
     emitter.instruction("call __rt_mbstring_release_array_arguments");          // release array wire owners before diagnostics or exception construction
-    emitter.label("__rt_mbstring_status_diagnostics");
+    emitter.label_shared("__rt_mbstring_status_diagnostics");
     emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // load complete diagnostic lines
     emitter.instruction("mov rsi, QWORD PTR [rsp + 40]");                       // load their byte length
     emitter.instruction("test rsi, rsi");                                       // check whether the bridge reported diagnostics

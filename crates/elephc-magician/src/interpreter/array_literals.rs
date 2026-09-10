@@ -54,7 +54,7 @@ pub(super) fn eval_assoc_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.assoc_new(elements.len())?;
-    context.clear_array_element_aliases(array);
+    context.clear_array_metadata(array);
     let mut next_key = None;
     let mut operands = Vec::new();
     let result = (|| {

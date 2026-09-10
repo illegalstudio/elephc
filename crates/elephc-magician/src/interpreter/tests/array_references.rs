@@ -38,7 +38,7 @@ fn mbstring_array_reference_identity_and_late_reads() {
     assert!(owners.is_empty());
 }
 
-/// Copies reference bindings to a new box, replaces stale destination metadata, and preserves source reads.
+/// Copies array metadata to a new box and clears stale metadata on reused identities.
 #[test]
 fn mbstring_array_reference_value_copy_metadata() {
     let mut context = ElephcEvalContext::new();
@@ -55,8 +55,11 @@ fn mbstring_array_reference_value_copy_metadata() {
         scope: &mut scope, name: "value".to_string(),
     });
     context.bind_array_element_alias(target, stale.clone(), EvalReferenceTarget::Cell { cell: first });
-    context.copy_array_element_aliases(source, target);
+    context.set_array_cursor(source, EvalArrayCursor::Position(1));
+    context.set_array_cursor(target, EvalArrayCursor::Invalid);
+    context.copy_array_metadata(source, target);
     assert!(context.array_element_alias(target, &stale).is_none());
+    assert_eq!(context.array_cursor(target), EvalArrayCursor::Position(1));
     scope.set("value", later, ScopeCellOwnership::Borrowed);
     let mut owners = Vec::new();
     for token in [source, target] {
@@ -64,7 +67,16 @@ fn mbstring_array_reference_value_copy_metadata() {
         assert_eq!(values.get(read), FakeValue::String("after".into()));
         values.release(read).unwrap();
     }
-    context.copy_array_element_aliases(target, target);
+    context.copy_array_metadata(target, target);
     assert!(context.array_element_alias(target, &key).is_some());
+    assert_eq!(context.array_cursor(target), EvalArrayCursor::Position(1));
+    context.set_array_cursor(source, EvalArrayCursor::Position(0));
+    context.set_array_cursor(target, EvalArrayCursor::Invalid);
+    context.copy_array_metadata(source, target);
+    assert_eq!(context.array_cursor(target), EvalArrayCursor::Position(0));
+    context.set_array_cursor(target, EvalArrayCursor::Invalid);
+    context.clear_array_metadata(target);
+    assert!(context.array_element_alias(target, &key).is_none());
+    assert_eq!(context.array_cursor(target), EvalArrayCursor::Position(0));
     assert!(owners.is_empty());
 }

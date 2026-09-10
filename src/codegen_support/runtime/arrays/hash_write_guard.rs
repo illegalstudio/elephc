@@ -66,7 +66,7 @@ fn claim(emitter: &mut Emitter) {
     emitter.instruction(if arm { "b __rt_hash_write_guard_inspect" } else { "jmp __rt_hash_write_guard_inspect" }); // share key matching between claims and read-only inspections
     emitter.label_global("__rt_hash_write_guard_owns");
     emitter.instruction(if arm { "mov x12, #0" } else { "xor r9d, r9d" });      // inspect ownership without invalidating an unchanged slot
-    emitter.label("__rt_hash_write_guard_inspect");
+    emitter.label_shared("__rt_hash_write_guard_inspect");
     abi::emit_load_symbol_to_reg(emitter, if arm { "x9" } else { "r10" }, TOP, 0);
     emitter.instruction(if arm { "cmp x9, #0" } else { "test r10, r10" });      // ordinary writes usually have no active construction scopes
     emitter.instruction(if arm { "b.eq __rt_hash_write_guard_claim_ordinary" } else { "je __rt_hash_write_guard_claim_ordinary" }); // return an ordinary owner without allocating a frame
