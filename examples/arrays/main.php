@@ -37,6 +37,17 @@ echo "Sum: " . sum($numbers) . "\n";
 echo "array_sum: " . array_sum($numbers) . "\n";
 echo "array_product([2,3,4]): " . array_product([2, 3, 4]) . "\n";
 
+// Turn aggregate conversion warnings into exceptions while retaining source ownership.
+set_error_handler(function(int $level, string $message): bool {
+    throw new RuntimeException($message);
+});
+try {
+    array_sum([str_repeat("invalid", 3)]);
+} catch (RuntimeException $error) {
+    echo "Rejected non-numeric total\n";
+}
+restore_error_handler();
+
 $numbers[2] += 8;
 $numbers[3] >>= 1;
 echo "Adjusted slots: " . $numbers[2] . ", " . $numbers[3] . "\n";

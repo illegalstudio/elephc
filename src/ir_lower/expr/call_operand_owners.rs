@@ -10,7 +10,7 @@
 
 use super::*;
 
-/// Roots callback and XML-setter operands when the result cannot alias their ownership.
+/// Roots callback, aggregate-warning and XML-setter operands with independently owned results.
 pub(super) fn root_non_aliasing_callback_operands(
     ctx: &mut LoweringContext<'_, '_>,
     def: &crate::builtins::registry::BuiltinDef,
@@ -24,6 +24,10 @@ pub(super) fn root_non_aliasing_callback_operands(
         BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)
             | RuntimeCallTarget::ProfiledFunction { target, .. }) => {
             target.string_callback_operand_index().is_some()
+                // Aggregates enter user code through warning handlers rather than
+                // an explicit callback operand. Their internal snapshot does not
+                // own the original temporary passed by this PHP activation.
+                || matches!(target, crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct)
         }
         _ => matches!(
             def.spec.semantics.argument_lowering,

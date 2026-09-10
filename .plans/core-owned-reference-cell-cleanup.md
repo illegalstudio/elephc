@@ -1645,3 +1645,20 @@ test compilation with curl, generated-doc rendering and all required builtin
 audits pass. No tests run locally. This fixes the unsafe retry boundary and lost
 diagnostics; it does not claim that the CI process failure is resolved without a
 new exact-head run. The remaining array and eval ownership gates stay open.
+
+### Root aggregate inputs across implicit warning callbacks
+
+The aggregate runtime already releases its own snapshot and partial carry, but
+the caller roots operands only when a builtin has an explicit callback argument.
+ArraySum and ArrayProduct invoke user warning handlers implicitly. A throw skips
+the caller's ordinary release of a freshly returned input array, accounting for
+the unretired source owners in the aggregate exception fixture. Include these two
+typed runtime targets in the existing scoped operand-owner mechanism. Preserve
+borrowed local ownership and the independent-result restriction.
+
+Keep the original failing regression unchanged. Add same-frame destructor-order
+checks for direct, named, FCC and dynamic calls, repeated catches and a borrowed
+source control. Add a five-target EIR/emitter gate requiring balanced owner-ledger
+publication and retirement. Extend the array example with a throwing aggregate
+warning handler. Test compilation and diff hygiene pass; runtime validation stays
+with CI and no tests execute locally.

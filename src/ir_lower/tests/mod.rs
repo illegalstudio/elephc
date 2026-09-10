@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::codegen::platform::Target;
 use crate::ir::{print_module, Terminator};
 
+mod aggregate_operand_owners;
 mod arrays;
 mod array_reference_outputs;
 mod array_implode;

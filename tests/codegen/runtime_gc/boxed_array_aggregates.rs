@@ -135,6 +135,43 @@ echo "done";
 "#, "aggregate|aggregate|done");
 }
 
+/// Same-frame catches retire temporary sources first without consuming a separately owned source.
+#[test]
+fn test_core_boxed_array_aggregates_throwing_warning_source_lifetimes() {
+    assert_clean_aggregate(r#"<?php
+class AggregateSourceOwner {
+    public function __destruct() { echo "drop|"; }
+}
+function aggregateOwnedSource(): array {
+    return [str_repeat("bad", 8), new AggregateSourceOwner()];
+}
+function callAggregate(callable $callback, array $source): mixed {
+    return call_user_func($callback, $source);
+}
+set_error_handler(function(int $level, string $message): bool {
+    throw new RuntimeException("stop");
+});
+for ($iteration = 0; $iteration < 2; $iteration++) {
+    try { array_sum(aggregateOwnedSource()); }
+    catch (RuntimeException $error) { echo "sum|"; unset($error); }
+    try { array_product(array: aggregateOwnedSource()); }
+    catch (RuntimeException $error) { echo "product|"; unset($error); }
+}
+$callback = array_sum(...);
+try { $callback(aggregateOwnedSource()); }
+catch (RuntimeException $error) { echo "fcc|"; unset($error); }
+try { callAggregate(array_product(...), aggregateOwnedSource()); }
+catch (RuntimeException $error) { echo "dynamic|"; unset($error); }
+$source = aggregateOwnedSource();
+try { array_sum($source); }
+catch (RuntimeException $error) { echo count($source), "|"; unset($error); }
+echo "before|";
+unset($source, $callback);
+restore_error_handler();
+echo "done";
+"#, "drop|sum|drop|product|drop|sum|drop|product|drop|fcc|drop|dynamic|2|before|drop|done");
+}
+
 /// Discarded sums and products keep warning effects and reject non-array Mixed arguments.
 #[test]
 fn test_core_boxed_array_aggregates_discarded_calls_and_invalid_sources() {
