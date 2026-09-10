@@ -2080,6 +2080,19 @@ regression distinguishing slot retirement from transfer. Existing callback itera
 regressions remain the executable gate. Cargo check --tests, assembly-comment
 alignment and diff hygiene pass. No local tests execute.
 
+### Give the measured slow metadata fixture the existing eval budget
+
+The mangled-inventory GC fixture performs two complete Magician compile, link
+and run cycles. It reached the exact 60-second termination limit on both retries
+in two consecutive macOS CI runs, while both Linux targets passed. Apply the
+existing three-period eval budget to this exact test in default and CI profiles.
+Keep other GC tests and their termination limits unchanged. This is a bounded
+budget adjustment, not a claim that new CI has already ruled out a Darwin stall.
+
+Native Sol compared the current and previous CI logs without local execution.
+Validate TOML syntax and diff hygiene only; CI must confirm completion within the
+new limit. No local tests execute.
+
 ### Transfer Mixed-element array results across descriptor invocations
 
 The detached-capture descriptor route exposes a missing concrete Array(Mixed)

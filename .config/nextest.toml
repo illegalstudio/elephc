@@ -95,6 +95,17 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'test(/codegen::eval::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# This runtime-GC fixture performs two full Magician compile/link/run cycles.
+# It exceeded the 60s cap twice on macOS in consecutive CI runs while Linux
+# passed. Match the eval fixtures' budget without relaxing other GC tests.
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_mangled_inventory_releases_metadata_temporaries)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_mangled_inventory_releases_metadata_temporaries)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # This fixture compiles the web prelude together with native closures and opaque
 # eval handlers. Keep HTTP requests bounded in the fixture while allowing a cold
 # compiler/linker run to finish on shared macOS runners.
