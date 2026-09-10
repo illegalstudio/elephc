@@ -89,7 +89,7 @@ pub(super) fn root_user_call_operands(
 }
 
 /// Publishes a temporary owner in a frame slot and returns its stable invocation operand.
-pub(super) fn root_owned_call_operand(
+pub(crate) fn root_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
@@ -124,7 +124,7 @@ pub(super) fn register_owned_call_operand(
 }
 
 /// Clears a rooted operand before releasing it, including when its destructor throws.
-pub(super) fn retire_owned_call_operand(
+pub(crate) fn retire_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,
     slot: crate::ir::LocalSlotId,
     span: Span,

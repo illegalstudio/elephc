@@ -57,10 +57,10 @@ for ($i = 0; $i < 3; $i++) {
     unset($mapped, $callback);
 }
 "#;
-    let out = compile_and_run_with_heap_debug(source);
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "childAda|childAda|childAda|", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nuser assembly:\n{assembly}", out.stderr);
     assert_eq!(compile_and_run_tagged(source), out.stdout);
 }
 

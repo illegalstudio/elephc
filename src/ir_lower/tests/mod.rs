@@ -27,6 +27,7 @@ mod effects;
 mod eval_ownership;
 mod exhaustive;
 mod ownership;
+mod boxed_array_write_owners;
 mod reference_cells;
 mod static_properties;
 mod synthetic_arrays;

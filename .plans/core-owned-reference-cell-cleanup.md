@@ -1238,3 +1238,24 @@ parser syntax. Apply the correction to the native heap fixture too and include
 the source fragment in unit parse diagnostics. Keep all owner-count and clean
 heap assertions unchanged. Validation here is test compilation and diff hygiene;
 no local tests are executed.
+
+### Boxed array write producer owners
+
+The static-descriptor/COW fixture on 48d244166 leaves three raw 80-byte
+descriptor allocations and three 24-byte strings (job 102760097811).
+The boxed local writer always retains concrete payloads while constructing
+the Mixed value consumed by the setter. Its EIR caller only retired string
+producers, leaving a fresh callable, object, array or Mixed producer unretired.
+Root those borrowed write operands with the shared scoped owner mechanism,
+then retire them in reverse acquisition order. Root a computed key before
+lowering the RHS so a same-frame catch can release it if that RHS throws.
+Keep concrete indexed/hash write ownership paths unchanged.
+
+Add an all-target EIR root/order gate and separate native heap regressions for
+callable replacement, fresh and borrowed payloads, and a throwing RHS. Attach
+user assembly to the original map fixture to locate its independent string
+owners if they remain. This fixes a verified missing producer release, not a
+claim that the whole map fixture or CI is green. Build, test compilation,
+EIR boundary audit and diff hygiene pass. A fresh fetch finds origin/main
+still at c91beb3434681294e0a1dd29ef92f42f3365923a, already an ancestor.
+Executable checks remain delegated to CI, with no local test execution.
