@@ -102,6 +102,21 @@ pub(super) fn lower_static_callable_call(
             signature,
             captures,
         } => {
+            // `LoadRefCell` is the conservative source marker for a capture whose stable
+            // cell is not present in this binding. It always covers by-reference captures,
+            // and can also match a by-value capture read from an already reference-bound
+            // local; descriptor fallback is safe for that extra case. Re-materializing a
+            // matched value for a later direct call asks the backend for the source local's
+            // current storage address. After `unset($source)`, however, that local has
+            // detached from the cell retained by the closure descriptor, so the direct call
+            // would read the cleared or rebound local instead of the captured cell. Until
+            // static bindings carry the stable captured-cell pointer, route this shape
+            // through the descriptor invocation.
+            if captures.iter().any(|capture| {
+                ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
+            }) {
+                return None;
+            }
             begin_call_argument_evaluation(ctx);
             let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());

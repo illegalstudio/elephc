@@ -87,6 +87,14 @@ unset($text, $old, $fresh);
             assert_eq!(main.locals[slot.as_raw() as usize].php_type, PhpType::Str, "{name}");
             assert_eq!(main.locals[owner.as_raw() as usize].php_type, PhpType::Str, "{name}");
         }
+        assert_eq!(
+            main.instructions
+                .iter()
+                .filter(|inst| inst.op == Op::ClosureCall)
+                .count(),
+            4,
+            "{name}: detached by-reference captures must invoke their retained descriptor cells",
+        );
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

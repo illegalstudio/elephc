@@ -2008,3 +2008,19 @@ Cargo check --tests, exporter build, full generated-docs regeneration, builtin a
 site audits, target-boundary audit and diff hygiene pass. Generated files remain
 unchanged. No tests execute locally; the existing runtime regressions remain CI
 gates for writable values, recursive keys, COW and reference escape rejection.
+
+### Keep detached closure captures on their retained descriptor cells
+
+CI assembly proves that both promotion checks reuse the original managed cell.
+The empty-string result instead comes from a static direct-call shortcut: after
+unset it reconstructs the capture address from the cleared or rebound local,
+not from the cell retained by the descriptor. Conservatively decline that shortcut
+for captures produced by LoadRefCell before emitting any call operands. Descriptor
+invocation preserves the original captured cell; ordinary static captures remain
+eligible for direct calls. The static array callback path already excludes the
+variable form that could expose this binding.
+
+Native Sol traced the failure and implemented the guard. Extend the five-target
+detach/rebind EIR regression to require descriptor calls; retain existing exact
+output and heap-clean controls. Cargo check --tests and diff hygiene pass. No
+local test or compiler repro executes; runtime confirmation remains on CI.
