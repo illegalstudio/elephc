@@ -36,7 +36,10 @@ unset($result, $many, $flipped);
 fn test_boxed_array_flip_warning_reentrancy_and_source_replacement() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 function flip(array $values): array { return array_flip($values); }
-$source = ["before" => 7, "invalid" => false, "after" => str_repeat("z", 3)];
+function flipWarningSource(): array {
+    return ["before" => 7, "invalid" => false, "after" => str_repeat("z", 3)];
+}
+$source = flipWarningSource();
 set_error_handler(function (int $level, string $message) use (&$source): bool {
     echo $level, ":", str_contains($message, "Can only flip") ? "warning" : "bad", "|";
     $source = ["changed"];

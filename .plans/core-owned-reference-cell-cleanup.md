@@ -1013,3 +1013,13 @@ corrected regression fixtures. A Callable declaration lets interprocedural
 checking specialize the target and reject the Mixed callback before descriptor
 normalization. This example is intended to demonstrate the runtime descriptor
 boundary, not relax static callback argument checking. No tests were executed.
+
+### Boxed flip warning-replacement fixture
+
+CI rejects the reentrant flip fixture before reaching the runtime: its caller
+source was inferred as a concrete associative array, then rebound to a packed
+array inside the handler. Obtain the source from a declared PHP-array return so
+the captured cell genuinely supports both layouts. Keep the callback replacement,
+recursive flip, original snapshot assertions and clean-heap assertion intact.
+This repairs the boxed-runtime fixture without changing concrete-array assignment
+rules or claiming that the runtime heap checks have passed locally.
