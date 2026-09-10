@@ -32,6 +32,7 @@ mod ownership;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
+mod boxed_array_multisort;
 mod instanceof_operand_owners;
 mod boxed_array_predicates;
 mod boxed_array_set_comparators;

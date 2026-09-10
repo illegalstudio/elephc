@@ -9,6 +9,15 @@
 
 use crate::ir::{Effects, Op, RuntimeFnId};
 
+/// Tandem sorting separates owners, changes both arrays and rejects invalid runtime inputs.
+#[test]
+fn multisort_effects_preserve_mutation_cow_and_validation() {
+    let required = Effects::READS_HEAP | Effects::WRITES_HEAP | Effects::ALLOC_HEAP
+        | Effects::REFCOUNT_OP | Effects::MAY_THROW | Effects::MAY_FATAL;
+    assert_eq!(RuntimeFnId::ArrayMultisort.effects(), required);
+    assert_eq!(RuntimeFnId::ArrayMultisort.intrinsic_effects(), required);
+}
+
 /// Array callbacks and cleanup stay observable without inventing a surrounding I/O event.
 #[test]
 fn array_callback_effects_preserve_barriers_without_claiming_io_boundaries() {

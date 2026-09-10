@@ -7,7 +7,8 @@
 //! Key details:
 //! - The golden signature is `fixed(["array1","array2"])` with `ref_params = [true, true]`:
 //!   exactly 2 by-ref params. The `ref` markers are mandatory for in-place mutation.
-//! - `check` requires BOTH arguments are indexed `Array(_)` types, returning Bool.
+//! - `check` accepts concrete indexed arrays and the non-null PHP array contract used by
+//!   declared parameters. The backend validates that boxed values still use indexed storage.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -23,12 +24,14 @@ builtin! {
 
 /// Validates argument types for an `array_multisort` call.
 ///
-/// Requires both arguments be indexed arrays (`PhpType::Array(_)`). Arity (exactly 2) is
-/// pre-validated by the registry. Returns `Ok(PhpType::Bool)` on success.
+/// Requires both arguments be concrete indexed arrays or declared PHP arrays. Arity (exactly 2)
+/// is pre-validated by the registry. Returns `Ok(PhpType::Bool)` on success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if !matches!(ty1, PhpType::Array(_)) || !matches!(ty2, PhpType::Array(_)) {
+    if (!matches!(&ty1, PhpType::Array(_)) && !ty1.is_php_array())
+        || (!matches!(&ty2, PhpType::Array(_)) && !ty2.is_php_array())
+    {
         return Err(CompileError::new(cx.span, "array_multisort() arguments must be indexed arrays"));
     }
     Ok(PhpType::Bool)

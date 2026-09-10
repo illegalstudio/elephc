@@ -4401,7 +4401,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "Sorts multiple arrays or multi-dimensional arrays.",
+        summary: "Sorts exactly two equal-length indexed arrays in ascending tuple order. AOT accepts either two concrete integer arrays or two boxed scalar arrays, not a mixed pair. Concrete string/float arrays, sort flags, associative arrays, and eval are unsupported.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-multisort.php"),

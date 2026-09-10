@@ -953,6 +953,14 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            RuntimeFnId::ArrayMultisort => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
             // Callback results and snapshots can run destructors independently of the callback body.
             // Keep every observable callback effect, but classify I/O at the nested runtime
             // boundary that performs it, not at the surrounding array operation.

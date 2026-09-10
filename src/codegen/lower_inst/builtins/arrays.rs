@@ -52,6 +52,7 @@ mod map_results;
 mod reduce_sets;
 mod misc_dispatch;
 mod callback_builtins;
+mod multisort;
 mod sort_dispatch;
 mod type_validation;
 mod callback_binding;
@@ -117,9 +118,10 @@ pub(crate) use misc_dispatch::{
 };
 pub(crate) use callback_builtins::{
     lower_array_walk_recursive,
-    lower_array_multisort, lower_array_search,
+    lower_array_search,
     lower_in_array,
 };
+pub(crate) use multisort::lower_array_multisort;
 pub(super) use in_array_cases::InArrayMode;
 
 /// How `array_splice()`'s optional `$replacement` argument is handed to the insert helper.

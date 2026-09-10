@@ -1926,3 +1926,15 @@ cleanup. Add five-target EIR assertions and heap-debug/tagged regressions for
 normal return, detached strings, borrowed objects and throwing target expressions.
 Grok reviewed the operand lifetime paths. Cargo check --tests and diff hygiene
 pass. No tests execute locally; runtime validation remains assigned to CI.
+
+### Sort declared boxed arrays with balanced writable storage ownership
+
+Extend the two-array AOT multisort path to declared boxed indexed scalar arrays,
+comparing the secondary array on primary ties. Validate length, layout and scalar
+elements before mutation. Separate COW owners and publish relocated storage through
+both by-reference destinations, comparing lvalue addresses to recognize aliases.
+Retire independently detached Mixed-slot payload leases before refreshing a second
+same-place operand. Add five-target EIR/emitter assertions, explicit reference
+aliases, property receivers and heap-debug/tagged runtime regressions. Keep the
+restricted two-array contract explicit. Grok reviewed alias and detached-owner
+paths. Cargo check --tests and diff hygiene pass; no local test executes.

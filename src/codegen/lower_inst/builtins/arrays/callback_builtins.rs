@@ -8,7 +8,6 @@
 //! - Preserves callback ABI, target parity, array storage, and ownership contracts.
 
 use super::*;
-use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
 
 /// Loads the `(wrapper, array, env[, mode])` argument registers and calls a single-array callback
@@ -150,46 +149,6 @@ pub(crate) fn lower_array_walk_recursive(
 }
 
 
-/// Lowers `array_multisort()`: stable-sorts the first indexed array ascending and reorders the second
-/// in tandem, both in place. Both arguments are by-reference, so each is copy-on-write split with
-/// `ensure_unique_sort_source` and the (possibly relocated) pointer is written back to its local
-/// before the runtime mutates the storage. Returns `true`. Supports 8-byte scalar indexed arrays.
-pub(crate) fn lower_array_multisort(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_multisort", 2)?;
-    let arr1 = expect_operand(inst, 0)?;
-    let arr2 = expect_operand(inst, 1)?;
-    eight_byte_indexed_array_element_type(ctx.value_php_type(arr1)?, "array_multisort")?;
-    eight_byte_indexed_array_element_type(ctx.value_php_type(arr2)?, "array_multisort")?;
-
-    // -- copy-on-write split both by-ref arrays and publish the new pointers to their locals --
-    let receiver1 = ReceiverPlace::resolve(ctx, arr1)?;
-    ensure_unique_sort_source(ctx, arr1)?;
-    receiver1.store_back_value(ctx, arr1)?;
-    let receiver2 = ReceiverPlace::resolve(ctx, arr2)?;
-    ensure_unique_sort_source(ctx, arr2)?;
-    receiver2.store_back_value(ctx, arr2)?;
-
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(arr1, "x0")?;
-            ctx.load_value_to_reg(arr2, "x1")?;
-        }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(arr1, "rdi")?;
-            ctx.load_value_to_reg(arr2, "rsi")?;
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_multisort");
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
-}
 
 /// Lowers `array_search()` for indexed arrays with integer-like payloads.
 ///
