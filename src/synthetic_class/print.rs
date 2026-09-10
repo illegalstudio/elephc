@@ -626,6 +626,9 @@ fn return_hint(return_type: &Option<TypeExpr>) -> String {
 }
 
 /// A type expression as PHP source.
+///
+/// The parser uses `TypeExpr::Void` for both standalone `void` and a `null` union member.
+/// Union context selects the PHP spelling that reparses to the same member.
 fn type_expr(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Int => "int".to_string(),
@@ -642,7 +645,10 @@ fn type_expr(ty: &TypeExpr) -> String {
         TypeExpr::Nullable(inner) => format!("?{}", type_expr(inner)),
         TypeExpr::Union(members) => members
             .iter()
-            .map(type_expr)
+            .map(|member| match member {
+                TypeExpr::Void => "null".to_string(),
+                other => type_expr(other),
+            })
             .collect::<Vec<_>>()
             .join("|"),
         TypeExpr::Ptr(None) => "ptr".to_string(),
@@ -971,6 +977,7 @@ fn truncate(node: impl std::fmt::Debug) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::synthetic_class::{function, t_union};
     use crate::web_prelude::PhpVersion;
 
     /// Removes span payloads so a printed-and-reparsed node compares against the built one on
@@ -1014,6 +1021,25 @@ mod tests {
                 "{label}: {name} changed across the round trip"
             );
         }
+    }
+
+    /// Distinguishes PHP's `null` union member from a standalone `void` return spelling.
+    #[test]
+    fn type_printer_distinguishes_null_union_members_from_void_returns() {
+        let program = vec![
+            function("accept")
+                .param(
+                    "value",
+                    t_union(vec![TypeExpr::Str, TypeExpr::Int, TypeExpr::Void]),
+                )
+                .build(),
+            function("finish").returns(TypeExpr::Void).build(),
+        ];
+
+        let rendered = print_program(&program);
+        assert!(rendered.contains("function accept(string|int|null $value)"));
+        assert!(rendered.contains("function finish(): void"));
+        round_trip("null union and void return spellings", &program);
     }
 
     /// THE PROPERTY THAT MAKES THIS TOOL USABLE AS AN ORACLE: printing a built prelude and

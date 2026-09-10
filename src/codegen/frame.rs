@@ -1167,6 +1167,21 @@ fn function_cleanup_locals(
     locals
 }
 
+/// Returns whether the frame epilogue owns the refcounted value in a local slot.
+pub(super) fn local_slot_has_epilogue_owner(
+    ctx: &FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> bool {
+    let cleanup_locals = if ctx.is_main {
+        main_cleanup_locals(ctx)
+    } else {
+        function_cleanup_locals(ctx, None)
+    };
+    cleanup_locals
+        .iter()
+        .any(|(_, cleanup_slot, _, _)| *cleanup_slot == slot)
+}
+
 /// Returns whether a local slot belongs to a function parameter.
 fn local_slot_is_parameter(function: &Function, slot: LocalSlotId) -> bool {
     function.params.get(slot.as_raw() as usize).is_some()
@@ -1223,11 +1238,24 @@ fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
 }
 
 /// Returns the local slot whose cleanup this return path must skip, if ownership is transferred.
-pub(super) fn return_cleanup_skip_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
-    let result_ty = function.value(value)?.php_type.codegen_repr();
-    let return_ty = function.return_php_type.codegen_repr();
+pub(super) fn return_cleanup_skip_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Option<LocalSlotId> {
+    let result_ty = ctx.function.value(value)?.php_type.codegen_repr();
+    let return_ty = ctx.function.return_php_type.codegen_repr();
     let mut visited = HashSet::new();
-    return_cleanup_skip_slot_inner(function, value, &result_ty, &return_ty, &mut visited)
+    let slot = return_cleanup_skip_slot_inner(
+        ctx.function,
+        value,
+        &result_ty,
+        &return_ty,
+        &mut visited,
+    )?;
+    function_cleanup_locals(ctx, None)
+        .iter()
+        .any(|(_, owned_slot, _, _)| *owned_slot == slot)
+        .then_some(slot)
 }
 
 /// Recursively traces forwarding return values back to the owned local they transfer.
@@ -1926,10 +1954,19 @@ fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_function_return_epilogue(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
+    return_ownership: super::return_ownership::ReturnOwnershipStatus,
 ) {
     emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
+    match return_ownership {
+        super::return_ownership::ReturnOwnershipStatus::Static(owned) => {
+            super::return_ownership::emit_status(ctx.emitter, owned);
+        }
+        super::return_ownership::ReturnOwnershipStatus::Dynamic(offset) => {
+            super::return_ownership::emit_load_status(ctx.emitter, offset);
+        }
+    }
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
 }
@@ -1947,6 +1984,7 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_function_local_epilogue_cleanup(ctx, None);
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
+    super::return_ownership::emit_status(ctx.emitter, true);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
     ctx.epilogue_emitted = true;

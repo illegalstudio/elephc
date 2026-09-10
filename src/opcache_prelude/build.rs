@@ -749,7 +749,16 @@ pub(crate) fn cli_ini_get_decl() -> Stmt {
 pub(crate) fn cli_ini_set_decl() -> Stmt {
     function("ini_set")
         .param("option", TypeExpr::Str)
-        .param("value", t_nullable(t_union(vec![TypeExpr::Str, TypeExpr::Int, TypeExpr::Float, TypeExpr::Bool])))
+        .param(
+            "value",
+            t_union(vec![
+                TypeExpr::Str,
+                TypeExpr::Int,
+                TypeExpr::Float,
+                TypeExpr::Bool,
+                TypeExpr::Void,
+            ]),
+        )
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
             crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_SET),

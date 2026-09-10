@@ -40,9 +40,21 @@ pub(in crate::interpreter) fn eval_instance_method_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_literal_call_arguments(args, context, scope, values, |args, context, _, values| {
-        eval_method_call_result_with_evaluated_args(object, method, args, context, values)
-    })
+    with_eval_call_arguments(
+        args,
+        context,
+        scope,
+        values,
+        |arguments, context, _, values| {
+            eval_method_call_result_with_evaluated_args(
+                object,
+                method,
+                arguments,
+                context,
+                values,
+            )
+        },
+    )
 }
 
 /// Invokes a static method with the same argument ownership and binding rules as instance methods.
@@ -54,9 +66,22 @@ pub(in crate::interpreter) fn eval_static_method_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_literal_call_arguments(args, context, scope, values, |args, context, scope, values| {
-        eval_static_method_call_result_from_scope(class_name, method, args, scope, context, values)
-    })
+    with_eval_call_arguments(
+        args,
+        context,
+        scope,
+        values,
+        |arguments, context, scope, values| {
+            eval_static_method_call_result_from_scope(
+                class_name,
+                method,
+                arguments,
+                scope,
+                context,
+                values,
+            )
+        },
+    )
 }
 
 /// Evaluates supported function-like calls from a runtime eval fragment.
@@ -186,13 +211,6 @@ pub(in crate::interpreter) fn eval_call(
         return eval_builtin_array_mutating_declared_call(name, args, context, scope, values);
     }
     if eval_php_visible_builtin_exists(name) {
-        if eval_builtin_uses_owned_arguments(name) {
-            return eval_builtin_call(name, args, context, scope, values);
-        }
-        if eval_call_args_are_plain_positional(args) {
-            let args = positional_call_arg_exprs(args)?;
-            return eval_positional_expr_call(name, &args, context, scope, values);
-        }
         return eval_builtin_call(name, args, context, scope, values);
     }
 
@@ -244,8 +262,20 @@ pub(in crate::interpreter) fn eval_dynamic_call(
                 || crate::context::pcntl_runtime::is_handler_callable(callback);
             if !is_closure_object && !is_detached_pcntl_handler {
                 eval_invokable_object_precheck(callback, context, values)?;
-                let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-                return eval_invokable_object_call_result(callback, evaluated_args, context, values);
+                return with_eval_call_arguments(
+                    args,
+                    context,
+                    scope,
+                    values,
+                    |arguments, context, _, values| {
+                        eval_invokable_object_call_result(
+                            callback,
+                            arguments,
+                            context,
+                            values,
+                        )
+                    },
+                );
             }
         }
         let callback = eval_callable(callback, context, values)?;
@@ -254,8 +284,20 @@ pub(in crate::interpreter) fn eval_dynamic_call(
                 return eval_builtin_call(name, args, context, scope, values);
             }
         }
-        let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-        eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+        with_eval_call_arguments(
+            args,
+            context,
+            scope,
+            values,
+            |arguments, context, _, values| {
+                eval_evaluated_callable_with_call_array_args(
+                    &callback,
+                    arguments,
+                    context,
+                    values,
+                )
+            },
+        )
     })
 }
 

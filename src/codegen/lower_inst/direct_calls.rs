@@ -56,6 +56,7 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     if let Some(result) = inst.result {
+        ctx.store_runtime_return_ownership(result);
         if ctx.value_php_type(result)? == PhpType::Void {
             abi::emit_load_int_immediate(
                 ctx.emitter,

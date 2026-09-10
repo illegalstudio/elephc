@@ -57,7 +57,16 @@ fn constructor_ownership_releases_defaults_without_releasing_borrowed_arguments(
         let program = parse_fragment(source.as_bytes()).expect("parse constructor fixture");
         let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
         assert_eq!(result.is_ok(), class == "KnownClass" && !reject_type);
-        assert!(!values.releases.contains(&borrowed));
+        let identity = borrowed.as_ptr() as usize;
+        let retains = values.retains.iter().filter(|value| {
+            value.as_ptr() as usize == identity
+        }).count();
+        let releases = values.releases.iter().filter(|value| {
+            value.as_ptr() as usize == identity
+        }).count();
+        assert!(retains > 0);
+        assert_eq!(releases, retains);
+        assert_eq!(values.cell_owners.get(&identity), Some(&1));
         for expected in [731, 732] {
             let owners: Vec<_> = values.values.iter()
                 .filter(|(_, value)| **value == FakeValue::Int(expected))

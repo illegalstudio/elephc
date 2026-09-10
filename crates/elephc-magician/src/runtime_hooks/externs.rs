@@ -13,7 +13,7 @@
 
 use std::ffi::c_void;
 
-use crate::value::{RuntimeCell, RuntimeCellHandle};
+use crate::value::RuntimeCell;
 
 #[cfg(not(test))]
 unsafe extern "C" {
@@ -337,7 +337,7 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_type_tag(value: *mut RuntimeCell) -> u64;
     /// Wraps a caller-owned boxed pointer slot for native callable reference binding.
     pub(super) fn __elephc_eval_value_invoker_ref_cell(
-        slot: *mut RuntimeCellHandle,
+        slot: *mut *mut RuntimeCell,
     ) -> *mut RuntimeCell;
     /// Wraps a typed raw slot for native callable reference binding.
     pub(super) fn __elephc_eval_value_invoker_raw_ref_cell(

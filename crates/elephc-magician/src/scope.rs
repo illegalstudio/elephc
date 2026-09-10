@@ -188,7 +188,21 @@ impl ElephcEvalScope {
     ) -> Option<RuntimeCellHandle> {
         let name = name.into();
         self.aot_visible_names.insert(name.clone());
-        self.set(name, cell, ownership)
+        let previous = self.entry(&name);
+        let dropped_owner = previous
+            .filter(|entry| {
+                ownership == ScopeCellOwnership::Borrowed
+                    && entry.flags().ownership == ScopeCellOwnership::Owned
+                    && entry.cell() == cell
+            })
+            .map(ScopeEntry::cell);
+        let replaced = self.set(name, cell, ownership);
+        if let Some(dropped_owner) = dropped_owner {
+            // Native code retains its own owner when it flushes this same cell
+            // back as borrowed, so the scope must surrender its previous owner.
+            return Some(dropped_owner);
+        }
+        replaced
     }
 
     /// Stores a variable while preserving existing PHP reference aliases.
@@ -359,6 +373,7 @@ impl ElephcEvalScope {
         self.entry(name)
             .filter(|entry| entry.flags().is_visible())
             .map(ScopeEntry::cell)
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Returns visible cells whose names are synchronized back to generated AOT storage.

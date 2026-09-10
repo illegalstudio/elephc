@@ -7670,3 +7670,29 @@ integration, and the earlier compatibility debts remain open.
 The read-only PR ledger was refreshed at 2026-09-10 10:22:43 UTC. PRs #895,
 #898, #899, #900, and #902 remain open and unmerged at the exact heads recorded
 in the ledger above. No PR comments, closures, commits, or pushes were made.
+
+## Eval ownership CI stabilization checkpoint, 2026-09-11
+
+- [x] Keep ownership provenance inside Rust handles while exposing only raw,
+  pointer-sized runtime-cell slots through every C ABI boundary.
+- [x] Mark durable scope, constant, property, and class storage reads as
+  borrowed, then copy borrowed expression results through the metadata-aware
+  scope value helper when a PHP-owned value is required.
+- [x] Use common operand and call-argument owner ledgers for source-order
+  evaluation, named and spread arguments, by-reference targets, defaults,
+  callback-array extraction, and result promotion before cleanup.
+- [x] Preserve array cursor and alias metadata across by-value copies and
+  borrowed-result promotion without using pointer identity as an ownership
+  test.
+- [x] Propagate direct-call lexical scope through the existing builtin values
+  registry while keeping already materialized callback dispatch unscoped.
+- [x] Confirm the Magician crate is warning-free and its 20 focused ownership
+  tests pass. Confirm focused dynamic-static, class-constant, special-class
+  callback, and first-class by-reference codegen regressions pass.
+- [x] Recheck the native Mixed-reference heap regression after the independent
+  duplicated `$argc` and `$argv` scope-owner correction. The focused heap-debug
+  run now passes with no live blocks or bytes.
+- [ ] Let CI validate this ownership model on every supported target and finish
+  the remaining mbstring feature checklist. This checkpoint does not complete
+  the 65-function goal or the recorded host, strictness, packaging, and
+  compatibility work.

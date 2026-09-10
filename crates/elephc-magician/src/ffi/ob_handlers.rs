@@ -221,7 +221,7 @@ unsafe fn ob_handler_inner(request: &mut OutputHandlerCallV1) -> u64 {
     if callback == 0 {
         return 1;
     }
-    let callback = RuntimeCellHandle::from_raw(callback as *mut RuntimeCell);
+    let callback = RuntimeCellHandle::from_raw(callback as *mut RuntimeCell).borrowed();
     let bytes = if request.length == 0 {
         &[]
     } else {

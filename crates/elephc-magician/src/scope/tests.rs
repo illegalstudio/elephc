@@ -88,6 +88,30 @@ fn set_does_not_return_same_owned_cell() {
     assert_eq!(replaced, None);
 }
 
+/// Verifies AOT synchronization releases a same-cell owner when the scope starts borrowing it.
+#[test]
+fn set_from_aot_returns_same_cell_when_dropping_scope_ownership() {
+    let mut scope = ElephcEvalScope::new();
+    let cell = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+    scope.set("x", cell, ScopeCellOwnership::Owned);
+
+    let replaced = scope
+        .set_from_aot("x", cell.borrowed(), ScopeCellOwnership::Borrowed)
+        .expect("the previous scope owner must be returned");
+
+    assert_eq!(replaced, cell);
+    assert!(!replaced.is_borrowed());
+    assert_eq!(scope.visible_cell("x"), Some(cell));
+    assert_eq!(
+        scope.entry("x").expect("x").flags().ownership,
+        ScopeCellOwnership::Borrowed
+    );
+    assert_eq!(
+        scope.set_from_aot("x", cell.borrowed(), ScopeCellOwnership::Borrowed),
+        None
+    );
+}
+
 /// Verifies reference binding points two variable names at one runtime cell.
 #[test]
 fn set_reference_binds_names_to_source_cell() {

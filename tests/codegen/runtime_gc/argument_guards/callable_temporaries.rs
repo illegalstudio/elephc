@@ -278,6 +278,132 @@ echo "done\n";
     assert_clean(source, &format!("{}done\n", expected.repeat(8)));
 }
 
+/// Transfers fresh results and promotes borrowed results from the same callable body.
+#[test]
+fn test_descriptor_mixed_return_ownership_follows_the_runtime_branch() {
+    let source = r#"<?php
+class NativeBranchResult {
+    public function __construct(public string $name) {}
+}
+function select_native_array(mixed $value, bool $fresh): mixed {
+    if ($fresh) { return ["fresh", $value[0]]; }
+    return $value;
+}
+function forward_native_array(mixed $value, bool $fresh): mixed {
+    return select_native_array($value, $fresh);
+}
+function ternary_native_array(mixed $value, bool $fresh): mixed {
+    return $fresh ? ["fresh", $value[0]] : $value;
+}
+function select_native_object(mixed $value, bool $fresh): mixed {
+    if ($fresh) { return new NativeBranchResult("fresh"); }
+    return $value;
+}
+function select_native_string(mixed $value, bool $fresh): mixed {
+    if ($fresh) { return $value . ":fresh"; }
+    return $value;
+}
+function narrowed_native_result(int $value): mixed { return $value + 1; }
+function exercise_native_return_ownership(
+    callable $arrayDescriptor,
+    callable $forwardArrayDescriptor,
+    callable $ternaryArrayDescriptor,
+    callable $objectDescriptor,
+    callable $stringDescriptor,
+    callable $narrowed,
+    int $i,
+): void {
+    $array = ["borrowed"];
+    $directArray = select_native_array($array, false);
+    $borrowedArray = $arrayDescriptor($array, false);
+    $freshArray = $arrayDescriptor($array, true);
+    $forwardBorrowedArray = $forwardArrayDescriptor($array, false);
+    $forwardFreshArray = $forwardArrayDescriptor($array, true);
+    $ternaryBorrowedArray = $ternaryArrayDescriptor($array, false);
+    $ternaryFreshArray = $ternaryArrayDescriptor($array, true);
+    $object = new NativeBranchResult("borrowed");
+    $directObject = select_native_object($object, false);
+    $borrowedObject = $objectDescriptor($object, false);
+    $freshObject = $objectDescriptor($object, true);
+    $string = "borrowed";
+    $directString = select_native_string($string, false);
+    $borrowedString = $stringDescriptor($string, false);
+    $freshString = $stringDescriptor($string, true);
+    echo $directArray[0], ":", $borrowedArray[0], ":", $freshArray[0], ":";
+    echo $forwardBorrowedArray[0], ":", $forwardFreshArray[0], ":";
+    echo $ternaryBorrowedArray[0], ":", $ternaryFreshArray[0], ":";
+    echo $directObject->name, ":", $borrowedObject->name, ":", $freshObject->name, ":";
+    echo $directString, ":", $borrowedString, ":", $freshString, ":", $narrowed($i), "\n";
+}
+$arrayDescriptor = select_native_array(...);
+$forwardArrayDescriptor = forward_native_array(...);
+$ternaryArrayDescriptor = ternary_native_array(...);
+$objectDescriptor = select_native_object(...);
+$stringDescriptor = select_native_string(...);
+$narrowed = narrowed_native_result(...);
+for ($i = 0; $i < 8; $i++) {
+    exercise_native_return_ownership(
+        $arrayDescriptor,
+        $forwardArrayDescriptor,
+        $ternaryArrayDescriptor,
+        $objectDescriptor,
+        $stringDescriptor,
+        $narrowed,
+        $i,
+    );
+}
+echo "done\n";
+"#;
+    let expected = (0..8)
+        .map(|index| {
+            format!(
+                "borrowed:borrowed:fresh:borrowed:fresh:borrowed:fresh:borrowed:borrowed:fresh:borrowed:borrowed:borrowed:fresh:{}\n",
+                index + 1
+            )
+        })
+        .collect::<String>();
+    assert_clean_in_ir_modes(source, &format!("{expected}done\n"));
+}
+
+/// Compiles and runs a heap-debug fixture with EIR optimization disabled and enabled.
+fn assert_clean_in_ir_modes(source: &str, expected: &str) {
+    for ir_opt in [false, true] {
+        let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "elephc_native_return_ownership_{}_{}",
+            std::process::id(),
+            id
+        ));
+        fs::create_dir_all(&dir).expect("failed to create native return fixture directory");
+        let php_path = dir.join("main.php");
+        fs::write(&php_path, source).expect("failed to write native return fixture");
+        let mode = if ir_opt { "--ir-opt=on" } else { "--ir-opt=off" };
+        let compile = elephc_cli_command(&dir)
+            .arg("--heap-debug")
+            .arg(mode)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile native return fixture");
+        assert!(
+            compile.status.success(),
+            "fixture compilation failed with ir_opt={ir_opt}: {}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let output = Command::new(dir.join("main"))
+            .output()
+            .expect("failed to run native return fixture");
+        let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+        let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        assert_eq!(stdout, expected, "ir_opt={ir_opt}: {stderr}\n{source}");
+        assert!(
+            stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "ir_opt={ir_opt}: {stderr}"
+        );
+    }
+}
+
 /// Requires a complete native execution, exact observable lifecycle order, and no residual heap owners.
 fn assert_clean(source: &str, expected: &str) {
     let output = compile_and_run_with_heap_debug(source);

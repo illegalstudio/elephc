@@ -270,7 +270,7 @@ fn bind_evaluated_native_variadic_function_args(
     )
 }
 
-/// Applies registered native AOT function parameter types after argument binding.
+/// Applies parameter types and publishes by-reference entry coercions before invocation.
 fn apply_native_function_arg_types(
     function: &NativeFunction,
     variadic_index: Option<usize>,
@@ -289,7 +289,14 @@ fn apply_native_function_arg_types(
             continue;
         };
         let value = eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
-        if value != bound_arg.value { owners.push(value); }
+        if value != bound_arg.value {
+            owners.push(value);
+            if function.param_by_ref(param_index) {
+                if let Some(target) = bound_arg.ref_target.as_ref() {
+                    write_back_method_ref_target(target, value, context, values)?;
+                }
+            }
+        }
         bound_arg.value = value;
     }
     Ok(())

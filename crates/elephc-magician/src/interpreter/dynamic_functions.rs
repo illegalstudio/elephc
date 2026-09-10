@@ -13,7 +13,6 @@ mod closure_execution;
 mod function_binding;
 mod method_binding;
 mod native_execution;
-mod literal_arguments;
 mod native_staging;
 pub(in crate::interpreter) mod builtin_arguments;
 
@@ -24,7 +23,6 @@ pub(in crate::interpreter) use closure_execution::*;
 pub(in crate::interpreter) use function_binding::*;
 pub(in crate::interpreter) use method_binding::*;
 pub(in crate::interpreter) use native_execution::*;
-pub(in crate::interpreter) use literal_arguments::with_literal_call_arguments;
 use native_staging::stage_native_function_invoker_args;
 
 /// Evaluates an eval-declared user function with PHP-style argument binding.
@@ -35,8 +33,15 @@ pub(in crate::interpreter) fn eval_dynamic_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, caller_scope, values)?;
-    eval_dynamic_function_with_evaluated_args(function, evaluated_args, context, values)
+    with_eval_call_arguments(
+        args,
+        context,
+        caller_scope,
+        values,
+        |arguments, context, _, values| {
+            eval_dynamic_function_with_evaluated_args(function, arguments, context, values)
+        },
+    )
 }
 
 /// Evaluates source-order call arguments while preserving named-argument metadata.
@@ -70,6 +75,66 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
     contract: Option<&elephc_builtin_contract::BuiltinContract>,
 ) -> Result<(), EvalStatus> {
     evaluate_call_arguments(args, context, caller_scope, values, &mut |_, _| {}, Some(owners), evaluated, contract)
+}
+
+/// Acquires normal-call argument owners without discarding caller reference targets.
+pub(in crate::interpreter) fn eval_leased_call_arg_values(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+    leases: &mut Vec<EvalValueLease>,
+    evaluated_args: &mut Vec<EvaluatedCallArg>,
+) -> Result<(), EvalStatus> {
+    let mut saw_named = false;
+
+    for arg in args {
+        if arg.is_spread() {
+            if saw_named {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let spread = acquire_expr_lease(arg.value(), context, caller_scope, values)?;
+            let spread_value = spread.owner;
+            leases.push(spread);
+            if !values.is_array_like(spread_value)? {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let mut unpacked_owners = Vec::new();
+            let unpacked = append_unpacked_call_arg_values_with_owners(
+                spread_value,
+                evaluated_args,
+                &mut saw_named,
+                context,
+                values,
+                Some(&mut unpacked_owners),
+            );
+            leases.extend(
+                unpacked_owners
+                    .into_iter()
+                    .map(EvalValueLease::preserving_metadata),
+            );
+            unpacked?;
+            continue;
+        }
+
+        if arg.name().is_none() && saw_named {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let name = arg.name().map(str::to_string);
+        saw_named |= name.is_some();
+        let (value, ref_target) =
+            eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+        let lease = acquire_value_lease(value, values)?;
+        let value = lease.owner;
+        leases.push(lease);
+        evaluated_args.push(EvaluatedCallArg {
+            name,
+            value,
+            ref_target,
+        });
+    }
+
+    Ok(())
 }
 
 /// Evaluates source arguments with legacy targets or explicit owners selected by the parameter contract.

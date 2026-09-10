@@ -213,7 +213,12 @@ fn eval_pcntl_signal_get_handler(
             let retained = values.retain(handler)?;
             if !std::ptr::eq(entry.context, context as *mut ElephcEvalContext) {
                 if let Some(owner) = pcntl_runtime::begin_callable_use(handler, context) {
-                    context.retain_pcntl_foreign_callable(handler, owner);
+                    if let Err(status) =
+                        context.retain_pcntl_foreign_callable(handler, owner, values)
+                    {
+                        let _ = values.release(retained);
+                        return Err(status);
+                    }
                 }
             }
             Ok(retained)

@@ -26,10 +26,13 @@ pub(in crate::interpreter) fn eval_builtin_clamp(
     let [value, min, max] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let value = eval_expr(value, context, scope, values)?;
-    let min = eval_expr(min, context, scope, values)?;
-    let max = eval_expr(max, context, scope, values)?;
-    eval_clamp_result(value, min, max, values)
+    with_eval_operands(
+        &[value, min, max],
+        context,
+        scope,
+        values,
+        |args, _, _, values| eval_clamp_result(args[0], args[1], args[2], values),
+    )
 }
 
 /// Selects the inclusive clamp result after validating bound order and NaN bounds.
@@ -42,16 +45,13 @@ pub(in crate::interpreter) fn eval_clamp_result(
     if eval_clamp_bound_is_nan(min, values)? || eval_clamp_bound_is_nan(max, values)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let invalid_bounds = values.compare(EvalBinOp::Gt, min, max)?;
-    if values.truthy(invalid_bounds)? {
+    if eval_comparison_condition(EvalBinOp::Gt, min, max, values)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let above_max = values.compare(EvalBinOp::Gt, value, max)?;
-    if values.truthy(above_max)? {
+    if eval_comparison_condition(EvalBinOp::Gt, value, max, values)? {
         return Ok(max);
     }
-    let below_min = values.compare(EvalBinOp::Lt, value, min)?;
-    if values.truthy(below_min)? {
+    if eval_comparison_condition(EvalBinOp::Lt, value, min, values)? {
         return Ok(min);
     }
     Ok(value)

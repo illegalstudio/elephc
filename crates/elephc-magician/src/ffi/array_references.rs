@@ -95,8 +95,13 @@ unsafe fn lookup(
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     let mut values = ElephcRuntimeOps::with_context(context);
-    let result = read_owned_array_reference(RuntimeCellHandle::from_raw(original.cast_mut()), key,
-        context, &mut values, owners);
+    let result = read_owned_array_reference(
+        RuntimeCellHandle::from_raw(original.cast_mut()).borrowed(),
+        key,
+        context,
+        &mut values,
+        owners,
+    );
     if matches!(result, Err(EvalStatus::UncaughtThrowable)) { *pending = context.take_pending_throw(); }
     result
 }

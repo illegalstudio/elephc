@@ -103,7 +103,7 @@ unsafe extern "C" fn error(_code: i32, buffer: *mut u8, capacity: u64) -> i32 {
     message.len() as i32 - 1
 }
 
-/// Checks callback-time state, pending exceptions, safe native failures, and immutable startup inheritance.
+/// Checks callback-time state, provider diagnostics, safe native failures, and immutable startup inheritance.
 #[test]
 fn ini_abi_owns_results_preserves_reentry_and_resets_workers() {
     let null = std::ptr::null_mut();
@@ -117,7 +117,14 @@ fn ini_abi_owns_results_preserves_reentry_and_resets_workers() {
     let mut output = MbResultV1::default();
     assert_eq!(unsafe { elephc_mbstring_ini_v1(INI_GET, std::ptr::null(), u64::MAX, &host(null), &mut output) }, 1);
     result(1, output);
-    assert_eq!(set(mime, b"["), (1, RESULT_FATAL, 0, vec![]), "missing provider must fail without a fabricated PHP warning");
+    let mut unavailable = Context::default();
+    let unavailable_pointer = (&mut unavailable as *mut Context).cast();
+    assert_eq!(ini(INI_SET, &[MbArgV1::string(mime), MbArgV1::string(b"[")], unavailable_pointer),
+        (0, RESULT_BOOL, 0, vec![]), "a custom pattern without its provider returns false");
+    assert_eq!(unavailable.events.len(), 1);
+    assert_eq!(unavailable.events[0].0, 2);
+    assert_eq!(unavailable.events[0].1,
+        b"ini_set(): [ (offset=0): managed PCRE2 MIME provider is unavailable; run elephc native add pcre2 and use --with-mbstring for opaque custom MIME configuration");
 
     let provider = MbMimeRegexV1 { version: 1, size: std::mem::size_of::<MbMimeRegexV1>() as u32,
         compile: Some(compile), matches: Some(matches), free: Some(free), error: Some(error) };

@@ -343,6 +343,18 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
     }
 
+    /// Returns the frame slot that preserves a dynamic PHP-call return ownership marker.
+    pub(super) fn runtime_return_ownership_offset(&self, value: ValueId) -> Option<usize> {
+        self.placement.runtime_return_ownership_slot(value)
+    }
+
+    /// Preserves the internal ownership marker immediately after a direct PHP call.
+    pub(super) fn store_runtime_return_ownership(&mut self, value: ValueId) {
+        if let Some(offset) = self.runtime_return_ownership_offset(value) {
+            super::return_ownership::emit_store_status(self.emitter, offset);
+        }
+    }
+
     /// Returns the runtime PHP type stored in a local slot.
     pub(super) fn local_php_type(&self, slot: LocalSlotId) -> Result<PhpType> {
         self.function
@@ -459,6 +471,11 @@ impl<'a> FunctionContext<'a> {
     /// Returns whether this by-value parameter slot is owned by the callee frame.
     pub(super) fn owns_parameter_slot(&self, slot: LocalSlotId) -> bool {
         self.local_analysis.owns_parameter_slot(slot)
+    }
+
+    /// Returns whether synchronized eval writeback may replace an owned local value.
+    pub(super) fn owns_eval_local_writeback_target(&self, slot: LocalSlotId) -> bool {
+        self.is_by_ref_param_slot(slot) || super::frame::local_slot_has_epilogue_owner(self, slot)
     }
 
     /// Selects the EIR instruction whose CFG-local representation facts codegen must use.

@@ -21,12 +21,14 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     fn php_object_handle(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         self.runtime_object_identity(object)
     }
-    /// Returns fake object identity for releases that target object cells.
+    /// Returns fake object identity only when the last explicit cell owner is released.
     fn final_object_identity_for_release(
         &mut self,
         value: RuntimeCellHandle,
     ) -> Result<Option<u64>, EvalStatus> {
-        if self.runtime_type_tag(value)? == EVAL_TAG_OBJECT {
+        if self.cell_owners.get(&(value.as_ptr() as usize)) == Some(&1)
+            && self.runtime_type_tag(value)? == EVAL_TAG_OBJECT
+        {
             self.runtime_object_identity(value).map(Some)
         } else {
             Ok(None)

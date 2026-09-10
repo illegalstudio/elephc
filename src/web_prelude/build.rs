@@ -4452,7 +4452,16 @@ fn decl_fn_elephc_session_name_valid() -> Stmt {
 fn decl_fn_ini_set() -> Stmt {
     function("ini_set")
         .param("option", TypeExpr::Str)
-        .param("value", t_nullable(t_union(vec![TypeExpr::Str, TypeExpr::Int, TypeExpr::Float, TypeExpr::Bool])))
+        .param(
+            "value",
+            t_union(vec![
+                TypeExpr::Str,
+                TypeExpr::Int,
+                TypeExpr::Float,
+                TypeExpr::Bool,
+                TypeExpr::Void,
+            ]),
+        )
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
             crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_SET),

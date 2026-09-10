@@ -137,8 +137,7 @@ pub(in crate::interpreter) fn execute_stmt(
             then_branch,
             else_branch,
         } => {
-            let condition = eval_expr(condition, context, scope, values)?;
-            if values.truthy(condition)? {
+            if eval_condition(condition, context, scope, values)? {
                 execute_statements(then_branch, context, scope, values)
             } else {
                 execute_statements(else_branch, context, scope, values)
@@ -236,10 +235,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::While { condition, body } => {
-            while {
-                let condition = eval_expr(condition, context, scope, values)?;
-                values.truthy(condition)?
-            } {
+            while eval_condition(condition, context, scope, values)? {
                 match execute_statements(body, context, scope, values)? {
                     EvalControl::None | EvalControl::Continue => {}
                     EvalControl::Break => break,
@@ -251,8 +247,8 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Expr(expr) => {
-            let result = eval_owned_expr(expr, context, scope, values)?;
-            eval_release_value(context, values, result)?;
+            let result = eval_expr(expr, context, scope, values)?;
+            release_expr_result(result, context, values)?;
             Ok(EvalControl::None)
         }
     }

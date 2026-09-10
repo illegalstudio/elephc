@@ -42,6 +42,7 @@ pub(in crate::interpreter) fn visible_scope_cell(
     scope_entry(context, scope, name)
         .filter(|entry| entry.flags().is_visible())
         .map(ScopeEntry::cell)
+        .map(RuntimeCellHandle::borrowed)
 }
 
 /// Stores a variable cell, redirecting `global` aliases to the global scope.

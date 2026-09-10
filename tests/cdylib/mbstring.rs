@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Hosts exercise lazy scalar/string entry, explicit init, saved C arguments, and returned ownership.
-//! - Failure injection supplies an empty argument list or missing provider to the real startup ABI.
+//! - Failure injection supplies empty configuration arguments or a missing explicit MIME provider.
 
 use super::*;
 use elephc::codegen::platform::{Arch, Target};
@@ -38,21 +38,24 @@ fn test_mbstring_library_initialization() {
 /// Reports provider and configuration validation failures through init, scalar, and string C returns.
 #[test]
 fn test_mbstring_library_configuration_failure() {
-    let dir = make_test_dir("mbstring_library_failure");
-    let cache = managed_pcre2::prepare_managed_pcre2_cli_project(&dir, Target::detect_host());
-    fs::write(dir.join("text.php"), SOURCE).unwrap();
-    compile(&dir, &cache, "staticlib", &[]);
-    compile(&dir, &cache, "staticlib", &["--emit-asm"]);
-    let assembly = fs::read_to_string(dir.join("text.s")).unwrap();
-    let target = Target::detect_host();
-    for (symbol, arm_argument, x86_argument) in [
-        ("elephc_mbstring_configure_v1", "mov x1, #0", "xor esi, esi"),
-        ("elephc_mbstring_mime_provider_v1", "mov x0, #0", "xor edi, edi"),
+    for (case, flags, symbol, arm_argument, x86_argument) in [
+        ("configuration", &[][..], "elephc_mbstring_configure_v1", "mov x1, #0", "xor esi, esi"),
+        ("MIME provider", &["--ini", "mbstring.http_output_conv_mimetypes=^application/json$"][..],
+            "elephc_mbstring_mime_provider_v1", "mov x0, #0", "xor edi, edi"),
     ] {
+        let dir = make_test_dir("mbstring_library_failure");
+        let cache = managed_pcre2::prepare_managed_pcre2_cli_project(&dir, Target::detect_host());
+        fs::write(dir.join("text.php"), SOURCE).unwrap();
+        compile(&dir, &cache, "staticlib", flags);
+        let mut assembly_flags = flags.to_vec();
+        assembly_flags.push("--emit-asm");
+        compile(&dir, &cache, "staticlib", &assembly_flags);
+        let assembly = fs::read_to_string(dir.join("text.s")).unwrap();
+        let target = Target::detect_host();
         let (call, argument) = if target.arch == Arch::AArch64 {
             (format!("bl {}", target.extern_symbol(symbol)), arm_argument)
         } else { (format!("call {symbol}"), x86_argument) };
-        assert_eq!(assembly.matches(&call).count(), 1);
+        assert_eq!(assembly.matches(&call).count(), 1, "{case} must emit {symbol} once");
         let patched = assembly.replace(&call, &format!("{argument}\n    {call}"));
         fs::write(dir.join("text.s"), patched).unwrap();
         let built = Command::new("cc").current_dir(&dir).args(["-c", "text.s", "-o", "text.o"]).output().unwrap();
@@ -61,11 +64,11 @@ fn test_mbstring_library_configuration_failure() {
         assert!(replaced.status.success(), "{}", String::from_utf8_lossy(&replaced.stderr));
         let host = compile_host(&dir, include_str!("mbstring/failure.c"), true);
         let result = Command::new(host).output().unwrap();
-        assert!(result.status.success(), "{symbol}: {}\n{}\n{}", result.status,
+        assert!(result.status.success(), "{case}/{symbol}: {}\n{}\n{}", result.status,
             String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
         assert_eq!(result.stdout, b"configuration failure:host alive\n");
+        fs::remove_dir_all(dir).unwrap();
     }
-    fs::remove_dir_all(dir).unwrap();
 }
 
 /// Compiles and assembles complete configured library user objects for all supported targets.

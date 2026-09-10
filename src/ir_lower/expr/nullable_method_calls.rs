@@ -170,7 +170,13 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
 ) -> LoweredValue {
     let receiver_type = strip_void_from_union(ctx.builder.value_php_type(object.value));
     let receiver_name = ctx.declare_hidden_temp(receiver_type.clone());
-    ctx.store_local(&receiver_name, object, receiver_type, Some(expr.span));
+    store_value_into_temp(
+        ctx,
+        &receiver_name,
+        receiver_type,
+        object,
+        expr.span,
+    );
     let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);
     let callback = Expr::new(
         ExprKind::ArrayLiteral(vec![receiver, method.clone()]),

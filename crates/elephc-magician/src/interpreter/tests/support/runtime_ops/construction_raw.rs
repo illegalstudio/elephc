@@ -96,7 +96,7 @@ macro_rules! impl_fake_construction_raw_ops {
     /// Creates a fake invoker-only by-reference marker.
     fn invoker_ref_cell(
         &mut self,
-        slot: *mut RuntimeCellHandle,
+        slot: *mut *mut RuntimeCell,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(self.alloc(FakeValue::InvokerRefCell(slot as usize)))
     }

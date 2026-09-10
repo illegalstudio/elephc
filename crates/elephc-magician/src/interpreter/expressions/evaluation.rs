@@ -30,11 +30,7 @@ pub(in crate::interpreter) fn eval_binary_result(
         | EvalBinOp::BitXor
         | EvalBinOp::ShiftLeft
         | EvalBinOp::ShiftRight => values.bitwise(op, left, right),
-        EvalBinOp::Concat => {
-            let left = eval_string_context_value(left, context, values)?;
-            let right = eval_string_context_value(right, context, values)?;
-            values.concat(left, right)
-        }
+        EvalBinOp::Concat => eval_concat_result(left, right, context, values),
         EvalBinOp::LogicalXor => {
             let left_truthy = values.truthy(left)?;
             let right_truthy = values.truthy(right)?;
@@ -53,6 +49,34 @@ pub(in crate::interpreter) fn eval_binary_result(
     }
 }
 
+/// Concatenates borrowed operands and releases cells produced by object string conversion.
+fn eval_concat_result(
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let left_string = eval_string_context_value(left, context, values)?;
+    let right_string = match eval_string_context_value(right, context, values) {
+        Ok(value) => value,
+        Err(status) => {
+            let _ = release_expr_result(left_string, context, values);
+            return Err(status);
+        }
+    };
+    let result = values.concat(left_string, right_string);
+    let left_released = release_expr_result(left_string, context, values);
+    let right_released = release_expr_result(right_string, context, values);
+    match (result, left_released.and(right_released)) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = release_expr_result(value, context, values);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
 /// Evaluates a runtime property or method name expression and returns its PHP string bytes as UTF-8.
 pub(in crate::interpreter) fn eval_dynamic_member_name(
     expr: &EvalExpr,
@@ -60,10 +84,16 @@ pub(in crate::interpreter) fn eval_dynamic_member_name(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let value = eval_expr(expr, context, scope, values)?;
-    let value = eval_string_context_value(value, context, values)?;
-    let bytes = values.string_bytes(value)?;
-    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+    let source = eval_leased_expr(expr, context, scope, values)?;
+    let result = (|| {
+        let value = eval_string_context_value(source.borrowed(), context, values)?;
+        let bytes = values.string_bytes(value);
+        let released = release_expr_result(value, context, values);
+        let bytes = bytes.and_then(|bytes| released.map(|()| bytes))?;
+        String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+    })();
+    let released = eval_release_value(context, values, source);
+    result.and_then(|result| released.map(|()| result))
 }
 
 /// Reads an array element or dispatches `ArrayAccess::offsetGet()` for objects.
@@ -105,16 +135,19 @@ pub(super) fn eval_cast_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = eval_expr(expr, context, scope, values)?;
-    match target {
-        EvalCastType::Int => values.cast_int(value),
-        EvalCastType::Float => values.cast_float(value),
-        EvalCastType::String => {
-            let value = eval_string_context_value(value, context, values)?;
-            values.cast_string(value)
+    with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
+        match target {
+            EvalCastType::Int => values.cast_int(args[0]),
+            EvalCastType::Float => values.cast_float(args[0]),
+            EvalCastType::String => {
+                let value = eval_string_context_value(args[0], context, values)?;
+                let result = values.cast_string(value);
+                let released = release_expr_result(value, context, values);
+                result.and_then(|result| released.map(|()| result))
+            }
+            EvalCastType::Bool => values.cast_bool(args[0]),
         }
-        EvalCastType::Bool => values.cast_bool(value),
-    }
+    })
 }
 
 /// Constructs an object after the target class name and constructor arguments have been evaluated.
@@ -398,17 +431,37 @@ pub(in crate::interpreter) fn eval_match_expr(
     values: &mut impl RuntimeValueOps,
     own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let subject = eval_expr(subject, context, scope, values)?;
-    for arm in arms {
-        for pattern in &arm.patterns {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let matched = values.compare(EvalBinOp::StrictEq, subject, pattern)?;
-            if values.truthy(matched)? {
-                return eval_expr_with_result_ownership(&arm.value, context, scope, values, own_result);
+    with_eval_operands(&[subject], context, scope, values, |subjects, context, scope, values| {
+        for arm in arms {
+            for pattern in &arm.patterns {
+                let matched = with_eval_operands(
+                    &[pattern],
+                    context,
+                    scope,
+                    values,
+                    |patterns, _, _, values| {
+                        values.compare(EvalBinOp::StrictEq, subjects[0], patterns[0])
+                    },
+                )?;
+                let truthy = values.truthy(matched);
+                let released = release_expr_result(matched, context, values);
+                let truthy = truthy?;
+                released?;
+                if truthy {
+                    return eval_expr_with_result_ownership(
+                        &arm.value,
+                        context,
+                        scope,
+                        values,
+                        own_result,
+                    );
+                }
             }
         }
-    }
-    default
-        .map(|expr| eval_expr_with_result_ownership(expr, context, scope, values, own_result))
-        .unwrap_or(Err(EvalStatus::RuntimeFatal))
+        default
+            .map(|expr| {
+                eval_expr_with_result_ownership(expr, context, scope, values, own_result)
+            })
+            .unwrap_or(Err(EvalStatus::RuntimeFatal))
+    })
 }

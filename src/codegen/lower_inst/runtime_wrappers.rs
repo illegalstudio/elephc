@@ -190,7 +190,7 @@ fn build_runtime_call_wrapper_function(
                 builder: &mut builder,
                 strict_php,
             };
-            Some(crate::builtins::semantics::lower_registry_call(
+            let result = crate::builtins::semantics::lower_registry_call(
                 &mut lowering,
                 def,
                 &operands,
@@ -203,19 +203,73 @@ fn build_runtime_call_wrapper_function(
                     name, error,
                 ))
             })?
-            .value)
+            .value;
+            let ownership = wrapper_result_ownership(
+                def.spec.semantics.result_ownership,
+                &return_php_type,
+                name,
+            )?;
+            builder.set_value_ownership(result, ownership);
+            Some(result)
         }
-        RuntimeCallWrapperKind::Extern => builder.emit(
-            Op::ExternCall,
-            operands,
-            Some(Immediate::Data(data)),
-            wrapper_return_ir_type(&return_php_type),
-            return_php_type.clone(),
-            Ownership::for_php_type(&return_php_type),
-        ),
+        RuntimeCallWrapperKind::Extern => {
+            let result = builder.emit(
+                Op::ExternCall,
+                operands,
+                Some(Immediate::Data(data)),
+                wrapper_return_ir_type(&return_php_type),
+                return_php_type.clone(),
+                if Ownership::php_type_needs_lifetime_tracking(&return_php_type) {
+                    Ownership::Borrowed
+                } else {
+                    Ownership::NonHeap
+                },
+            );
+            result
+        }
     };
     builder.terminate(Terminator::Return { value: result });
     Ok(function)
+}
+
+/// Maps a builtin's shared ownership contract onto its synthetic wrapper result.
+fn wrapper_result_ownership(
+    contract: crate::builtins::semantics::BuiltinResultOwnership,
+    return_ty: &PhpType,
+    name: &str,
+) -> Result<Ownership> {
+    use crate::builtins::semantics::BuiltinResultOwnership;
+    if !Ownership::php_type_needs_lifetime_tracking(return_ty) {
+        return Ok(Ownership::NonHeap);
+    }
+    match contract {
+        BuiltinResultOwnership::Fresh => Ok(Ownership::Owned),
+        BuiltinResultOwnership::Borrowed | BuiltinResultOwnership::Aliases(_) => {
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::MayAliasArguments
+            if return_ty.codegen_repr() == PhpType::Str =>
+        {
+            // String wrapper returns are persisted before the native C boundary,
+            // so aliasing and fresh scratch paths share one borrowed EIR convention.
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::MayAliasArguments => {
+            Err(CodegenIrError::invalid_module(format!(
+                "callable wrapper {} needs a runtime marker for path-dependent ownership of {:?}",
+                name, return_ty
+            )))
+        }
+        BuiltinResultOwnership::Independent if return_ty.codegen_repr() == PhpType::Str => {
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::Independent | BuiltinResultOwnership::NonHeap => {
+            Err(CodegenIrError::invalid_module(format!(
+                "callable wrapper {} has ambiguous {:?} ownership for {:?}",
+                name, contract, return_ty
+            )))
+        }
+    }
 }
 
 /// EIR construction adapter used by synthetic builtin callable wrappers.

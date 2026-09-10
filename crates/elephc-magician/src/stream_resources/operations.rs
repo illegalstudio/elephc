@@ -189,7 +189,10 @@ impl EvalStreamResources {
 
     /// Returns the persisted options for a stream context resource.
     pub(crate) fn stream_context_options(&self, id: i64) -> Option<RuntimeCellHandle> {
-        self.stream_contexts.get(&id).and_then(|context| context.options)
+        self.stream_contexts
+            .get(&id)
+            .and_then(|context| context.options)
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Replaces persisted options for a stream context resource.

@@ -190,7 +190,7 @@ fn test_x86_64_runtime_array_new_carries_size_guard() {
         "cmovg rax, rdi",
         "imul rax, 64",
         "jo __rt_hash_cap_overflow",
-        "mov eax, 56",
+        "mov eax, 64",
         "mov QWORD PTR [rax + 40], r10",
         "mov QWORD PTR [rax + 48], 0",
         "jz __rt_hash_new_done",

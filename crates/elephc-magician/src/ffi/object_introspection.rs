@@ -44,7 +44,7 @@ pub unsafe extern "C" fn __elephc_eval_object_context(
 ) -> *mut ElephcEvalContext {
     std::panic::catch_unwind(|| {
         if object.is_null() { return std::ptr::null_mut(); }
-        let object = RuntimeCellHandle::from_raw(object);
+        let object = RuntimeCellHandle::from_raw(object).borrowed();
         let mut values = ElephcRuntimeOps::new();
         let owner = values.object_identity(object).ok().and_then(|identity| {
             crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
@@ -188,7 +188,7 @@ unsafe fn eval_object_class_name_inner(
     match interpreter::execute_context_object_class_name(
         context,
         lookup,
-        RuntimeCellHandle::from_raw(object_or_class),
+        RuntimeCellHandle::from_raw(object_or_class).borrowed(),
         &mut values,
     ) {
         Ok(result) => write_outcome(EvalOutcome::Value(result), out).code(),
@@ -228,7 +228,7 @@ unsafe fn eval_class_relation_inner(
     match interpreter::execute_context_class_relation(
         context,
         lookup,
-        RuntimeCellHandle::from_raw(target),
+        RuntimeCellHandle::from_raw(target).borrowed(),
         &mut values,
     ) {
         Ok(result) => write_outcome(EvalOutcome::Value(result), out).code(),
@@ -261,7 +261,7 @@ unsafe fn eval_object_is_a_inner(
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_object_is_a(
         context,
-        RuntimeCellHandle::from_raw(object),
+        RuntimeCellHandle::from_raw(object).borrowed(),
         &target,
         exclude_self != 0,
         &mut values,
@@ -292,8 +292,8 @@ unsafe fn eval_object_is_a_dynamic_inner(
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_object_is_a_dynamic(
         context,
-        RuntimeCellHandle::from_raw(object),
-        RuntimeCellHandle::from_raw(target),
+        RuntimeCellHandle::from_raw(object).borrowed(),
+        RuntimeCellHandle::from_raw(target).borrowed(),
         exclude_self != 0,
         &mut values,
     ) {
@@ -328,8 +328,8 @@ unsafe fn eval_member_exists_inner(
     match interpreter::execute_context_member_exists(
         context,
         lookup,
-        RuntimeCellHandle::from_raw(target),
-        RuntimeCellHandle::from_raw(member),
+        RuntimeCellHandle::from_raw(target).borrowed(),
+        RuntimeCellHandle::from_raw(member).borrowed(),
         &mut values,
     ) {
         Ok(result) => i32::from(result),

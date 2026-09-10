@@ -105,6 +105,11 @@ pub(super) fn copy_scope_value(
         values.copy_value(value)?
     };
     context.copy_array_metadata(value, copied);
+    if let Err(status) = context.copy_pcntl_foreign_callable(value, copied, values) {
+        context.clear_array_metadata(copied);
+        let _ = values.release(copied);
+        return Err(status);
+    }
     Ok(copied)
 }
 

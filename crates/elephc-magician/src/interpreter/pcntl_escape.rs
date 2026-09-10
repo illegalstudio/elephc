@@ -60,7 +60,7 @@ pub(crate) fn value_contains_foreign_pcntl_callable(
                             return Err(status);
                         }
                     };
-                    let nested = match values.array_get(value, key) {
+                    let nested = match array_walk_value(value, key, context, values) {
                         Ok(nested) => nested,
                         Err(status) => {
                             let _ = values.release(key);
@@ -131,6 +131,39 @@ pub(crate) fn value_contains_foreign_pcntl_callable(
         release_walk_value(value, owned, values);
     }
     Ok(false)
+}
+
+/// Reads the stored array cell when its pointer carries foreign-callable metadata.
+fn array_walk_value(
+    array: RuntimeCellHandle,
+    key: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let stored = values.array_get_preserving_references(array, key)?;
+    if context.pcntl_foreign_callable_owner(stored).is_some() {
+        return Ok(stored);
+    }
+    let is_reference = match values.is_reference(stored) {
+        Ok(is_reference) => is_reference,
+        Err(status) => {
+            let _ = values.release(stored);
+            return Err(status);
+        }
+    };
+    if !is_reference {
+        return Ok(stored);
+    }
+    let copied = values.copy_value(stored);
+    let cleanup = values.release(stored);
+    match (copied, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = values.release(value);
+            Err(status)
+        }
+    }
 }
 
 /// Releases one container-read result when the graph walker owns it.

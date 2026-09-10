@@ -35,6 +35,7 @@ use crate::codegen::{
 use crate::codegen_support::try_handlers::{
     EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
+use crate::ir::Ownership;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
@@ -203,7 +204,17 @@ fn emit_runtime_callable_invoker_impl(
         &mut ctx,
         data,
     );
-    emit_boxed_invoker_return(emitter, &ret_ty, invoker.sig.by_ref_return);
+    if invoker.mbstring_operation.is_some() {
+        // The mbstring bridge returns a freshly allocated boxed Mixed owner and
+        // bypasses the EIR entry path that normally publishes this status.
+        super::return_ownership::emit_status(emitter, true);
+    }
+    emit_boxed_invoker_return(
+        emitter,
+        &ret_ty,
+        invoker.sig.by_ref_return,
+        &mut ctx,
+    );
     argument_owners::finish(emitter);
     if catch_native_throws {
         emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
@@ -229,15 +240,42 @@ fn emit_runtime_callable_invoker_impl(
 /// By-value typed object returns own either a fresh object or the reference acquired
 /// by source return lowering. Boxing consumes that owner in both cases.
 ///
-/// Other representations retain their existing ABI: container returns can still
-/// borrow parameters, and Mixed results already use boxed return storage.
-fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType, by_ref_return: bool) {
+/// Lifetime-tracked results follow the exact status published by the target's
+/// return path. Borrowed results gain one owner before argument cleanup, while
+/// owned results transfer their existing owner into the boxed C return.
+fn emit_boxed_invoker_return(
+    emitter: &mut Emitter,
+    ret_ty: &PhpType,
+    by_ref_return: bool,
+    ctx: &mut InvokerEmitContext,
+) {
     let repr = ret_ty.codegen_repr();
     if repr == PhpType::Str || (!by_ref_return && matches!(repr, PhpType::Object(_))) {
         emit_box_current_owned_value_as_mixed(emitter, &repr);
         return;
     }
-    emit_box_current_value_as_mixed(emitter, &repr);
+    if by_ref_return || !Ownership::php_type_needs_lifetime_tracking(&repr) {
+        emit_box_current_value_as_mixed(emitter, &repr);
+        return;
+    }
+
+    let owned = ctx.next_label("return_owned");
+    let done = ctx.next_label("return_boxed");
+    super::return_ownership::emit_branch_if_owned(emitter, &owned);
+    emit_box_borrowed_invoker_return(emitter, &repr);
+    abi::emit_jump(emitter, &done);
+    emitter.label(&owned);
+    emit_box_current_owned_value_as_mixed(emitter, &repr);
+    emitter.label(&done);
+}
+
+/// Promotes a borrowed target result into the owned boxed Mixed C return.
+fn emit_box_borrowed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
+    if matches!(ret_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_incref");
+    } else {
+        emit_box_current_value_as_mixed(emitter, ret_ty);
+    }
 }
 
 /// Loads the saved descriptor entry slot into `call_reg` after a `setjmp` boundary.
@@ -2592,53 +2630,53 @@ fn emit_call_user_func_array_missing_arg_error(emitter: &mut Emitter, data: &mut
         data.add_string(b"call_user_func_array(): missing required argument");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #56");                                // request the compact Throwable payload
-            emitter.instruction("bl __rt_heap_alloc");                         // allocate the ArgumentCountError object
-            emitter.instruction("mov x9, #6");                                 // heap kind 6 identifies a throwable object
-            emitter.instruction("str x9, [x0, #-8]");                          // stamp the allocation before acquiring its PHP handle
-            emitter.instruction("bl __rt_object_handle_acquire");              // assign the object its runtime handle
+            emitter.instruction("mov x0, #56");                                 // request the compact Throwable payload
+            emitter.instruction("bl __rt_heap_alloc");                          // allocate the ArgumentCountError object
+            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its PHP handle
+            emitter.instruction("bl __rt_object_handle_acquire");               // assign the object its runtime handle
             abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_argument_count_error_class_id", 0);
-            emitter.instruction("str x9, [x0]");                               // identify the catchable ArgumentCountError class
+            emitter.instruction("str x9, [x0]");                                // identify the catchable ArgumentCountError class
             abi::emit_symbol_address(emitter, "x9", &message_label);
-            emitter.instruction("str x9, [x0, #8]");                           // store the immutable diagnostic bytes
+            emitter.instruction("str x9, [x0, #8]");                            // store the immutable diagnostic bytes
             abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
-            emitter.instruction("str x9, [x0, #16]");                          // store the diagnostic byte length
-            emitter.instruction("str xzr, [x0, #24]");                         // exception code defaults to zero
+            emitter.instruction("str x9, [x0, #16]");                           // store the diagnostic byte length
+            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
                 emitter, "x0",
             );
-            emitter.instruction("str xzr, [x0, #40]");                         // previous exception defaults to null
+            emitter.instruction("str xzr, [x0, #40]");                          // previous exception defaults to null
             abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
-            emitter.instruction("b __rt_throw_current");                       // release argument guards and enter PHP exception handling
+            emitter.instruction("b __rt_throw_current");                        // release argument guards and enter PHP exception handling
         }
         Arch::X86_64 => {
-            emitter.instruction("mov eax, 56");                                // request the compact Throwable payload
-            emitter.instruction("call __rt_heap_alloc");                       // allocate the ArgumentCountError object
+            emitter.instruction("mov eax, 56");                                 // request the compact Throwable payload
+            emitter.instruction("call __rt_heap_alloc");                        // allocate the ArgumentCountError object
             abi::emit_load_int_immediate(
                 emitter,
                 "r10",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,
             );
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");               // stamp the canonical throwable heap kind
-            emitter.instruction("call __rt_object_handle_acquire");            // assign the object its runtime handle
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the canonical throwable heap kind
+            emitter.instruction("call __rt_object_handle_acquire");             // assign the object its runtime handle
             abi::emit_load_symbol_to_reg(
                 emitter,
                 "r10",
                 "_spl_argument_count_error_class_id",
                 0,
             );
-            emitter.instruction("mov QWORD PTR [rax], r10");                   // identify the catchable ArgumentCountError class
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the catchable ArgumentCountError class
             abi::emit_symbol_address(emitter, "r10", &message_label);
-            emitter.instruction("mov QWORD PTR [rax + 8], r10");               // store the immutable diagnostic bytes
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the immutable diagnostic bytes
             abi::emit_load_int_immediate(emitter, "r10", message_len as i64);
-            emitter.instruction("mov QWORD PTR [rax + 16], r10");              // store the diagnostic byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                // exception code defaults to zero
+            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the diagnostic byte length
+            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
                 emitter, "rax",
             );
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                // previous exception defaults to null
+            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous exception defaults to null
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
-            emitter.instruction("jmp __rt_throw_current");                     // release argument guards and enter PHP exception handling
+            emitter.instruction("jmp __rt_throw_current");                      // release argument guards and enter PHP exception handling
         }
     }
 }

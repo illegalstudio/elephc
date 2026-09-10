@@ -119,6 +119,11 @@ pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
             .stream_resources_mut()
             .release_curl_easy_private_values(&mut values);
     }
+    #[cfg(not(test))]
+    if let Some(context) = unsafe { ctx.as_mut() } {
+        let mut values = crate::runtime_hooks::ElephcRuntimeOps::with_context(ctx);
+        context.release_pcntl_foreign_callables(&mut values);
+    }
     if let Some(context) = unsafe { ctx.as_ref() } {
         context.unregister_dynamic_object_context();
     }

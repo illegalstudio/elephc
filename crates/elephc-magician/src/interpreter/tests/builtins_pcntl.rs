@@ -169,3 +169,68 @@ pcntl_signal(SIGUSR1, function(): void {
         "Cannot switch fibers in current execution context"
     );
 }
+
+/// Pins each copied foreign handler identity once and releases every pin during teardown.
+#[test]
+fn foreign_handler_copy_metadata_is_idempotent_and_drains_cell_pins() {
+    let _guard = PCNTL_TEST_LOCK.lock().expect("PCNTL test lock poisoned");
+    let register = parse_fragment(
+        b"function pinned_handler(): void {} pcntl_signal(SIGUSR1, 'pinned_handler');",
+    )
+    .expect("parse named PCNTL registration");
+    let get = parse_fragment(b"return pcntl_signal_get_handler(SIGUSR1);")
+        .expect("parse foreign handler lookup");
+    let cleanup = parse_fragment(b"pcntl_signal(SIGUSR1, SIG_DFL);")
+        .expect("parse PCNTL cleanup");
+    let mut owner_context = ElephcEvalContext::new();
+    let mut owner_scope = ElephcEvalScope::new();
+    let mut foreign_context = ElephcEvalContext::new();
+    let mut foreign_scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let registered = execute_program_with_context(
+        &mut owner_context,
+        &register,
+        &mut owner_scope,
+        &mut values,
+    )
+    .expect("register named eval handler");
+    values.release(registered).expect("release registration result");
+    let handler = execute_program_with_context(
+        &mut foreign_context,
+        &get,
+        &mut foreign_scope,
+        &mut values,
+    )
+    .expect("get foreign handler");
+    assert!(foreign_context.pcntl_foreign_callable_owner(handler).is_some());
+
+    let copied = values.copy_value(handler).expect("copy foreign handler value");
+    let retains_before = values.retains.len();
+    foreign_context
+        .copy_pcntl_foreign_callable(handler, copied, &mut values)
+        .expect("copy foreign handler metadata");
+    assert_eq!(values.retains.len(), retains_before + 1);
+    foreign_context
+        .copy_pcntl_foreign_callable(handler, copied, &mut values)
+        .expect("repeat foreign handler metadata copy");
+    assert_eq!(values.retains.len(), retains_before + 1);
+    assert!(foreign_context.pcntl_foreign_callable_owner(copied).is_some());
+
+    let releases_before = values.releases.len();
+    foreign_context.release_pcntl_foreign_callables(&mut values);
+    assert_eq!(values.releases.len(), releases_before + 2);
+    assert!(foreign_context.pcntl_foreign_callable_owner(handler).is_none());
+    assert!(foreign_context.pcntl_foreign_callable_owner(copied).is_none());
+    values.release(handler).expect("release handler result");
+    values.release(copied).expect("release copied handler");
+
+    let cleaned = execute_program_with_context(
+        &mut owner_context,
+        &cleanup,
+        &mut owner_scope,
+        &mut values,
+    )
+    .expect("restore default signal disposition");
+    values.release(cleaned).expect("release cleanup result");
+}

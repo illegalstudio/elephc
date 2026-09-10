@@ -18,15 +18,7 @@ pub(in crate::interpreter) fn eval_builtin_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if eval_builtin_uses_owned_arguments(name) {
-        return eval_owned_builtin_call(name, args, false, context, scope, values);
-    }
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, values)?;
-    let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
-        return Err(EvalStatus::UnsupportedConstruct);
-    };
-    Ok(result)
+    eval_owned_builtin_call(name, args, false, context, scope, values)
 }
 
 /// Binds evaluated builtin arguments to PHP parameter order when names are used.

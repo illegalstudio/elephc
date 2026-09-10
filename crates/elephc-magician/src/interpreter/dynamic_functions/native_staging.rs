@@ -103,8 +103,8 @@ pub(super) fn stage_native_function_invoker_args(
         }
         let original = bound_arg.value;
         let retained = values.retain(original)?;
-        let mut slot = Box::new(retained);
-        let marker = match values.invoker_ref_cell(slot.as_mut() as *mut RuntimeCellHandle) {
+        let mut slot = Box::new(retained.as_ptr());
+        let marker = match values.invoker_ref_cell(slot.as_mut()) {
             Ok(marker) => marker,
             Err(status) => {
                 values.release(retained)?;

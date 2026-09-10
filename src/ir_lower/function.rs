@@ -1335,6 +1335,9 @@ fn lower_body_into_function(
         crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
     }
     terminate_open_block(&mut ctx);
+    // Cleanup-only loads must follow the final frame representation after every
+    // source-order store has had a chance to widen its local slot.
+    ctx.builder.repair_owned_local_cleanup_load_types();
     // Final storage types are now known: erase deferred loop-store releases that
     // guard slots which never widened to lifetime-tracked storage (issue #534).
     ctx.builder.prune_untracked_release_local_slot_ops();

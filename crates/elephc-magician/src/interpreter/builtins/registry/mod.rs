@@ -300,10 +300,11 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
     hook.call(spec.name, args, context, scope, values).map(Some)
 }
 
-/// Dispatches a declaratively migrated builtin from already evaluated argument cells.
-pub(in crate::interpreter) fn eval_declared_builtin_values_call(
+/// Dispatches evaluated builtin cells with optional lexical scope for callback resolution.
+pub(in crate::interpreter) fn eval_declared_builtin_values_call_from_scope(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
@@ -322,7 +323,7 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call(
     let Some(hook) = spec.values else {
         return Ok(None);
     };
-    hook.call(spec.name, evaluated_args, context, values)
+    hook.call(spec.name, evaluated_args, lexical_scope, context, values)
         .map(Some)
 }
 

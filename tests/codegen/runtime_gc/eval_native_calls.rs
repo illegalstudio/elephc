@@ -10,6 +10,102 @@
 
 use crate::support::*;
 
+/// Releases main-scope process argument boxes when eval reuses the local scope as globals.
+#[test]
+fn test_eval_noop_scope_sync_releases_main_process_arguments() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$source = $argc > 0 ? '' : 'echo "unreachable";';
+eval($source);
+echo $argc, ":", count($argv);
+"#,
+    );
+    assert!(output.success, "{}\n{}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "1:1");
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        output.stderr
+    );
+}
+
+/// Releases the previous Mixed owner when eval replaces and then unsets a caller local.
+#[test]
+fn test_eval_scope_reassignment_unset_heap_discriminant() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$value = "before";
+$source = $argc > 0 ? '$value = "after"; unset($value);' : '';
+eval($source);
+echo isset($value) ? $value : "unset";
+"#,
+    );
+    assert!(output.success, "{}\n{}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "unset");
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        output.stderr
+    );
+}
+
+/// Balances unchanged, replaced, and aliased Mixed eval reloads.
+#[test]
+fn test_eval_scope_reload_balances_mixed_owner_transitions() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$value = "before";
+$replace = $argc > 0 ? '$value = "after";' : '';
+eval($replace);
+echo $value, ":";
+
+$alias = "alias";
+$bind = $argc > 0 ? '$value =& $alias;' : '';
+eval($bind);
+$noop = $argc > 0 ? '' : 'echo "unreachable";';
+eval($noop);
+echo $value, ":", $alias;
+"#,
+    );
+    assert!(output.success, "{}\n{}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "after:alias:alias");
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        output.stderr
+    );
+}
+
+/// Gives eval-owned replacements to by-value and by-reference Mixed parameter storage.
+#[test]
+fn test_eval_scope_reload_balances_mixed_parameter_transitions() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function update_eval_parameters(mixed $parameter, mixed &$reference, string $code): string {
+    eval($code);
+    return $parameter . ":" . $reference;
+}
+$caller = "caller";
+$reference = $argc > 0 ? "reference" : 0;
+echo update_eval_parameters(
+    $caller,
+    $reference,
+    '$parameter = "local"; $reference = "reference-local";'
+), ":", $caller, ":", $reference;
+"#,
+    );
+    assert!(output.success, "{}\n{}", output.stdout, output.stderr);
+    assert_eq!(
+        output.stdout,
+        "local:reference-local:caller:reference-local"
+    );
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        output.stderr
+    );
+}
+
 /// Borrows native method arguments through normal returns and throws without retaining lookup cells.
 #[test]
 fn test_mbstring_eval_native_method_argument_ownership() {

@@ -17,10 +17,17 @@ pub(in crate::interpreter) fn eval_native_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_literal_call_arguments(args, context, caller_scope, values, |args, context, _, values| {
-        let bound = bind_evaluated_native_function_args(&function, args, context, values)?;
-        eval_native_function_with_values(function, bound, context, values)
-    })
+    with_eval_call_arguments(
+        args,
+        context,
+        caller_scope,
+        values,
+        |arguments, context, _, values| {
+            let bound =
+                bind_evaluated_native_function_args(&function, arguments, context, values)?;
+            eval_native_function_with_values(function, bound, context, values)
+        },
+    )
 }
 
 /// Invokes a registered AOT function after its arguments have been bound and staged.
@@ -173,7 +180,7 @@ fn cleanup_native_function_ref_slot(
                 released
             }
             BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
-                values.release(**slot)
+                values.release(RuntimeCellHandle::from_raw(**slot))
             }
             BoundNativeFunctionRefSlot::RawWord { .. } => Ok(()),
         }
@@ -208,7 +215,7 @@ fn write_back_native_function_ref_slot(
                 slot,
                 target,
             } => {
-                let value = **slot;
+                let value = RuntimeCellHandle::from_raw(**slot);
                 if value == *original {
                     values.release(value)?;
                     return Ok(());

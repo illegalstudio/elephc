@@ -26,11 +26,14 @@ pub(in crate::interpreter) fn eval_builtin_min(
     if args.len() < 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated_args.push(eval_expr(arg, context, scope, values)?);
-    }
-    eval_min_result(&evaluated_args, values)
+    let operands = args.iter().collect::<Vec<_>>();
+    with_eval_operands(
+        &operands,
+        context,
+        scope,
+        values,
+        |args, _, _, values| eval_min_result(args, values),
+    )
 }
 
 /// Applies PHP `min()` to already evaluated values.

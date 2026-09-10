@@ -95,7 +95,7 @@ fn pcntl_runtime() -> &'static Mutex<PcntlRuntimeState> {
 /// Returns the active eval-owned handler for one signal.
 pub(crate) fn signal_handler(signal: i32) -> Option<EvalPcntlSignalEntry> {
     let state = pcntl_runtime().lock().ok()?;
-    stored_to_entry(*state.handlers.get(&signal)?)
+    stored_to_entry(*state.handlers.get(&signal)?, true)
 }
 
 /// Returns one handler for dispatch while pinning its owning context until invocation ends.
@@ -105,7 +105,7 @@ pub(crate) fn begin_handler_dispatch(signal: i32) -> Option<EvalPcntlSignalEntry
     if stored.context != 0 {
         *state.active_contexts.entry(stored.context).or_default() += 1;
     }
-    stored_to_entry(stored)
+    stored_to_entry(stored, true)
 }
 
 /// Pins the detached owner of one handler callable when another eval context invokes it.
@@ -171,7 +171,7 @@ pub(crate) fn replace_signal_handler(
     state
         .handlers
         .insert(signal, stored)
-        .and_then(stored_to_entry)
+        .and_then(|stored| stored_to_entry(stored, false))
 }
 
 /// Marks a frame-owned context as detached when an active signal handler still references it.
@@ -289,12 +289,20 @@ pub(crate) fn fiber_dispatching() -> bool {
 }
 
 /// Converts pointer-free registry storage back into an interpreter-facing entry.
-fn stored_to_entry(stored: StoredSignalEntry) -> Option<EvalPcntlSignalEntry> {
+fn stored_to_entry(
+    stored: StoredSignalEntry,
+    borrowed: bool,
+) -> Option<EvalPcntlSignalEntry> {
     let handler = match stored.disposition {
         Some(disposition) => EvalPcntlSignalHandler::Disposition(disposition),
-        None if stored.callback != 0 => EvalPcntlSignalHandler::Callable(
-            RuntimeCellHandle::from_raw(stored.callback as *mut RuntimeCell),
-        ),
+        None if stored.callback != 0 => {
+            let callback = RuntimeCellHandle::from_raw(stored.callback as *mut RuntimeCell);
+            EvalPcntlSignalHandler::Callable(if borrowed {
+                callback.borrowed()
+            } else {
+                callback
+            })
+        }
         None => return None,
     };
     Some(EvalPcntlSignalEntry {

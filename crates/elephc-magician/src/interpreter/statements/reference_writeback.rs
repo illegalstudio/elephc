@@ -354,7 +354,9 @@ pub(super) fn eval_invoker_slot_ref_target_value(
             values.raw_word_value(source_tag, word)
         }
         EVAL_TAG_MIXED => {
-            let value = unsafe { *(slot as *const RuntimeCellHandle) };
+            let value = RuntimeCellHandle::from_raw(unsafe {
+                *(slot as *const *mut crate::value::RuntimeCell)
+            });
             values.retain(value)
         }
         _ => Err(EvalStatus::RuntimeFatal),
@@ -383,9 +385,9 @@ pub(super) fn write_back_invoker_slot_ref_target(
         EVAL_TAG_MIXED => {
             let retained = values.retain(value)?;
             let replaced = unsafe {
-                let slot = slot as *mut RuntimeCellHandle;
-                let replaced = *slot;
-                *slot = retained;
+                let slot = slot as *mut *mut crate::value::RuntimeCell;
+                let replaced = RuntimeCellHandle::from_raw(*slot);
+                *slot = retained.as_ptr();
                 replaced
             };
             values.release(replaced)

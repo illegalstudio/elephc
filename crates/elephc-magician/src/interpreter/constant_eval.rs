@@ -26,7 +26,7 @@ pub(super) fn eval_const(
     }
 }
 
-/// Loads a retained value for one eval-defined dynamic constant.
+/// Borrows one eval-defined dynamic constant until its expression consumer takes a copy.
 pub(super) fn eval_const_fetch(
     name: &str,
     context: &ElephcEvalContext,
@@ -38,7 +38,7 @@ pub(super) fn eval_const_fetch(
     let Some(value) = context.constant(name) else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    values.retain(value)
+    Ok(value)
 }
 
 /// Fetches a namespaced constant and falls back to the global constant namespace.
@@ -52,7 +52,7 @@ pub(super) fn eval_namespaced_const_fetch(
         return Ok(value);
     }
     if let Some(value) = context.constant(name) {
-        return values.retain(value);
+        return Ok(value);
     }
     eval_const_fetch(fallback_name, context, values)
 }

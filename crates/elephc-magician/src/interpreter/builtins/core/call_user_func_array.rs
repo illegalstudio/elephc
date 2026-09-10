@@ -30,7 +30,6 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     let [callback, arg_array] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let release_arg_array = matches!(arg_array, EvalExpr::Array(_));
     let callback = eval_owned_expr(callback, context, scope, values)?;
     if let Ok(EvaluatedCallable::Named { name, .. }) = eval_callable_from_scope(callback, context, scope, values) {
         if eval_builtin_uses_owned_arguments(&name) {
@@ -38,25 +37,21 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
             return release_callback_result(callback, result, context, values);
         }
     }
-    let arg_array = match eval_expr(arg_array, context, scope, values) {
-        Ok(arg_array) => arg_array,
-        Err(status) => {
-            return release_callback_result(callback, Err(status), context, values);
-        }
-    };
-    let result = eval_call_user_func_array_with_values_from_scope(
-        callback,
-        arg_array,
-        Some(scope),
+    let result = with_eval_operands(
+        &[arg_array],
         context,
+        scope,
         values,
+        |arguments, context, scope, values| {
+            eval_call_user_func_array_with_values_from_scope(
+                callback,
+                arguments[0],
+                Some(scope),
+                context,
+                values,
+            )
+        },
     );
-    if release_arg_array {
-        if let Err(status) = eval_release_value(context, values, arg_array) {
-            if let Ok(value) = result { let _ = eval_release_value(context, values, value); }
-            return release_callback_result(callback, Err(status), context, values);
-        }
-    }
     release_callback_result(callback, result, context, values)
 }
 

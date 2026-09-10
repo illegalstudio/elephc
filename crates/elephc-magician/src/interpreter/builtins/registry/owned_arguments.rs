@@ -27,9 +27,10 @@ pub(in crate::interpreter) fn eval_owned_builtin_call(
     name: &str, args: &[EvalCallArg], callback_by_value: bool, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_owned_builtin_arguments(name, callback_by_value, context, values,
-        |contract, context, values, owners, evaluated| {
-            eval_owned_call_arg_values(args, context, scope, values, owners, evaluated,
+    with_owned_builtin_arguments(name, callback_by_value, Some(scope), context, values,
+        |contract, lexical_scope, context, values, owners, evaluated| {
+            let lexical_scope = lexical_scope.ok_or(EvalStatus::RuntimeFatal)?;
+            eval_owned_call_arg_values(args, context, lexical_scope, values, owners, evaluated,
                 (!callback_by_value).then_some(contract))
         })
 }
@@ -39,9 +40,10 @@ pub(in crate::interpreter) fn eval_builtin_call_array_expr(
     name: &str, array: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_owned_builtin_arguments(name, true, context, values,
-        |contract, context, values, owners, evaluated| {
-            let array = eval_owned_expr(array, context, scope, values)?;
+    with_owned_builtin_arguments(name, true, Some(scope), context, values,
+        |contract, lexical_scope, context, values, owners, evaluated| {
+            let lexical_scope = lexical_scope.ok_or(EvalStatus::RuntimeFatal)?;
+            let array = eval_owned_expr(array, context, lexical_scope, values)?;
             owners.push(array);
             capture_array(contract, array, context, values, owners, evaluated)
         })
@@ -51,8 +53,8 @@ pub(in crate::interpreter) fn eval_builtin_call_array_expr(
 pub(in crate::interpreter) fn eval_builtin_call_array_value(
     name: &str, array: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_owned_builtin_arguments(name, true, context, values,
-        |contract, context, values, owners, evaluated| {
+    with_owned_builtin_arguments(name, true, None, context, values,
+        |contract, _, context, values, owners, evaluated| {
             let copy = values.copy_value(array)?;
             context.copy_array_metadata(array, copy);
             owners.push(copy);
@@ -65,8 +67,8 @@ pub(in crate::interpreter) fn eval_builtin_callback_with_arguments(
     name: &str, arguments: Vec<EvaluatedCallArg>, preserve_references: bool,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_owned_builtin_arguments(name, true, context, values,
-        |contract, context, values, owners, evaluated| {
+    with_owned_builtin_arguments(name, true, None, context, values,
+        |contract, _, context, values, owners, evaluated| {
             for (index, argument) in arguments.into_iter().enumerate() {
                 let value = values.retain(argument.value)?;
                 owners.push(value);
@@ -118,8 +120,9 @@ fn capture_callback_argument(
 
 /// Shares binding, optional callback-reference adaptation, invocation, and failure-safe owner cleanup.
 fn with_owned_builtin_arguments<V: RuntimeValueOps>(
-    name: &str, callback: bool, context: &mut ElephcEvalContext, values: &mut V,
-    evaluate: impl FnOnce(&BuiltinContract, &mut ElephcEvalContext, &mut V,
+    name: &str, callback: bool, mut lexical_scope: Option<&mut ElephcEvalScope>,
+    context: &mut ElephcEvalContext, values: &mut V,
+    evaluate: impl FnOnce(&BuiltinContract, Option<&mut ElephcEvalScope>, &mut ElephcEvalContext, &mut V,
         &mut Vec<RuntimeCellHandle>, &mut Vec<EvaluatedCallArg>) -> Result<(), EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut owners = Vec::new();
@@ -128,7 +131,14 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
     let mut callback_reference_metadata = Vec::new();
     let result = (|| {
         let contract = elephc_builtin_contract::lookup(name).ok_or(EvalStatus::UnsupportedConstruct)?;
-        evaluate(contract, context, values, &mut owners, &mut evaluated)?;
+        evaluate(
+            contract,
+            lexical_scope.as_deref_mut(),
+            context,
+            values,
+            &mut owners,
+            &mut evaluated,
+        )?;
         ordered = bind_builtin_arguments(name, evaluated.clone(), values, Some(&mut owners))?;
         if callback {
             adapt_callback_references(
@@ -140,10 +150,25 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
                 values,
             )?;
         }
-        eval_builtin_with_values(name, &ordered, context, values)?.ok_or(EvalStatus::UnsupportedConstruct)
+        let borrowed = ordered
+            .iter()
+            .copied()
+            .map(RuntimeCellHandle::borrowed)
+            .collect::<Vec<_>>();
+        let result = eval_builtin_with_values_from_scope(
+            name,
+            &borrowed,
+            lexical_scope.as_deref(),
+            context,
+            values,
+        )?.ok_or(EvalStatus::UnsupportedConstruct)?;
+        promote_borrowed_result(result, values)
     })();
+    let preserved = result.as_ref().ok().copied();
     for reference in callback_reference_metadata {
-        context.clear_array_metadata(reference);
+        if preserved.map_or(true, |value| value.as_ptr() != reference.as_ptr()) {
+            context.clear_array_metadata(reference);
+        }
     }
     if ordered.is_empty() {
         // Partial evaluation still destroys captured PHP arguments in parameter order.

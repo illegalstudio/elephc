@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - C owns an independent bounded heap and forwards provider calls to the real Rust bridge.
+//! - Shared fixture runtime symbols use production hidden visibility before register probes call them.
 //! - Structural target checks cover both architectures, PIC modes, and all five supported targets.
 
 use super::*;
@@ -122,7 +123,11 @@ fn fixture(target: Target) -> String {
         ("mb_test_lower", "__rt_strtolower", 2), ("mb_test_upper", "__rt_strtoupper", 2),
         ("mb_test_free", "__rt_heap_free", 1), ("mb_test_reset", "__rt_mbstring_ini_reset", 0)] { entry(&mut emitter, name, runtime, arguments); }
     if target.platform == Platform::Linux { emitter.raw(".section .note.GNU-stack,\"\",@progbits"); }
-    emitter.output().to_owned()
+    crate::codegen_support::visibility::append_hidden_directives(
+        &emitter.output(),
+        &std::collections::HashSet::new(),
+        target.platform,
+    )
 }
 
 /// Executes the emitted persistence/free hooks against real identity leases, including native address reuse.
@@ -176,5 +181,15 @@ fn mbstring_ini_identity_hooks_cover_all_targets() {
             assert!(assembly.contains(if target.arch == Arch::AArch64 { "stp q30, q31" } else { "and rsp, -16" }));
             assert!(assembly.contains(if target.arch == Arch::AArch64 { "ldp q30, q31" } else { "movdqu xmm15" }));
         }
+        let shared_fixture = fixture(target);
+        let visibility = if target.platform == Platform::MacOS {
+            ".private_extern"
+        } else {
+            ".hidden"
+        };
+        assert!(
+            shared_fixture.contains(&format!("{visibility} __rt_mbstring_ini_bind\n")),
+            "{name} shared fixture must bind the register-preserving hook locally"
+        );
     }
 }

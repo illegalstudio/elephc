@@ -18,9 +18,17 @@ pub(in crate::interpreter) fn with_array_call_arguments<V: RuntimeValueOps>(
     values: &mut V,
     invoke: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut V) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_array_call_argument_result(array, context, values, invoke, |value, context, values| {
-        eval_release_value(context, values, value)
-    })
+    with_array_call_argument_result(
+        array,
+        context,
+        values,
+        invoke,
+        |value, values| {
+            let value = promote_borrowed_result(value, values)?;
+            Ok((value, Some(value)))
+        },
+        |value, context, values| eval_release_value(context, values, value),
+    )
 }
 
 /// Keeps argument owners through an optional reflection result and releases an escaped object on cleanup failure.
@@ -30,12 +38,22 @@ pub(in crate::interpreter) fn with_optional_array_call_arguments<V: RuntimeValue
     values: &mut V,
     invoke: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut V) -> Result<Option<RuntimeCellHandle>, EvalStatus>,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    with_array_call_argument_result(array, context, values, invoke, |result, context, values| {
-        match result {
+    with_array_call_argument_result(
+        array,
+        context,
+        values,
+        invoke,
+        |result, values| {
+            let result = result
+                .map(|value| promote_borrowed_result(value, values))
+                .transpose()?;
+            Ok((result, result))
+        },
+        |result, context, values| match result {
             Some(value) => eval_release_value(context, values, value),
             None => Ok(()),
-        }
-    })
+        },
+    )
 }
 
 /// Shares argument acquisition and cleanup across ordinary and optional invocation results.
@@ -44,6 +62,10 @@ fn with_array_call_argument_result<R, V: RuntimeValueOps>(
     context: &mut ElephcEvalContext,
     values: &mut V,
     invoke: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut V) -> Result<R, EvalStatus>,
+    preserve_result: impl FnOnce(
+        R,
+        &mut V,
+    ) -> Result<(R, Option<RuntimeCellHandle>), EvalStatus>,
     release_result: impl FnOnce(R, &mut ElephcEvalContext, &mut V) -> Result<(), EvalStatus>,
 ) -> Result<R, EvalStatus> {
     if !values.is_array_like(array)? { return Err(EvalStatus::RuntimeFatal); }
@@ -52,10 +74,28 @@ fn with_array_call_argument_result<R, V: RuntimeValueOps>(
     let mut owners = vec![copy];
     let mut arguments = Vec::new();
     let mut saw_named = false;
+    let mut preserved = None;
     let result = append_unpacked_call_arg_values_with_owners(
         copy, &mut arguments, &mut saw_named, context, values, Some(&mut owners),
-    ).and_then(|()| invoke(arguments, context, values));
-    context.clear_array_metadata(copy);
+    )
+    .and_then(|()| {
+        let arguments = arguments
+            .into_iter()
+            .map(|argument| EvaluatedCallArg {
+                value: argument.value.borrowed(),
+                ..argument
+            })
+            .collect();
+        invoke(arguments, context, values)
+    })
+    .and_then(|result| {
+        let (result, value) = preserve_result(result, values)?;
+        preserved = value;
+        Ok(result)
+    });
+    if preserved.map_or(true, |value| value.as_ptr() != copy.as_ptr()) {
+        context.clear_array_metadata(copy);
+    }
     let mut cleanup = Ok(());
     for value in owners.into_iter().rev() {
         if let Err(status) = eval_release_value(context, values, value) { cleanup = Err(status); }
@@ -231,7 +271,9 @@ fn eval_invoker_ref_slot_value(
             values.raw_word_value(source_tag, word)
         }
         EVAL_TAG_MIXED => {
-            let value = unsafe { *(slot as *const RuntimeCellHandle) };
+            let value = RuntimeCellHandle::from_raw(unsafe {
+                *(slot as *const *mut crate::value::RuntimeCell)
+            });
             values.retain(value)
         }
         _ => Err(EvalStatus::RuntimeFatal),
