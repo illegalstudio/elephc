@@ -474,6 +474,17 @@ fn test_error_iterator_to_array_rejects_array_preserve_keys() {
     );
 }
 
+/// Declared array argument support does not admit scalar or unrestricted Mixed containers.
+#[test]
+fn test_error_iterator_apply_rejects_unproven_array_argument_containers() {
+    for source in [
+        "<?php function tick(): bool { return true; } function bad(Traversable $items, mixed $args): int { return iterator_apply($items, 'tick', $args); }",
+        "<?php function tick(): bool { return true; } function bad(Traversable $items): int { return iterator_apply($items, 'tick', 7); }",
+    ] {
+        expect_error(source, "iterator_apply() args must be null, a literal array, or an array value");
+    }
+}
+
 /// Verifies that error iterator apply rejects array source.
 #[test]
 fn test_error_iterator_apply_rejects_array_source() {

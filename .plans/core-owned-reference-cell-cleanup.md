@@ -782,3 +782,13 @@ Build, test compilation and diff hygiene pass without local execution. CI on
 22ef9aecb now confirms codegen shard 8 and eval shard 15 on all three executable
 targets. The current branch already contains origin/main; no rebase is required.
 The remaining failed shards are still merge blockers.
+
+### Iterator callback argument containers
+
+iterator_apply now accepts the proven PHP array contract for its callback
+argument container. The existing descriptor backend already accepts its boxed
+representation. Since either indexed or named keys may arrive, checker callback
+specialization conservatively permits associative arguments. Extended the
+Traversable/iterable regression with named containers and added scalar/Mixed
+rejection controls. Build, test compilation and diff hygiene pass without local
+execution; CI validation remains pending.
