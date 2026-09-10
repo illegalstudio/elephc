@@ -1334,3 +1334,36 @@ Build and test compilation pass without local test execution. Generated metadata
 and its mechanically shifted source links are refreshed with the builtin-doc
 workflow and committed separately from the implementation. The CI failures above
 remain the pending executable verification for this fix, not proof of its result.
+
+### Boxed numeric array aggregates
+
+The exact-head CI still rejects declared PHP arrays passed to array_sum, including
+the array-builder return fixture (x86_64 job 102777758664). The previous backend
+also forced heterogeneous values through integer casts and selected integer-only
+callable parameters. Replace sum and product entry lowering with a borrowed-cell
+ABI that validates packed/hash tags, snapshots the payload, iterates logical entries
+and returns an independently owned numeric Mixed cell. The checker keeps that
+boxed storage contract so existing typed scalar return boundaries can narrow it.
+Known scalar source arguments remain compile errors; unknown Mixed sources now
+raise a catchable TypeError. Update the scalar-match typing gate to assert that it
+still remains Mixed and add an executable rejection of that exact source shape.
+
+Use the shared overflow-promoting numeric helpers. A private length-sized string
+buffer plus the PHP grammar scanner preserves exact 64-bit integers, decimal and
+exponent values, leading-numeric prefixes, embedded NUL classification and long
+strings. Select errno through the target platform and keep it a 32-bit C integer.
+PHP 8.3 warning callbacks get unsupported type names and leading-numeric warnings;
+legacy profiles retain silent fallback behavior. Resource fallback uses its PHP id.
+Snapshot and partial-result owners are rooted before warning dispatch and cleaned
+through a native exception boundary. Warning effects include global writes and
+reference cleanup, even for unused results.
+
+Enable generic sum/product callable wrappers with full PHP-array parameters and
+Mixed results. Add all-target EIR/emitter gates and native/tagged regressions for
+layouts, empty identities, scalar return coercion, exact numeric strings, overflow,
+CUF/FCC/dynamic selection, warnings, resources, reentrancy and exceptional cleanup.
+Remove the obsolete integer-only aggregate lowerer and its unused validator, and
+extend the array example. Builds, test compilation, assembly-comment checks and
+diff hygiene pass; no tests run locally. The generated docs are synchronized in
+the following documentation commit. Native and Magician ownership failures outside
+these AOT aggregates remain open, so the branch is not review-ready yet.

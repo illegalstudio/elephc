@@ -74,6 +74,11 @@ function eventSummary(array $events): mixed {
 echo eventSummary([10 => "opened", "note" => "reviewed"]), "\n";
 echo eventSummary([]), "\n";
 
+// Decimal totals survive declared PHP arrays and numeric-string values.
+function eventCosts(array $amounts): mixed { return array_sum($amounts); }
+echo 'event cost: ', eventCosts(['opened' => 1.5, 'reviewed' => '2.25']), "\n";
+echo 'cost multiplier: ', array_product([1.5, '2']), "\n";
+
 // --- keep captured formatters in a returned PHP array ---
 function eventFormatters(string $prefix): array {
     return [function(string $event) use ($prefix): string { return $prefix . $event; }];

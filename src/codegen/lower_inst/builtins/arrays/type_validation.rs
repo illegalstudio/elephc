@@ -9,19 +9,6 @@
 
 use super::*;
 
-/// Verifies the aggregate can use the current raw integer-slot runtime helper.
-pub(super) fn require_supported_indexed_array(ty: PhpType, name: &str) -> Result<()> {
-    match ty.codegen_repr() {
-        PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Bool | PhpType::Never) => {
-            Ok(())
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name, other
-        ))),
-    }
-}
-
 /// Returns the indexed-array element type supported by the current filter runtime helpers.
 pub(super) fn array_filter_source_element_type(ty: PhpType) -> Result<PhpType> {
     match ty.codegen_repr() {

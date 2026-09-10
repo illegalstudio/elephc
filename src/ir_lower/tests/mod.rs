@@ -29,6 +29,7 @@ mod exhaustive;
 mod ownership;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
+mod boxed_array_aggregates;
 mod static_callable_string_owners;
 mod reference_cells;
 mod static_properties;

@@ -39,6 +39,7 @@ mod basic;
 mod boxed_map_callback;
 mod boxed_merge;
 mod boxed_membership;
+mod boxed_aggregate;
 mod boxed_reduce;
 mod boxed_reverse;
 mod boxed_mutation;

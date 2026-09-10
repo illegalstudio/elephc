@@ -82,6 +82,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_sum(emitter);
     arrays::emit_array_sum_mixed(emitter);
     arrays::emit_array_product(emitter);
+    arrays::emit_array_numeric_aggregate(emitter);
     arrays::emit_array_shift(emitter);
     arrays::emit_array_take_boxed(emitter);
     arrays::emit_array_unshift(emitter);

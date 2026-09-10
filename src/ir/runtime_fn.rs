@@ -923,7 +923,8 @@ impl RuntimeFnId {
                 sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
             }
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => {
-                set_callable_param_type(sig, 0, PhpType::Array(Box::new(PhpType::Int)));
+                set_callable_param_type(sig, 0, PhpType::php_array());
+                sig.return_type = PhpType::Mixed;
             }
             RuntimeFnId::Clamp => {
                 set_callable_param_type(sig, 0, PhpType::Int);
@@ -947,6 +948,13 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            // Unsupported entries can invoke arbitrary warning handlers, including
+            // mutation of globals and destruction of the replaced source array.
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             // Both transfer drivers may invoke arbitrary PHP callbacks. Keep the
             // callback-capable conservative set, then preserve their typed network and
             // blocking distinctions so optimizer and monitoring consumers agree.
@@ -1030,12 +1038,10 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
             RuntimeFnId::ArrayMergeRecursive |
-            RuntimeFnId::ArrayProduct |
             RuntimeFnId::ArrayReplace |
             RuntimeFnId::ArrayReplaceRecursive |
             RuntimeFnId::ArraySearch |
             RuntimeFnId::ArraySlice |
-            RuntimeFnId::ArraySum |
             RuntimeFnId::ArrayUnique |
             RuntimeFnId::Asin |
             RuntimeFnId::Atan |
@@ -1581,6 +1587,8 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::ArraySum
+                | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
@@ -1605,7 +1613,8 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct
+            | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
@@ -1854,12 +1863,14 @@ impl RuntimeFnId {
                 // the box is independently owned and never aliases the receiving array.
                 | RuntimeFnId::ArrayPtrKey
                 | RuntimeFnId::ArrayPtrValue
+                | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::ArrayReduce
                 | RuntimeFnId::ArrayReplace
                 | RuntimeFnId::ArrayReplaceRecursive
                 | RuntimeFnId::ArrayReverse
                 | RuntimeFnId::ArrayShift
                 | RuntimeFnId::ArraySlice
+                | RuntimeFnId::ArraySum
                 | RuntimeFnId::ArrayUnique
                 | RuntimeFnId::ArrayValues
                 // `base64_decode()`'s result is `string|false`, so its lowering boxes BOTH

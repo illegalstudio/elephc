@@ -785,6 +785,9 @@ pub(crate) fn emit_runtime_data_fixed(
     for (label, message) in crate::codegen_support::runtime::arrays::ARRAY_FLIP_SKIPPED_MESSAGES {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
+    for (label, message) in crate::codegen_support::runtime::arrays::ARRAY_AGGREGATE_MESSAGES {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     // -- php-src's array_count_values() skipped-entry warning, shared with its runtime emitter --
     // The emitter derives its `write()` length from the same table, so the bytes here and the
     // immediate there can never drift apart.

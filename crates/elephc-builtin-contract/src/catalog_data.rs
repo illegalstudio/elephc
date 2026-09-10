@@ -4504,9 +4504,9 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Calculate the product of values in an array.",
+        summary: "Calculate an integer or float product of array values; an empty array returns integer 1.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-product.php"),
@@ -4923,9 +4923,9 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Calculate the sum of values in an array.",
+        summary: "Calculate an integer or float sum of array values; an empty array returns integer 0.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-sum.php"),

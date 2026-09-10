@@ -22,40 +22,14 @@ pub(crate) fn lower_call_user_func_builtin_escape(
     )))
 }
 
-/// Lowers `array_sum()` over supported indexed arrays and boxed-Mixed associative values.
+/// Lowers sum through the storage-neutral numeric aggregate helper.
 pub(crate) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_sum", 1)?;
-    let array = expect_operand(inst, 0)?;
-    if matches!(
-        ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
-    ) {
-        ctx.load_value_to_result(array)?;
-        if ctx.emitter.target.arch == Arch::X86_64 {
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the associative-array pointer as the runtime helper argument
-        }
-        abi::emit_call_label(ctx.emitter, "__rt_hash_sum_mixed");
-        return store_if_result(ctx, inst);
-    }
-
-    lower_indexed_array_aggregate(
-        ctx,
-        inst,
-        "array_sum",
-        "__rt_array_sum",
-        Some("__rt_array_sum_mixed"),
-    )
+    super::boxed_aggregate::lower_aggregate(ctx, inst, false)
 }
 
-/// Lowers `array_product()` over supported indexed-array payloads.
+/// Lowers product through the storage-neutral numeric aggregate helper.
 pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_aggregate(
-        ctx,
-        inst,
-        "array_product",
-        "__rt_array_product",
-        None,
-    )
+    super::boxed_aggregate::lower_aggregate(ctx, inst, true)
 }
 
 /// Lowers `array_push()` by appending one value and publishing the mutated array.

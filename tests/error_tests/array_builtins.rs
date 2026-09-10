@@ -185,6 +185,13 @@ fn test_error_array_sum_wrong_args() {
     expect_error("<?php array_sum();", "array_sum() takes exactly 1 argument");
 }
 
+/// Boxed aggregate support retains static diagnostics for definite non-array arguments.
+#[test]
+fn test_error_numeric_array_aggregates_reject_known_scalar_arguments() {
+    expect_error("<?php array_sum(42);", "array_sum() argument must be array");
+    expect_error("<?php array_product(\"invalid\");", "array_product() argument must be array");
+}
+
 /// Verifies that error array search wrong args.
 ///
 /// PHP's signature is `array_search(mixed $needle, array $haystack, bool $strict = false)`, so a

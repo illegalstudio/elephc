@@ -1037,15 +1037,15 @@ fn test_heterogeneous_match_assoc_merge_stays_array() {
     );
 }
 
-/// Guards issue #587's fix against over-widening: a merge of non-array scalar arms
-/// (`1` vs `"a"`) must still type as `mixed`, so an array-only use like `array_sum()`
-/// stays rejected.
+/// Scalar match arms remain Mixed, and aggregate use validates their actual tag at runtime.
 #[test]
-fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
-    expect_error(
+fn test_scalar_match_merge_stays_mixed_with_checked_array_use() {
+    let tokens = tokenize(
         "<?php $r = match($argc) { 1 => 1, default => \"a\" }; echo array_sum($r);",
-        "array_sum() argument must be array",
-    );
+    ).expect("tokenize failed");
+    let ast = parse(&tokens).expect("parse failed");
+    let result = types::check(&ast).expect("Mixed aggregates are validated at runtime");
+    assert_eq!(result.global_env.get("r"), Some(&PhpType::Mixed));
 }
 
 /// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe

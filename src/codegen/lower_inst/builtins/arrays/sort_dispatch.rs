@@ -1,5 +1,5 @@
 //! Purpose:
-//! Aggregate helpers and callback-aware sorting.
+//! Array set-operation helpers and callback-aware sorting.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::arrays`.
@@ -9,39 +9,6 @@
 
 use super::*;
 use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
-
-/// Loads an indexed array argument and calls the selected runtime aggregate helper.
-pub(super) fn lower_indexed_array_aggregate(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    scalar_helper: &str,
-    mixed_helper: Option<&str>,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
-    let array = expect_operand(inst, 0)?;
-    let array_ty = ctx.value_php_type(array)?;
-    let helper = match array_ty.codegen_repr() {
-        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => mixed_helper
-            .ok_or_else(|| {
-                CodegenIrError::unsupported(format!(
-                    "{} for PHP type {:?}",
-                    name,
-                    array_ty.codegen_repr()
-                ))
-            })?,
-        _ => {
-            require_supported_indexed_array(array_ty, name)?;
-            scalar_helper
-        }
-    };
-    ctx.load_value_to_result(array)?;
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the runtime helper argument
-    }
-    abi::emit_call_label(ctx.emitter, helper);
-    store_if_result(ctx, inst)
-}
 
 /// Calls a value set-operation helper after validating compatible indexed-array layouts.
 pub(super) fn lower_indexed_array_set_op(
