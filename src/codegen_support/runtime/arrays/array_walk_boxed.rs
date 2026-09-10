@@ -197,8 +197,8 @@ fn emit_visitor(emitter: &mut Emitter) {
     abi::emit_branch_if_int_result_zero(emitter, "__rt_array_walk_boxed_visit_invoke");
     abi::load_at_offset(emitter, result, VISIT_CELL_VALUE);
     load_indirect(emitter, scratch, result);
-    ins(emitter, "sub x10, x10, #4", "sub r10, 4");
-    ins(emitter, "cmp x10, #1", "cmp r10, 1");
+    ins(emitter, "sub x9, x9, #4", "sub r10, 4");
+    ins(emitter, "cmp x9, #1", "cmp r10, 1");
     ins(
         emitter,
         "b.hi __rt_array_walk_boxed_visit_invoke",
@@ -586,8 +586,28 @@ mod tests {
             };
             assert!(asm.contains(transferred), "{name}: {asm}");
             if target.arch == Arch::AArch64 {
-                assert!(asm.contains("sub x10, x10, #4"), "{name}: {asm}");
-                assert!(asm.contains("cmp x10, #1"), "{name}: {asm}");
+                let tag_load = asm
+                    .find("ldr x9, [x0, #0]")
+                    .expect("load the recursive candidate's Mixed tag");
+                let tag_normalize = asm[tag_load..]
+                    .find("sub x9, x9, #4")
+                    .map(|offset| tag_load + offset)
+                    .expect("normalize the loaded Mixed tag");
+                let tag_compare = asm[tag_normalize..]
+                    .find("cmp x9, #1")
+                    .map(|offset| tag_normalize + offset)
+                    .expect("classify indexed and associative nested arrays");
+                let recursive_call = asm[tag_compare..]
+                    .find("bl __rt_array_walk_boxed_visit")
+                    .map(|offset| tag_compare + offset)
+                    .expect("descend after classifying the nested value");
+                assert!(
+                    tag_load < tag_normalize
+                        && tag_normalize < tag_compare
+                        && tag_compare < recursive_call,
+                    "{name}: {asm}",
+                );
+                assert!(!asm.contains("sub x10, x10, #4"), "{name}: {asm}");
             }
             let owner_pair = if target.arch == Arch::X86_64 {
                 "lea rcx, [rbp - 64]"

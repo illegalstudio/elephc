@@ -2220,3 +2220,15 @@ The same seven non-codegen failures were confirmed on Linux and macOS. These two
 are stale structural expectations, independent of the production owner repairs.
 Cargo check --tests, assembly-comment alignment and diff hygiene pass. No local
 tests execute; CI remains responsible for running these assertions.
+
+### Read recursive boxed-walk tags from the actual ARM64 load register
+
+CI on deb330029 repeats the recursive-walk output mismatch on ARM64 while x86_64
+passes. The target-aware load helper puts the tag in x9, but classification used
+x10. Read x9 for the array/hash range check. Strengthen the five-target emitter
+assertion to correlate the load, range check and recursive call, and reject the
+incorrect register explicitly. Existing recursive, throwing-callback, COW and
+heap-balance fixtures remain the executable gate.
+
+Native Sol traced the register mismatch. Cargo check --tests, assembly-comment
+alignment and diff hygiene pass. No local tests or compiler repros execute.
