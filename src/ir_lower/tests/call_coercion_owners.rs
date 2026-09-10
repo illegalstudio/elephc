@@ -46,7 +46,7 @@ fn callable_argument_normalizer_is_emitted_once_on_all_targets() {
     let source = r#"<?php
 class CallableArgumentObject { public function __invoke(): void { echo "called"; } }
 function consumeCallableArgument(callable $callback): void { $callback(); }
-function dispatchCallableArgument(callable $target, mixed $callback): void {
+function dispatchCallableArgument(mixed $target, mixed $callback): void {
     $target($callback);
     $target(callback: $callback);
 }
@@ -57,6 +57,9 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
+        let dispatch = module.functions.iter().find(|f| f.name == "dispatchCallableArgument").unwrap();
+        assert_eq!(dispatch.params[0].php_type, crate::types::PhpType::Mixed,
+            "{target}: callback validation must run through the runtime descriptor boundary");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         assert_eq!(asm.matches("_eir_callable_argument_normalizer:").count(), 1, "{target}");
         assert!(asm.contains("__rt_callable_descriptor_retain"), "{target}: existing descriptors remain owned");

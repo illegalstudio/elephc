@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Descriptor cleanup must retire captured values on both normal and exceptional exits.
+//! - Shape-validation fixtures keep the target Mixed so static signature checks cannot replace dispatch.
 
 use crate::support::*;
 
@@ -72,7 +73,7 @@ class DescriptorShapeObject {
     public function __destruct() { echo "drop|"; }
 }
 function consumeDescriptorShape(callable $callback): void { $callback(); }
-function dispatchDescriptorShape(callable $target, mixed $callback, bool $named): void {
+function dispatchDescriptorShape(mixed $target, mixed $callback, bool $named): void {
     if ($named) { $target(callback: $callback); } else { $target($callback); }
 }
 $object = new DescriptorShapeObject();
@@ -105,7 +106,7 @@ class InvalidDescriptorOwner {
 function consumeInvalidDescriptor(InvalidDescriptorOwner $owner, callable $callback): void {
     echo "unexpected|";
 }
-function rejectDescriptorShape(callable $target, mixed $callback, bool $named): void {
+function rejectDescriptorShape(mixed $target, mixed $callback, bool $named): void {
     $owner = new InvalidDescriptorOwner();
     try {
         if ($named) { $target(owner: $owner, callback: $callback); }

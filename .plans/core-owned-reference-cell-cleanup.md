@@ -938,3 +938,14 @@ negative, positive and sentinel-colliding lengths through slice and splice.
 Extended the array example with a nullable page limit. Test compilation and
 assembly-comment checks pass. Runtime verification remains assigned to CI;
 no tests were executed locally.
+
+### Runtime callback fixture reachability
+
+CI on c6136456f rejects the invalid callback cleanup fixture during checking:
+its declared Callable target acquired a known signature from the caller, so
+the Mixed callback never reached descriptor invocation. Keep the target Mixed
+in both callback-shape fixtures and the matching all-target emitter gate. This
+exercises runtime validation without changing static argument compatibility or
+accepting an invalid callback into the native callee. The emitter gate also
+asserts the target retains its Mixed ABI. Local validation compiles the tests
+only; runtime results still require CI.
