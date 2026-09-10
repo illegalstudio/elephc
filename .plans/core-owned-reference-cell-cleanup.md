@@ -1993,3 +1993,18 @@ barrier so they exercise the intended detached-Mixed paths. Keep the exact type,
 output, exception and zero-live-block assertions. Cargo check --tests and diff
 hygiene pass. No tests or PHP programs execute locally; runtime validation stays
 on CI.
+
+### Validate boxed walk callbacks against writable runtime storage
+
+The boxed-walk CI fixtures were rejected before code generation because the
+checker simulated their writable Mixed value with a non-addressable expression.
+Give the explicit walk checker entrypoint a synthetic Mixed local for that
+argument. Preserve the concrete-array and non-walk callback rules. Derive optional
+key delivery from known callback signatures, including callable variables, and
+cover mixed-case builtin calls plus one- and two-parameter callbacks in the
+five-target EIR regression. Native Sol implemented and reviewed this bounded fix.
+
+Cargo check --tests, exporter build, full generated-docs regeneration, builtin and
+site audits, target-boundary audit and diff hygiene pass. Generated files remain
+unchanged. No tests execute locally; the existing runtime regressions remain CI
+gates for writable values, recursive keys, COW and reference escape rejection.

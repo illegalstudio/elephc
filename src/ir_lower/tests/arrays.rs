@@ -16,11 +16,16 @@ fn declared_array_walks_use_boxed_callback_storage_on_every_target() {
     let source = r#"<?php
 function walkDeclared(array $values): void {
     $walked = $values;
-    array_walk($walked, static function (mixed &$value, mixed $key): void {
+    Array_Walk($walked, static function (mixed &$value, mixed $key): void {
         $value = $value;
     });
     $recursive = $values;
-    array_walk_recursive($recursive, static function (mixed &$value, mixed $key): void {
+    $recursiveCallback = static function (mixed &$value, mixed $key): void {
+        $value = $value;
+    };
+    ARRAY_WALK_RECURSIVE($recursive, $recursiveCallback);
+    $single = $values;
+    array_walk($single, static function (mixed &$value): void {
         $value = $value;
     });
 }
@@ -50,8 +55,8 @@ walkDeclared(["outer" => ["leaf" => 1], 2]);
         let walks = asm.lines().enumerate().filter_map(|(index, line)| {
             (line.trim() == walk_call).then_some(index)
         }).collect::<Vec<_>>();
-        assert!(cows.len() >= 2, "{target}: {asm}");
-        assert_eq!(walks.len(), 2, "{target}: {asm}");
+        assert!(cows.len() >= 3, "{target}: {asm}");
+        assert_eq!(walks.len(), 3, "{target}: {asm}");
         assert!(walks.iter().enumerate().all(|(index, walk)| {
             cows.iter().filter(|cow| *cow < walk).count() > index
         }), "{target}: each walk must separate its own receiver\n{asm}");

@@ -32,9 +32,9 @@ pub(crate) use catalog::{
 pub(crate) use catalog::is_php_visible_builtin_function;
 pub(crate) use callables::{
     array_element_type, array_filter_callback_arg_types, array_key_type,
-    array_walk_callback_arg_types, callback_supports_complex_descriptor_env,
-    check_array_callback_builtin_call, check_call_user_func, check_call_user_func_array,
-    check_function_exists,
+    callback_supports_complex_descriptor_env, check_array_callback_builtin_call,
+    check_array_walk_callback_builtin_call,
+    check_call_user_func, check_call_user_func_array, check_function_exists,
     check_preg_replace_callback_first_class_call,
     contextual_callback_arg_positions,
     runtime_callable_array_type,

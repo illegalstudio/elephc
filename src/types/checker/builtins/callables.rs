@@ -245,6 +245,31 @@ pub(crate) fn check_array_callback_builtin_call(
             span,
             env,
             label,
+            false,
+        )
+    })
+}
+
+/// Validates a walk callback, exposing boxed declared-array values as writable Mixed storage.
+pub(crate) fn check_array_walk_callback_builtin_call(
+    checker: &mut Checker,
+    callback: &Expr,
+    arr_ty: &PhpType,
+    span: crate::span::Span,
+    env: &TypeEnv,
+    label: &str,
+) -> Result<PhpType, CompileError> {
+    let callback_arg_types = array_walk_callback_arg_types(checker, arr_ty, callback);
+    let writable_mixed_value = arr_ty.is_php_array();
+    checker.with_internal_callback_binding(|checker| {
+        check_array_callback_builtin_call_in_engine_frame(
+            checker,
+            callback,
+            &callback_arg_types,
+            span,
+            env,
+            label,
+            writable_mixed_value,
         )
     })
 }
@@ -258,12 +283,22 @@ fn check_array_callback_builtin_call_in_engine_frame(
     span: crate::span::Span,
     env: &TypeEnv,
     label: &str,
+    writable_mixed_value: bool,
 ) -> Result<PhpType, CompileError> {
     let mut callback_env = env.clone();
     let callback_args = callback_arg_types
         .iter()
         .enumerate()
-        .map(|(index, ty)| callback_dummy_arg_for_type(ty, index, span, &mut callback_env))
+        .map(|(index, ty)| {
+            if index == 0
+                && writable_mixed_value
+                && *ty == PhpType::Mixed
+            {
+                writable_mixed_callback_dummy_arg(index, span, &mut callback_env)
+            } else {
+                callback_dummy_arg_for_type(ty, index, span, &mut callback_env)
+            }
+        })
         .collect::<Vec<_>>();
 
     if let ExprKind::Closure {
@@ -323,6 +358,17 @@ fn check_array_callback_builtin_call_in_engine_frame(
         &callback_env,
         label,
     )
+}
+
+/// Builds an addressable boxed Mixed slot for a walk callback's writable value parameter.
+fn writable_mixed_callback_dummy_arg(
+    index: usize,
+    span: crate::span::Span,
+    env: &mut TypeEnv,
+) -> Expr {
+    let name = format!("{}_writable_{}", CALLBACK_ARG_PLACEHOLDER_PREFIX, index);
+    env.insert(name.clone(), PhpType::Mixed);
+    Expr::new(ExprKind::Variable(name), span)
 }
 
 /// Checks object or array callable call and reports a compile error when it is invalid.
@@ -1457,12 +1503,16 @@ pub(crate) fn array_filter_callback_arg_types(
 /// Returns the contextual callback parameter types for `array_walk()`/`array_walk_recursive()`.
 ///
 /// PHP always invokes the callback as `callback($value, $key)`, but declaring only the value
-/// parameter is legal and common. The key slot is therefore added only when the callback is a
-/// closure literal that declares at least two parameters, so a one-parameter callback keeps
-/// passing arity validation while `function ($v, $k)` gets its key typed from the array.
-pub(crate) fn array_walk_callback_arg_types(arr_ty: &PhpType, callback: &Expr) -> Vec<PhpType> {
+/// parameter is legal and common. The key slot is therefore added only when the callback has a
+/// known two-parameter contract, so a one-parameter callback keeps passing arity validation while
+/// `function ($v, $k)` gets its key typed from the array.
+fn array_walk_callback_arg_types(
+    checker: &Checker,
+    arr_ty: &PhpType,
+    callback: &Expr,
+) -> Vec<PhpType> {
     let elem_ty = array_element_type(arr_ty);
-    if callback_declares_at_least_two_params(callback) {
+    if callback_declares_at_least_two_params(checker, callback) {
         vec![elem_ty, array_key_type(arr_ty)]
     } else {
         vec![elem_ty]
@@ -1471,13 +1521,38 @@ pub(crate) fn array_walk_callback_arg_types(arr_ty: &PhpType, callback: &Expr) -
 
 /// Reports whether a callback expression is a closure literal declaring two or more parameters.
 ///
-/// Only literal closures/arrow functions are inspected; every other callable shape keeps the
-/// single-parameter contract the checker can prove without resolving the callable.
-fn callback_declares_at_least_two_params(callback: &Expr) -> bool {
+/// Literal closures and already-resolved callable variables expose their declared arity. Other
+/// runtime-selected shapes keep the single-parameter contract the checker can prove here.
+fn callback_declares_at_least_two_params(checker: &Checker, callback: &Expr) -> bool {
     match &callback.kind {
         ExprKind::Closure { params, .. } => params.len() >= 2,
+        ExprKind::Variable(name) => checker
+            .callable_sigs
+            .get(name)
+            .is_some_and(callback_signature_accepts_walk_key),
+        ExprKind::StringLiteral(name) => {
+            let canonical = checker
+                .canonical_function_name_folded(name.as_str())
+                .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
+            checker
+                .functions
+                .get(canonical.as_str())
+                .is_some_and(callback_signature_accepts_walk_key)
+                || checker
+                    .fn_decls
+                    .get(canonical.as_str())
+                    .is_some_and(|decl| decl.params.len() >= 2 || decl.variadic.is_some())
+        }
+        ExprKind::Assignment { value, .. } => {
+            callback_declares_at_least_two_params(checker, value)
+        }
         _ => false,
     }
+}
+
+/// Reports whether a resolved callable signature can consume the walk key argument.
+fn callback_signature_accepts_walk_key(sig: &FunctionSig) -> bool {
+    sig.params.len() >= 2 || sig.variadic.is_some()
 }
 
 /// Returns a compile-time `array_filter()` mode value for integer literals and predefined constants.
