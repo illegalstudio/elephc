@@ -57,11 +57,11 @@ fn emit_detach_data(emitter: &mut Emitter) {
     abi::emit_load_from_address(emitter, scratch, result, 16);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("cmp x10, x11");                                // stop before a node belonging to a suspended outer parser
+            emitter.instruction(&format!("cmp {scratch}, {depth}"));            // compare the node depth with the ABI-selected active-depth register
             emitter.instruction("b.lo __rt_unserialize_detach_data_done");      // leave the outer parser's owner list published
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp r10, r11");                                // stop before a node belonging to a suspended outer parser
+            emitter.instruction(&format!("cmp {scratch}, {depth}"));            // compare the node depth with the ABI-selected active-depth register
             emitter.instruction("jb __rt_unserialize_detach_data_done");        // leave the outer parser's owner list published
         }
     }
@@ -151,6 +151,13 @@ mod tests {
             assert!(defer.contains(defer_frame), "{name}: saved data must fit above the callee stack");
             assert!(detach.contains(detach_frame), "{name}: cursor spills must fit below the frame footer");
             assert!(detach.contains("_unser_active") && detach.contains("_unser_temporaries"), "{name}");
+            let (depth_load, depth_compare) = if name == "linux-x86_64" {
+                ("mov rcx, QWORD PTR [rip + _unser_active]", "cmp r10, rcx")
+            } else {
+                ("ldr x11, [x9]", "cmp x10, x11")
+            };
+            assert!(detach.find(depth_load).unwrap() < detach.find(depth_compare).unwrap(),
+                "{name}: compare the same active-depth register that was loaded");
             assert!(!detach.contains("__rt_heap_free"), "{name}: detachment must not invoke PHP");
             assert_eq!(finish.matches("__rt_cleanup_invoke").count(), 2, "{name}");
             assert!(finish.find("__rt_decref_any").unwrap() < finish.find("__rt_decref_mixed").unwrap(), "{name}");

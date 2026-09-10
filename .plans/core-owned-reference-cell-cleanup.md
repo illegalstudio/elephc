@@ -792,3 +792,16 @@ specialization conservatively permits associative arguments. Extended the
 Traversable/iterable regression with named containers and added scalar/Mixed
 rejection controls. Build, test compilation and diff hygiene pass without local
 execution; CI validation remains pending.
+
+### Unserialize temporary-list depth comparison
+
+The x86_64 detachment helper loaded the current parser depth through the ABI
+tertiary scratch register (rcx), then compared node depths against an unrelated
+hardcoded r11. It could leave the completed parser's hydration nodes published
+and skip their releases. The comparison now uses the selected registers on both
+architectures. The emitter regression checks the exact load/compare pair on all
+targets, alongside existing executable nested-context and destructor-throw tests.
+
+Build, test compilation, assembly-comment alignment and diff hygiene pass, with
+no local execution. This does not fix the separate missing array back-reference
+registry entries in the decoder.
