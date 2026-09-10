@@ -37,6 +37,8 @@ use crate::types::{
 use super::super::super::context::FunctionContext;
 
 mod owner_dispatch;
+mod function_dispatch;
+mod extension_factories;
 mod owner_emission;
 mod class_metadata;
 mod callable_metadata;
@@ -61,6 +63,10 @@ mod type_object_emit;
 mod flags_offsets;
 
 use owner_emission::*;
+use function_dispatch::*;
+use extension_factories::{
+    emit_reflection_extension_factory, emit_shared_reflection_owner_factory,
+};
 use class_metadata::*;
 use callable_metadata::*;
 use property_metadata::*;
@@ -84,6 +90,7 @@ use type_object_emit::*;
 use flags_offsets::*;
 
 pub(super) use owner_dispatch::{is_reflection_owner_class, lower_reflection_owner_new};
+pub(in crate::codegen) use extension_factories::emit_shared_reflection_extension_factories;
 
 /// Compile-time metadata used to populate one Reflection owner object.
 struct ReflectionOwnerMetadata {
@@ -184,6 +191,17 @@ struct ReflectionParameterMember {
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
     default_value_constant_name: Option<String>,
+    default_value_display: Option<ReflectionParameterDefaultDisplay>,
+}
+
+/// PHP source representation used only in reflection string formatting.
+///
+/// Some internal defaults evaluate to scalar values while php-src retains a richer source form
+/// in `ReflectionFunction::__toString()`. This stays distinct from
+/// `default_value_constant_name`, whose presence controls ReflectionParameter's constant APIs.
+#[derive(Clone)]
+enum ReflectionParameterDefaultDisplay {
+    ClassNameConstant(String),
 }
 
 /// Metadata needed for `ReflectionParameter::getDeclaringFunction()`.

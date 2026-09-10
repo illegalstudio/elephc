@@ -159,6 +159,7 @@ mod mixed_clone;
 mod mixed_cast_bool;
 mod mixed_cast_float;
 mod mixed_cast_int;
+mod mixed_cast_object;
 mod mixed_intval_base;
 mod mixed_cast_string;
 mod mixed_from_value;
@@ -468,6 +469,8 @@ pub use min_max_container::{emit_min_max_hash, emit_min_max_mixed, emit_min_max_
 pub use mixed_abs::emit_mixed_abs;
 /// Emit boxed-Mixed-to-array cast helper.
 pub use mixed_cast_array::emit_mixed_cast_array;
+/// Emit boxed-Mixed PHP object-cast helper.
+pub use mixed_cast_object::emit_mixed_cast_object;
 /// Emit a resource-aware owned Mixed value read.
 pub use mixed_clone::emit_mixed_clone;
 /// Emit Mixed from value conversion helper.

@@ -116,6 +116,25 @@ pub(super) fn reflection_class_object_map_type() -> PhpType {
     }
 }
 
+/// Returns `array<string, mixed>` for `ReflectionExtension::getClasses()`.
+///
+/// The collection deliberately admits both `ReflectionClass` and `ReflectionEnum`
+/// instances, which are separate flattened synthetic checker classes.
+pub(super) fn reflection_extension_class_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Mixed),
+    }
+}
+
+/// Returns `array<string, ReflectionFunction>` for extension function collections.
+pub(super) fn reflection_extension_function_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Object("ReflectionFunction".to_string())),
+    }
+}
+
 /// Returns `array<string, string>` for trait-alias reflection maps.
 pub(super) fn reflection_string_map_type() -> PhpType {
     PhpType::AssocArray {

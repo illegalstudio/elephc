@@ -18,6 +18,7 @@ pub(super) fn reflection_owner_metadata(
     match class_name {
         "ReflectionClass" => reflection_class_metadata(ctx, inst),
         "ReflectionEnum" => reflection_enum_metadata(ctx, inst),
+        "ReflectionExtension" => reflection_extension_metadata(ctx, inst),
         "ReflectionFunction" => reflection_function_metadata(ctx, inst),
         "ReflectionMethod" => reflection_method_metadata(ctx, inst),
         "ReflectionProperty" => reflection_property_metadata(ctx, inst),
@@ -27,6 +28,130 @@ pub(super) fn reflection_owner_metadata(
             reflection_enum_case_metadata(ctx, class_name, inst)
         }
         _ => Ok(empty_reflection_metadata()),
+    }
+}
+
+/// Resolves the frozen DOM bridge registry exposed through `ReflectionExtension`.
+pub(super) fn reflection_extension_metadata(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some(value) = inst.operands.first().copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let name = const_required_string_operand(ctx, value, "ReflectionExtension")?;
+    reflection_extension_metadata_for_name(&name)
+}
+
+/// Returns the PHP 8.5.8 DOM, libxml, or SimpleXML class-name registry.
+pub(super) fn reflection_extension_metadata_for_name(name: &str) -> Result<ReflectionOwnerMetadata> {
+    let (canonical, _legacy_classes): (&str, &[&str]) = match php_symbol_key(name).as_str() {
+        "dom" => ("dom", &[
+            "DOMAttr", "DOMCdataSection", "DOMCharacterData", "DOMChildNode", "DOMComment", "DOMDocument", "DOMDocumentFragment", "DOMDocumentType", "DOMElement", "DOMEntity", "DOMEntityReference", "DOMException", "DOMImplementation", "DOMNameSpaceNode", "DOMNamedNodeMap", "DOMNode", "DOMNodeList", "DOMNotation", "DOMParentNode", "DOMProcessingInstruction", "DOMText", "DOMXPath", "Dom\\AdjacentPosition", "Dom\\Attr", "Dom\\CDATASection", "Dom\\CharacterData", "Dom\\ChildNode", "Dom\\Comment", "Dom\\Document", "Dom\\DocumentFragment", "Dom\\DocumentType", "Dom\\DtdNamedNodeMap", "Dom\\Element", "Dom\\Entity", "Dom\\EntityReference", "Dom\\HTMLCollection", "Dom\\HTMLDocument", "Dom\\HTMLElement", "Dom\\Implementation", "Dom\\NamedNodeMap", "Dom\\NamespaceInfo", "Dom\\Node", "Dom\\NodeList", "Dom\\Notation", "Dom\\ParentNode", "Dom\\ProcessingInstruction", "Dom\\Text", "Dom\\TokenList", "Dom\\XMLDocument", "Dom\\XPath", "dom\\domexception",
+        ]),
+        "libxml" => ("libxml", &["LibXMLError"]),
+        "simplexml" => ("SimpleXML", &["SimpleXMLElement", "SimpleXMLIterator"]),
+        _ => return Ok(empty_reflection_metadata()),
+    };
+    let mut metadata = empty_reflection_metadata();
+    metadata.reflected_name = Some(canonical.to_string());
+    metadata.interface_names = crate::internal_extensions::registry()
+        .extension(canonical)
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "ReflectionExtension metadata for unknown extension {}",
+                canonical
+            ))
+        })?
+        .classes
+        .iter()
+        .map(|class| class.exported_name.clone())
+        .collect();
+    Ok(metadata)
+}
+
+/// Returns PHP 8.5.8's `ReflectionExtension::info()` module block for one DOM-family extension.
+pub(super) fn reflection_extension_info(name: &str) -> Option<&'static str> {
+    match php_symbol_key(name).as_str() {
+        "dom" => Some(
+            "\ndom\n\nDOM/XML => enabled\nDOM/XML API Version => 20031129\nlibxml Version => 2.15.3\nHTML Support => enabled\nXPath Support => enabled\nXPointer Support => enabled\nSchema Support => enabled\nRelaxNG Support => enabled\n",
+        ),
+        "libxml" => Some(
+            "\nlibxml\n\nlibXML support => active\nlibXML Compiled Version => 2.15.3\nlibXML Loaded Version => 21503\nlibXML streams => enabled\n",
+        ),
+        "simplexml" => Some("\nSimpleXML\n\nSimpleXML support => enabled\nSchema support => enabled\n"),
+        _ => None,
+    }
+}
+
+/// Returns PHP 8.5.8's ordered DOM-family dependency maps for one extension.
+pub(super) fn reflection_extension_dependencies(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    match php_symbol_key(name).as_str() {
+        "dom" => Some(&[
+            ("libxml", "Required"),
+            ("lexbor", "Required"),
+            ("domxml", "Conflicts"),
+        ]),
+        "libxml" => Some(&[("standard", "Required")]),
+        "simplexml" => Some(&[("libxml", "Required"), ("spl", "Required")]),
+        _ => None,
+    }
+}
+
+/// Returns PHP 8.5.8's ordered, typed DOM-family extension constants.
+pub(super) fn reflection_extension_constant_members(
+    name: &str,
+) -> Result<Vec<ReflectionConstantMember>> {
+    let extension = crate::internal_extensions::registry()
+        .extension(name)
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "ReflectionExtension::getConstants for unknown extension {}",
+                name
+            ))
+        })?;
+    extension
+        .constants
+        .iter()
+        .map(|(name, value)| {
+            let value = match value {
+                serde_json::Value::Number(value) => value
+                    .as_i64()
+                    .map(ReflectionConstantValue::Int)
+                    .ok_or_else(|| {
+                        CodegenIrError::unsupported(format!(
+                            "ReflectionExtension::getConstants has non-integer numeric {}",
+                            name
+                        ))
+                    })?,
+                serde_json::Value::String(value) => ReflectionConstantValue::Str(value.clone()),
+                _ => {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "ReflectionExtension::getConstants has unsupported constant {}",
+                        name
+                    )));
+                }
+            };
+            Ok(ReflectionConstantMember {
+                name: name.clone(),
+                value,
+            })
+        })
+        .collect()
+}
+
+/// Maps the bounded DOM bridge classes to their PHP extension names.
+pub(super) fn reflection_extension_name_for_class(class_name: &str) -> Option<&'static str> {
+    if class_name.eq_ignore_ascii_case("LibXMLError") {
+        Some("libxml")
+    } else if class_name.eq_ignore_ascii_case("SimpleXMLElement")
+        || class_name.eq_ignore_ascii_case("SimpleXMLIterator")
+    {
+        Some("SimpleXML")
+    } else if class_name.starts_with("DOM") || class_name.starts_with("Dom\\") {
+        Some("dom")
+    } else {
+        None
     }
 }
 
@@ -340,4 +465,3 @@ pub(super) fn reflection_enum_metadata_for_name(
     metadata.parent_class_name = None;
     Ok(metadata)
 }
-

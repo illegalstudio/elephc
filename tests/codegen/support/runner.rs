@@ -137,6 +137,12 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         package: "elephc-xml",
         php_extensions: &["xml", "xmlwriter"],
     },
+    TestBridgeStaticlib {
+        lib_name: "elephc_dom",
+        package: "elephc-dom",
+        // The archive exposes the three PHP extension surfaces together.
+        php_extensions: &["dom", "libxml", "SimpleXML"],
+    },
 ];
 
 /// Default timeout for executing one compiled codegen fixture binary.
@@ -317,10 +323,11 @@ mod bridge_extension_tests {
             "elephc_iconv".to_string(),
             "elephc_pcntl".to_string(),
             "elephc_curl".to_string(),
+            "elephc_dom".to_string(),
         ];
         assert_eq!(
             test_linked_extensions(&linked),
-            ["iconv", "pcntl", "posix", "curl"]
+            ["iconv", "pcntl", "posix", "curl", "dom", "libxml", "SimpleXML"]
         );
     }
 }
@@ -1270,6 +1277,12 @@ fn test_link_plan(
     }
     for framework in extra_frameworks {
         plan.push(LinkItem::Framework(framework.clone()));
+    }
+    if target().platform == Platform::MacOS
+        && named.contains("elephc_dom")
+        && named.insert("iconv".to_string())
+    {
+        plan.push(LinkItem::named_runtime("iconv"));
     }
     plan.without_redundant_embedded_bridges()
 }

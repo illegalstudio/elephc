@@ -1216,6 +1216,7 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::ConstRef(_)
         | ExprKind::This
         | ExprKind::StaticPropertyAccess { .. }

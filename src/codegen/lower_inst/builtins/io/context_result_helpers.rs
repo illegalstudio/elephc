@@ -57,91 +57,6 @@ pub(super) fn lower_stream_context_set_option_4(
     Ok(())
 }
 
-/// Stores an options heap pointer in the runtime's single stream-context slot.
-pub(super) fn store_stream_context_options(
-    ctx: &mut FunctionContext<'_>,
-    options: ValueId,
-    clear_on_null: bool,
-) -> Result<()> {
-    if matches!(
-        ctx.raw_value_php_type(options)?.codegen_repr(),
-        PhpType::Void | PhpType::Never
-    ) {
-        if clear_on_null {
-            clear_stream_context_options(ctx);
-        }
-        return Ok(());
-    }
-    ctx.load_value_to_result(options)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => store_stream_context_options_aarch64(ctx, clear_on_null),
-        Arch::X86_64 => store_stream_context_options_x86_64(ctx, clear_on_null),
-    }
-    Ok(())
-}
-
-/// Stores the loaded AArch64 options pointer into `_stream_context_options`.
-pub(super) fn store_stream_context_options_aarch64(ctx: &mut FunctionContext<'_>, clear_on_null: bool) {
-    let skip_label = ctx.next_label("sctx_store_done");
-    if clear_on_null {
-        let zero_label = ctx.next_label("sctx_store_zero");
-        ctx.emitter.instruction(&format!("cbz x0, {}", zero_label));            // clear the context slot when a null options value is passed
-        abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
-        ctx.emitter.instruction("str x0, [x9]");                                // persist the options heap pointer globally
-        abi::emit_call_label(ctx.emitter, "__rt_incref");
-        ctx.emitter.instruction(&format!("b {}", skip_label));                  // skip the null-clearing fallback after retaining options
-        ctx.emitter.label(&zero_label);
-        clear_stream_context_options(ctx);
-        ctx.emitter.label(&skip_label);
-        return;
-    }
-    ctx.emitter.instruction(&format!("cbz x0, {}", skip_label));                // leave the context slot unchanged for null options
-    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
-    ctx.emitter.instruction("str x0, [x9]");                                    // persist the options heap pointer globally
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
-    ctx.emitter.label(&skip_label);
-}
-
-/// Stores the loaded x86_64 options pointer into `_stream_context_options`.
-pub(super) fn store_stream_context_options_x86_64(ctx: &mut FunctionContext<'_>, clear_on_null: bool) {
-    let skip_label = ctx.next_label("sctx_store_done_x86");
-    if clear_on_null {
-        let zero_label = ctx.next_label("sctx_store_zero_x86");
-        ctx.emitter.instruction("test rax, rax");                               // check whether the options pointer is null
-        ctx.emitter.instruction(&format!("jz {}", zero_label));                 // clear the context slot when a null options value is passed
-        abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
-        ctx.emitter.instruction("mov QWORD PTR [r9], rax");                     // persist the options heap pointer globally
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the options pointer to incref
-        abi::emit_call_label(ctx.emitter, "__rt_incref");
-        ctx.emitter.instruction(&format!("jmp {}", skip_label));                // skip the null-clearing fallback after retaining options
-        ctx.emitter.label(&zero_label);
-        clear_stream_context_options(ctx);
-        ctx.emitter.label(&skip_label);
-        return;
-    }
-    ctx.emitter.instruction("test rax, rax");                                   // check whether the options pointer is null
-    ctx.emitter.instruction(&format!("jz {}", skip_label));                     // leave the context slot unchanged for null options
-    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
-    ctx.emitter.instruction("mov QWORD PTR [r9], rax");                         // persist the options heap pointer globally
-    ctx.emitter.instruction("mov rdi, rax");                                    // pass the options pointer to incref
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
-    ctx.emitter.label(&skip_label);
-}
-
-/// Clears the runtime's single stream-context options slot.
-pub(super) fn clear_stream_context_options(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
-            ctx.emitter.instruction("str xzr, [x9]");                           // clear the persisted stream-context options pointer
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
-            ctx.emitter.instruction("mov QWORD PTR [r9], 0");                   // clear the persisted stream-context options pointer
-        }
-    }
-}
-
 /// Emits an empty associative hash with Mixed values as the current result.
 pub(super) fn emit_empty_mixed_hash(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
@@ -275,4 +190,3 @@ pub(super) fn php_fd_stream(path: &str) -> Option<i64> {
 pub(super) fn is_php_memory_stream(path: &str) -> bool {
     path == "php://memory" || path == "php://temp" || path.starts_with("php://temp/")
 }
-

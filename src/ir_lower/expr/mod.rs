@@ -160,14 +160,20 @@ pub(crate) use indexed_array_literals::{
     array_literal_type_for_ir, lower_array_literal_with_expected_type,
 };
 pub(crate) use array_access::{
-    array_access_element_result_type, index_expr_key_type,
-    lower_array_access_from_lowered_receiver, lower_by_ref_foreach_element_source,
+    array_access_element_result_type, dom_named_node_map_class,
+    dom_named_node_map_dimension_class, dom_named_node_map_dimension_receiver,
+    dom_named_node_map_receiver,
+    index_expr_key_type, lower_array_access_from_lowered_receiver,
+    lower_by_ref_foreach_element_source, lower_dom_named_node_map_dimension_error,
+    lower_simplexml_dimension_read_for_write_from_value, lower_simplexml_offset,
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
-pub(crate) use instanceof_coercions::coerce_to_int_at_span;
+pub(crate) use instanceof_coercions::{coerce_to_int_at_span, coerce_to_string_at_span};
+pub(crate) use lazy_isset::simplexml_object_expr_class;
 pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use property_access::{
     lower_ref_assign_array_elem, lower_ref_assign_call, lower_ref_assign_property,
+    lower_simplexml_property_read_for_write_from_value,
 };
 pub(crate) use property_fetch_for_write::lower_by_ref_foreach_property_source;
 pub(crate) use string_concat::string_op_uses_scratch_storage;
@@ -178,6 +184,7 @@ pub(super) use assoc_array_literals::{
 pub(super) use call_return_types::call_return_type;
 pub(super) use merge_temps::coerce_container_to_mixed_payload;
 pub(super) use nullable_method_calls::lower_dynamic_method_call_with_receiver;
+pub(crate) use nullable_method_calls::release_owning_receiver_temporary;
 pub(super) use static_method_calls::static_method_call_expr_type_for_ir;
 
 /// Lowers an expression and returns its EIR value.
@@ -197,6 +204,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
         ExprKind::BoolLiteral(value) => lower_bool_literal(ctx, *value, expr),
         ExprKind::Null => lower_null(ctx, expr),
+        // An empty dimension is a syntactic marker consumed by an enclosing
+        // SimpleXML write/read handler. Its standalone lowering is null-shaped.
+        ExprKind::ArrayAppend => lower_null(ctx, expr),
         ExprKind::Variable(name) => ctx.load_local(name, Some(expr.span)),
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),

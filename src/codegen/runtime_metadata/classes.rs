@@ -38,9 +38,31 @@ pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> HashMap<String
     classes
 }
 
-/// Returns classes that EIR object allocation or named `instanceof` can reference at runtime.
+/// Returns the monotonic runtime class-metadata closure for every emitted data consumer.
+///
+/// Roots come from EIR, helper constructors, and synthetic methods; dependency expansion happens
+/// only after every root has been collected. `finalize_user_asm()` passes this one closure to both
+/// interface metadata and `runtime::emit_runtime_data_user`, so no consumer can observe a smaller
+/// class set than the generated code can materialize.
 pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
     let mut names = HashSet::new();
+    if module.required_runtime_features.dom_bridge {
+        names.insert("DOMException".to_string());
+        names.extend(
+            module
+                .class_infos
+                .keys()
+                .filter(|class_name| {
+                    crate::internal_extensions::is_native_wrapper_class(class_name)
+                        || crate::internal_extensions::is_native_wrapper_descendant(
+                            &module.class_infos,
+                            class_name,
+                        )
+                        || crate::internal_extensions::is_native_value_object_class(class_name)
+                })
+                .cloned(),
+        );
+    }
     if module_contains_generator(module) {
         names.insert("Generator".to_string());
     }
@@ -85,8 +107,42 @@ pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> Has
     seed_runtime_throwable_class_names(module, &mut names);
     seed_runtime_stdclass_name(module, &mut names);
     seed_builtin_reflection_class_names(module, &mut names);
+    seed_synthetic_internal_iterator_class_name(module, &mut names);
     expand_class_dependencies(&mut names, &module.class_infos);
     names
+}
+
+/// Adds the shared iterator class when an emitted synthetic `getIterator()` can construct it.
+///
+/// DOM collection and `SplFixedArray` bodies are generated after source-level reachability
+/// analysis. Their `new InternalIterator(...)` is therefore a runtime-materialization edge even
+/// when the user source never spells an SPL class. Adding it before the common closure is what
+/// also pulls `Iterator` and its `Traversable` parent into the interface tables.
+fn seed_synthetic_internal_iterator_class_name(module: &Module, names: &mut HashSet<String>) {
+    if !module.class_infos.contains_key("InternalIterator") {
+        return;
+    }
+    const ITERATOR_AGGREGATE_OWNERS: &[&str] = &[
+        "SplFixedArray",
+        "DOMNodeList",
+        "DOMNamedNodeMap",
+        "Dom\\NodeList",
+        "Dom\\NamedNodeMap",
+        "Dom\\DtdNamedNodeMap",
+        "Dom\\HTMLCollection",
+        "Dom\\TokenList",
+    ];
+    let get_iterator = php_symbol_key("getIterator");
+    let constructs_internal_iterator = module.class_methods.iter().any(|function| {
+        let Some((class_name, method_name)) = function.name.rsplit_once("::") else {
+            return false;
+        };
+        ITERATOR_AGGREGATE_OWNERS.contains(&class_name)
+            && php_symbol_key(method_name) == get_iterator
+    });
+    if constructs_internal_iterator {
+        names.insert("InternalIterator".to_string());
+    }
 }
 
 /// Returns whether emitted EIR can deserialize a runtime-selected declared class.

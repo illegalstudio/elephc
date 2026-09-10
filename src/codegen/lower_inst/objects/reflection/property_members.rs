@@ -244,6 +244,7 @@ pub(super) fn reflection_property_hook_parameter_member(
         type_metadata,
         default_value: None,
         default_value_constant_name: None,
+        default_value_display: None,
     }
 }
 
@@ -374,4 +375,3 @@ pub(super) fn reflection_default_value_to_string(
         | ReflectionParameterDefaultValue::AssocArray(_) => None,
     }
 }
-

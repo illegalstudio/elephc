@@ -56,6 +56,40 @@ fn build_function_with_block_param_and_iadd() {
     assert_eq!(function.blocks[1].instructions.len(), 2);
 }
 
+/// Builds a typed internal-extension call carrying stable opcode metadata.
+#[test]
+fn builds_internal_extension_call() {
+    let mut function = Function::new("dom_call".to_string(), IrType::I64, PhpType::Bool);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let value = builder
+            .emit(
+                Op::InternalExtensionCall,
+                Vec::new(),
+                Some(Immediate::InternalExtension {
+                    opcode: 4323,
+                    flags: 1,
+                }),
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            )
+            .expect("internal extension call produces bool");
+        builder.terminate(Terminator::Return { value: Some(value) });
+    }
+    assert_eq!(function.instructions[0].op, Op::InternalExtensionCall);
+    assert_eq!(
+        function.instructions[0].immediate,
+        Some(Immediate::InternalExtension {
+            opcode: 4323,
+            flags: 1,
+        })
+    );
+}
+
 /// Keeps a deferred local release after the slot widens from scalar to Mixed storage.
 #[test]
 fn deferred_local_release_survives_refcounted_widening() {

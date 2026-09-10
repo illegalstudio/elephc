@@ -29,6 +29,11 @@ pub(super) trait Pass {
         ExprKind::StringLiteral(value)
     }
 
+    /// Transforms one completely rebuilt expression node after all children were walked.
+    fn transform_expr(&self, _span: Span, kind: ExprKind) -> ExprKind {
+        kind
+    }
+
     /// Called when entering a `namespace` declaration (the `namespace Foo;` statement).
     fn enter_namespace_decl(&mut self, _name: &Option<Name>) {}
     /// Called when entering a namespace block scope.

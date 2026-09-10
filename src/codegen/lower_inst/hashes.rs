@@ -86,6 +86,7 @@ pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruct
     }
     let hash = expect_operand(inst, 0)?;
     require_hash(ctx.value_php_type(hash)?.codegen_repr(), inst)?;
+    require_hash(inst.result_php_type.codegen_repr(), inst)?;
     require_hash_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
     let done = ctx.next_label("hash_to_mixed_done");
     match ctx.emitter.target.arch {
@@ -109,6 +110,22 @@ pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruct
         }
     }
     ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers an associative-array shallow clone through the shared ownership-aware runtime helper.
+pub(super) fn lower_hash_clone_shallow(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    require_hash(ctx.value_php_type(hash)?.codegen_repr(), inst)?;
+    require_hash(inst.result_php_type.codegen_repr(), inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.load_value_to_reg(hash, "x0")?,
+        Arch::X86_64 => ctx.load_value_to_reg(hash, "rdi")?,
+    };
+    abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
     store_if_result(ctx, inst)
 }
 

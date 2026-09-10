@@ -88,6 +88,21 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         },
     },
     BridgeStaticlib {
+        lib_name: "elephc_dom",
+        env_var: "ELEPHC_DOM_LIB_DIR",
+        crate_name: "elephc-dom",
+        flag_name: "dom",
+        whole_archive: false,
+        apple_frameworks: &[],
+        // Like the XML bridge, the vendored libxml2 objects need `-liconv` on every
+        // Apple SDK but rely on glibc's libc implementation on Linux.
+        apple_libraries: &["iconv"],
+        needs_libdl: true,
+        // The bridge implements PHP's DOM, libxml, and SimpleXML surfaces.
+        php_extensions: &["dom", "libxml", "SimpleXML"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_crypto",
         env_var: "ELEPHC_CRYPTO_LIB_DIR",
         crate_name: "elephc-crypto",
@@ -1558,6 +1573,10 @@ mod tests {
         // elephc_pdo backs two PHP surfaces (PDO, mysqli); reporting is
         // surface-based via `linked_php_surfaces`, never archive-based.
         assert!(php_extensions_for_lib("elephc_pdo").is_empty());
+        assert_eq!(
+            php_extensions_for_lib("elephc_dom"),
+            ["dom", "libxml", "SimpleXML"]
+        );
         assert_eq!(php_extensions_for_lib("elephc_crypto"), ["hash"]);
         assert_eq!(php_extensions_for_lib("elephc_bcmath"), ["bcmath"]);
         assert_eq!(php_extensions_for_lib("elephc_phar"), ["Phar"]);

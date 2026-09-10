@@ -6,8 +6,8 @@
 //!
 //! Key details:
 //! - `check` validates the argument type (Array, AssocArray, Mixed, Union-of-countable, or
-//!   Countable Object) and returns `Int`. The Countable interface check delegates to
-//!   `cx.checker.class_implements_interface`.
+//!   Countable Object, fallible array results, or fallible SimpleXML wrappers) and returns
+//!   `Int`. The Countable interface check delegates to `cx.checker.class_implements_interface`.
 //! - `$mode` accepts `COUNT_NORMAL` (`0`) and `COUNT_RECURSIVE` (`1`); anything else raises
 //!   PHP's catchable `ValueError`. The guard lives in the backend
 //!   (`codegen::lower_inst::builtins::lower_count`) because `$mode` may be a runtime value.
@@ -56,10 +56,11 @@ fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
 /// Validates the argument type and returns `Int`.
 ///
 /// Accepts Array, AssocArray, Mixed (heterogeneous arrays), a Union with at least one
-/// countable member, or an Object that implements the `Countable` interface. Arity
+/// countable member (including fallible SimpleXML wrappers), or an Object that may
+/// implement the `Countable` interface at runtime. Arity
 /// enforcement (1 or 2 arguments) is handled by the registry's `check_arity`; `$mode`'s
 /// value range is a runtime `ValueError`, not a compile-time error, exactly like PHP.
-/// Returns a `CompileError` for non-countable types or non-Countable objects.
+/// Returns a `CompileError` for non-countable scalar types.
 ///
 /// The union rule used to require EVERY member to be countable, which refused
 /// `count(fgetcsv($h))` and `count(file($p))` — the ordinary shape for a builtin returning
@@ -73,7 +74,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match &ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(PhpType::Int),
-        PhpType::Union(members) if members.iter().any(union_member_is_countable_array) => {
+        PhpType::Union(members)
+            if members.iter().any(union_member_is_countable_array)
+                || union_is_fallible_simplexml(cx.checker, members) =>
+        {
             Ok(PhpType::Int)
         }
         // A non-Countable object is accepted here and REFUSED AT RUN TIME, the way PHP does it.
@@ -88,4 +92,37 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "count() argument must be array or Countable object",
         )),
     }
+}
+
+/// Returns whether a union is one SimpleXML wrapper plus only its documented failure arms.
+fn union_is_fallible_simplexml(
+    checker: &crate::types::checker::Checker,
+    members: &[PhpType],
+) -> bool {
+    let mut wrapper_class: Option<&str> = None;
+    for member in members {
+        match member {
+            PhpType::Object(class_name) if is_simplexml_countable_class(checker, class_name) => {
+                if wrapper_class
+                    .is_some_and(|existing| !existing.eq_ignore_ascii_case(class_name))
+                {
+                    return false;
+                }
+                wrapper_class = Some(class_name);
+            }
+            PhpType::False | PhpType::Void | PhpType::Never => {}
+            _ => return false,
+        }
+    }
+    wrapper_class.is_some()
+}
+
+/// Returns whether a class uses SimpleXML's native `Countable` object handler.
+fn is_simplexml_countable_class(
+    checker: &crate::types::checker::Checker,
+    class_name: &str,
+) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    class_name.eq_ignore_ascii_case("SimpleXMLElement")
+        || checker.is_subclass_of(class_name, "SimpleXMLElement")
 }

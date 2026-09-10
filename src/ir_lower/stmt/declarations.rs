@@ -24,7 +24,12 @@ pub(super) fn lower_const_decl(ctx: &mut LoweringContext<'_, '_>, name: &str, va
 
 /// Lowers simple positional list destructuring into indexed reads plus local writes.
 pub(super) fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[String], value: &Expr, span: Span) {
-    let source = lower_expr(ctx, value);
+    let source = match &value.kind {
+        ExprKind::Variable(name) => ctx
+            .load_local_mixed_storage_for_runtime_read(name, Some(value.span))
+            .unwrap_or_else(|| lower_expr(ctx, value)),
+        _ => lower_expr(ctx, value),
+    };
     let item_type = list_unpack_item_type(ctx, source.value);
     let get_op = list_unpack_get_op(source.ir_type);
     for (index, var) in vars.iter().enumerate() {
@@ -139,4 +144,3 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
         Some(span),
     );
 }
-

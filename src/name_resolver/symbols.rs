@@ -56,6 +56,11 @@ impl Symbols {
             .or_else(|| {
                 elephc_builtin_contract::lookup_class(name).map(|builtin| builtin.name.to_string())
             })
+            .or_else(|| {
+                crate::internal_extensions::registry()
+                    .class(name)
+                    .map(|class| class.canonical_name.clone())
+            })
     }
 
     /// Returns whether `name` resolves to a user-declared (or extern) class,

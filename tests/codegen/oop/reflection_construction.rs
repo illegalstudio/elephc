@@ -70,3 +70,42 @@ $ref->newInstance(right: "N", left: "M");
     );
     assert_eq!(out.stdout, "AC|XY|MN|");
 }
+
+/// Verifies DOM `ReflectionClass` constructors resolve case-insensitively and
+/// transport unknown literal and runtime class names as PHP ReflectionExceptions.
+#[test]
+fn test_reflection_class_dom_names_and_unknowns_match_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$literal = new ReflectionClass("domdocument");
+echo $literal->getName() . ":";
+echo $literal->isInternal() ? "I" : "i";
+echo ":" . ($literal->isInstantiable() ? "Y" : "N") . "|";
+
+$name = "\\DOMDocument";
+$dynamic = new ReflectionClass($name);
+echo $dynamic->getName() . ":";
+echo $dynamic->isInternal() ? "I" : "i";
+echo ":" . ($dynamic->isInstantiable() ? "Y" : "N") . "|";
+
+foreach (["\\UnknownDomThing", "dOm\\UnKnOwN"] as $name) {
+    try {
+        new ReflectionClass($name);
+        echo "bad|";
+    } catch (Exception $error) {
+        echo get_class($error) . ":" . $error->getCode() . ":" . $error->getMessage() . "|";
+    }
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "DOMDocument:I:Y|DOMDocument:I:Y|ReflectionException:-1:Class \"\\UnknownDomThing\" does not exist|ReflectionException:-1:Class \"dOm\\UnKnOwN\" does not exist|"
+    );
+}

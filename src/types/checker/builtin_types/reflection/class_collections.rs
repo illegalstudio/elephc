@@ -45,6 +45,159 @@ pub(super) fn builtin_reflection_class_array_method(
     }
 }
 
+/// Returns a deferred `ReflectionExtension::getClasses()` collection builder.
+///
+/// The owner stores names rather than nested reflector objects so constructing a
+/// class-owned extension cannot recurse through Extension -> Class -> Extension.
+pub(super) fn builtin_reflection_extension_classes_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let class_name = variable_expr("class_name", dummy_span);
+    let collection = reflection_this_property("__classes", dummy_span);
+    let is_enum = function_call(
+        "in_array",
+        vec![
+            class_name.clone(),
+            reflection_this_property("__enum_names", dummy_span),
+            Expr::new(ExprKind::BoolLiteral(true), dummy_span),
+        ],
+        dummy_span,
+    );
+    let new_reflector = |reflector_class: &str| {
+        Expr::new(
+            ExprKind::NewObject {
+                class_name: Name::unqualified(reflector_class),
+                args: vec![class_name.clone()],
+            },
+            dummy_span,
+        )
+    };
+    ClassMethod {
+        name: "getClasses".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(array_type()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::PropertyAssign {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: "__classes".to_string(),
+                    value: Expr::new(ExprKind::ArrayLiteral(Vec::new()), dummy_span),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property("__class_names", dummy_span),
+                    key_var: None,
+                    value_var: "class_name".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: is_enum,
+                            then_body: vec![Stmt::new(
+                                StmtKind::PropertyArrayAssign {
+                                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                                    property: "__classes".to_string(),
+                                    index: class_name.clone(),
+                                    value: new_reflector("ReflectionEnum"),
+                                },
+                                dummy_span,
+                            )],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::new(
+                                StmtKind::PropertyArrayAssign {
+                                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                                    property: "__classes".to_string(),
+                                    index: class_name.clone(),
+                                    value: new_reflector("ReflectionClass"),
+                                },
+                                dummy_span,
+                            )]),
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(Some(collection)), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a deferred `ReflectionExtension::getFunctions()` collection builder.
+///
+/// Function reflectors are created only when the public collection is requested,
+/// preventing the reverse extension link from recursively constructing the same graph.
+pub(super) fn builtin_reflection_extension_functions_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let function_name = variable_expr("function_name", dummy_span);
+    let collection = reflection_this_property("__functions", dummy_span);
+    let new_reflector = Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("ReflectionFunction"),
+            args: vec![function_name.clone()],
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "getFunctions".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(array_type()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::PropertyAssign {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: "__functions".to_string(),
+                    value: Expr::new(ExprKind::ArrayLiteral(Vec::new()), dummy_span),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property("__function_names", dummy_span),
+                    key_var: None,
+                    value_var: "function_name".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::PropertyArrayAssign {
+                            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                            property: "__functions".to_string(),
+                            index: function_name,
+                            value: new_reflector,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(Some(collection)), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public `ReflectionClass` array method with an optional modifier filter.
 pub(super) fn builtin_reflection_class_filtered_array_method(
     method_name: &str,

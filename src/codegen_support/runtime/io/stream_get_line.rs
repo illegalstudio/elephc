@@ -54,7 +54,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("mov w9, #0x4000");                                     // high half of USER_WRAPPER_FD_BASE
     emitter.instruction("lsl w9, w9, #16");                                     // form 0x40000000 in w9
     emitter.instruction("cmp x0, x9");                                          // is this a synthetic user-wrapper fd?
-    emitter.instruction("b.ge __rt_sgl_wrapper_entry");                         // wrappers read via the feof-gated stream_read loop below
+    emitter.instruction("b.ge __rt_sgl_wrapper_entry");                         // wrappers read through the post-read-EOF stream_read loop below
 
     emitter.label("__rt_stream_get_line_loop");
     emitter.instruction("ldr x10, [sp, #56]");                                  // running total
@@ -113,10 +113,10 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #56]");                                  // store the stripped total
     emitter.instruction("b __rt_stream_get_line_done");                         // a delimiter match is not EOF
 
-    // -- user-wrapper line read: feof-gated stream_read into _user_wrapper_drain_buf
+    // -- user-wrapper line read: stream_read into _user_wrapper_drain_buf
     //    (a SEPARATE buffer from _concat_buf, which each __rt_fread result may
     //    occupy). [sp,#48] = drain-buf base, [sp,#56] = running length. Stops at
-    //    the byte budget, the ending delimiter (stripped), or EOF. --
+    //    the byte budget, the ending delimiter (stripped), or an empty read. --
     emitter.label("__rt_sgl_wrapper_entry");
     emit_symbol_address(emitter, "x12", "_user_wrapper_drain_buf");
     emitter.instruction("str x12, [sp, #48]");                                  // result start = drain-buf base
@@ -125,9 +125,6 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #24]");                                  // maximum length
     emitter.instruction("cmp x10, x11");                                        // reached the byte budget?
     emitter.instruction("b.ge __rt_stream_get_line_done");                      // stop at the maximum length
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper fd
-    emitter.instruction("bl __rt_feof");                                        // check stream_eof FIRST (x0 = 1 at EOF)
-    emitter.instruction("cbnz x0, __rt_stream_get_line_done");                  // at EOF: return the bytes gathered so far
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper fd
     emitter.instruction("mov x1, #1");                                          // read exactly one byte
     emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
@@ -210,7 +207,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the file descriptor
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp rax, r9");                                         // is this a synthetic user-wrapper fd?
-    emitter.instruction("jge __rt_sgl_wrapper_entry_x86");                      // wrappers read via the feof-gated stream_read loop below
+    emitter.instruction("jge __rt_sgl_wrapper_entry_x86");                      // wrappers read through the post-read-EOF stream_read loop below
 
     emitter.label("__rt_stream_get_line_loop_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // running total
@@ -264,7 +261,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10d, 11");                                        // is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
     emitter.instruction("je __rt_stream_get_line_done_x86");                    // transient nonblocking miss returns without setting EOF
 
-    // -- user-wrapper line read: feof-gated stream_read into _user_wrapper_drain_buf
+    // -- user-wrapper line read: stream_read into _user_wrapper_drain_buf
     //    (a SEPARATE buffer from _concat_buf, which each __rt_fread result may
     //    occupy). [rbp-40] = drain-buf base, [rbp-48] = running length. --
     emitter.label("__rt_sgl_wrapper_entry_x86");
@@ -274,10 +271,6 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // running total
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // reached the byte budget?
     emitter.instruction("jge __rt_stream_get_line_done_x86");                   // stop at the maximum length
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
-    emitter.instruction("call __rt_feof");                                      // check stream_eof FIRST (rax = 1 at EOF)
-    emitter.instruction("test rax, rax");                                       // at EOF?
-    emitter.instruction("jnz __rt_stream_get_line_done_x86");                   // at EOF: return the bytes gathered so far
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
     emitter.instruction("mov rsi, 1");                                          // read exactly one byte
     emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len

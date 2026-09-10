@@ -203,15 +203,12 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
         // Mixed param needs the source type expression to distinguish a real
         // `mixed` hint from an untyped param widened for the boxed ABI.
         let declared = sig.declared_params.get(index).copied().unwrap_or(false);
+        let declared_type_expr = sig.param_type_exprs.get(index).and_then(Option::as_ref);
         let has_type = declared
-            && (!matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-                || sig
-                    .param_type_exprs
-                    .get(index)
-                    .and_then(Option::as_ref)
-                    .is_some());
+            && (declared_type_expr.is_some()
+                || !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)));
         let type_metadata = reflection_parameter_type_metadata(
-            sig.param_type_exprs.get(index).and_then(Option::as_ref),
+            declared_type_expr,
             ty,
         )
         .filter(|_| has_type);
@@ -268,6 +265,7 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
             type_metadata,
             default_value,
             default_value_constant_name,
+            default_value_display: None,
         });
     }
     Ok(parameters)

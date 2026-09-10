@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "source_lock": "tools/php-dom/source-lock.json",
+  "opcode_authority": "tests/php_dom/surface/opcodes-php-8.5.8.json",
+  "ledgers": {
+    "dom": "tests/php_dom/upstream/dom-php-8.5.8.json",
+    "libxml": "tests/php_dom/upstream/libxml-php-8.5.8.json",
+    "simplexml": "tests/php_dom/upstream/simplexml-php-8.5.8.json"
+  },
+  "supported_targets": [
+    "macos-aarch64",
+    "linux-aarch64",
+    "linux-x86_64"
+  ]
+}

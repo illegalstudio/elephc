@@ -340,12 +340,9 @@ pub(crate) const ZEND_LOADED_EXTENSIONS: &[&str] = &["Zend OPcache"];
 /// usage, `mysqli` for the mysqli surface — both ride the same `elephc_pdo` archive, so the
 /// archive alone identifies neither), so a bridge-free program reports only the core set.
 pub(in crate::codegen::lower_inst) fn extension_is_loaded(name: &str) -> bool {
-    CORE_LOADED_EXTENSIONS
+    dynamic_extension_loaded_candidates()
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(name))
-        || crate::codegen::linked_extensions()
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(name))
 }
 
 /// Lowers `extension_loaded($extension)` over the effective extension set.
@@ -424,6 +421,19 @@ pub(in crate::codegen::lower_inst) fn dynamic_extension_loaded_candidates() -> V
             .any(|candidate| candidate.eq_ignore_ascii_case(&extension))
         {
             candidates.push(extension);
+        }
+    }
+    if candidates
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case("dom"))
+    {
+        for companion in ["libxml", "SimpleXML"] {
+            if !candidates
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(companion))
+            {
+                candidates.push(companion.to_string());
+            }
         }
     }
     candidates

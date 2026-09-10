@@ -32,6 +32,12 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_open_failure_kind");
+    emitter.instruction("str xzr, [x9]");                                       // clear the prior wrapper-open failure discriminator
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_open_class_ptr");
+    emitter.instruction("str xzr, [x9]");                                       // clear stale wrapper-open class bytes
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_open_class_len");
+    emitter.instruction("str xzr, [x9]");                                       // clear the stale wrapper-open class byte count
 
     // -- recognise user-registered stream wrappers before opening a real file
     //    (Phase 10 dispatch v1: silent-false on match; the wrapper class is
@@ -158,12 +164,20 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     //      [sp, #32] obj ptr (from __rt_new_by_name)
     //      [sp, #40] handle slot index
     //      [sp, #48] stream_open ptr (saved across blr)
-    //      [sp, #56] stream_open boxed-result flag
+    //      [sp, #56] failure kind after a failed call
+    //      [sp, #64] class-name pointer
+    //      [sp, #72] class-name length
+    //      [sp, #80] stream_open boxed-result flag
     emitter.label("__rt_fopen_uw_match");
-    emitter.instruction("sub sp, sp, #64");                                     // reserve wrapper-dispatch scratch below the fopen frame
+    emitter.instruction("sub sp, sp, #96");                                     // reserve wrapper-dispatch scratch below the fopen frame
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save path ptr/len across __rt_new_by_name and stream_open
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save mode ptr/len across __rt_new_by_name and stream_open
     emitter.instruction("str xzr, [sp, #32]");                                  // pre-initialise the obj slot to 0 so the fail path can tell whether an object was allocated
+    emitter.instruction("str xzr, [sp, #56]");                                  // generic failures carry no PHP method warning
+    emitter.instruction("ldr x9, [x12, #16]");                                  // preserve the matched wrapper class-name pointer
+    emitter.instruction("str x9, [sp, #64]");                                   // keep class bytes stable across destructor re-entry
+    emitter.instruction("ldr x9, [x12, #24]");                                  // preserve the matched wrapper class-name length
+    emitter.instruction("str x9, [sp, #72]");                                   // keep the class byte count stable across destructor re-entry
 
     // -- instantiate the wrapper class via __rt_new_by_name --
     emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
@@ -171,6 +185,8 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_new_by_name");                                 // returns obj pointer in x0, or 0 when the class is unknown
     emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // unknown class → silent fail with -1
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper object pointer for later
+    emitter.instruction("bl __rt_user_wrapper_apply_context");                  // expose libxml's selected stream context before stream_open()
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the wrapper after context-property injection
 
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
@@ -178,9 +194,9 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("ldr x13, [x10, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x10 is reused
     emitter.instruction("and x13, x13, #1");                                    // stream_open is slot 0, so its mask bit is bit 0
-    emitter.instruction("str x13, [sp, #56]");                                  // save the flag across the handle-slot scan and the call
+    emitter.instruction("str x13, [sp, #80]");                                  // save the boxed flag without aliasing the failure discriminator
     emitter.instruction("ldr x11, [x10]");                                      // load the stream_open method pointer from slot 0
-    emitter.instruction("cbz x11, __rt_fopen_uw_fail");                         // class did not implement stream_open → silent fail
+    emitter.instruction("cbz x11, __rt_fopen_uw_missing");                      // class did not implement stream_open → classified failure
     emitter.instruction("str x11, [sp, #48]");                                  // save stream_open ptr across the upcoming blr
 
     // -- allocate the first free slot in _user_wrapper_handles --
@@ -208,7 +224,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x6", "_stream_open_opened_path_scratch");
     emitter.instruction("stp xzr, xzr, [x6]");                                  // zero the opened_path scratch slot before the call
     emitter.instruction("ldr x11, [sp, #48]");                                  // reload stream_open method pointer
-    emitter.instruction("ldr x13, [sp, #56]");                                  // reload the boxed-result flag
+    emitter.instruction("ldr x13, [sp, #80]");                                  // reload the boxed-result flag
     emitter.instruction("tbnz x13, #0, __rt_fopen_uw_boxed");                   // an undeclared return type arrives boxed
     emitter.instruction("blr x11");                                             // invoke stream_open on the wrapper object
     emitter.instruction("b __rt_fopen_uw_called");                              // the declared shape needs no conversion
@@ -216,25 +232,45 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("blr x11");                                             // invoke stream_open; x0 = owned Mixed cell
     emitter.instruction("bl __rt_wrapper_unbox_int");                           // x0 = the boolean, reference released
     emitter.label("__rt_fopen_uw_called");
-    emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // stream_open returned false → silent fail (obj is freed on the shared fail path)
+    emitter.instruction("cbz x0, __rt_fopen_uw_call_failed");                   // stream_open returned false → classified failure
 
     // -- success: store obj in the handle slot and return the synthetic fd --
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload the handle slot index
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the wrapper object pointer
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
     emitter.instruction("str x13, [x10, x12, lsl #3]");                         // _user_wrapper_handles[slot] = obj
+    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_eof_flags");
+    emitter.instruction("strb wzr, [x10, x12]");                                // clear stale cached EOF state before publishing the reused slot
     emitter.instruction("mov x0, #0x4000");                                     // low 16 bits of USER_WRAPPER_FD_BASE = 0x40000000
     emitter.instruction("lsl x0, x0, #16");                                     // shift into bits 30..16 to form 0x40000000
     emitter.instruction("orr x0, x0, x12");                                     // synthetic fd = USER_WRAPPER_FD_BASE | slot index
-    emitter.instruction("add sp, sp, #64");                                     // release the wrapper-dispatch scratch
+    emitter.instruction("add sp, sp, #96");                                     // release the wrapper-dispatch scratch
     emitter.instruction("b __rt_fopen_return");                                 // share the common return path
 
+    emitter.label("__rt_fopen_uw_missing");
+    emitter.instruction("mov x9, #1");                                          // failure kind one means stream_open is missing
+    emitter.instruction("str x9, [sp, #56]");                                   // preserve the failure kind across object destruction
+    emitter.instruction("b __rt_fopen_uw_fail");                                // release the wrapper before returning failure
+    emitter.label("__rt_fopen_uw_call_failed");
+    emitter.instruction("mov x9, #2");                                          // failure kind two means stream_open returned false
+    emitter.instruction("str x9, [sp, #56]");                                   // preserve the failure kind across object destruction
     emitter.label("__rt_fopen_uw_fail");
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the wrapper object pointer (or 0 if instantiation never happened)
     emitter.instruction("cbz x0, __rt_fopen_uw_fail_release");                  // no object to release — skip the deep-free
     emitter.instruction("bl __rt_object_free_deep");                            // free the wrapper object so failed dispatches do not leak
     emitter.label("__rt_fopen_uw_fail_release");
-    emitter.instruction("add sp, sp, #64");                                     // release the wrapper-dispatch scratch before falling into the shared silent-fail path
+    emitter.instruction("ldr x9, [sp, #56]");                                   // reload the stable wrapper-open failure discriminator
+    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_open_failure_kind");
+    emitter.instruction("str x9, [x10]");                                       // publish the exact open failure after destructor re-entry
+    emitter.instruction("cbz x9, __rt_fopen_uw_fail_published");                // generic failures expose no wrapper class metadata
+    emitter.instruction("ldr x11, [sp, #64]");                                  // reload the stable wrapper class-name pointer
+    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_open_class_ptr");
+    emitter.instruction("str x11, [x10]");                                      // publish class bytes for the DOM warning
+    emitter.instruction("ldr x11, [sp, #72]");                                  // reload the stable wrapper class-name length
+    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_open_class_len");
+    emitter.instruction("str x11, [x10]");                                      // publish the class byte count for the DOM warning
+    emitter.label("__rt_fopen_uw_fail_published");
+    emitter.instruction("add sp, sp, #96");                                     // release the wrapper-dispatch scratch before falling into the shared silent-fail path
     emitter.instruction("b __rt_fopen_silent_fail");                            // share the existing -1 return
 
     // -- restore frame and return fd in x0 --
@@ -265,6 +301,9 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fopen() uses stack locals for path and mode parsing
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the temporary pathname and mode spill slots
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the saved mode pair, cstring path, and cstring mode pointers
+    abi::emit_store_zero_to_symbol(emitter, "_user_wrapper_open_failure_kind", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_user_wrapper_open_class_ptr", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_user_wrapper_open_class_len", 0);
 
     // -- recognise user-registered stream wrappers before opening a real file --
     emitter.instruction(&format!("mov r9d, {}", MIN_WRAPPER_SCHEME_LEN));       // wrapper scheme scan index: a one-letter scheme is never a wrapper
@@ -375,14 +414,22 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     //      [rsp + 32] obj ptr (from __rt_new_by_name)
     //      [rsp + 40] handle slot index
     //      [rsp + 48] stream_open ptr (saved across call rax)
-    //      [rsp + 56] stream_open boxed-result flag
+    //      [rsp + 56] failure kind after a failed call
+    //      [rsp + 64] class-name pointer
+    //      [rsp + 72] class-name length
+    //      [rsp + 80] stream_open boxed-result flag
     emitter.label("__rt_fopen_uw_match_x86");
-    emitter.instruction("sub rsp, 64");                                         // reserve wrapper-dispatch scratch below the fopen frame
+    emitter.instruction("sub rsp, 96");                                         // reserve wrapper-dispatch scratch below the fopen frame
     emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // save path ptr across __rt_new_by_name and stream_open
     emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // save path len across __rt_new_by_name and stream_open
     emitter.instruction("mov QWORD PTR [rsp + 16], rdi");                       // save mode ptr across __rt_new_by_name and stream_open
     emitter.instruction("mov QWORD PTR [rsp + 24], rsi");                       // save mode len across __rt_new_by_name and stream_open
     emitter.instruction("mov QWORD PTR [rsp + 32], 0");                         // pre-initialise the obj slot to 0 so the fail path can tell whether an object was allocated
+    emitter.instruction("mov QWORD PTR [rsp + 56], 0");                         // generic failures carry no PHP method warning
+    emitter.instruction("mov r10, QWORD PTR [r12 + 16]");                       // preserve the matched wrapper class-name pointer
+    emitter.instruction("mov QWORD PTR [rsp + 64], r10");                       // keep class bytes stable across destructor re-entry
+    emitter.instruction("mov r10, QWORD PTR [r12 + 24]");                       // preserve the matched wrapper class-name length
+    emitter.instruction("mov QWORD PTR [rsp + 72], r10");                       // keep the class byte count stable across destructor re-entry
 
     // -- instantiate the wrapper class via __rt_new_by_name --
     emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
@@ -391,6 +438,9 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // unknown class → silent fail with -1
     emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // save the wrapper object pointer for later
+    emitter.instruction("mov rdi, rax");                                        // pass the new wrapper to context-property injection
+    emitter.instruction("call __rt_user_wrapper_apply_context");                // expose libxml's selected context before stream_open()
+    emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                       // reload the wrapper after context-property injection
 
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id stored at the head of every wrapper object
@@ -398,10 +448,10 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r10, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused
     emitter.instruction("and r10, 1");                                          // stream_open is slot 0, so its mask bit is bit 0
-    emitter.instruction("mov QWORD PTR [rsp + 56], r10");                       // save the flag across the handle-slot scan and the call
+    emitter.instruction("mov QWORD PTR [rsp + 80], r10");                       // save the boxed flag without aliasing the failure discriminator
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the stream_open method pointer from slot 0
     emitter.instruction("test r11, r11");                                       // class did not implement stream_open?
-    emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // no stream_open → silent fail
+    emitter.instruction("jz __rt_fopen_uw_missing_x86");                        // no stream_open → classified failure
     emitter.instruction("mov QWORD PTR [rsp + 48], r11");                       // save stream_open ptr across the upcoming call
 
     // -- allocate the first free slot in _user_wrapper_handles --
@@ -439,31 +489,47 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp], r10");                            // 7th arg (opened_path address) at [rsp+0]
     emitter.instruction("call r11");                                            // invoke stream_open on the wrapper object
     emitter.instruction("add rsp, 16");                                         // release the stack-arg slot
-    emitter.instruction("mov r10, QWORD PTR [rsp + 56]");                       // reload the boxed-result flag
+    emitter.instruction("mov r10, QWORD PTR [rsp + 80]");                       // reload the boxed-result flag
     emitter.instruction("test r10, r10");                                       // an undeclared return type arrives boxed
     emitter.instruction("jz __rt_fopen_uw_called_x86");                         // the declared shape needs no conversion
     emitter.instruction("call __rt_wrapper_unbox_int");                         // rax = the boolean, reference released
     emitter.label("__rt_fopen_uw_called_x86");
     emitter.instruction("test rax, rax");                                       // did stream_open return false?
-    emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // stream_open returned false → silent fail (obj is freed on the shared fail path)
+    emitter.instruction("jz __rt_fopen_uw_call_failed_x86");                    // stream_open returned false → classified failure
 
     // -- success: store obj in the handle slot and return the synthetic fd --
     emitter.instruction("mov r12, QWORD PTR [rsp + 40]");                       // reload the handle slot index
     emitter.instruction("mov r13, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
     abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
     emitter.instruction("mov QWORD PTR [r10 + r12 * 8], r13");                  // _user_wrapper_handles[slot] = obj
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_eof_flags");
+    emitter.instruction("mov BYTE PTR [r10 + r12], 0");                         // clear stale cached EOF state before publishing the reused slot
     emitter.instruction("mov rax, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("or rax, r12");                                         // synthetic fd = USER_WRAPPER_FD_BASE | slot index
-    emitter.instruction("add rsp, 64");                                         // release the wrapper-dispatch scratch
+    emitter.instruction("add rsp, 96");                                         // release the wrapper-dispatch scratch
     emitter.instruction("jmp __rt_fopen_return_x86");                           // share the common return path
 
+    emitter.label("__rt_fopen_uw_missing_x86");
+    emitter.instruction("mov QWORD PTR [rsp + 56], 1");                         // failure kind one means stream_open is missing
+    emitter.instruction("jmp __rt_fopen_uw_fail_x86");                          // release the wrapper before returning failure
+    emitter.label("__rt_fopen_uw_call_failed_x86");
+    emitter.instruction("mov QWORD PTR [rsp + 56], 2");                         // failure kind two means stream_open returned false
     emitter.label("__rt_fopen_uw_fail_x86");
     emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer (or 0 if instantiation never happened)
     emitter.instruction("test rdi, rdi");                                       // any object to release?
     emitter.instruction("jz __rt_fopen_uw_fail_release_x86");                   // no object to release — skip the deep-free
     emitter.instruction("call __rt_object_free_deep");                          // free the wrapper object so failed dispatches do not leak
     emitter.label("__rt_fopen_uw_fail_release_x86");
-    emitter.instruction("add rsp, 64");                                         // release the wrapper-dispatch scratch before falling into the shared silent-fail path
+    emitter.instruction("mov r10, QWORD PTR [rsp + 56]");                       // reload the stable wrapper-open failure discriminator
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_user_wrapper_open_failure_kind", 0);
+    emitter.instruction("test r10, r10");                                       // should this failure expose wrapper class metadata?
+    emitter.instruction("jz __rt_fopen_uw_fail_published_x86");                 // generic failures carry no PHP method warning
+    emitter.instruction("mov r11, QWORD PTR [rsp + 64]");                       // reload the stable wrapper class-name pointer
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_user_wrapper_open_class_ptr", 0);
+    emitter.instruction("mov r11, QWORD PTR [rsp + 72]");                       // reload the stable wrapper class-name length
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_user_wrapper_open_class_len", 0);
+    emitter.label("__rt_fopen_uw_fail_published_x86");
+    emitter.instruction("add rsp, 96");                                         // release the wrapper-dispatch scratch before falling into the shared silent-fail path
     emitter.instruction("jmp __rt_fopen_silent_fail_x86");                      // share the existing -1 return
 
     emitter.label("__rt_fopen_opened_x86");

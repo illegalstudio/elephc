@@ -141,6 +141,21 @@ fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<Com
         if tokens[pos].0 == Token::Eof {
             break;
         }
+        if matches!(tokens[pos].0, Token::HaltCompiler(_)) {
+            match stmt::parse_outermost_halt_compiler(tokens, &mut pos) {
+                Ok(stmt) => stmts.push(stmt),
+                Err(error) => errors.extend(error.flatten()),
+            }
+            break;
+        }
+        // A PHP closing tag is lexed as a synthetic semicolon because it can
+        // terminate an unterminated expression statement. When the source
+        // already supplied `;`, the synthetic token is an empty top-level
+        // statement and can be discarded without adding an AST node.
+        if tokens[pos].0 == Token::Semicolon {
+            pos += 1;
+            continue;
+        }
         // Extern blocks can produce multiple stmts. Attributes on declarations
         // flow through parse_stmt below — extern is an elephc-specific block
         // that does not interact with PHP attributes.

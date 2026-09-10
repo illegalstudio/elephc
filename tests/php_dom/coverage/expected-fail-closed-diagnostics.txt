@@ -1,0 +1,10 @@
+# Required subset of stable strict-gate diagnostics for the unmapped bootstrap.
+# The checker may report additional missing-owner and missing-byte evidence; none
+# of those diagnostics may turn this bootstrap into a passing coverage claim.
+LEDGER_NOT_CLOSED:dom
+LEDGER_NOT_CLOSED:libxml
+LEDGER_NOT_CLOSED:simplexml
+BUILD_PROVENANCE_UNVERIFIED
+TARGET_EVIDENCE_MISSING:macos-aarch64
+TARGET_EVIDENCE_MISSING:linux-aarch64
+TARGET_EVIDENCE_MISSING:linux-x86_64

@@ -83,7 +83,12 @@ impl Checker {
                 }
                 None => match contextual_param_types.get(idx) {
                     Some(hint) => (hint.clone(), hint.clone()),
-                    None => (PhpType::Int, PhpType::Mixed),
+                    // An unannotated closure receives a runtime PHP value. Keep
+                    // its body dynamic so the existing guarded Mixed dispatch
+                    // can select native wrapper operations (including
+                    // SimpleXMLElement offsets) without treating arbitrary
+                    // concrete objects as indexable.
+                    None => (PhpType::Mixed, PhpType::Mixed),
                 },
             };
 

@@ -272,8 +272,14 @@ fn apply_instance_property(
         .property_offsets
         .insert(prop.name.clone(), 8 + slot_index * 16);
     state
+        .property_declaring_class_slots
+        .push(class.name.clone());
+    state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
+    state
+        .property_visibility_slots
+        .push(prop.visibility.clone());
     state.property_declared_slots.push(is_declared_slot);
     state.property_reference_slots.push(prop.by_ref);
     state
@@ -378,6 +384,12 @@ fn apply_instance_property_redeclaration(
     let slot = find_instance_property_slot(state, &prop.name);
     state.prop_types[slot] = (prop.name.clone(), ty);
     state.defaults[slot] = untyped_property_schema_default(prop);
+    if let Some(slot_declaring_class) = state.property_declaring_class_slots.get_mut(slot) {
+        *slot_declaring_class = class.name.clone();
+    }
+    if let Some(slot_visibility) = state.property_visibility_slots.get_mut(slot) {
+        *slot_visibility = prop.visibility.clone();
+    }
     if let Some(slot_declared) = state.property_declared_slots.get_mut(slot) {
         *slot_declared = is_declared_slot;
     }
@@ -462,6 +474,12 @@ fn apply_private_parent_property_shadowing(
         .property_offsets
         .insert(prop.name.clone(), 8 + slot_index * 16);
     state.defaults.push(untyped_property_schema_default(prop));
+    state
+        .property_declaring_class_slots
+        .push(class.name.clone());
+    state
+        .property_visibility_slots
+        .push(prop.visibility.clone());
     state.property_declared_slots.push(is_declared_slot);
     state.property_reference_slots.push(prop.by_ref);
     state

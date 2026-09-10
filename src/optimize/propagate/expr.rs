@@ -84,6 +84,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
+        ExprKind::ArrayAppend => ExprKind::ArrayAppend,
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(propagate_expr(*inner, env))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(propagate_expr(*inner, env))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(propagate_expr(*inner, env))),

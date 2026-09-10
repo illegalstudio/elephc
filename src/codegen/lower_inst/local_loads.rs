@@ -202,6 +202,12 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
             );
             Ok(())
         }
+        (PhpType::TaggedScalar, PhpType::Int | PhpType::Bool) => {
+            // The local load already placed the inline payload in the canonical
+            // integer result register. EIR emits this narrowed result only on a
+            // control-flow path that excluded the nullable tag.
+            Ok(())
+        }
         (_, PhpType::TaggedScalar) => {
             coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
             Ok(())
@@ -231,4 +237,3 @@ pub(super) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &Ph
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
     )
 }
-

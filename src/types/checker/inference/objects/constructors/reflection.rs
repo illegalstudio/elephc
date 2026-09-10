@@ -88,18 +88,16 @@ impl Checker {
 
     /// Validates enum-level attributes for `ReflectionEnum`.
     ///
-    /// The reflected symbol must be a declared enum; enum attributes are stored
-    /// on the parallel class metadata produced for enum declarations.
+    /// Declared enum attributes are stored on the parallel class metadata produced
+    /// for enum declarations. A known non-enum must reach EIR lowering so PHP can
+    /// throw its catchable `ReflectionException` at runtime.
     pub(super) fn validate_reflection_enum_attrs(
         &self,
         enum_name: &str,
         expr: &Expr,
     ) -> Result<(), CompileError> {
         if !self.enums.contains_key(enum_name) {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("ReflectionEnum::__construct(): {} is not an enum", enum_name),
-            ));
+            return Ok(());
         }
         if let Some(class_info) = self.classes.get(enum_name) {
             return self.validate_reflection_attribute_metadata(

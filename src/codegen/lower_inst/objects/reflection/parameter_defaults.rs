@@ -280,8 +280,8 @@ pub(super) fn reflection_parameter_type_metadata(
     type_expr: Option<&TypeExpr>,
     ty: &PhpType,
 ) -> Option<ReflectionParameterTypeMetadata> {
-    if let Some(TypeExpr::Intersection(members)) = type_expr {
-        return reflection_intersection_type_metadata(members);
+    if let Some(type_expr) = type_expr {
+        return reflection_declared_type_metadata(type_expr);
     }
     match ty {
         PhpType::Union(members) => reflection_union_or_nullable_type_metadata(members),
@@ -372,6 +372,7 @@ pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionN
         PhpType::Float => Some(reflection_builtin_named_type("float", false)),
         PhpType::Str => Some(reflection_builtin_named_type("string", false)),
         PhpType::Bool => Some(reflection_builtin_named_type("bool", false)),
+        PhpType::False => Some(reflection_builtin_named_type("false", false)),
         PhpType::Iterable => Some(reflection_builtin_named_type("iterable", false)),
         PhpType::Mixed => Some(reflection_builtin_named_type("mixed", true)),
         PhpType::Array(_) | PhpType::AssocArray { .. } => {

@@ -129,6 +129,11 @@ pub(super) fn resolve_stmts(
                 }
             }
             StmtKind::ConstDecl { name, value } => {
+                if crate::source::is_mangled_halt_offset_name(name)
+                    && !state.halt_offset_constants.insert(name.clone())
+                {
+                    continue;
+                }
                 if let Ok(s) = fold_include_path(value, state) {
                     let key = canonical_name_for_decl(state.namespace.as_deref(), name);
                     state.constants.insert(key, s);

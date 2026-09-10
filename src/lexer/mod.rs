@@ -10,6 +10,7 @@
 
 mod cursor;
 mod literals;
+mod physical;
 mod scan;
 /// Lexer token module.
 pub mod token;
@@ -38,5 +39,16 @@ pub fn tokenize_with_mode(
     source: &str,
     mode: SourceMode,
 ) -> Result<Vec<SpannedToken>, CompileError> {
-    scan::scan_tokens(source, mode)
+    tokenize_bytes_with_mode(source.as_bytes(), mode)
+}
+
+/// Tokenizes one physical source byte stream without decoding an opaque halt payload.
+///
+/// Bytes before and through a valid `__HALT_COMPILER()` statement must be UTF-8,
+/// while every byte after PHP's recorded halt offset is data and is never decoded.
+pub fn tokenize_bytes_with_mode(
+    source: &[u8],
+    mode: SourceMode,
+) -> Result<Vec<SpannedToken>, CompileError> {
+    physical::tokenize_physical_bytes(source, mode)
 }

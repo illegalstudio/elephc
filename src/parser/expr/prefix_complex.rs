@@ -498,6 +498,7 @@ fn collect_arrow_expr_captures(
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::ConstRef(_)
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::ClassConstant { .. }

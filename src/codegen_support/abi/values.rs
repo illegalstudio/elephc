@@ -198,19 +198,25 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 /// of `cbz`'s +/-1 MiB range, which large generated PDO/class functions can exceed.
 /// The integer result represents a coerced PHP truthiness value used in conditional contexts.
 pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
+    let value_reg = int_result_reg(emitter);
+    emit_branch_if_int_reg_zero(emitter, value_reg, label);
+}
+
+/// Branches to `label` when `value_reg` contains zero.
+///
+/// AArch64: inverse `cbnz` over an unconditional `b`; x86_64: `test` + `je`.
+/// The unconditional AArch64 branch gives the selected label its +/-128 MiB range, so callers
+/// can use it for non-result registers in large generated dispatches.
+pub fn emit_branch_if_int_reg_zero(emitter: &mut Emitter, value_reg: &str, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbnz {}, 1f", int_result_reg(emitter))); // skip the long branch when the coerced truthiness result is nonzero
-            emitter.instruction(&format!("b {}", label));                       // branch with the wider unconditional range when the result is zero
+            emitter.instruction(&format!("cbnz {value_reg}, 1f"));              // skip the long branch when the tested register is nonzero
+            emitter.instruction(&format!("b {label}"));                         // branch with the wider unconditional range when the tested register is zero
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "test {}, {}",
-                int_result_reg(emitter),
-                int_result_reg(emitter)
-            )); // test whether the coerced integer truthiness result is zero
-            emitter.instruction(&format!("je {}", label));                      // branch when the coerced integer truthiness result is zero
+            emitter.instruction(&format!("test {value_reg}, {value_reg}"));     // test whether the integer register is zero
+            emitter.instruction(&format!("je {label}"));                        // branch when the integer register is zero
         }
     }
 }
@@ -229,12 +235,60 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!(
-                "test {}, {}",
-                int_result_reg(emitter),
-                int_result_reg(emitter)
-            )); // test whether the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); // test whether the coerced integer truthiness result is non-zero
             emitter.instruction(&format!("jne {}", label));                     // branch when the coerced integer truthiness result is non-zero
+        }
+    }
+}
+
+/// Branches to `label` when two integer registers contain the same value.
+///
+/// AArch64: `cmp`, inverse `b.ne` over an unconditional `b`; x86_64: `cmp` + `je`.
+/// The AArch64 sequence keeps the conditional skip within its +/-1 MiB range while the
+/// selected target receives the unconditional branch's +/-128 MiB range. This is required
+/// for runtime dispatches whose selected reflection metadata body can be very large.
+pub fn emit_branch_if_int_regs_equal(
+    emitter: &mut Emitter,
+    left: &str,
+    right: &str,
+    label: &str,
+) {
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {left}, {right}"));               // compare the integer dispatch operands
+            emitter.instruction("b.ne 1f");                                     // skip the long branch when the dispatch operands differ
+            emitter.instruction(&format!("b {label}"));                         // branch with the wider unconditional range when the operands match
+            emitter.label("1");
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {left}, {right}"));               // compare the integer dispatch operands
+            emitter.instruction(&format!("je {label}"));                        // branch when the integer dispatch operands match
+        }
+    }
+}
+
+/// Branches to `label` when two integer registers contain different values.
+///
+/// AArch64: `cmp`, inverse `b.eq` over an unconditional `b`; x86_64: `cmp` + `jne`.
+/// The AArch64 sequence keeps the conditional skip within its +/-1 MiB range while the
+/// selected target receives the unconditional branch's +/-128 MiB range. This is required
+/// when a dynamic dispatch rejects a receiver before its generated fallback is emitted.
+pub fn emit_branch_if_int_regs_not_equal(
+    emitter: &mut Emitter,
+    left: &str,
+    right: &str,
+    label: &str,
+) {
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {left}, {right}"));               // compare the integer dispatch operands
+            emitter.instruction("b.eq 1f");                                     // skip the long branch when the dispatch operands match
+            emitter.instruction(&format!("b {label}"));                         // branch with the wider unconditional range when the operands differ
+            emitter.label("1");
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {left}, {right}"));               // compare the integer dispatch operands
+            emitter.instruction(&format!("jne {label}"));                       // branch when the integer dispatch operands differ
         }
     }
 }
@@ -330,28 +384,13 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
                 let uval = value as u64;
                 emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); // seed the low 16 bits of the wider immediate value
                 if (uval >> 16) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 16-31 of the wider immediate value
-                        "movk {}, #0x{:x}, lsl #16",
-                        reg,
-                        (uval >> 16) & 0xFFFF
-                    ));
+                    emitter.instruction(&format!("movk {}, #0x{:x}, lsl #16", reg, (uval >> 16) & 0xFFFF)); // patch bits 16-31 of the wider immediate value
                 }
                 if (uval >> 32) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 32-47 of the wider immediate value
-                        "movk {}, #0x{:x}, lsl #32",
-                        reg,
-                        (uval >> 32) & 0xFFFF
-                    ));
+                    emitter.instruction(&format!("movk {}, #0x{:x}, lsl #32", reg, (uval >> 32) & 0xFFFF)); // patch bits 32-47 of the wider immediate value
                 }
                 if (uval >> 48) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 48-63 of the wider immediate value
-                        "movk {}, #0x{:x}, lsl #48",
-                        reg,
-                        (uval >> 48) & 0xFFFF
-                    ));
+                    emitter.instruction(&format!("movk {}, #0x{:x}, lsl #48", reg, (uval >> 48) & 0xFFFF)); // patch bits 48-63 of the wider immediate value
                 }
             }
         }

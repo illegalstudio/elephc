@@ -9,7 +9,9 @@
 //!   until Phase 03 introduces `--emit-ir` fixtures.
 
 use crate::codegen::platform::{Arch, Platform, Target};
-use crate::ir::{print_module, Builder, Function, IrType, Module, Terminator};
+use crate::ir::{
+    print_module, Builder, Function, Immediate, IrType, Module, Op, Ownership, Terminator,
+};
 use crate::types::PhpType;
 
 /// Prints a minimal integer-returning function.
@@ -59,4 +61,36 @@ fn prints_block_params_and_branch_args() {
     let printed = print_module(&module);
     assert!(printed.contains("body(v0: I64 php=int):"));
     assert!(printed.contains("br bb1(v1)"));
+}
+
+/// Prints stable internal-extension opcode and flag metadata.
+#[test]
+fn prints_internal_extension_call_metadata() {
+    let mut module = Module::new(Target::new(Platform::Linux, Arch::AArch64));
+    let mut function = Function::new("dom_call".to_string(), IrType::I64, PhpType::Bool);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let value = builder
+            .emit(
+                Op::InternalExtensionCall,
+                Vec::new(),
+                Some(Immediate::InternalExtension {
+                    opcode: 4323,
+                    flags: 1,
+                }),
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            )
+            .expect("typed DOM call");
+        builder.terminate(Terminator::Return { value: Some(value) });
+    }
+    module.add_function(function);
+    let printed = print_module(&module);
+    assert!(printed.contains(
+        "internal_extension_call internal_extension#4323 flags=1"
+    ));
 }

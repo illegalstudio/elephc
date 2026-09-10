@@ -114,8 +114,9 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             constructor_impl,
         )
     };
-    emit_object_allocation(
+    emit_named_class_object_allocation(
         ctx,
+        &class_name,
         class_id,
         property_count,
         allow_dynamic_properties,
@@ -141,4 +142,28 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         )?;
     }
     Ok(())
+}
+
+/// Transfers an owned Mixed-entry hash into a new `stdClass` runtime wrapper.
+///
+/// `__rt_stdclass_from_hash` is target-neutral runtime infrastructure: it
+/// records the hash pointer in the new object's dynamic-property slot without
+/// reinterpreting or copying its entries.
+pub(in crate::codegen::lower_inst) fn lower_stdclass_from_hash(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    if !matches!(ctx.value_php_type(hash)?.codegen_repr(), PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed) {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} expects a Mixed-entry associative hash",
+            inst.op.name()
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.load_value_to_reg(hash, "x0")?,
+        Arch::X86_64 => ctx.load_value_to_reg(hash, "rdi")?,
+    };
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_from_hash");
+    store_if_result(ctx, inst)
 }

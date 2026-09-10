@@ -119,7 +119,7 @@ pub fn generate_runtime_with_features_mode(
         emitter.output()
     };
     output.push('\n');
-    output.push_str(&runtime::emit_runtime_data_fixed(heap_size, target));
+    output.push_str(&runtime::emit_runtime_data_fixed(heap_size, target, features));
     // PIC runtime globals are implementation details on every shared-library
     // target. ELF uses hidden visibility; Mach-O uses private extern visibility.
     if library_boundary {

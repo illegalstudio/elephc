@@ -16,8 +16,12 @@ use crate::ir::{print_module, Terminator};
 
 mod arrays;
 mod corpus;
+mod dom_debug_projection;
+mod dom_opcode_matrix;
+mod dom_runtime_dispatch;
 mod effects;
 mod exhaustive;
+mod internal_extensions;
 mod ownership;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.

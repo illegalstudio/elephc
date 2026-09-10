@@ -40,6 +40,12 @@ pub enum ExprKind {
     },
     BoolLiteral(bool),
     Null,
+    /// Empty array-dimension syntax (`[]`) used as an append target.
+    ///
+    /// This is deliberately distinct from a literal `null` offset: PHP exposes
+    /// different SimpleXML object-handler semantics for `$xml->item[]` and
+    /// `$xml->item[null]`.
+    ArrayAppend,
     Negate(Box<Expr>),
     Not(Box<Expr>),
     BitNot(Box<Expr>),
@@ -263,6 +269,7 @@ pub enum CastType {
     String,
     Bool,
     Array,
+    Object,
 }
 
 #[derive(Debug, Clone, PartialEq)]

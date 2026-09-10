@@ -295,6 +295,7 @@ fn expr_carries_decision(expr: &Expr) -> bool {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::ConstRef(_)
         | ExprKind::This
         | ExprKind::StaticPropertyAccess { .. }

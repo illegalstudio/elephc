@@ -29,11 +29,6 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the synthetic wrapper fd
             ctx.emitter.instruction("str xzr, [sp, #8]");                       // initialize copied byte total to zero
             ctx.emitter.label(&loop_label);
-            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the wrapper fd for EOF probing
-            abi::emit_call_label(ctx.emitter, "__rt_feof");
-            ctx.emitter.instruction(
-                &format!("cbnz x0, {}", wrapper_done_label)
-            );                                                                  // stop streaming when stream_eof reports EOF
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the wrapper fd for reading
             ctx.emitter.instruction("mov x1, #4096");                           // request a bounded wrapper read chunk
             abi::emit_call_label(ctx.emitter, "__rt_fread");
@@ -66,10 +61,6 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the synthetic wrapper fd
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");              // initialize copied byte total to zero
             ctx.emitter.label(&loop_label);
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the wrapper fd for EOF probing
-            abi::emit_call_label(ctx.emitter, "__rt_feof");
-            ctx.emitter.instruction("test rax, rax");                           // test whether stream_eof reported EOF
-            ctx.emitter.instruction(&format!("jnz {}", wrapper_done_label));    // stop streaming when stream_eof reports EOF
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the wrapper fd for reading
             ctx.emitter.instruction("mov rsi, 4096");                           // request a bounded wrapper read chunk
             abi::emit_call_label(ctx.emitter, "__rt_fread");
@@ -342,4 +333,3 @@ pub(crate) fn lower_flock(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
-

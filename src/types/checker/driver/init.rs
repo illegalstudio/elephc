@@ -44,6 +44,14 @@ impl Checker {
         for (name, _) in pcntl_int_constants(target) {
             constants.insert(name.to_string(), PhpType::Int);
         }
+        for name in crate::internal_extensions::registry().constant_names() {
+            let value = crate::internal_extensions::registry()
+                .constant(name)
+                .expect("internal extension constant index must resolve");
+            let php_type = crate::internal_extensions::value_php_type(value)
+                .unwrap_or_else(|error| panic!("invalid internal constant {name}: {error}"));
+            constants.insert(name.to_string(), php_type);
+        }
 
         Self {
             target,

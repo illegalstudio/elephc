@@ -1,0 +1,2589 @@
+{
+  "libxml": {
+    "archive": "libxml2-2.15.3.tar.xz",
+    "archive_sha256": "78262a6e7ac170d6528ebfe2efccdf220191a5af6a6cd61ea4a9a9a5042c7a07",
+    "official_archive_sha256": "78262a6e7ac170d6528ebfe2efccdf220191a5af6a6cd61ea4a9a9a5042c7a07",
+    "version": "2.15.3"
+  },
+  "php": {
+    "file_count": 514,
+    "files": [
+      {
+        "path": "php-8.5.8/LICENSE",
+        "sha256": "b42e4df5e50e6ecda1047d503d6d91d71032d09ed1027ba1ef29eed26f890c5a",
+        "size": 3204
+      },
+      {
+        "path": "php-8.5.8/ext/dom/CREDITS",
+        "sha256": "d853b1f059b4c3a106727d35e705560091e37dfb0bdd908bf5939f519e8862c0",
+        "size": 66
+      },
+      {
+        "path": "php-8.5.8/ext/dom/attr.c",
+        "sha256": "84cd247e4d6807f8845128e08cf76eac68f642db0d5093571300e8ee9d666253",
+        "size": 5778
+      },
+      {
+        "path": "php-8.5.8/ext/dom/cdatasection.c",
+        "sha256": "cb0d581beecbd04c63c580adcb3608a12ef49ddae6e3a37fb1891ca184cc8897",
+        "size": 2078
+      },
+      {
+        "path": "php-8.5.8/ext/dom/characterdata.c",
+        "sha256": "5104445102bbe9b36c42b7e783bf1d5720716e74b8f1cfc97390132111d8e029",
+        "size": 10508
+      },
+      {
+        "path": "php-8.5.8/ext/dom/comment.c",
+        "sha256": "9e19c92a57505ba4417c18dd68bd11366dde49ee923dd0fe9caa17716f835930",
+        "size": 2066
+      },
+      {
+        "path": "php-8.5.8/ext/dom/config.m4",
+        "sha256": "f9efab6bc1b024d694fc83eba040e3356eb3ee448beca66fa95c25baf8de5153",
+        "size": 1614
+      },
+      {
+        "path": "php-8.5.8/ext/dom/config.w32",
+        "sha256": "d9743613a5f5327a88bf92afdf7f477d9044b257d9985b2d30d8232c110e8499",
+        "size": 1586
+      },
+      {
+        "path": "php-8.5.8/ext/dom/document.c",
+        "sha256": "ea003f840c8b813b691b87263327657617630449024b673fd5c35065b45f4a24",
+        "size": 64662
+      },
+      {
+        "path": "php-8.5.8/ext/dom/documentfragment.c",
+        "sha256": "dc6ea08a38f4c55c7fe689dd6c6c7b895b0e1671cbe2c6ac176f54e704133bd3",
+        "size": 2752
+      },
+      {
+        "path": "php-8.5.8/ext/dom/documenttype.c",
+        "sha256": "e6339cda13ea56ab440f0edff79d5528b93ff2f523bac5f4be92dc8cadc16f65",
+        "size": 4736
+      },
+      {
+        "path": "php-8.5.8/ext/dom/dom_ce.h",
+        "sha256": "9ff5c27e08d3b68ed82e3fc355c9add4a78e847743980b6016ad6a5965f142a1",
+        "size": 4749
+      },
+      {
+        "path": "php-8.5.8/ext/dom/dom_iterators.c",
+        "sha256": "ebbb9c54c9f3c4bf55e89efef50ee47e18fbaa8cff6e97323fa97c9ce3823cf9",
+        "size": 6277
+      },
+      {
+        "path": "php-8.5.8/ext/dom/dom_properties.h",
+        "sha256": "135cc9953ad77c735bd0646e2421ab38d3cdc81caedb36ee4580b235c482130d",
+        "size": 10483
+      },
+      {
+        "path": "php-8.5.8/ext/dom/domexception.c",
+        "sha256": "fd03d959eef1eb4ebbaf76f280e562be47573e9245ca96933455cd0335fd640b",
+        "size": 3280
+      },
+      {
+        "path": "php-8.5.8/ext/dom/domexception.h",
+        "sha256": "78208260f5463f1399c51e57c31713d1ed84068da76aeb2f3b4a73d4342038f3",
+        "size": 2286
+      },
+      {
+        "path": "php-8.5.8/ext/dom/domimplementation.c",
+        "sha256": "cb3e688eeb4c95f48a7eb79cb374f77774bd721b6ba80673f87d7497627b46bd",
+        "size": 12964
+      },
+      {
+        "path": "php-8.5.8/ext/dom/element.c",
+        "sha256": "3070323e17407a536862fd531570d1a4a110885097d1fefa1293dd8aa7ef701f",
+        "size": 63398
+      },
+      {
+        "path": "php-8.5.8/ext/dom/entity.c",
+        "sha256": "c0dcd73b7e4b406862852044e1f40daaee8239559c108908e7eef40bddeb0fde",
+        "size": 3982
+      },
+      {
+        "path": "php-8.5.8/ext/dom/entityreference.c",
+        "sha256": "ce467a2e80518f67c2339d527f2350c9b3d94e91d55890359f6d696c76d5deff",
+        "size": 4006
+      },
+      {
+        "path": "php-8.5.8/ext/dom/html5_parser.c",
+        "sha256": "0f5c29712498f9411739d833524b03e5060718b806dd55e1760adb3001d5d30f",
+        "size": 19856
+      },
+      {
+        "path": "php-8.5.8/ext/dom/html5_parser.h",
+        "sha256": "7b1d38a07b8043ca18611da7eafdca8d42ead63fc91fc37779b2d8626adb4147",
+        "size": 3662
+      },
+      {
+        "path": "php-8.5.8/ext/dom/html5_serializer.c",
+        "sha256": "3c2cb209b21d2eb52b1df90e3e2b4d772ab5bb2980cb4bef323f53dbcf9ded5c",
+        "size": 16093
+      },
+      {
+        "path": "php-8.5.8/ext/dom/html5_serializer.h",
+        "sha256": "5f1fa9926ff7e6f1863cc5c59f837f2edace36536d2a66527b0cebaac564e324",
+        "size": 1590
+      },
+      {
+        "path": "php-8.5.8/ext/dom/html_collection.c",
+        "sha256": "bdccfb211ae074c5bf4e3972331163e751df8bd3102dbb6af14be1850cd1a255",
+        "size": 5460
+      },
+      {
+        "path": "php-8.5.8/ext/dom/html_collection.h",
+        "sha256": "2c26448b6f340477af30465dba418f898240291116bdd74e97eaaf45ec8b81ad",
+        "size": 1334
+      },
+      {
+        "path": "php-8.5.8/ext/dom/html_document.c",
+        "sha256": "082c611e835294dd607be88f6eab8da6688b8365c740fcab9ed3c3129afa5e71",
+        "size": 61414
+      },
+      {
+        "path": "php-8.5.8/ext/dom/infra.c",
+        "sha256": "0960948d58afc7ea5c799b73341a4648f63d84cdd9919b133c1695ec5da2a4c0",
+        "size": 2693
+      },
+      {
+        "path": "php-8.5.8/ext/dom/infra.h",
+        "sha256": "aa82569ab9aae4bf52529eccd4d7cb6fa65ef1eafea5aac5e49b648fb0531744",
+        "size": 1174
+      },
+      {
+        "path": "php-8.5.8/ext/dom/inner_outer_html_mixin.c",
+        "sha256": "7221e2e8e773180364864ea55d33407bee1aa0ff3c0ff69d61f4ff7c8009ec7a",
+        "size": 17804
+      },
+      {
+        "path": "php-8.5.8/ext/dom/internal_helpers.h",
+        "sha256": "3b961f981305c1f483b40dc462bdbf8e47f348aa430771ddb44f6e0dd6d74da6",
+        "size": 4025
+      },
+      {
+        "path": "php-8.5.8/ext/dom/lexbor/selectors-adapted/selectors.c",
+        "sha256": "8ae0a35a2cc2d867bd8fabba704a343ba16a50a8d8bdca984652bf38d4bc6508",
+        "size": 58506
+      },
+      {
+        "path": "php-8.5.8/ext/dom/lexbor/selectors-adapted/selectors.h",
+        "sha256": "6c2a466b0ad587a6617971cac8eddf03c75807c3b6f8b40ac8ace34a7cf306d5",
+        "size": 7423
+      },
+      {
+        "path": "php-8.5.8/ext/dom/namednodemap.c",
+        "sha256": "493382f829fe81120442e60d11bdb5148f52b0e9365a3c846749029fbafb2ef0",
+        "size": 3862
+      },
+      {
+        "path": "php-8.5.8/ext/dom/namespace_compat.c",
+        "sha256": "25068bd1ccc74d8f2d976127d6a5e89572a8f69e467ad77a50e35ff1a287e775",
+        "size": 21410
+      },
+      {
+        "path": "php-8.5.8/ext/dom/namespace_compat.h",
+        "sha256": "27491752af061facd639e2092beb81043306f242a1a5e135387264458f7dcf0d",
+        "size": 4228
+      },
+      {
+        "path": "php-8.5.8/ext/dom/node.c",
+        "sha256": "3e992f7c9186cb8967c4b91e0da66293a86b6b3f8485609dd6977dffdb18f4a4",
+        "size": 79526
+      },
+      {
+        "path": "php-8.5.8/ext/dom/nodelist.c",
+        "sha256": "914e60440cd742e729ffe835b85cc2427c77f90e9d1f6b3c0e8703c3fe47c206",
+        "size": 4578
+      },
+      {
+        "path": "php-8.5.8/ext/dom/nodelist.h",
+        "sha256": "169a1605a8a436c8c10d6d834ee2daaa973761f5b4e4348acb879c19ffce6e83",
+        "size": 1616
+      },
+      {
+        "path": "php-8.5.8/ext/dom/notation.c",
+        "sha256": "ce45a4a511325255d1257b3a34bfb93cac57e76cd9525ddbef20332aae7efe13",
+        "size": 2244
+      },
+      {
+        "path": "php-8.5.8/ext/dom/obj_map.c",
+        "sha256": "62e5c4503a59abc22940f3d8d3ac51f63e48b802f85817403eb187c4805e4393",
+        "size": 20556
+      },
+      {
+        "path": "php-8.5.8/ext/dom/obj_map.h",
+        "sha256": "9ab6c242ec92bde76efe5c2e046f83877f7538a512a1e309dafa5fb6622ae729",
+        "size": 3234
+      },
+      {
+        "path": "php-8.5.8/ext/dom/parentnode/css_selectors.c",
+        "sha256": "12b47780a9207656a4a0d69d846d0acd69baf042774630f30e7106397cb9d967",
+        "size": 8583
+      },
+      {
+        "path": "php-8.5.8/ext/dom/parentnode/tree.c",
+        "sha256": "f11beaa07c90c55cf1e37b0c9d72a63c1fdcbb53f2dbf8c5017c32ba052c5737",
+        "size": 28484
+      },
+      {
+        "path": "php-8.5.8/ext/dom/php_dom.c",
+        "sha256": "076875707216e31c26898b6cd40963ca08e24721cda7a6541ea667782ef4a9ef",
+        "size": 114539
+      },
+      {
+        "path": "php-8.5.8/ext/dom/php_dom.h",
+        "sha256": "b9d8a3ba827c296ae69bf3972e5eae7bbf8e2992dfc4f9239126cd608a318063",
+        "size": 14136
+      },
+      {
+        "path": "php-8.5.8/ext/dom/php_dom.stub.php",
+        "sha256": "bf8f0ca3fa9e322367bc37f3335865364d36cd7f0af055f8162b530f1d28c956",
+        "size": 61885
+      },
+      {
+        "path": "php-8.5.8/ext/dom/php_dom_arginfo.h",
+        "sha256": "de5e5fa210c803b6d81c37c001658155255184d50df1f9e475e34c770dad20a3",
+        "size": 216870
+      },
+      {
+        "path": "php-8.5.8/ext/dom/private_data.c",
+        "sha256": "ae6148834b69b9f61faf95f13d9ad1e2e92fbbb3880f28ccdfb77c8d7b52653b",
+        "size": 6390
+      },
+      {
+        "path": "php-8.5.8/ext/dom/private_data.h",
+        "sha256": "cebd126cd830c645ad52e93c4e5bb451c9a667a628291c4e19cafc507a17f6b8",
+        "size": 2786
+      },
+      {
+        "path": "php-8.5.8/ext/dom/processinginstruction.c",
+        "sha256": "b4bb0e22c8b3503301e21787637a71ed85e1f731b67f714ea6a85cdc9522264b",
+        "size": 3342
+      },
+      {
+        "path": "php-8.5.8/ext/dom/serialize_common.h",
+        "sha256": "a357d45d6c9ff5ac5acf16b36c9fe7ce2ae6bbf170127367b78d798b6a992074",
+        "size": 1454
+      },
+      {
+        "path": "php-8.5.8/ext/dom/text.c",
+        "sha256": "b12e453009a309d31b1f41b75abb7fb96dafb9e5769045cce89e7eccbcb653d0",
+        "size": 4843
+      },
+      {
+        "path": "php-8.5.8/ext/dom/token_list.c",
+        "sha256": "e58145070917d9d3f4020e1d100195f783386a098bfedf9366cd5dde1dbbf0a6",
+        "size": 25644
+      },
+      {
+        "path": "php-8.5.8/ext/dom/token_list.h",
+        "sha256": "bea7739fe0807d85940c9687821b32276c5f3196da74eb7ae83b971f09d35be3",
+        "size": 2219
+      },
+      {
+        "path": "php-8.5.8/ext/dom/xml_common.h",
+        "sha256": "320977e51a12695a174e206921df273f05a58c791a79bbb9c609257bafac2fef",
+        "size": 4398
+      },
+      {
+        "path": "php-8.5.8/ext/dom/xml_document.c",
+        "sha256": "1412536b1dca5d5a8bb4d83c41be4d6a913824bd404a2f34f8847d029802229c",
+        "size": 11189
+      },
+      {
+        "path": "php-8.5.8/ext/dom/xml_serializer.c",
+        "sha256": "89a542ddc08b43ad427af0f91ac8da67c0e896268a51393965c3fc0140098dc0",
+        "size": 50870
+      },
+      {
+        "path": "php-8.5.8/ext/dom/xml_serializer.h",
+        "sha256": "ae338e5dd2880449718404660c2947a230c7223b5e9b874c4b8ac6d731176cb9",
+        "size": 1410
+      },
+      {
+        "path": "php-8.5.8/ext/dom/xpath.c",
+        "sha256": "784a9dcfd1893bd34cd1a3b63708e2e8a72c490e86d38f9cda38b574616b6767",
+        "size": 16356
+      },
+      {
+        "path": "php-8.5.8/ext/dom/xpath_callbacks.c",
+        "sha256": "05f4d436ec79e0c1ba3c63e01484a541fd700ac9af245276366589d9d5540599",
+        "size": 18417
+      },
+      {
+        "path": "php-8.5.8/ext/dom/xpath_callbacks.h",
+        "sha256": "70cf05aabf062b85781d81e33c8d96632b4a88a4a434f035ad583f572daf874b",
+        "size": 4088
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/LICENSE",
+        "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+        "size": 10174
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/NOTICE",
+        "sha256": "b87f965fd2eba846a0a502d633dd7e7a680b93de5c514c404c948ccf1e5c9dc7",
+        "size": 606
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/config.m4",
+        "sha256": "4b84917d2559c70d6f44c8edb6959c21a6bcfda219dac6dddecabf0b914035af",
+        "size": 9114
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/config.w32",
+        "sha256": "e2b455529da94081859e8b1ca93af0f56232c8b768c1ae6d2bff4dc4025b70cd",
+        "size": 4005
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/array.c",
+        "sha256": "b3fd47f9c8d35ac25e198b6e0e0bffa02765170fc1c48719f6f8973d42a29da9",
+        "size": 4191
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/array.h",
+        "sha256": "1aab418d349fe12073fcc7e1b2d8ff6ad924299fa1fc555e01afec2e7cc6b62d",
+        "size": 1751
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/array_obj.c",
+        "sha256": "7fae358f902cf35a5c944c5b2a62e9cb9d09c79f15ed4d086563dfd90c913e36",
+        "size": 4308
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/array_obj.h",
+        "sha256": "550ad58f3d851e7291d4d3197232ae4fde0d133c8a416db7322a262188fc4741",
+        "size": 2588
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/avl.c",
+        "sha256": "477dde65890c7bc4bb209910c05bd805c9e74460a68ea722601ea423f72316a0",
+        "size": 13452
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/avl.h",
+        "sha256": "cf43845cd35dbe966c8e07e4c0058586419543e8eab996a21b055257b2f8d7bb",
+        "size": 2208
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/base.h",
+        "sha256": "3ab42356d77dfada3b15c46d6b97bc14c7091a6f199d1c994fab55968a3fcd30",
+        "size": 2558
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/bst.c",
+        "sha256": "ad449689c72f2e4aec510ac18722c455bc29805d25e99eecf165a94f9957c5b7",
+        "size": 10521
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/bst.h",
+        "sha256": "49fb59e868337ffa70ea07c76e4909487cbb171015dc81238b3619df1a8aa8bd",
+        "size": 2503
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/bst_map.c",
+        "sha256": "8c89021d90c535d0dc4b336bf04f7b8f0d9eca42eb341f7021c20aeea7a7244b",
+        "size": 5408
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/bst_map.h",
+        "sha256": "ee2faa210bfa7334ebe4c0c22c0a820c42ec2861c32a173a19ddecd317ceaac4",
+        "size": 1902
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/conv.c",
+        "sha256": "bd846660599008d6e8763f233eb68135c4253b9e6c392ec8f9f60a7c54ae3bf9",
+        "size": 6495
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/conv.h",
+        "sha256": "affaa0d5f0b675e8b73b776af80255b0686eef057ecc5e74a69e779919173595",
+        "size": 1233
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/core.h",
+        "sha256": "09fd8ccc0b3194853b77364b650f5c2e67e2c25151d62a720294143fe78ef64d",
+        "size": 908
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/def.h",
+        "sha256": "7bdf0764aed090b814f49df69d063a8ce17c05ba134c55b1e6938926db624301",
+        "size": 1418
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/diyfp.c",
+        "sha256": "f479d70a786f644d4e6efbb94211d27e97d0d65eb023a21de51d670b94fa4873",
+        "size": 8241
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/diyfp.h",
+        "sha256": "f40c3b2c9b3a0673fa3fece09adea7a5307f1608aba23a4ef929b3eaa01b194b",
+        "size": 7227
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/dobject.c",
+        "sha256": "2d1f37bf18af8a7d8c06e5ddbe3024d48e4af6a197479e55e38f8478a450f29e",
+        "size": 3943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/dobject.h",
+        "sha256": "1cf9984c3629a4e2ff581b52c5e5d4815bb20e77c97913f71f14ec1eaff7c5b8",
+        "size": 1613
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/dtoa.c",
+        "sha256": "9a23457b6567d4913b63defef331e67ab9f10a6c351013e9f81f09499bc5cb50",
+        "size": 9909
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/dtoa.h",
+        "sha256": "f38b8ca844043750629e59c553d957a4d8f3a35e4174b4f4f3f74fdc87eb0235",
+        "size": 1873
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/fs.h",
+        "sha256": "c23e61c351b5b93ed8af6c1b65884b7c4d04a963fb89f155c9fde62799e773fb",
+        "size": 1592
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/hash.c",
+        "sha256": "3f61f3c34f274606467fd8277deaf8e755af1c7f50d4e0dd54428e80d9227dc7",
+        "size": 11369
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/hash.h",
+        "sha256": "2eabeb7469bd0d820b987be844175e70262022acd91218f91d132e84748a11d6",
+        "size": 5755
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/in.c",
+        "sha256": "bca896b8572e17659e017e2a16a20c38534b1bc72b0566b2dde471d82a3abebb",
+        "size": 5439
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/in.h",
+        "sha256": "0fe368b1f29086a71bfbe4badabb6adbdf63d2da569803725245a4c58f207072",
+        "size": 3754
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/lexbor.h",
+        "sha256": "eecf7f4c2223000e94037b2075b64cc3a80fcaa3c52111612258a64b8d9c174f",
+        "size": 909
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/mem.c",
+        "sha256": "5129122f0a1efe13d9e56fd35a35882fe2721152ca1308046b13211d7231ec27",
+        "size": 4365
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/mem.h",
+        "sha256": "3de84de61f6af4cf7676eb9670f167daf47d815b87a91994355b6fe96e3503ec",
+        "size": 2897
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/mraw.c",
+        "sha256": "6def92c3e2626211a2bedfb5b22f59691504461396a58b692e4b059aa6c49183",
+        "size": 10607
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/mraw.h",
+        "sha256": "1acce95567c2030ba3d0284c3095e97ac03745f06e3776ed29c733697687df5c",
+        "size": 2299
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/perf.h",
+        "sha256": "28e3c610d1d10607a0b3540f5c66231dac1173b6f1f1a43fd22a4cc5c030e0d4",
+        "size": 583
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/plog.c",
+        "sha256": "b48e3012aaa5b1c99c33c44d0f789d21f41076ce2abe684e85d3d309db02a672",
+        "size": 1334
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/plog.h",
+        "sha256": "9456bc462c1d1fee0ce5c3f98b920d244657ce18bd4715b0d2d04f7d813dc86e",
+        "size": 1816
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/print.c",
+        "sha256": "24e338519673a11b22411033d9462f7b42f9d2bc3e8836aca2ee08848ccee821",
+        "size": 4143
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/print.h",
+        "sha256": "981582be9770bf40687f2dd8aee1fc299ad7c6d200d7358278e7cafba3d94c6d",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/sbst.h",
+        "sha256": "4c1d0460a36ca33e8135a36e9353be108f46f089075a521d0ab851cdaebd57e0",
+        "size": 1331
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/serialize.c",
+        "sha256": "ce5e1bea749cf6413ce808523da413c3762cd4a6e8c0c74251ee1db91937de1d",
+        "size": 548
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/serialize.h",
+        "sha256": "76a59b2b6f7ef6978da0f9e18e0e8b8074b714af0f7dc93b25d4fca977015752",
+        "size": 1001
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/shs.c",
+        "sha256": "04735d06f7af954d87abd8fc822e63fe518abe6d67f9887a74da95134ac6adb0",
+        "size": 3670
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/shs.h",
+        "sha256": "3de7343c5b16b1eae93e9bf551aa0b195e28f1d38cac709a596d7829141aa420",
+        "size": 1492
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/str.c",
+        "sha256": "663c79b260b6cec2a54fe09965f9d2f6adba97504cf8229dcbc844608be17fad",
+        "size": 13845
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/str.h",
+        "sha256": "ac123a1bd3878b97414b3a163c260af6532e202fa09bd55a257ed1cb952f6f36",
+        "size": 7884
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/str_res.h",
+        "sha256": "b4c00d57e0cc44c37a4316620e1864b94c6a836f2fd6448cdd95110dfbf2d2e9",
+        "size": 16928
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/strtod.c",
+        "sha256": "98d3bc4a6c0f46d5e7a4e2a9d2349ed89fd3f850ba9ee4738d6e832a5fc7adb2",
+        "size": 9949
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/strtod.h",
+        "sha256": "ba9f094c6dff1acbcad1fc16e83d24bfeca215db7f60f12d9adcb9fbdb002f10",
+        "size": 1894
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/swar.h",
+        "sha256": "9ee0e3d95cc3351a25fb25d4873906e59447edfab46ce89a4b17d86a090c722e",
+        "size": 2764
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/types.h",
+        "sha256": "6fa2c696209ee3ac5bf3134cda0c61ac383d7926dacceede66696550fa099495",
+        "size": 711
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/utils.c",
+        "sha256": "e4a4356a05b8e495f80f59c84e581cb87d40f14521731df441bbf7648aeb7e2d",
+        "size": 656
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/core/utils.h",
+        "sha256": "5b19b344cb8545ea23f0e60be40a5723db1a266d5e8c6621fb4332ce282e7778",
+        "size": 864
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/at_rule.c",
+        "sha256": "ed1528b6e2964a0fc06c6afe1a4bfe4a7d748b323d31f12860bc35ad3669b7ba",
+        "size": 11771
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/at_rule.h",
+        "sha256": "7c890f5de6e7eeba278fada807db0c61b2b97c0c5fbfd05d7ff69e6550e8f69f",
+        "size": 4467
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/at_rule/const.h",
+        "sha256": "2d51d667495df18bdbaab73a97be0bad6ab49c8d9278afb91e9425226d451ef2",
+        "size": 662
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/at_rule/res.h",
+        "sha256": "23f2d754df0615f2edd7b51f377ce50ac14008ae27275c2ea974272a7c1bd3c3",
+        "size": 1967
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/at_rule/state.c",
+        "sha256": "c763b0eef82e1ebeb9dccae0e4b71c979f6819886e1f28e4096e2f6bae7c66ff",
+        "size": 10517
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/at_rule/state.h",
+        "sha256": "75c6d6adae0fdf3d4c839fa5a1bfc80aa07af5693c738f0819419e249ff1049f",
+        "size": 5339
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/at_rule/types.h",
+        "sha256": "8f657447b336ea66b18d4dd658a90eeb3e67538fdfc3cd3964c61e8f35d612ca",
+        "size": 1942
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/base.h",
+        "sha256": "4d016518d5275b98a7add93eafe3d0fa65c496cee216cf3927f046e4c1d97231",
+        "size": 3670
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/blank.c",
+        "sha256": "810185b6208885f59e8bce890f5c7d7540d30b878859bfcd8b578d2fead517c4",
+        "size": 13382
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/blank.h",
+        "sha256": "1ab3f4ec70ad4dc1554edd0731d556c55e65ee8d0f6a369344c937a07ee50fee",
+        "size": 746
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/css.c",
+        "sha256": "f3fcc65a79c8693ec025ac63682f19002dcb959310b1ded7af07ebe1aee64ff0",
+        "size": 5316
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/css.h",
+        "sha256": "e6f42d5fc8d232f71301bb300c8c86c66211a9c225772ae2462f61d1183120d8",
+        "size": 1418
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/declaration.c",
+        "sha256": "6ba18e146318d160e951cabcdefac48e7d4b08d93d4d4379a133317bbb892454",
+        "size": 2101
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/declaration.h",
+        "sha256": "6f84bd5db414430c2512656364e2323e159b2781780e80f221abee87f2e6e657",
+        "size": 746
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/log.c",
+        "sha256": "f85d019639780fec56b655514ecf98bc6f9022a9c9617132542986119cf5592c",
+        "size": 7171
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/log.h",
+        "sha256": "75a58b205273c16857810fcf55c9212ff7f6376128927746c5f5f08f3de9a4e5",
+        "size": 2468
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/parser.c",
+        "sha256": "87d408a29dc1e405e69938835f722c3f5b426b738a00398b34f1ec8a6ef5e832",
+        "size": 13249
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/parser.h",
+        "sha256": "133e2257226bd7e1981d1f5d1256d519fb4ad14fc301ac832a52cf8985c5834f",
+        "size": 24437
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/property.c",
+        "sha256": "9c8f18a4a44bffbbcadee52382e915aad64f36ca9bdf537e38c99c2982cd0617",
+        "size": 89003
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/property.h",
+        "sha256": "004b321cd34aa57bc0e2b72dce59ed196d4d794b09d26e85f93b28ac335e1104",
+        "size": 54604
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/property/const.h",
+        "sha256": "8fb5bcbe222c5b85776488f0c684e3cc82e815dbc088f9b8b6c29a4ab320870c",
+        "size": 52484
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/property/res.h",
+        "sha256": "af8c580345fdfa68737041fca0d1f16cb1df0ab2da6b92df82039a22b662e76c",
+        "size": 46320
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/property/state.c",
+        "sha256": "ae57f38ea6206fbad6f081a95bbb92cf35779919b2188ad73963673771849cca",
+        "size": 164126
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/property/state.h",
+        "sha256": "65aece321a34dbdd5e7f87126f9288a850ff7d7407837abf82960797c4c24975",
+        "size": 16686
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/property/types.h",
+        "sha256": "51deafeaeaf79b5e9cee6ef320b67bc77191983ab9397c20865f7f12cf3ed173",
+        "size": 325
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/rule.c",
+        "sha256": "c5450f9d566a0be17408c9455a84288a620da4ba478badb95d3422376880a86a",
+        "size": 17573
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/rule.h",
+        "sha256": "efaff0ca6dacdf2b9eb175926a5444a8d5f8f7b217cab65cae8ca9a982ee3615",
+        "size": 15649
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/base.h",
+        "sha256": "7223f46202bce76663fa8c81bbde1684366336d6936edfafa74a92fc0b3f6525",
+        "size": 1515
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/pseudo.c",
+        "sha256": "2ed35083aed8c2252d1e426618e676ae7f48f8b73909ecde13ad905a13da9225",
+        "size": 2890
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/pseudo.h",
+        "sha256": "3a61f2dd64e11b20b69197f5734e2a640effb370535c950ec7ae6e8c70f55a69",
+        "size": 2049
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/pseudo_const.h",
+        "sha256": "ed451490f10a020f4021e897ff0af5480e4b55a1c6b8b3963b5b51a8719a5d02",
+        "size": 5424
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/pseudo_res.h",
+        "sha256": "a60cd622bd0cd9a98cac3ce3d4d6421629d86ae3d972e7b733036e7ea54dff96",
+        "size": 21140
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/pseudo_state.c",
+        "sha256": "1df9e160e9d9127eb84aa070c5c48502cbf793a8faebbf2923269885640c7d4f",
+        "size": 13102
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/pseudo_state.h",
+        "sha256": "629db03ad61a7ce6dc4b6fce75aae1af33bb57be3b75c5cc32a349902bab23e8",
+        "size": 2835
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/selector.c",
+        "sha256": "29220185dd35e390935a92c1e34daa4ed2438ff56d58467a3389c9561cf39bb3",
+        "size": 27002
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/selector.h",
+        "sha256": "5785237f0bc4501170f26836930a63167700101e5a7aae6d595b39ea28d62a85",
+        "size": 8610
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/selectors.c",
+        "sha256": "24d34a02fd748b7f4e36ba0953ff869eb196eee8e07a903703292c3b3d94886c",
+        "size": 9937
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/selectors.h",
+        "sha256": "ea4781507e185c345bbb25ea4f82f6e838590ea2ff06492ff1c948da94cf3a54",
+        "size": 3591
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/state.c",
+        "sha256": "a879fb46338677c45e0920205a00e5df5083f3a492d0db552851790374eea056",
+        "size": 67289
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/selectors/state.h",
+        "sha256": "4ed41e548f507f40e3fa25f360be75d336c2e8702f12204319e87c0c76ed83e0",
+        "size": 2751
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/state.c",
+        "sha256": "c7a954fb0bd839740c343ef09843f5dc6ff7a26f0ae786f68d590ff874a10b27",
+        "size": 20732
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/state.h",
+        "sha256": "9274856e1016a01b71731da8bd6a2790fa79794d4e60220942a7256aac737b33",
+        "size": 1500
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/stylesheet.c",
+        "sha256": "a54ec3f4be45a0bc083edc1d7718df84889dfcf5ae74a59d429a44477cb7cfb4",
+        "size": 2615
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/stylesheet.h",
+        "sha256": "529c038e671d9dc84d4c74fdb7de0f7991489e76272379a8556fa23e8083ca0c",
+        "size": 2747
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/anb.c",
+        "sha256": "11ec2148e1a6551514cc875973636942a3d68b97c3f32a179affc7a6c78fc467",
+        "size": 12176
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/anb.h",
+        "sha256": "1b44e1cb2ba781e50bbe7c5cddd9046f2f521d1386d691a00c44523ab7146dcd",
+        "size": 1019
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/base.h",
+        "sha256": "3c9653ed465a41c0308f1c9a821064cdb5e0cc48e1e94a719ddf6e333cda368e",
+        "size": 773
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/parser.c",
+        "sha256": "9b6f38cdd3f854e0b0d467fee4519aec0407c200b23de61e1d3259b8ebb40ad4",
+        "size": 72963
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/parser.h",
+        "sha256": "2e1763c520791ce15469059403f1b12386f4aa359797aa77aa4c304d55a4c030",
+        "size": 3794
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/res.h",
+        "sha256": "1ef08c9a9da99c4690670225f632c990d45b3738c4c86f9b4c8e6b933a11fa5a",
+        "size": 1951
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/state.c",
+        "sha256": "4da4db5f5c09df199224a8f5a56ffb6f2e7e6245299118cf09ca3038b4ac5251",
+        "size": 54824
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/state.h",
+        "sha256": "9ed63637e7568458fed05367efc61d7f878ff9b4061785d3835de9eb75f37d52",
+        "size": 5483
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/state_res.h",
+        "sha256": "27e6eb32074c28e72d0a40d23b8a9f3317127353d07f3e40b5639518e92d1726",
+        "size": 16350
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/syntax.c",
+        "sha256": "16f8af93ef6ec0548c05ec1a11a500ac269010bd3e859362d356fae6c461b06c",
+        "size": 16220
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/syntax.h",
+        "sha256": "8fe4b4ae0ece86db57513b51fbfd0ab0ac47cdaadb32cbd7ce4b9a86d6273172",
+        "size": 10030
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/token.c",
+        "sha256": "9454a6b2ae0b68acd58933aad0f69bd05f67292b44b8c333856ecf21091d8174",
+        "size": 19180
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/token.h",
+        "sha256": "021933a84b7160f57cd5e44071305c363c67dd69e67abeed8fbc65aeb951278c",
+        "size": 12863
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/token_res.h",
+        "sha256": "cbed1d14353b4707b7b34695bdd86a9fd4d2bc30724cfcc49cf19c8c4cdace88",
+        "size": 4466
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/tokenizer.c",
+        "sha256": "797906510f287bfea1e43c7d4dd0437665f46855f9f79ffd208ee58d5648fcf4",
+        "size": 10648
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/tokenizer.h",
+        "sha256": "6099a4a2c02e0a2e30dbf4a7ba88b06ab6daf5ba2e183e079681c479ddc181c2",
+        "size": 3472
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/tokenizer/error.c",
+        "sha256": "fc1362fa5328ebd8056d0b3fe69a6ce16c24af587a5b037f43207f055a06d5bd",
+        "size": 665
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/syntax/tokenizer/error.h",
+        "sha256": "befb4753baee19a3615594f4362baae2c8cab83397a547dbac13e06ffe9ccd5a",
+        "size": 1526
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/unit.c",
+        "sha256": "f9ca763eaf7c1f6964674152f6b124ab87d47441e9f0e1a8128a2d24f3841013",
+        "size": 2711
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/unit.h",
+        "sha256": "7edb4317e70e9a50cdb67ddea9633b828613fe4a484d2e892e1620af1f2ee586",
+        "size": 1088
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/unit/const.h",
+        "sha256": "7148ba2dd15a2b5193bd905135ee93d792faa582837d0b65d52cb903c83c8910",
+        "size": 2871
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/unit/res.h",
+        "sha256": "ddda4c11b637ab867ae0a9ae929e2fb51327ce0cb18ee3f6970d7b70e10b0814",
+        "size": 9885
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/value.c",
+        "sha256": "8c3dc7153f2257c41be282a839e3f8fbf755c9084492beaed120a37ef1c75571",
+        "size": 19366
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/value.h",
+        "sha256": "af10b9521f7fd64e2d8f11aea20d317c29590c8b686ccd6008753a176f93567d",
+        "size": 7480
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/value/const.h",
+        "sha256": "3170a8b2c4f0175186370d22551e4490e060adaadb9a5fc6a25d4c27f4cd13b1",
+        "size": 18693
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/css/value/res.h",
+        "sha256": "55e1ab9f98a42cbbdae67eb685becd48523060134a5c30c190c12fdbd4194c60",
+        "size": 45780
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/base.h",
+        "sha256": "63701044520558f990e8c8e73a8b5b5b51252e3bfa7d807ec0051a301d999e8c",
+        "size": 695
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/collection.c",
+        "sha256": "214be3de61b2b7f804ab9ff084a306b985cbd3e9bd1af3e52b0e78a18b50d45c",
+        "size": 1975
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/collection.h",
+        "sha256": "4a5e3c1c7edf6e7b1535657445c761849c831a6d392f6769ab03eb9e54fe3637",
+        "size": 2504
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/dom.h",
+        "sha256": "f72f37882a06b4ea643acffa642275cae491ea2e4cb57058f6ccfeafdbab03cc",
+        "size": 944
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/exception.c",
+        "sha256": "667cb05a74a71d1778a820ecaaa1bd414e5a86113bf79d3c79c98b52fa07915f",
+        "size": 10007
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/exception.h",
+        "sha256": "c3a7bc42e36f0adfda77e120422de62ecde05ed208269f5dcd99e0f5b7cf9447",
+        "size": 3085
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interface.c",
+        "sha256": "fefc38635ac9fef55ca38970a08dc26e3e6601a2962d56b61956c81898423f6e",
+        "size": 3406
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interface.h",
+        "sha256": "4ddd4f049fad49f3e40c60f18ff81b70a6b5b9af74291885e2a8dde56503642e",
+        "size": 3074
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/attr.c",
+        "sha256": "114409b6a5fc7636e57cf56b9f2e4ad723d8f6d98f76122392af58a1151a1ec9",
+        "size": 13261
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/attr.h",
+        "sha256": "66919f9f7f38f2926489fa89a12459c1779889fa013b5cd353d003c5d0b17ebf",
+        "size": 3832
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/attr_const.h",
+        "sha256": "595f6494e2a581e89daf3461d35094ccfc5fb8c811648f9aa48d2c4f9f6e250a",
+        "size": 1876
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/attr_res.h",
+        "sha256": "1022ac67aca344d9a3ce3250f5663519254ddd5cc4210620e95b4d6290d62f9d",
+        "size": 7237
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/cdata_section.c",
+        "sha256": "c24608f7cfa2a5dafb09aa4680f09c4f7f635b106bc9ccc5b96b4093a2c00481",
+        "size": 1446
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/cdata_section.h",
+        "sha256": "265210bbc963da2dec38d385a22ef713417908f580929e9efc90503f9ca1eafa",
+        "size": 852
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/character_data.c",
+        "sha256": "a113a63f92b96b404b5b166de91eeafb4e08a182d5dc4b6400067aa7e7d15a1f",
+        "size": 3204
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/character_data.h",
+        "sha256": "8bcdd5a10e6223e90cea983785618201532e377da20b3726eaa23d64d287c4aa",
+        "size": 1307
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/comment.c",
+        "sha256": "31d1044d16e8081aff274910572da950e7b77c7093221d83d61dc99e71cb5195",
+        "size": 1650
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/comment.h",
+        "sha256": "356e7ec7f452b1d52d41593dd7ea9ac61fb82d2ac0cd278e70c80af79092615e",
+        "size": 931
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/document.c",
+        "sha256": "5297a25668fe0ee493d94b9893d99d7a860a12601f6e4a77ab685f08410e93eb",
+        "size": 14819
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/document.h",
+        "sha256": "fc98c86fd88c3742de1446f8af17ada0f47e1e5d340e19b32ddad4128c203672",
+        "size": 8903
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/document_fragment.c",
+        "sha256": "5f1907f8e999df15822ad246b78cb8296f925b6fb3bb4b07bea98c42bc4ea910",
+        "size": 958
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/document_fragment.h",
+        "sha256": "fc691198e3794b7225fe2eef60cd16dd369b658351b9edc9f43299ae87e8edb7",
+        "size": 745
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/document_type.c",
+        "sha256": "70d0525240f92e9c077bfde7337d68d108ecb9918f2c49782b51ee196c0f2bee",
+        "size": 6416
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/document_type.h",
+        "sha256": "617a3a564f821bd1dea6fb844b43eb39b9dda35e226a38643df668fb2615410b",
+        "size": 3916
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/element.c",
+        "sha256": "98e33f4462a867c63879dd0d129cdd294ce734760739c562e1143e4654cce0f6",
+        "size": 22546
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/element.h",
+        "sha256": "7fc886bbc1903610145ebf748481e2065719100e62f40bb6e95532ae2ad670d5",
+        "size": 9992
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/event_target.c",
+        "sha256": "1a23823e79fa41ee165029f0853a0e1c99083202f34cdb38172b66abd604e870",
+        "size": 795
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/event_target.h",
+        "sha256": "f0e7e555edafc20bd50e67036febef2190a88a62857604d3d77e4fb0ae1cbaff",
+        "size": 639
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/node.c",
+        "sha256": "429f23bfdb7949d0883fb822496574e963691d764b5b908340faa7722fa87b97",
+        "size": 47292
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/node.h",
+        "sha256": "42fcff95b51fac0086a53d985afccc617ae83a1fdba733596e7cc0ee4ef19a73",
+        "size": 11606
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/processing_instruction.c",
+        "sha256": "634de69adf2df9028d183daec119ce939840a5362f19569653fd4edc1e379eb9",
+        "size": 2674
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/processing_instruction.h",
+        "sha256": "c8770011a57c7615dc656ac02539c7bbee03f5f0a8b7e35bcb839fd04207b393",
+        "size": 1712
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/shadow_root.c",
+        "sha256": "66c6ab5d824fc91ae76a242542d1b0c435f11ae06438461bdab9c721627bfb02",
+        "size": 942
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/shadow_root.h",
+        "sha256": "672d330c9d7a2edd3a7aafbcef47d6a80dae3d132400d68506f896b9fe65a33f",
+        "size": 940
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/text.c",
+        "sha256": "05803fcbb88c3b9d489a48d57fdd404cd2abc120343c1740b106501270c520b1",
+        "size": 1556
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/dom/interfaces/text.h",
+        "sha256": "46de0e044491b8a9d92fa2808e514afe8b5b0fed61e20b17b34582ae8d507fa3",
+        "size": 850
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/base.h",
+        "sha256": "f5164a0addaebe7e1bbe80e492fb6685e463674329a2bbae143799a7c973e8c2",
+        "size": 5796
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/const.h",
+        "sha256": "a142bf761ff9ed2c3e5cc2206ff21e55def244d308e6d8736846c4552ed50742",
+        "size": 2117
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/decode.c",
+        "sha256": "4a437655e437b338958a24e661a70461c8508a41723148fb62bd971f71d21101",
+        "size": 95745
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/decode.h",
+        "sha256": "2ee1f5a5799e60480fe4ad8daa4e2eec8c1ded35086231c6cd7972786e9f3e1e",
+        "size": 14991
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/encode.c",
+        "sha256": "a6e3a6606e4cb737f2a0d483e30340cf4804ed3b6e5f5d3fdb1bb57ed6b8c2e7",
+        "size": 63369
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/encode.h",
+        "sha256": "ab28f615480208198ae8a6d9c9f9a0d12bd68e7f0d6275f6fae7d814379d1625",
+        "size": 15728
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/encoding.c",
+        "sha256": "8ced4652b9bf8550d06880ff683b56859523f9ec4c4c04c6e8cdf26b0333518e",
+        "size": 10045
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/encoding.h",
+        "sha256": "90f9bb4fc405c0e0a7f826bceffb195f38c77dc0a1df1d94f88bf3c303c64e01",
+        "size": 12676
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/multi.c",
+        "sha256": "8db1ce0c30cc84a267fd7dadb0f83ed8f649c5be864dc09339ec398cb5337087",
+        "size": 10383349
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/multi.h",
+        "sha256": "93813697f220e657e602dcddb0024ab0dc1a88e44263db37119991c244819e4c",
+        "size": 2381
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/range.c",
+        "sha256": "4caaf9003bd065e2741d563537e5a9c152a2894fed3fbdbe7901516657c63319",
+        "size": 3924
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/range.h",
+        "sha256": "04fda79a2c463aaf9408c80fffb2ccc992b5265df1a69a569098a3139cdf1126",
+        "size": 670
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/res.c",
+        "sha256": "a6b22110bc224f34b60af5e79d6645e9fb735e23931d04d35c6411a26f091cf3",
+        "size": 22587
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/res.h",
+        "sha256": "5ca6df7e29b27932f1013f981d9b1d02d108682ba060293a27cbb5d1c584c361",
+        "size": 712
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/single.c",
+        "sha256": "0f5f7650815f8bc094607e0ac814877e00ed1c50aa501a63072e2f641bb3be84",
+        "size": 408321
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/encoding/single.h",
+        "sha256": "760acc80cebd272a1936f7c4a78210300f83eb2eeecfa4a28b59b78b992a5e61",
+        "size": 6503
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/base.h",
+        "sha256": "81536e82dc352645ec292e3d7df6b5f43810515f3fb5543fc519c0ce1fb2c2f9",
+        "size": 922
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/encoding.c",
+        "sha256": "0ff6b24c34083ef4128fd8d1331a7b6fc25dfba7b891554a32a6ea3be6d55805",
+        "size": 16136
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/encoding.h",
+        "sha256": "65de9d38cabf7e5faa755c26581605ee922ca6a2e891619c0ac4777fdcbedf37",
+        "size": 7446
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/html.h",
+        "sha256": "64152750e269c70ef00550d947544069e5948f6ab6f0e54b7fd124b4002da605",
+        "size": 4767
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interface.c",
+        "sha256": "77060249b23d38970182c43d05086ba3e7b8fa7d18ccfa6403d11f1e8f4c7121",
+        "size": 5132
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interface.h",
+        "sha256": "8c11e2cf70f99a92fd936712c8550db70729a0e7293b287bb4791a50dc9db270",
+        "size": 11384
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interface_res.h",
+        "sha256": "2db2f39112ba136a8980142b0714a0797e3708d1cce12c5636734e4a55a1c21b",
+        "size": 312739
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/anchor_element.c",
+        "sha256": "4f0489aa6d0244461cbe5dc1597085356c6911b5e853029929dcba39b9531fbc",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/anchor_element.h",
+        "sha256": "915ac309c51da4d5a0c592c735f7ade3acd5bba46517cf79f817bd3d08bf742a",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/area_element.c",
+        "sha256": "d7aa1e1f367866fb4ce16cca63cf966c512c868b8bb38b4a237c478ea4e3d538",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/area_element.h",
+        "sha256": "b312582dc8da414bfbd79a8e91ee3e81bfb4aa0f5383d90bfd562e93668b0743",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/audio_element.c",
+        "sha256": "2b52d061c6f9dbf01e40f1000054b00bb775d7bfe45b72703c388e8dc609bb33",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/audio_element.h",
+        "sha256": "2fed93ee046d8d5195b9da329c082630ed4d6226610879c1461ead62fb808f37",
+        "size": 697
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/base_element.c",
+        "sha256": "c4860db7197e44d17037df78274e6cb4e6ffe8e297f580ab6cdf6783953d4f32",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/base_element.h",
+        "sha256": "35ca370d63620beb166c9f4acc11b26903902761d354539e9819bb902ff61763",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/body_element.c",
+        "sha256": "d6f23a89ec9d7f534489616bad674037bf8bb6f0cecb15d40122d62b65870a06",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/body_element.h",
+        "sha256": "23f5a666c1399f6b1256de3a93c8a6b3a765371eecac458460875e426842b3a1",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/br_element.c",
+        "sha256": "89188deb6fbc37a73e4f0039487ff87842495df9bdd67ec2e04c5c5cb8229a10",
+        "size": 903
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/br_element.h",
+        "sha256": "5513ca936349d9831746ebab61d6b35faae08c5c2190f8147cb8a72b1438792b",
+        "size": 649
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/button_element.c",
+        "sha256": "2bfc9f1b0f51843b82c7900ca34bbd83a6e1e816bfa07862381a57ce5b643802",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/button_element.h",
+        "sha256": "d13306b18ffb081191e5cc917d4e8a58768fa377e6c15099c4110206f3d5c19b",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/canvas_element.c",
+        "sha256": "6eac2d992ee31621861144641fcdd11b30ec55497ecb22d69d03d8d65344a3a4",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/canvas_element.h",
+        "sha256": "b4b57642793cbe7f42866b2410664d87a952bc76d639a2e45f1df243a089b57c",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/d_list_element.c",
+        "sha256": "9393b8af06d7c43c30db03a0d106ddf465dc828b7e8123e218538c3d47abe9d2",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/d_list_element.h",
+        "sha256": "881f87fd8335db6e969be1667081fc0f2acf7d6b4efa7e171198c878ddd73077",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/data_element.c",
+        "sha256": "25f15fd67ad44deddd8d6461bb398fdb52c733979afc5fea99c52dbc10ec78d6",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/data_element.h",
+        "sha256": "aa82bcf424debc42abc0feb119d996460f8be4aabc5514881cc8bc412640b37e",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/data_list_element.c",
+        "sha256": "d81441b638d2e6a16266917035d36b67c25af0b2107438ce4409715078024d0f",
+        "size": 973
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/data_list_element.h",
+        "sha256": "1ae86225d98c6d89ce80bcda2754ad1f55b63523f7337d50404a377760116452",
+        "size": 719
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/details_element.c",
+        "sha256": "99751de05296426b9527cfc217be075c20737de9c99503fd22c13b54e6d9f125",
+        "size": 953
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/details_element.h",
+        "sha256": "0dd81837d19e06c604d61aad519b5242004aac7c7e9a7d0f24d1d2eac936b6e6",
+        "size": 699
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/dialog_element.c",
+        "sha256": "d7ebc6137fef22781c9f9b8ae76fbc4f9ff173d6b03c4ab9b36e33b7cdad2e5a",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/dialog_element.h",
+        "sha256": "ad77a1de42fe537018a04da1c5316c4e350be276203118b737c29d4c7bf050d5",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/directory_element.c",
+        "sha256": "09e2a5e3b3b10483a0d2305006aa4ca7f548f79411c43dd550850b8356d16f11",
+        "size": 973
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/directory_element.h",
+        "sha256": "f3add78c9c2ccad17e261ca62093d3f519eacbeb8aa5c1db36d0aec20cbd052e",
+        "size": 719
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/div_element.c",
+        "sha256": "25b4eddf2de73a97122c28f85c279967a5e74ee121956deac076f76c8973a6d8",
+        "size": 913
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/div_element.h",
+        "sha256": "cdee951f51becade754b2e24a610cf10ed47e3729db39b374482ade9844aa4cb",
+        "size": 659
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/document.c",
+        "sha256": "f1659f4b26a3fa6d65861427c6f3cd0b03e03b045123a39b1ead1d33acfa6c70",
+        "size": 12635
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/document.h",
+        "sha256": "bccf135565ccaaa4504eb1a6238dea33aee66184c159004bc0d7e3ce5b9c6972",
+        "size": 8352
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/element.c",
+        "sha256": "87c283fa52c70398df8474d57501a093ec3369cd7f7726bc1fb4fd21666cab4c",
+        "size": 1690
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/element.h",
+        "sha256": "a1144136040a5003d81ab0240cbb9590c27e213338bc456ae66b448dcc0fd5b6",
+        "size": 2054
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/embed_element.c",
+        "sha256": "5b565a9e91c7a8fda612b529e015e0bbda20d91ec31a89a5c2e09cf0b9870711",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/embed_element.h",
+        "sha256": "64d338c1b3263e4784660459ca92a1f4680dcad34424df184ef471fa86246593",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/field_set_element.c",
+        "sha256": "e6ea1e75901e9c3cef4b1b95ef6b5f0edd0f29a84a8c661e55a1f14212da93b6",
+        "size": 973
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/field_set_element.h",
+        "sha256": "ad384d7fffb6a602fcc9bf187872a00e674fa0f5f642c1d77071cc69f27d68e4",
+        "size": 719
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/font_element.c",
+        "sha256": "bc47ade396f51b674e5e8ba53dd58f8e27d09ebec23bb71ea9a9231c473ad787",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/font_element.h",
+        "sha256": "865bb13fc11e3396b217844093c6c4e22de07d57a9693d78327239b69c6f18a1",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/form_element.c",
+        "sha256": "747c39336c34d7ab53673be2f7f13aed812b38c42d56d1808eedbc3418880633",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/form_element.h",
+        "sha256": "7bf50633edef9e60a9e8f44aa0142f2759e6075fe4d90261d7bf324330199794",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/frame_element.c",
+        "sha256": "b9400b1e613f1e5d98f0756757eb6390e8eac3b0b11d6833177734367241c208",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/frame_element.h",
+        "sha256": "f41175166da734ccb4a1a76c11eaf38b04b6f5b7c2aa97daaebcaaad175b8d58",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/frame_set_element.c",
+        "sha256": "d28eef26cb17236f707ac6d53be8dd6ccb1b9b5031fe66ddcb8a168fde672139",
+        "size": 973
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/frame_set_element.h",
+        "sha256": "00dcf91d8b8f3ecaa0136b8a7392ce69e929d0a5adc0cebf35fd498cfb6ed311",
+        "size": 719
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/head_element.c",
+        "sha256": "38bbacd22a13b5321e23e68eca39b74e071ce5a23ab0f5cd2dd98d9dcf24196c",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/head_element.h",
+        "sha256": "fa0f921ea5f78b1bd83a1e08707b8a80cd30c1f448ba2bd2ae1c0e9c66adeaef",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/heading_element.c",
+        "sha256": "136d1bdd2838d47f32615cf9d63e80f578e9150e9b630d0f12d18422bb13c5fe",
+        "size": 953
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/heading_element.h",
+        "sha256": "e7883dff0b4ade8a1974714775e044485d281fb9eef82eb94f5c8fae6f5c3f6b",
+        "size": 699
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/hr_element.c",
+        "sha256": "eaee5e633a7e84ec8c5c1e0a700dc66f78cb306e81b6255bde03323a1950a02c",
+        "size": 903
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/hr_element.h",
+        "sha256": "f61f3ea57bf7e89aaee4f8bcb962a65dad752d45ea81fc3d00f23f546a2f3071",
+        "size": 649
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/html_element.c",
+        "sha256": "87b941635875b064ffeff0e56826e56584ad7ea6229177a8c02378eb9d0305cf",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/html_element.h",
+        "sha256": "c1afa39d3b2596744f67bbee6256b957aab34f4a0edb9ccae430f6e1520832ba",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/iframe_element.c",
+        "sha256": "7d7eac524b3bbc67484f7b10317adc2d62d6c380e68cbb06c03a1ca2cc979b8d",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/iframe_element.h",
+        "sha256": "6ffaac16cdc2d97e9c0f10a76b403aeaed1937a56ad0b3e7b3925ab924d83296",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/image_element.c",
+        "sha256": "2bb6c8be92742ad085c3d5fb296b24b46fe7c653554bee5fe0b4967641e86e2a",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/image_element.h",
+        "sha256": "748957058462430035d19efd01bd1d02e1690ac4573d1796a9025e8933e2b133",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/input_element.c",
+        "sha256": "6537b2b49774dac1630268aea659ffa48ed5db1717e7a99df041c04695c99862",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/input_element.h",
+        "sha256": "1b0e8ccb6aff331c958b337f4c6f06985ef85e9c8dddfc52417e6a5b7cd75fc1",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/label_element.c",
+        "sha256": "72345a0f5bc408eca266a2192c999c95fa28ba5856a973fd642b910f636337e1",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/label_element.h",
+        "sha256": "0d15e8255c5e0054002ece9794f8b5572530459df502474386caeac98581fd9e",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/legend_element.c",
+        "sha256": "73bb954436ca061abfb2bb24db43529a80cbccb7471f5b4864a3ac845049d88e",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/legend_element.h",
+        "sha256": "db2e716ddd81c3ae5c3109133214956fe2b7c64b52ad371409a365635d1baa46",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/li_element.c",
+        "sha256": "1ad333729a84bc0e64191f4116b0d9834ad5725ef791cd61898c0ded949f1b80",
+        "size": 903
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/li_element.h",
+        "sha256": "4d0de1a20ede284d516d136574f56c5283f77b70e097d484cc3d9affc9521628",
+        "size": 649
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/link_element.c",
+        "sha256": "cac7db52665ac362d7f896a35a7874a5950973b1322516c4a5bba3475a0447dd",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/link_element.h",
+        "sha256": "782f442076ae393ff1f2afd238df8fad4fe37e9798e8145ac0c06a8c51dc033e",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/map_element.c",
+        "sha256": "1799c0f19cc07bee9a6341fe191cd7407d30e6d8c4cef980a18bd284fe977f2d",
+        "size": 913
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/map_element.h",
+        "sha256": "440b9350349b86f14568840ee5d4899f7cbf263c15b6eb7388c846149137b730",
+        "size": 659
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/marquee_element.c",
+        "sha256": "a3490e33fca25031d9af45aea39241eabda89adf3ef858d6c2b6c4de99dbaea9",
+        "size": 953
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/marquee_element.h",
+        "sha256": "1e13cfbd1a91f97d0d19197e697c69c6a465f848f6d16c73d00d7fc07003b4ff",
+        "size": 699
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/media_element.c",
+        "sha256": "c877b5dfb7cad9e6a2ef4d68d903d44280702a20ab642a19fbe1d99f8ba0ba9e",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/media_element.h",
+        "sha256": "4087fdfd4785d9428445977fdeb3a3921ce35b625373ad586268cd717c441ab5",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/menu_element.c",
+        "sha256": "878f47280b32215ef45ddfe7a4f67258c3285e3753cca1e182498ba3c6ef1a16",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/menu_element.h",
+        "sha256": "cdefdeebce7155cae0fbca09084dcab04ddc1c9aed6f347b373a14997767e16f",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/meta_element.c",
+        "sha256": "74e754fb9b0298a08c2048543bc5951faf87bbcd522ba15f0ce3c681bb0a3ff5",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/meta_element.h",
+        "sha256": "c3d8ba118a7bf29c57e4128ec52b67afee59fa05cb2aec7669f0fa845f0ab41c",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/meter_element.c",
+        "sha256": "d30da7eeb7d73973957d7a35e06527ba0494eacd9bebd1334bc4ae31441d2f9b",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/meter_element.h",
+        "sha256": "3b15eb6cc319ef69b8ea411d89e93135679734177d8aeb07d9c347b4eca407ee",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/mod_element.c",
+        "sha256": "7f17a444ed6b0015304d866b406b2f1b7a547755ff9791ed94b1b47948668f34",
+        "size": 913
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/mod_element.h",
+        "sha256": "111680e7625f0dc0fada754e60458cc494af246e4ec69b4805e012da52db48ab",
+        "size": 659
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/o_list_element.c",
+        "sha256": "62be2f1738ec637c6edc4aceb1905c24a0719bc477e087c2f022eeaa8c5f481d",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/o_list_element.h",
+        "sha256": "28f038fe405c7171bf0e04b0d63edff31abad222739ae12eea2ea2ec3ea85c83",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/object_element.c",
+        "sha256": "892be783abdc5083ccc7b9e5fc62c8cac862166a8d9a57ee681d3639a420a43f",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/object_element.h",
+        "sha256": "fd3fcc305ef7de6a9866c2af5a4f2f255ee78b7a71d14e4bd98031516360b552",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/opt_group_element.c",
+        "sha256": "a2388817c616800104b5e19aa5e357eb47797c22ab5d63b31c0d8332d2aff089",
+        "size": 973
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/opt_group_element.h",
+        "sha256": "44529bb40431c51354d5ada804a97be90e6b6b157531b43c6e9f2cfc987656c8",
+        "size": 719
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/option_element.c",
+        "sha256": "94736c578de1741b8f2f01f382de580599a2b58c0c56c3a4d295b6380ee5ae07",
+        "size": 2258
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/option_element.h",
+        "sha256": "6d7055d52c1e5c1684ddbc1469dccfda5255ad9d4ff0863647f1810fed4bf2e9",
+        "size": 894
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/output_element.c",
+        "sha256": "af0231d02a5d8efdac7441372b4749adff690e720ed54e693ff6c1f94aaf912d",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/output_element.h",
+        "sha256": "fb137ad2738efafa5eab9c22a2b07a956c980f3a5318c14ba142abb514d38dc1",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/paragraph_element.c",
+        "sha256": "aec3c8e332c1cc0d72fba540b157594fb72affab0671b59ebf4127b2fb011912",
+        "size": 973
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/paragraph_element.h",
+        "sha256": "8684cc59ca28d1d0e4475bc4332a93b205fb2c862ae15bc418c663d81a7c659b",
+        "size": 719
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/param_element.c",
+        "sha256": "1a9a82c3222e600cc16587081bff6fd414ce4f9607389e661bff3f1696e518af",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/param_element.h",
+        "sha256": "a5da0c2e05ef2a1f9544e06630288355ca3d05b746be29b65d7022f62a506b49",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/picture_element.c",
+        "sha256": "570b8f4aea34005402abca016d40f3745e2745c0d3eeb47b8f31bf3951a44592",
+        "size": 953
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/picture_element.h",
+        "sha256": "611e0127b4f295fecec3b05a05ccc2309955e4865edf8246fa44aeaaed1d8c35",
+        "size": 699
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/pre_element.c",
+        "sha256": "e70106532e8af1b3b5943daa0c2e3ba423a298b635dc53cbdd0202bece6cc4fb",
+        "size": 913
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/pre_element.h",
+        "sha256": "50e95fb84bb10807c2970b3af7b09e336ff6f53e62b1ab96d8c726db1bd8b956",
+        "size": 659
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/progress_element.c",
+        "sha256": "e957e4232bca6743056841826245d1fa64f3096c6d415d0c65c97c50fe0da60d",
+        "size": 963
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/progress_element.h",
+        "sha256": "b87565e3742e1c5c601ca8192f43db8f57ab39390e077da6c27ec2cb44849493",
+        "size": 709
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/quote_element.c",
+        "sha256": "09f98c2f72e7466c4db62d056af93a765dc1583e5930f8e550c41b6298523232",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/quote_element.h",
+        "sha256": "383151d243c908cd723cfd59c2071cf5cef3ea09b33ad4dab813e8eeb90ff63d",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/script_element.c",
+        "sha256": "75227d4d3757342a1ea040c8e5b24b489ab2a3e549627cdbb5384deb2da24ce4",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/script_element.h",
+        "sha256": "04f2f64f6647380e7580a64b9a3f9e1b2ca283fde2f6179cc5ce5b1d2f1ac2c3",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/search_element.c",
+        "sha256": "ec7e02966920e2e00d6606495487d918e4caf8990b7fc2933243312d246bd609",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/search_element.h",
+        "sha256": "9b3e9fae1342a84c33f40fef67a13168d8fc8d4c38df382175be8d9551a72f32",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/select_element.c",
+        "sha256": "0eee28c184f471ec4bbd98118abfa5f97aebbf70e88260cfafb1b5697fa7224f",
+        "size": 2123
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/select_element.h",
+        "sha256": "04bce5d08a8c96244cbcaf0c5bd02adbbb01be9abe15d77bfe1a2fba2d47f785",
+        "size": 810
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/selectedcontent_element.c",
+        "sha256": "bc84b69f90ec3a2336b4f6be1dadf7020f695c3290bd602c9132788777ca2113",
+        "size": 2097
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/selectedcontent_element.h",
+        "sha256": "0767294394fcba0029cb5d5b401492d66c5f003558acbea071119e33461fabd9",
+        "size": 964
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/slot_element.c",
+        "sha256": "6c29cd8118a855f11547d35c36876d5a90cf1ffeb440264ac4ed12f36b34d7cb",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/slot_element.h",
+        "sha256": "bb0970f5cb68b8181d7543a4cf9e04bcbf063c26dd79d154418fd3fc6611d1f8",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/source_element.c",
+        "sha256": "be4ad6ec8009a5e8334a933a8585ca6b0e4405ba8b5f918845dcd6bbcb7fdc81",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/source_element.h",
+        "sha256": "6edac92064a41bba7cc954fbbd768e6a5606473aa187b1c6a881c6dcd09d3a40",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/span_element.c",
+        "sha256": "4a3ebb580bd6e26eaf2f233dae0246569414eb6ff89572b42be0c7f015de74af",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/span_element.h",
+        "sha256": "a1fc62695d2dc26073c405a06a53ffcaa0e6a767204cb76c88ac7c0f63ba02a8",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/style_element.c",
+        "sha256": "09d30f0997410873650466dc3f42c328207f0814d336d9af36e065ee6c69d3d1",
+        "size": 939
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/style_element.h",
+        "sha256": "1728f85cc3f925c49e2e99fa543ab634905e1b945322ca8d636294ed6cfa1b1a",
+        "size": 925
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_caption_element.c",
+        "sha256": "951b4c4ec2adc7a7db16403c23c15e3bc0cd258f48283be8d250cdc0f9979c3e",
+        "size": 1013
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_caption_element.h",
+        "sha256": "2540bf72d4842616acfdef810601169e6327d2e8ec28dd59e0c087779122b8b6",
+        "size": 759
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_cell_element.c",
+        "sha256": "5524f779dc6940618b5f0f928b4046c72608d82cdda180b9c59060fe4b3825e5",
+        "size": 983
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_cell_element.h",
+        "sha256": "06a1f5d0ae47ded9ee99848b0ae212fc92a03c25017bb0292f444d3d9bd69dd1",
+        "size": 729
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_col_element.c",
+        "sha256": "e23ee9b92e890b35643f6df1d3b3625283d9ccd4f0fd568c70d35156dd616560",
+        "size": 973
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_col_element.h",
+        "sha256": "c735fca403ae37e87d0307ba95f1fe319e7187b4eaef4ed85d773f8a22db45db",
+        "size": 719
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_element.c",
+        "sha256": "1430924782cfd61dbec9ad06426ac91effeb7b705e16c59033e21dcaeaafacd2",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_element.h",
+        "sha256": "6e5ba920be99af59532c2df6614712fea7a17aba71ef2e580cbe29b861942830",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_row_element.c",
+        "sha256": "537ad98896aa299fa05d15b78351279770f806d18c52c9819ba7365c6acb408d",
+        "size": 973
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_row_element.h",
+        "sha256": "b120f62136bb68a165a8cf4d115ee7f1a943234c854c42c7e07e41cf0e6ad26e",
+        "size": 719
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_section_element.c",
+        "sha256": "40ac883554ff989eb947dd5ebebf7ae7328c41461a00946851cfbe632b575733",
+        "size": 1013
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/table_section_element.h",
+        "sha256": "4ea1cabde7ca20185f42781457d11b0d89d8765515ba64c60b9188672936be61",
+        "size": 759
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/template_element.c",
+        "sha256": "afca1e288422a2a476c5f29c4710194dbe2a7b45db2cf1067765f0846982bb85",
+        "size": 1359
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/template_element.h",
+        "sha256": "c12903c45d4384b62eda9428f8337384c42b72e5b6dce591db4e3de5d8e5f0ca",
+        "size": 815
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/text_area_element.c",
+        "sha256": "58b9c1ef7cb6961aaba9f30b12b696789087a62025744f94769954fb3c65dac1",
+        "size": 973
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/text_area_element.h",
+        "sha256": "98b28a67b71f23d0f7e7a4cf47f1773658421e2e7c219fe655eac4a6bbeaf257",
+        "size": 719
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/time_element.c",
+        "sha256": "2508f6af0a1116246c7dbf75a5c513a10d77638170a127bee660f734dc678ea3",
+        "size": 923
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/time_element.h",
+        "sha256": "ee005b800c0b9fa03a6953baae7ec9addd15f6e51a5470494ab08b144408381d",
+        "size": 669
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/title_element.c",
+        "sha256": "8aceb508d85fd8816ebab2ecb00b2c1b3358f1addfaff487f8515d541914d8f3",
+        "size": 3477
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/title_element.h",
+        "sha256": "657309030b8de2a0666ffa1505101171bebda650bebfe64932cb33b0d0439fa7",
+        "size": 930
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/track_element.c",
+        "sha256": "ae00672ead9b1c42ff2ae62bcac484853213149fab82c43c71a2175bf6e80c21",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/track_element.h",
+        "sha256": "792966c29c89904ce28a4400c37d12d5b7c138d07fbc215f99719367be04477c",
+        "size": 679
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/u_list_element.c",
+        "sha256": "ff9d349020dad8beb155ea51f87e1a2f0fd96060906320661819d6d836cac499",
+        "size": 943
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/u_list_element.h",
+        "sha256": "7ac4a3b40ca1a6e8c58bb447aa67d5d32c65ae166f7c82da439ebfef67e15a9e",
+        "size": 689
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/unknown_element.c",
+        "sha256": "ce167a9fef552566ce788094defda2f5ccf3b9a0576affc5b0316d7c4c59d0ff",
+        "size": 953
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/unknown_element.h",
+        "sha256": "3a8e2a7af727b7f92ea31a6aca17a4230c8ddf43a8fa4f7498847e72d04be3da",
+        "size": 699
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/video_element.c",
+        "sha256": "b1925102ebfa02c80f651cd29c8cf1b538b31fecd6926a9a61028e4ab4ebd2bc",
+        "size": 933
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/video_element.h",
+        "sha256": "726c7e6661bf243472d656319c1af0fd634fb201beae15e4c7794251c959155f",
+        "size": 697
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/window.c",
+        "sha256": "e3cad95194acc9ad6611bbf50962c1adba6716216484120813c2f782bf0ffe3f",
+        "size": 859
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/interfaces/window.h",
+        "sha256": "a4765bbde448ee18353e69ca4db1664296b845a9284d0a1e96bfa5437577ccb0",
+        "size": 602
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/node.c",
+        "sha256": "16a70a28ee64e63ed8f5071673f43fb3e5e4ef665773784ae9ec821f61a49536",
+        "size": 226
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/node.h",
+        "sha256": "14bc28cef7b929ee87291255b602ea0a14f45cba6a5b3863542223508dc6dacd",
+        "size": 1377
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/parser.c",
+        "sha256": "df5c181c3551665fd956a5309c380b9d7c8be0a00bef9d176a0dbebcbf410bb6",
+        "size": 12909
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/parser.h",
+        "sha256": "149500a4ac270c4d2b46f4c71dc4aec190ccc638d47d512b7645152dbdd5c8a1",
+        "size": 4109
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/serialize.h",
+        "sha256": "fa3efa3b72f5d9cb5cf259dcee5375e81a9d4fa4ee41fd8d204586c97fd47ccd",
+        "size": 2985
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tag.c",
+        "sha256": "e0426be8e22c880e0b9b5f52576ac34aa915f1ded84ebc88df2d74eb18adbfd8",
+        "size": 672
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tag.h",
+        "sha256": "0cb606bb03743b3b405b56d71d2f36622074db9a06a1111809e3a7bd3cb06e32",
+        "size": 1710
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tag_res.h",
+        "sha256": "397c887d32abd9e039483ff7a3b5779cc1b4084248a09516939086a9a5d7e73b",
+        "size": 74084
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/token.c",
+        "sha256": "9e41ea3d74d367230804422176f5da7733bcff94374e68447991520431dcc475",
+        "size": 9182
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/token.h",
+        "sha256": "1163d5534419184fda9af3cf92ef6e0d7b725ef08858297b9ce87743010d7c58",
+        "size": 3347
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/token_attr.c",
+        "sha256": "9d2f11ea0388906eaf2f4ceb4e7cface760ad8dbb0ec4a44df4fe13d0adec9b3",
+        "size": 883
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/token_attr.h",
+        "sha256": "dea761fa6016aebf187c3abf1844373a8c775ebc2a1b3a9aa96cd6cc861c4fbb",
+        "size": 1560
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer.c",
+        "sha256": "a0829eaec1826009b4bce313eb6b17dc1ad82c3456cb9b1fdf777dc6478328dc",
+        "size": 23127
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer.h",
+        "sha256": "239fec5a4623087f62051b66230f5758acbea1cac49465940168caae6f32caba",
+        "size": 10497
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/error.c",
+        "sha256": "c6de6476f7451e697c27b2350bb2cf8f1ba80a8edd7f615553863d849f762721",
+        "size": 3954
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/error.h",
+        "sha256": "bb593b3720f856e5e98ea49482e8738a007f628370b495b5f59254128a5136f8",
+        "size": 5099
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/res.h",
+        "sha256": "73c7ff55aee69eb960777c38a8882b9d3f647756954d05730cafcd5a20c1c46b",
+        "size": 303610
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state.c",
+        "sha256": "16c991c42d2a251a9f9c59a231495bfaee605869b8175526d060de50f886ff67",
+        "size": 70964
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state.h",
+        "sha256": "a286f570b6c26516f3dc93b5b3842424c6e00859d2482a31d42e0181c8c69d3a",
+        "size": 14399
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state_comment.c",
+        "sha256": "98c2cd13aad3844a586391acd0d5ca2050b8cb7785c8ca53feed86f71442c69e",
+        "size": 15291
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state_comment.h",
+        "sha256": "5bb02996b0074f47f7568f7dfc7c4297f80c5c625a2b420c4a8f1adfae8de89a",
+        "size": 615
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state_doctype.c",
+        "sha256": "03eea7b44b8e5665405bb4d7aebdcd51357a0c9b9829f21160a528de8eb335e4",
+        "size": 54851
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state_doctype.h",
+        "sha256": "65e6cc159a8ab6e2b866761162a0ddf4eb299149ac47e5ad6a936a35f18a56ca",
+        "size": 597
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state_rawtext.c",
+        "sha256": "f6e21e73ac7726e5d57f2fa025eaa4c6160771f7a04f96437c9f6c4b672690ce",
+        "size": 9272
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state_rawtext.h",
+        "sha256": "7cf1cb108dc412ffb9e64970452ac0b223b0810b7befe1ac6f617d13bbc84f86",
+        "size": 676
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state_rcdata.c",
+        "sha256": "a30c526d7f2f65676cdaa8fc8152900ba042806fab80b5ba310332ab29756a8a",
+        "size": 9505
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state_rcdata.h",
+        "sha256": "888d19657f12975a0122adb72d5ff02ba07d7fd3b53559dfea97a6a162154f28",
+        "size": 670
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state_script.c",
+        "sha256": "52a8d13b35b0e9434cf03cd87fa0d251bf576549c04b347fac50ea1a040df370",
+        "size": 39139
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tokenizer/state_script.h",
+        "sha256": "1213b1ef6aa01211535e2f0b0827ba5c0b55131d9adc3ce89453bf95ff3553ff",
+        "size": 685
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree.c",
+        "sha256": "99212dc7552d8e3406265efba54037ad2c582abea3c2d511c2550221ff48e2ba",
+        "size": 49003
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree.h",
+        "sha256": "43912fcb643b6b6d369f2f1eaa72e49eec660a3de27b82d30bb70af945a5d2eb",
+        "size": 12017
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/active_formatting.c",
+        "sha256": "801f2767d8bd2ad678503052433f96e6791be70937671dd3f660145add09a19b",
+        "size": 6054
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/active_formatting.h",
+        "sha256": "a625eeba338507ec583723c2169db831546850db145493ab9e8c0ca80d826ed8",
+        "size": 3249
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/error.c",
+        "sha256": "fa19912b0659a3d8af8d0b745bae6ed6a0b62551f0302718121837262e7908b2",
+        "size": 3533
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/error.h",
+        "sha256": "77db829b87b8208b1114d5344df8695e03e0940cbdedd371643ecdb6c99402c3",
+        "size": 4332
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode.h",
+        "sha256": "99850957854dbd76b0f5e12d8db657503e1bf6aa35e2e2d3bb5f2d0f97924b6e",
+        "size": 4251
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/after_after_body.c",
+        "sha256": "2087b325412a9ad6283b7a61879fb8437c1d844aa243d9b0adc2b7d2b3a56a0f",
+        "size": 1743
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/after_after_frameset.c",
+        "sha256": "caf9a2c82d1295e37d0045594563042c2c6cee313be7950f24683d43e0ae9fbc",
+        "size": 1782
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/after_body.c",
+        "sha256": "30d33c4414ef6f87f576494dce638cc8ad0390578536772e8a0ab781ddcc466d",
+        "size": 2368
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/after_frameset.c",
+        "sha256": "55c4dd4886fe38bb2a1e3bbf50be2205fba84a5bbedc43a35754fddd00a37fe5",
+        "size": 2552
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/after_head.c",
+        "sha256": "b2cca8f7d608b0f6e09885f925bc24315191a1010e25b706862eff65c81060a0",
+        "size": 6736
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/before_head.c",
+        "sha256": "c549059fba2e94d75ea3fc83eb9d437cae09322b64a3e260b711e242c76122ec",
+        "size": 4307
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/before_html.c",
+        "sha256": "cdf462b965dca34bd9d6b514837a64ab868d63b14665545656e23f764f9eeb3f",
+        "size": 5190
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/foreign_content.c",
+        "sha256": "92c759ffec1c5995d62e0b56c9caa7092c5dac1a916904b54d8b8b6c141c21d0",
+        "size": 11455
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_body.c",
+        "sha256": "36780152cab7a065f30c3875971e4152786f7b09961cc902a4c8a1572bec465b",
+        "size": 65791
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_caption.c",
+        "sha256": "bbbb77ac938160a2d06eea1d92e8fd63f8a4b98a749529216e2e64c3182861bf",
+        "size": 5485
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_cell.c",
+        "sha256": "748a1c37c1053bb853f7490ad22b994cc02ee87246f20f0f5f6a9156cb109025",
+        "size": 5783
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_column_group.c",
+        "sha256": "d4c2a1842caeaea443a7793114782e3e9f13cfd13a641a435552823d7df592c8",
+        "size": 6946
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_frameset.c",
+        "sha256": "cbb8b6a7622fa3352b5670722897b421e943536eaebb179eaed98d444870e17d",
+        "size": 4416
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_head.c",
+        "sha256": "b9d36fad9f19e4fe4a640d1fe23b57c3fec10f5bbf2987541eb6b1d4cd2ded2a",
+        "size": 11542
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_head_noscript.c",
+        "sha256": "7abdaaec64630b577b308b37d584f1d92d68697f2e528e175fcc6f08fe2fbc4a",
+        "size": 4125
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_row.c",
+        "sha256": "c83d498e68209f90028236f5dcd78e9b0b5792c4eb2be75eacefc35931bb2c67",
+        "size": 6686
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_table.c",
+        "sha256": "2ca2745db6df0a1adb7f50f189e20579dcbd0470c24ba176001814496af3631c",
+        "size": 13875
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_table_body.c",
+        "sha256": "b4054c50ed18f602cae341691512585a36111bd23c27babc025d0a0191467e1e",
+        "size": 6605
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_table_text.c",
+        "sha256": "8ddfd9c1d9bdb2d6ba91bcdeb3684c5abcae21539be25c57ebfc0b38f9169ead",
+        "size": 3914
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/in_template.c",
+        "sha256": "e0df8b251b679b129f684e8c102df7ee63f6388b0097be39092c2e5e9d7a7a9c",
+        "size": 5997
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/initial.c",
+        "sha256": "17e40f0e9efcd6006f5488b795c6952d9ccf9028ffca787b2ed76d29910aa4d9",
+        "size": 13423
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/insertion_mode/text.c",
+        "sha256": "65c08157e91c26f3fff18e5283caa9cb2880b99c6fd9235f4ea541250dc22804",
+        "size": 2436
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/open_elements.c",
+        "sha256": "a841b225a023453ee35763384bfeb956fd95c4ab6fa7a2b65597c31e2aae5d43",
+        "size": 5804
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/open_elements.h",
+        "sha256": "840f51e1a13d13fee73acc8ba57d4b5a81964065641487f0cdd4bae5c3b95fa4",
+        "size": 3007
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/template_insertion.c",
+        "sha256": "3482db057ff88130bdcec84d98111037de1d288504f65d72def5e1c4af4cf8f1",
+        "size": 153
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree/template_insertion.h",
+        "sha256": "185b5c9b0a709e1a1ed7fb07ec1fecd9f3ad20d12655059d5b91525029d5d2ce",
+        "size": 2294
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/html/tree_res.h",
+        "sha256": "c9d3887c0202538ae6ac635e45e2b05919e2e26930b7304150ee46130a7b3a75",
+        "size": 3792
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/ns/base.h",
+        "sha256": "c23233e56883821c30a56a5b888ef4555dd21ba3f7d3e7255301246a74f2745e",
+        "size": 688
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/ns/const.h",
+        "sha256": "947e73303f7326003b4ff242be68ee271ea8d475c3aea3e53859257d94ef3057",
+        "size": 810
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/ns/ns.c",
+        "sha256": "81cc84ac2b8e23e1aa472842ba1551352f9c75a4b963b077bfdf15ff5e2ff975",
+        "size": 3718
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/ns/ns.h",
+        "sha256": "bfc722b4938b1fe61e315417e2cdd9e4f96e0dca84657b65e6b14ca495c065ab",
+        "size": 1436
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/ns/res.h",
+        "sha256": "f70028a1063a16417136fafd9a870387fff6615daad46ef3add6679cd459356c",
+        "size": 4286
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/ports/posix/lexbor/core/memory.c",
+        "sha256": "946e22a87454ce161cf8ee2606f89477d67265b0a6c4782d623c0ec25faaf9e3",
+        "size": 1250
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/ports/windows_nt/lexbor/core/memory.c",
+        "sha256": "946e22a87454ce161cf8ee2606f89477d67265b0a6c4782d623c0ec25faaf9e3",
+        "size": 1250
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/punycode/base.h",
+        "sha256": "b238c3cc8203bb70f6752209a9c9ec4bb85498d0824ce6e9e2d2b936f6203768",
+        "size": 701
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/punycode/punycode.c",
+        "sha256": "0550de6f822e0187725f3f645a462d95ae21869525c6ce485dcef512d13f1fe4",
+        "size": 16382
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/punycode/punycode.h",
+        "sha256": "55db0c1326c76a5b2d97a8633b81e2713ffcb42970ca9b8b79dfc2b3493408ca",
+        "size": 3324
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/selectors/base.h",
+        "sha256": "3ac324d43ca6bff77375f07b120d5aa3c360f8eabff265332f4b9182fe41deec",
+        "size": 708
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/tag/base.h",
+        "sha256": "4d6115cf4e5926a19d61f0a1c00c60872169c7af9516473d6a315da95f72ddb8",
+        "size": 695
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/tag/const.h",
+        "sha256": "49c39ba031b3794b50e8b3fe404ae1d595dbcd13ccea2089403f8d49b1a14eac",
+        "size": 8859
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/tag/res.h",
+        "sha256": "05fa925855fe8917805896296ac3c8f7348e4b448b7dc9d7eaee21a748b4b8d3",
+        "size": 48336
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/tag/tag.c",
+        "sha256": "8fad00ee604b93cb95aff0bc6c48cde995afb484e2e8b068f3a420b6d15ab7e4",
+        "size": 3546
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/tag/tag.h",
+        "sha256": "8ef9fc411108470e69ba207993c12899c0e6dac7e78ab6b6e3579c5e2c4890bc",
+        "size": 2468
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/unicode/base.h",
+        "sha256": "2a9b07254275d057060bc04ca7a89b6c15ca323c3ee83ea5e1fc9fe55260cc60",
+        "size": 4786
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/unicode/idna.c",
+        "sha256": "3c9967ab51047b3da3b481d865359f97df3ce4eb53bab222b43daab8430204ba",
+        "size": 20594
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/unicode/idna.h",
+        "sha256": "d4d318e0bf26eee7ecb91edab53f93eaead72bfbb3a2fbbf3728134c165fa0dd",
+        "size": 8694
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/unicode/res.h",
+        "sha256": "776d822d254a056643cf7f5160ca5a5da31301be741737cc1ab2de7aaa87d31d",
+        "size": 6285169
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/unicode/unicode.c",
+        "sha256": "e0fc06b500bae6954a31d46363c98244843cf23959eb39a5961b63b76ec53fcf",
+        "size": 27915
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/unicode/unicode.h",
+        "sha256": "52ef3618c6d2c369bcf3073962e018eee24338b4dff6f1186bdcef05ff0bae46",
+        "size": 13009
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/url/base.h",
+        "sha256": "3b406170731129178f3850052d8c74675c5a0643b88040637a0e69408331f57c",
+        "size": 697
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/url/url.c",
+        "sha256": "203a2fb99bef0ee15a9bf0188c51bff4355d3b8d4f984ddfc120bce44a7fbe16",
+        "size": 159357
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/lexbor/url/url.h",
+        "sha256": "0229ea36d98e6cacaccd814f9ffe51687e0eee24845a248b0c019654fff883ff",
+        "size": 26851
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/patches/0001-Expose-line-and-column-information-for-use-in-PHP.patch",
+        "sha256": "6fb32c18b41086187f0fa02d3149c8eb4c9609cd604837bf3a2677b27fce79ff",
+        "size": 7065
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/patches/0002-Track-implied-added-nodes-for-options-use-in-PHP.patch",
+        "sha256": "ecf40425521fccaf1a9225a2d883c9ef6c18efa4ee9bd96b0f3d937eadbd360f",
+        "size": 2875
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/patches/0003-Patch-utilities-and-data-structure-to-be-able-to-gen.patch",
+        "sha256": "29952ae40b529b6b48abe41b920116a40c4025b0979428d323d01328e37dd5e6",
+        "size": 3339
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/patches/0004-Remove-unused-upper-case-tag-static-data.patch",
+        "sha256": "643665e8ccbe67e975b0f36cf561b2aa345122716cff36db97350af2d5e8c2ac",
+        "size": 1941
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/patches/0005-Shrink-size-of-static-binary-search-tree.patch",
+        "sha256": "efb504e02db40dfbf6128f558ee52dbbb0689363b60e286c102b172c6578637f",
+        "size": 3695
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/patches/0006-Patch-out-unused-CSS-style-code.patch",
+        "sha256": "41eb57af77a1523d0cc2a30a98152bdef31c94a0e6b96bd5f74403c34aa4b081",
+        "size": 854
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/patches/0007-URL-fixed-setters-for-empty-hosts.patch",
+        "sha256": "480cf935c4b40b55f3f4be175da6811e6d8fbfd4f4ef189e1fd4085274b944e3",
+        "size": 5427
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/patches/0008-URL-fixed-uninitialized-memory-in-the-path-buffer-gr.patch",
+        "sha256": "b892a489a966a28bb08b27b4a231c57de91d3e8277b18e234d2b7c8f19d1c333",
+        "size": 2157
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/patches/README.md",
+        "sha256": "093410a186a13f92cff294086adc9700979d12130487ea572faf1da21335006e",
+        "size": 2337
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/patches/update-lexbor.sh",
+        "sha256": "c8c210c8f3e7c24f3a4eea409478803a80c2ea15f03b65b3a971e80ae3e1a292",
+        "size": 1857
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/php_lexbor.c",
+        "sha256": "90c082978eb810769eb6e5b4b5ceb33a9920a15da66ca64b302a898217410247",
+        "size": 2571
+      },
+      {
+        "path": "php-8.5.8/ext/lexbor/php_lexbor.h",
+        "sha256": "c8318becf842a35319ddb50e6633942aabb4e905de541702cecb06a49b81588c",
+        "size": 1342
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/CREDITS",
+        "sha256": "4dd59d99aa691ce7b6447c684a4ba7a7822f13c14c69e0ae3412a1a22a41b02c",
+        "size": 83
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/config.w32",
+        "sha256": "2be9b0e26c5e21da5206b5bbaec6ba4b7439f92b6a297e019dfe216133b7e479",
+        "size": 1299
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/config0.m4",
+        "sha256": "9544a34d2ec8be0db8289af704206be32ef972b13c8ac50be3899355f9ef6553",
+        "size": 600
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/image_svg.c",
+        "sha256": "0fe1efbedb68cc0571ce069ac6814947a806eb7d00faa77e1f6a976efb57af58",
+        "size": 4956
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/image_svg.h",
+        "sha256": "34ed9e67e297d6613ba53f919527b194f5db8a73fba5d04494b3f74d956691db",
+        "size": 1184
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/libxml.c",
+        "sha256": "5dc813708a1e7b12af57e1707d6ffd42204c292682987b7f07b6e2cc987a359b",
+        "size": 47103
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/libxml.stub.php",
+        "sha256": "50f036a2e7420c96507d97a5143f7ff23573553cc797bc15d9709b54318ff639",
+        "size": 3341
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/libxml_arginfo.h",
+        "sha256": "d6a086b7ed61e53bbb005f744edb259735e303533fad8cf693d0da27faef7962",
+        "size": 7846
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/mime_sniff.c",
+        "sha256": "54c220427bf19ed59700688950e34f2d91b5459bb00cb334e5fca4a9716f0cf5",
+        "size": 10810
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/php_libxml.h",
+        "sha256": "6e637eed049f70c210945ae9c19a42b2117a3f686746c70e57493592a8c2657a",
+        "size": 11680
+      },
+      {
+        "path": "php-8.5.8/ext/libxml/php_libxml2.def",
+        "sha256": "c9f67f7b0d7cd333d214d3464917d077c97b096f9e949b1695dec40e28b7241f",
+        "size": 30747
+      },
+      {
+        "path": "php-8.5.8/ext/simplexml/CREDITS",
+        "sha256": "e2e3ac339079d481aabf5465c20b809cd98887cd465849cfa7e00eab22104d58",
+        "size": 56
+      },
+      {
+        "path": "php-8.5.8/ext/simplexml/config.m4",
+        "sha256": "db9fe3e9d9125981b63dac80d718b0222f0d40926dde8ba17f88bd25f0db20ea",
+        "size": 664
+      },
+      {
+        "path": "php-8.5.8/ext/simplexml/config.w32",
+        "sha256": "151653baaa1c87a463527bc10ab42d9cdf53d0bc2285f2570aaa2a5f35775921",
+        "size": 942
+      },
+      {
+        "path": "php-8.5.8/ext/simplexml/php_simplexml.h",
+        "sha256": "27c0da51229290a2acc425fc9d1b2dcf21e9a672a2b039027c560f9196cacd5c",
+        "size": 2553
+      },
+      {
+        "path": "php-8.5.8/ext/simplexml/php_simplexml_exports.h",
+        "sha256": "adf66a9d621ebe40ae2af5d6a02251147b68c31bb397291351f63e7112c71ba9",
+        "size": 2089
+      },
+      {
+        "path": "php-8.5.8/ext/simplexml/simplexml.c",
+        "sha256": "7ee18acc7aaedc9fe822d506a37dec9ea089e2a4033aec2523edaccab9ad4740",
+        "size": 73568
+      },
+      {
+        "path": "php-8.5.8/ext/simplexml/simplexml.stub.php",
+        "sha256": "1c8c2d6518a074c199c276bdd241e9f25152ca29160ffeadf66bfbc684d840a9",
+        "size": 2951
+      },
+      {
+        "path": "php-8.5.8/ext/simplexml/simplexml_arginfo.h",
+        "sha256": "7be839380ad2518be6e2ac19fecf072188c0d41e45e99fa6e65efb06179ac7b7",
+        "size": 9746
+      }
+    ],
+    "lexbor_version": "2.7.0",
+    "native_archive": "php-8.5.8-dom-native.tar.xz",
+    "native_archive_sha256": "da88520251cc5833281fe6b484598b661aff5051aae7f732502c151cbe157008",
+    "official_archive_sha256": "58910198d19e873048fe87cdfe16bc790025417ede3d1651bfa1c4b533d573f2",
+    "version": "8.5.8"
+  },
+  "schema": 1
+}

@@ -23,6 +23,7 @@ mod func_args;
 mod global_decls;
 mod hash_prelude;
 mod image_prelude;
+mod internal_extensions;
 mod intrinsics;
 #[allow(dead_code, unused_imports)]
 mod ir;

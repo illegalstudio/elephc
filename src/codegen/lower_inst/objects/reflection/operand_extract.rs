@@ -75,6 +75,41 @@ pub(super) fn const_required_string_operand(
     const_data_operand(ctx, value, owner, false)
 }
 
+/// Returns a string literal operand when its EIR value retains a data-pool identifier.
+pub(super) fn const_optional_string_operand(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    owner: &str,
+) -> Result<Option<String>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::ConstStr {
+        return Ok(None);
+    }
+    let Some(Immediate::Data(data)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} reflection literal missing data id",
+            owner
+        )));
+    };
+    ctx.module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+}
+
 /// Extracts a constant ReflectionParameter name or offset selector from EIR.
 pub(super) fn const_parameter_selector_operand(
     ctx: &FunctionContext<'_>,
@@ -168,4 +203,3 @@ pub(super) fn const_data_operand(
         ))),
     }
 }
-

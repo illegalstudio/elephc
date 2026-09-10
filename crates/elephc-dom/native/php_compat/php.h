@@ -1,0 +1,3 @@
+#ifndef ELEPHC_DOM_EMPTY_PHP_H
+#define ELEPHC_DOM_EMPTY_PHP_H
+#endif

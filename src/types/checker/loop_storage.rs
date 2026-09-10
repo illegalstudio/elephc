@@ -438,7 +438,7 @@ fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
             CastType::Float => Some(PhpType::Float),
             CastType::String => Some(PhpType::Str),
             CastType::Bool => Some(PhpType::Bool),
-            CastType::Array => None,
+            CastType::Array | CastType::Object => None,
         },
         ExprKind::ErrorSuppress(inner) => precise_scalar_expr_type(inner),
         _ => None,

@@ -9,8 +9,32 @@
 
 use super::*;
 
+use crate::ir_lower::expr::{
+    dom_named_node_map_receiver, lower_dom_named_node_map_dimension_error,
+};
+
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
+    let local_type = ctx.local_type(array);
+    if crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &local_type,
+        "write_dimension",
+    )
+    .is_some()
+    {
+        let receiver = ctx.load_local(array, Some(span));
+        super::array_write_core::lower_simplexml_dimension_write(ctx, receiver, None, value, span);
+        return;
+    }
+    if let Some((class_name, nullable)) = dom_named_node_map_receiver(&local_type) {
+        lower_dom_named_node_map_array_append(ctx, array, value, &class_name, nullable, span);
+        return;
+    }
+    if matches!(local_type.codegen_repr(), PhpType::Void) {
+        lower_null_local_array_append(ctx, array, value, span);
+        return;
+    }
     let array_value = ctx.load_local(array, Some(span));
     let value = lower_expr(ctx, value);
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {
@@ -54,6 +78,88 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         Some(span),
     );
     release_persisted_string_operand(ctx, value, span);
+}
+
+/// Autovivifies a null local into a one-element indexed array for append.
+fn lower_null_local_array_append(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    value: &Expr,
+    span: Span,
+) {
+    let value = lower_expr(ctx, value);
+    let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let destination = ctx.emit_value(
+        Op::ArrayNew,
+        Vec::new(),
+        Some(Immediate::Capacity(1)),
+        array_ty.clone(),
+        Op::ArrayNew.default_effects(),
+        Some(span),
+    );
+    ctx.emit_void(
+        Op::ArrayPush,
+        vec![destination.value, value.value],
+        None,
+        Op::ArrayPush.default_effects(),
+        Some(span),
+    );
+    release_indexed_array_write_operand(ctx, Some(&PhpType::Mixed), value, span);
+    ctx.store_local(array, destination, array_ty, Some(span));
+}
+
+/// Lowers a DOM named-map append after evaluating its value exactly once.
+///
+/// Null receivers use the existing Mixed append helper, which autovivifies
+/// the local cell; live DOM maps take the php-src read-only error path.
+fn lower_dom_named_node_map_array_append(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    value: &Expr,
+    class_name: &str,
+    nullable: bool,
+    span: Span,
+) {
+    let receiver = ctx.load_local(array, Some(span));
+    let value = lower_expr(ctx, value);
+    if !nullable {
+        lower_dom_named_node_map_dimension_error(ctx, class_name, span);
+        return;
+    }
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![receiver.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(span),
+    );
+    let null_block = ctx.builder.create_named_block("dom.map_append.null", Vec::new());
+    let map_block = ctx.builder.create_named_block("dom.map_append.error", Vec::new());
+    let merge = ctx.builder.create_named_block("dom.map_append.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: map_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    ctx.emit_void(
+        Op::MixedArrayAppend,
+        vec![receiver.value, value.value],
+        None,
+        Op::MixedArrayAppend.default_effects(),
+        Some(span),
+    );
+    release_persisted_string_operand(ctx, value, span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(map_block);
+    lower_dom_named_node_map_dimension_error(ctx, class_name, span);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
 }
 
 /// Prepares an indexed-array local for an offset assignment.
@@ -218,4 +324,3 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
     normalize_materialized_element_type(item_type)
 }
-

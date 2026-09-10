@@ -12,6 +12,7 @@
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
+use crate::codegen::literal_defaults::emit_boxed_bool_literal_to_result;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
@@ -664,16 +665,116 @@ fn loaded_extension_names(zend_extensions: bool) -> Vec<String> {
             .map(|name| (*name).to_string())
             .collect();
     }
-    let mut names: Vec<String> = super::CORE_LOADED_EXTENSIONS
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect();
-    for extension in crate::codegen::linked_extensions() {
-        if !names.iter().any(|name| name.eq_ignore_ascii_case(&extension)) {
-            names.push(extension);
+    super::dynamic_extension_loaded_candidates()
+}
+
+/// Lowers `get_extension_funcs()` for the bounded DOM bridge extension registry.
+///
+/// Literal names fold directly, while a runtime string or scalar-coercible value is compared
+/// case-insensitively against the same three PHP 8.5.8 registry names. This keeps the AOT
+/// registry bounded without requiring callers to provide a literal extension name.
+pub(crate) fn lower_get_extension_funcs(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "get_extension_funcs", 1)?;
+    let value = super::expect_operand(inst, 0)?;
+    if let Some(extension) = optional_const_string_operand(ctx, value)? {
+        if let Some(names) = dom_extension_function_names(&extension) {
+            emit_string_array(ctx, &names)?;
+        } else {
+            emit_boxed_bool_literal_to_result(ctx, false);
         }
+    } else {
+        lower_dynamic_get_extension_funcs(ctx, value)?;
     }
-    names
+    store_if_result(ctx, inst)
+}
+
+/// Returns the PHP 8.5.8 procedural function registry for one DOM bridge extension.
+fn dom_extension_function_names(extension: &str) -> Option<Vec<String>> {
+    let names = match php_symbol_key(extension).as_str() {
+        "dom" => vec!["Dom\\import_simplexml", "dom_import_simplexml"],
+        "libxml" => vec![
+            "libxml_clear_errors",
+            "libxml_disable_entity_loader",
+            "libxml_get_errors",
+            "libxml_get_external_entity_loader",
+            "libxml_get_last_error",
+            "libxml_set_external_entity_loader",
+            "libxml_set_streams_context",
+            "libxml_use_internal_errors",
+        ],
+        "simplexml" => vec![
+            "simplexml_import_dom",
+            "simplexml_load_file",
+            "simplexml_load_string",
+        ],
+        _ => return None,
+    };
+    Some(names.into_iter().map(str::to_string).collect())
+}
+
+/// Lowers a runtime string or non-strict scalar extension name against the fixed DOM registries.
+///
+/// The argument has already passed the shared builtin scalar contract and is materialized with
+/// PHP string coercion. Its pointer and length are saved before each `__rt_strcasecmp`
+/// invocation because that target-aware runtime helper consumes caller-saved argument registers.
+/// Each match emits the same array as the literal path; the miss path keeps PHP's exact boxed
+/// `false` result.
+fn lower_dynamic_get_extension_funcs(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    if !matches!(
+        ctx.value_php_type(value)?.codegen_repr(),
+        PhpType::Str
+            | PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::Void
+            | PhpType::TaggedScalar
+    ) {
+        return Err(CodegenIrError::unsupported(
+            "get_extension_funcs with non-scalar dynamic extension name",
+        ));
+    }
+
+    const EXTENSIONS: [&str; 3] = ["dom", "libxml", "simplexml"];
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    super::strings::load_value_as_string_to_regs(
+        ctx,
+        value,
+        "get_extension_funcs",
+        ptr_reg,
+        len_reg,
+    )?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    let matched_labels: Vec<String> = EXTENSIONS
+        .iter()
+        .map(|extension| ctx.next_label(&format!("get_extension_funcs_{extension}")))
+        .collect();
+    let done_label = ctx.next_label("get_extension_funcs_dynamic_done");
+
+    for (extension, matched_label) in EXTENSIONS.iter().zip(&matched_labels) {
+        super::emit_branch_if_saved_string_matches_ci(ctx, extension.as_bytes(), matched_label);
+    }
+    emit_boxed_bool_literal_to_result(ctx, false);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    for (extension, matched_label) in EXTENSIONS.iter().zip(&matched_labels) {
+        ctx.emitter.label(matched_label);
+        let names = dom_extension_function_names(extension)
+            .expect("fixed DOM bridge extension registry must exist");
+        emit_string_array(ctx, &names)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
 }
 
 /// Lowers `get_loaded_extensions($flag)` for a flag that is only known at runtime.

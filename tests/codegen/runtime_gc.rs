@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), and the reference a `foreach` loop holds on an object source.
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, DOM/SimpleXML view ownership and identity, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that omit an optional by-reference argument, and the reference a `foreach` loop holds on an object source.
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
@@ -35,6 +35,10 @@ mod foreach_object_source;
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]
 mod cow_and_cycles;
+#[path = "runtime_gc/dom.rs"]
+mod dom;
+#[path = "runtime_gc/simplexml_views.rs"]
+mod simplexml_views;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
 #[path = "runtime_gc/heap.rs"]

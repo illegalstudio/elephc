@@ -32,6 +32,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionClass",
         "ReflectionObject",
         "ReflectionEnum",
+        "ReflectionExtension",
         "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",
@@ -126,6 +127,10 @@ pub(crate) fn inject_builtin_reflection(
         builtin_reflection_object_class(),
     );
     class_map.insert("ReflectionEnum".to_string(), builtin_reflection_enum_class());
+    class_map.insert(
+        "ReflectionExtension".to_string(),
+        builtin_reflection_extension_class(),
+    );
     class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
     class_map.insert(
         "ReflectionMethod".to_string(),

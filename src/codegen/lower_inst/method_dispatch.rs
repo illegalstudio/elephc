@@ -321,4 +321,3 @@ pub(super) fn emit_mixed_method_class_dispatch(
 /// non-alphanumeric byte collapses to `_`, so `a_b` and `aéb` collide. A second copy here
 /// invited use where uniqueness matters; there is now one definition carrying that warning.
 pub(super) use crate::names::label_fragment;
-

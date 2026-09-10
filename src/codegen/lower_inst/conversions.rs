@@ -82,6 +82,25 @@ fn lower_mixed_array_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
+/// Lowers a boxed runtime value through the shared PHP object-cast dispatcher.
+///
+/// The helper returns an owned boxed `Mixed` so object inputs can preserve an
+/// arbitrary concrete class while scalar, null, and array inputs materialize a
+/// `stdClass` without lying about the runtime representation.
+pub(super) fn lower_mixed_cast_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    if !matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed) {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            inst.op.name(),
+            ctx.value_php_type(value)?
+        )));
+    }
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_object");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an explicit cast to PHP int for concrete scalar operands.
 fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
@@ -359,7 +378,7 @@ fn move_unboxed_mixed_object_payload(ctx: &mut FunctionContext<'_>, receiver_reg
 }
 
 /// Emits one concrete `__toString()` candidate call for a boxed Mixed object.
-fn emit_mixed_tostring_candidate_call(
+pub(super) fn emit_mixed_tostring_candidate_call(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     receiver_reg: &str,
@@ -398,7 +417,7 @@ fn emit_mixed_tostring_candidate_call(
 }
 
 /// Normalizes a `__toString()` return into a string result pair.
-fn coerce_tostring_return_to_string_result(
+pub(super) fn coerce_tostring_return_to_string_result(
     ctx: &mut FunctionContext<'_>,
     return_ty: &PhpType,
 ) -> Result<()> {

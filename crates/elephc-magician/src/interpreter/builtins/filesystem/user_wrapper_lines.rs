@@ -10,9 +10,7 @@
 //!   methods, preserving the same wrapper state used by aggregate reads.
 
 use super::super::super::*;
-use super::user_wrapper_streams::{
-    eval_user_wrapper_eof_bool, eval_user_wrapper_read_bytes,
-};
+use super::user_wrapper_streams::eval_user_wrapper_read_bytes;
 
 /// Dispatches `fgets()` to a userspace-wrapper stream.
 pub(in crate::interpreter) fn eval_user_wrapper_fgets_result(
@@ -68,9 +66,6 @@ fn eval_user_wrapper_line_bytes(
 ) -> Result<Option<Vec<u8>>, EvalStatus> {
     let mut output = Vec::new();
     while output.len() < length {
-        if eval_user_wrapper_eof_bool(id, context, values)? {
-            break;
-        }
         let Some(chunk) = eval_user_wrapper_read_bytes(id, 1, context, values)? else {
             return Ok(None);
         };

@@ -186,8 +186,21 @@ pub(super) fn method_call_result_type(
     let nullable = singular_object_class(&object_ty)
         .map(|(_, nullable)| nullable)
         .unwrap_or(false);
-    let Some(return_ty) = method_signature(ctx, object, method)
-        .map(|signature| normalize_value_php_type(signature.return_type))
+    // Internal DOM methods whose Reflection return type is only `mixed` carry a
+    // compiler-side php-src contract (for example, legacy `DOMXPath::query()`
+    // is `DOMNodeList|false`). Keep that precise union on the lowered call so
+    // direct collection indexing can materialize its wrapper receiver instead
+    // of collapsing it to an opaque Mixed value.
+    let override_type = singular_object_class(&object_ty).and_then(|(receiver_name, _)| {
+        crate::internal_extensions::method_result_type_override(
+            receiver_name,
+            &php_symbol_key(method),
+        )
+    });
+    let Some(return_ty) = override_type.or_else(|| {
+        method_signature(ctx, object, method)
+            .map(|signature| normalize_value_php_type(signature.return_type))
+    })
     else {
         if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
             return PhpType::Mixed;

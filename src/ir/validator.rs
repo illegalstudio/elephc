@@ -349,6 +349,11 @@ fn validate_instruction_immediate(
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
+        InternalExtensionCall => {
+            require_immediate(inst_id, inst, "internal extension operation", |imm| {
+                matches!(imm, Imm::InternalExtension { .. })
+            })
+        }
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_))
         }),
@@ -435,6 +440,10 @@ fn validate_opcode_rules(
         ClosureNew => Ok(()),
         FirstClassCallableNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
+        StdClassFromHash => {
+            check_count(inst_id, inst, 1, "1")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)")
+        }
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
@@ -502,7 +511,7 @@ fn validate_opcode_rules(
             check_count(inst_id, inst, 2, "2")
         }
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
-        | MixedCastString => {
+        | MixedCastString | MixedCastObject => {
             check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)")
         }
         ArrayUnion => check_binary(

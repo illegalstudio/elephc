@@ -9,6 +9,12 @@
 
 use super::*;
 
+use crate::ir_lower::expr::{
+    dom_named_node_map_dimension_class, lower_dom_named_node_map_dimension_error,
+    lower_simplexml_dimension_read_for_write_from_value,
+    lower_simplexml_property_read_for_write_from_value, simplexml_object_expr_class,
+};
+
 /// Lowers a nested array assignment that already carries an expression target.
 pub(super) fn lower_nested_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -27,6 +33,13 @@ pub(super) fn lower_nested_array_assign(
     // lowered with fetch-for-write semantics so missing or null intermediate
     // elements autovivify as arrays instead of dropping the write (#555).
     if let ExprKind::ArrayAccess { array, index } = &target.kind {
+        if let Some(class_name) = dom_named_node_map_dimension_class(ctx, array) {
+            let _receiver = lower_expr(ctx, array);
+            let _index = lower_expr(ctx, index);
+            let _value = lower_expr(ctx, value);
+            lower_dom_named_node_map_dimension_error(ctx, &class_name, span);
+            return;
+        }
         // PHP reads a plain-variable index at STORE time, and a nested target reads EVERY one of
         // them there: `$a[$i][$i] = ($i = 1)` writes through the index the right-hand side left
         // behind, not the one it started with. Deferring the whole target is sound only when it
@@ -34,9 +47,27 @@ pub(super) fn lower_nested_array_assign(
         // so the shape is checked and anything else keeps the original order. Constant
         // propagation applies the same rule ahead of this pass; fixing either alone changes
         // nothing, because the fold has already replaced the variable by the time lowering runs.
-        let deferred = nested_target_is_all_bare_variables(target);
+        let deferred = nested_target_is_all_bare_variables(target)
+            && simplexml_object_expr_class(ctx, array).is_none();
         let value_first = deferred.then(|| lower_expr(ctx, value));
         let parent = lower_nested_assign_parent(ctx, array, span);
+        let parent_type = ctx.builder.value_php_type(parent.value);
+        if crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+            ctx,
+            &parent_type,
+            "write_dimension",
+        )
+        .is_some()
+        {
+            super::array_write_core::lower_simplexml_dimension_write(
+                ctx,
+                parent,
+                Some(index),
+                value,
+                span,
+            );
+            return;
+        }
         let key = lower_expr(ctx, index);
         let value = match value_first {
             Some(value) => value,
@@ -99,11 +130,18 @@ pub(super) fn lower_nested_assign_parent(
     }
     // Boxed Mixed receivers: chains recurse with for-write semantics; other
     // receiver shapes evaluate once as plain reads of the receiver cell.
-    let receiver = if matches!(array.kind, ExprKind::ArrayAccess { .. }) {
-        lower_nested_assign_parent(ctx, array, span)
-    } else {
-        lower_expr(ctx, array)
-    };
+    let append_target = matches!(index.kind, ExprKind::ArrayAppend);
+    let receiver = lower_nested_assign_receiver(ctx, array, span, append_target);
+    let receiver_type = ctx.builder.value_php_type(receiver.value);
+    if crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &receiver_type,
+        "read_dimension",
+    )
+    .is_some()
+    {
+        return lower_simplexml_dimension_read_for_write_from_value(ctx, receiver, index, expr);
+    }
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         let key = lower_expr(ctx, index);
         let parent = ctx.emit_value(
@@ -123,6 +161,47 @@ pub(super) fn lower_nested_assign_parent(
     // The receiver is already evaluated but not a boxed Mixed cell: finish as
     // the plain subscript read the pre-#555 lowering produced.
     lower_array_access_from_lowered_receiver(ctx, receiver, index, expr)
+}
+
+/// Evaluates an array-access receiver using SimpleXML's nested-write property semantics.
+///
+/// A property chain such as `$xml->parent->children[]->name = $value` must
+/// materialize each missing property before the final append dimension. Ordinary
+/// reads intentionally keep absent SimpleXML properties as empty views instead.
+pub(in crate::ir_lower::stmt) fn lower_nested_assign_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    span: Span,
+    append_target: bool,
+) -> LoweredValue {
+    let ExprKind::PropertyAccess { object, property } = &expr.kind else {
+        return if matches!(expr.kind, ExprKind::ArrayAccess { .. }) {
+            lower_nested_assign_parent(ctx, expr, span)
+        } else {
+            lower_expr(ctx, expr)
+        };
+    };
+    if simplexml_object_expr_class(ctx, object).is_none() {
+        return lower_expr(ctx, expr);
+    }
+    let receiver = lower_nested_assign_receiver(ctx, object, span, false);
+    let receiver_type = ctx.builder.value_php_type(receiver.value);
+    if crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &receiver_type,
+        "read_property",
+    )
+    .is_some()
+    {
+        return lower_simplexml_property_read_for_write_from_value(
+            ctx,
+            receiver,
+            property,
+            expr,
+            append_target,
+        );
+    }
+    unreachable!("a statically SimpleXML property chain lost its native handler")
 }
 
 /// Lowers `$local[key]` as the parent of a nested assignment when the local

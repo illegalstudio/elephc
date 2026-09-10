@@ -468,6 +468,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::Assignment { .. }
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
@@ -650,6 +651,7 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::ConstRef(_)
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::FirstClassCallable(_)
@@ -868,6 +870,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)

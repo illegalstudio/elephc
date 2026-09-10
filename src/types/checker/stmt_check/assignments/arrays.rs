@@ -144,8 +144,13 @@ pub(super) fn check_array_assign(
             }
             _ => {}
         }
+    } else if super::is_simplexml_element_wrapper_type(checker, &arr_ty) {
+        // SimpleXML dimensions are backed by extension object handlers rather than
+        // userland `ArrayAccess`; fallible loader unions are still valid wrappers.
     } else if let PhpType::Object(class_name) = &arr_ty {
-        if !checker.object_type_implements_interface(class_name, "ArrayAccess") {
+        if !checker.object_type_implements_interface(class_name, "ArrayAccess")
+            && !is_dom_named_node_map(class_name)
+        {
             return Err(CompileError::new(
                 span,
                 "Object array assignment requires ArrayAccess",
@@ -191,14 +196,16 @@ pub(super) fn check_nested_array_assign(
     let arr_ty = checker.infer_type_with_assignment_effects(array, env)?;
     checker.infer_type_with_assignment_effects(index, env)?;
     checker.infer_type_with_assignment_effects(value, env)?;
-    match arr_ty {
+    match &arr_ty {
         PhpType::Mixed => Ok(()),
         PhpType::Str => Err(CompileError::new(
             span,
             "String offset assignment is not supported",
         )),
+        ty if super::is_simplexml_element_wrapper_type(checker, ty) => Ok(()),
         PhpType::Object(class_name)
-            if checker.object_type_implements_interface(&class_name, "ArrayAccess") =>
+            if checker.object_type_implements_interface(class_name, "ArrayAccess")
+                || is_dom_named_node_map(class_name) =>
         {
             Ok(())
         }
@@ -264,8 +271,13 @@ pub(super) fn check_array_push(
             span,
             "buffer<T> does not support push; allocate with buffer_new<T>(len)",
         ));
+    } else if super::is_simplexml_element_wrapper_type(checker, &arr_ty) {
+        // SimpleXML dimension pushes use the extension handler even though the
+        // wrapper does not implement userland `ArrayAccess`.
     } else if let PhpType::Object(class_name) = &arr_ty {
-        if !checker.object_type_implements_interface(class_name, "ArrayAccess") {
+        if !checker.object_type_implements_interface(class_name, "ArrayAccess")
+            && !is_dom_named_node_map(class_name)
+        {
             return Err(CompileError::new(
                 span,
                 "Object array push requires ArrayAccess",
@@ -273,4 +285,12 @@ pub(super) fn check_array_push(
         }
     }
     Ok(())
+}
+
+/// Returns whether `class_name` uses the read-only DOM named-map dimension handler.
+fn is_dom_named_node_map(class_name: &str) -> bool {
+    matches!(
+        class_name.trim_start_matches('\\'),
+        "DOMNamedNodeMap" | "Dom\\NamedNodeMap" | "Dom\\DtdNamedNodeMap"
+    )
 }

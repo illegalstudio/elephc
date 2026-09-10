@@ -19,8 +19,8 @@ use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
-    declared_return_type_compatible, is_pdo_exception_get_code_contract,
-    late_static_return_compatible,
+    allows_untyped_tostring_override, declared_return_type_compatible,
+    is_pdo_exception_get_code_contract, late_static_return_compatible,
     validate_signature_compatibility,
 };
 use super::state::ClassBuildState;
@@ -109,7 +109,8 @@ fn class_can_implement_throwable_contract(
 ///
 /// Class metadata is not registered yet while interface contracts are validated, so
 /// this derives the subtype relationship from the interface currently being checked
-/// and the interfaces declared directly on the class.
+/// and the interfaces declared directly on the class. Union members are checked
+/// independently, so nullable covariant returns retain their null member contract.
 fn interface_self_return_conforms(
     checker: &Checker,
     class: &FlattenedClass,
@@ -117,7 +118,45 @@ fn interface_self_return_conforms(
     required_return: &PhpType,
     actual_return: &PhpType,
 ) -> bool {
+    if required_return == actual_return {
+        return true;
+    }
     match (required_return, actual_return) {
+        (PhpType::Union(required_members), PhpType::Union(actual_members)) => actual_members
+            .iter()
+            .all(|actual_member| {
+                required_members.iter().any(|required_member| {
+                    interface_self_return_conforms(
+                        checker,
+                        class,
+                        interface_name,
+                        required_member,
+                        actual_member,
+                    )
+                })
+            }),
+        (PhpType::Union(required_members), actual_member) => required_members
+            .iter()
+            .any(|required_member| {
+                interface_self_return_conforms(
+                    checker,
+                    class,
+                    interface_name,
+                    required_member,
+                    actual_member,
+                )
+            }),
+        (required_member, PhpType::Union(actual_members)) => actual_members
+            .iter()
+            .all(|actual_member| {
+                interface_self_return_conforms(
+                    checker,
+                    class,
+                    interface_name,
+                    required_member,
+                    actual_member,
+                )
+            }),
         (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
             actual_name == &class.name
                 && (expected_name == interface_name
@@ -283,7 +322,12 @@ fn validate_static_interface_method(
         .methods
         .iter()
         .find(|m| m.is_static && php_symbol_key(&m.name) == method_name);
-    if required_sig.declared_return && !actual_sig.declared_return {
+    let untyped_tostring_override_allowed = actual_method
+        .is_some_and(|method| allows_untyped_tostring_override(method, false, required_sig));
+    if required_sig.declared_return
+        && !actual_sig.declared_return
+        && !untyped_tostring_override_allowed
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -344,7 +388,7 @@ fn validate_static_interface_method(
             &actual_sig.return_type,
         )
     });
-    if required_sig.declared_return && !return_compatible {
+    if required_sig.declared_return && !return_compatible && !untyped_tostring_override_allowed {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -509,7 +553,12 @@ fn validate_interface_method(
         .methods
         .iter()
         .find(|m| php_symbol_key(&m.name) == method_name);
-    if required_sig.declared_return && !actual_sig.declared_return {
+    let untyped_tostring_override_allowed = actual_method
+        .is_some_and(|method| allows_untyped_tostring_override(method, false, required_sig));
+    if required_sig.declared_return
+        && !actual_sig.declared_return
+        && !untyped_tostring_override_allowed
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -570,7 +619,7 @@ fn validate_interface_method(
             &actual_sig.return_type,
         )
     });
-    if required_sig.declared_return && !return_compatible {
+    if required_sig.declared_return && !return_compatible && !untyped_tostring_override_allowed {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)

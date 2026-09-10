@@ -455,8 +455,9 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
     {
         return emit_dynamic_new_mixed_spl_dll_candidate(ctx, candidate.class_id, result);
     }
-    emit_object_allocation(
+    emit_named_class_object_allocation(
         ctx,
+        &candidate.class_name,
         candidate.class_id,
         candidate.property_count,
         candidate.allow_dynamic_properties,
@@ -503,8 +504,9 @@ pub(super) fn emit_dynamic_new_without_constructor_mixed_candidate(
     candidate: &DynamicNewCandidate,
     result: ValueId,
 ) -> Result<()> {
-    emit_object_allocation(
+    emit_named_class_object_allocation(
         ctx,
+        &candidate.class_name,
         candidate.class_id,
         candidate.property_count,
         candidate.allow_dynamic_properties,

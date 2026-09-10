@@ -1,0 +1,3 @@
+#ifndef ELEPHC_DOM_EMPTY_ZEND_API_H
+#define ELEPHC_DOM_EMPTY_ZEND_API_H
+#endif

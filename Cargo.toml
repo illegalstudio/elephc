@@ -13,8 +13,9 @@ categories = ["compilers", "command-line-utilities"]
 
 # The bridge staticlibs are default workspace members so plain `cargo build` /
 # `cargo test` materialize libelephc_tls.a (https:// wrapper),
-# libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_crypto.a
-# (hash/HMAC family), libelephc_bcmath.a (arbitrary-precision decimal math),
+# libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_dom.a
+# (PHP DOM/libxml/SimpleXML), libelephc_crypto.a (hash/HMAC family),
+# libelephc_bcmath.a (arbitrary-precision decimal math),
 # libelephc_iconv.a (character-set conversion and RFC 2047 MIME headers),
 # libelephc_phar.a (runtime phar:// archive reads),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
@@ -29,8 +30,8 @@ categories = ["compilers", "command-line-utilities"]
 # see crates/elephc-curl/build.rs for how its own gated tests opt into a real
 # link.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-dom", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-xml", "crates/elephc-magician", "crates/elephc-curl"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-dom", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-xml", "crates/elephc-magician", "crates/elephc-curl"]
 resolver = "2"
 
 [[bin]]
@@ -97,6 +98,7 @@ console = "0.15"
 [dev-dependencies]
 elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
+elephc-dom = { path = "crates/elephc-dom" }
 elephc-crypto = { path = "crates/elephc-crypto" }
 elephc-bcmath = { path = "crates/elephc-bcmath" }
 elephc-phar = { path = "crates/elephc-phar" }

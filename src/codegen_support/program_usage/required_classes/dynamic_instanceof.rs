@@ -263,6 +263,7 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)

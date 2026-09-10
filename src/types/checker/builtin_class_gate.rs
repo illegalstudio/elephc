@@ -44,14 +44,15 @@ pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
     "JsonException",
 ];
 
-/// Throwables `inject_builtin_throwables` registers that nothing in elephc can raise.
+/// Throwables `inject_builtin_throwables` registers without a standalone runtime producer.
 ///
 /// Each has NO `_*_class_id` symbol, and `seed_runtime_throwable_class_names` records why:
 /// elephc rejects a bad builtin arity at COMPILE time where reference PHP raises
-/// `ArgumentCountError` at runtime; `assert()` is not implemented, so `AssertionError` has no
-/// producer; and an unmatched `match` ends in `Terminator::Fatal` rather than throwing
-/// `UnhandledMatchError` — a real gap against reference PHP, and closing it will give the class
-/// the EIR reference that makes it survive this gate on its own.
+/// `ArgumentCountError` at runtime, except for Reflection's synthetic `info()` body; `assert()`
+/// is not implemented, so `AssertionError` has no producer; and an unmatched `match` ends in
+/// `Terminator::Fatal` rather than throwing `UnhandledMatchError` — a real gap against reference
+/// PHP, and closing it will give the class the EIR reference that makes it survive this gate on
+/// its own.
 const UNRAISED_THROWABLES: &[&str] = &[
     "ArgumentCountError",
     "AssertionError",
@@ -158,7 +159,14 @@ pub(crate) fn throwables_to_register(
         }
     }
     if reflection_registered {
-        wanted.insert("ReflectionException".to_string());
+        // Reflection's synthetic `ReflectionExtension::info()` body throws this exact class for
+        // its runtime arity guard. No source-level name scan can see the generated body, so both
+        // throwables must be registered with the Reflection surface before EIR lowering.
+        wanted.extend(
+            ["ReflectionException", "ArgumentCountError"]
+                .into_iter()
+                .map(str::to_string),
+        );
     }
     wanted
 }
@@ -326,11 +334,13 @@ mod tests {
         assert!(!wanted.contains("AssertionError"), "unrelated to SPL");
     }
 
-    /// Reflection helpers raise ReflectionException without the program naming it.
+    /// Reflection helpers can raise both ReflectionException and ArgumentCountError without the
+    /// program naming either class.
     #[test]
-    fn the_reflection_surface_registers_its_exception() {
+    fn the_reflection_surface_registers_its_helper_throwables() {
         let wanted = throwables_to_register(&parse("<?php echo 1;"), false, true);
         assert!(wanted.contains("ReflectionException"));
+        assert!(wanted.contains("ArgumentCountError"));
     }
 
     /// The three cases where the class name is somewhere no static walk can read it: resolved at

@@ -385,11 +385,28 @@ fn multiple_output_body(method: &str) -> Vec<Stmt> {
     ]
 }
 
-/// Builds the synthetic method body for multiple debug info.
+/// Builds php-src's inherited private `SplObjectStorage::$storage` projection.
 fn multiple_debug_info_body() -> Vec<Stmt> {
-    return_body(expr(ExprKind::ArrayLiteralAssoc(vec![
-        (string_expr("\0MultipleIterator\0iterators"), multiple_iterators_expr()),
-        (string_expr("\0MultipleIterator\0infos"), multiple_infos_expr()),
-        (string_expr("\0MultipleIterator\0flags"), multiple_flags_expr()),
-    ])))
+    vec![
+        assign_stmt("storage", empty_array_expr()),
+        assign_stmt("i", int_expr(0)),
+        assign_stmt("limit", count_expr(multiple_iterators_expr())),
+        while_stmt(
+            binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+            vec![
+                array_push_stmt(
+                    "storage",
+                    expr(ExprKind::ArrayLiteralAssoc(vec![
+                        (string_expr("obj"), multiple_iterator_at(var_expr("i"))),
+                        (string_expr("inf"), multiple_info_at(var_expr("i"))),
+                    ])),
+                ),
+                increment_stmt("i"),
+            ],
+        ),
+        return_stmt(expr(ExprKind::ArrayLiteralAssoc(vec![(
+            string_expr("\0SplObjectStorage\0storage"),
+            var_expr("storage"),
+        )]))),
+    ]
 }

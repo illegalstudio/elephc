@@ -37,11 +37,25 @@ pub(super) fn builtin_reflection_owner_class(
         ));
     }
     if reflection_owner_has_extension_methods(name) {
-        methods.push(builtin_reflection_constant_false_union_method(
-            "getExtensionName",
+        properties.push(builtin_property(
+            "__extension_name",
+            Visibility::Private,
+            Some(mixed_type()),
+            false_bool(),
         ));
-        methods.push(builtin_reflection_constant_null_mixed_method(
+        properties.push(builtin_property(
+            "__extension",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getExtensionName",
+            "__extension_name",
+        ));
+        methods.push(builtin_reflection_class_mixed_method(
             "getExtension",
+            "__extension",
         ));
     }
     add_reflection_function_method_origin_methods(name, &mut properties, &mut methods);

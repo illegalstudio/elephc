@@ -130,3 +130,18 @@ fn printf_family_effects_cover_userland_string_conversion() {
         assert!(effects.contains(Effects::OUTPUT), "{target:?}");
     }
 }
+
+/// Persistent class-name results cannot alias their object arguments.
+#[test]
+fn class_name_lookup_results_are_argument_independent() {
+    use crate::builtins::semantics::BuiltinResultOwnership;
+
+    assert_eq!(
+        RuntimeFnId::GetClass.result_ownership(),
+        BuiltinResultOwnership::Independent
+    );
+    assert_eq!(
+        RuntimeFnId::GetParentClass.result_ownership(),
+        BuiltinResultOwnership::Independent
+    );
+}

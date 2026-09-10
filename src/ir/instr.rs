@@ -130,6 +130,10 @@ pub enum Immediate {
     RuntimeRef(RuntimeId),
     RuntimeCall(RuntimeCallTarget),
     ExternRef(u32),
+    InternalExtension {
+        opcode: u32,
+        flags: u32,
+    },
     ClassRef(u32),
     EnumCaseRef {
         enum_id: u32,
@@ -366,6 +370,9 @@ pub enum Op {
     MixedCastInt,
     MixedCastFloat,
     MixedCastString,
+    /// Casts a boxed runtime value to PHP object semantics, preserving an
+    /// object payload's identity and materializing `stdClass` otherwise.
+    MixedCastObject,
     StrConcat,
     StrLen,
     StrPersist,
@@ -417,6 +424,13 @@ pub enum Op {
     ArrayHashUnion,
     HashArrayUnion,
     HashSpread,
+    /// Promotes an indexed-array reference to associative hash storage.
+    ///
+    /// A physical indexed-array conversion consumes the operand's owner
+    /// reference after copying its entries into a fresh hash. An already
+    /// promoted physical hash is forwarded unchanged. The result owns the
+    /// resulting hash in either case, so lowering must not emit a second
+    /// release for the transferred value.
     ArrayToHash,
     ArraySetMixedKey,
     ArrayGetMixedKey,
@@ -434,6 +448,11 @@ pub enum Op {
     IteratorMethodCall,
     SplRuntimeCall,
     ObjectNew,
+    /// Wraps one owned, Mixed-entry associative hash as a fresh `stdClass`.
+    ///
+    /// The hash ownership transfers to the object; callers must not release the
+    /// operand after this operation.
+    StdClassFromHash,
     EvalObjectNew,
     ObjectCloneShallow,
     DynamicObjectNew,
@@ -538,6 +557,7 @@ pub enum Op {
     /// Reads through a boxed Mixed/ArrayAccess receiver for an imminent nested write.
     MixedArrayGetForWrite,
     ExternCall,
+    InternalExtensionCall,
     ClosureNew,
     ClosureCapture,
     ClosureCall,
@@ -700,10 +720,12 @@ impl Op {
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
+            | StdClassFromHash
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
+            MixedCastObject => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
             | PtrReadString => {
@@ -772,9 +794,10 @@ impl Op {
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
             StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
-            IterCurrentValueRef | IterNext | IterEnd | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
+            IterCurrentValueRef | IterNext | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
+            IterEnd => E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT | E::REFCOUNT_OP,
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
             EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
             | ReturnBoundaryMixedToInt => {
@@ -804,7 +827,7 @@ impl Op {
             | CallableDescriptorInvoke
             | PipeCall
             | FiberRuntimeCall => E::all().difference(E::REFCOUNT_OP),
-            ExternCall | ExternGlobalLoad | ExternGlobalStore => {
+            ExternCall | InternalExtensionCall | ExternGlobalLoad | ExternGlobalStore => {
                 E::READS_HEAP | E::WRITES_HEAP | E::READS_PROCESS | E::WRITES_PROCESS | E::MAY_THROW
             }
             EchoValue | WriteStrStdout | WriteStdout | Warn => E::OUTPUT,
@@ -852,6 +875,7 @@ impl Op {
                 | Op::EvalStaticMethodCall
                 | Op::RuntimeCall
                 | Op::ExternCall
+                | Op::InternalExtensionCall
                 | Op::MethodCall
                 | Op::StaticMethodCall
                 | Op::PropGet
@@ -968,6 +992,7 @@ impl Op {
             MixedCastInt => "mixed_cast_int",
             MixedCastFloat => "mixed_cast_float",
             MixedCastString => "mixed_cast_string",
+            MixedCastObject => "mixed_cast_object",
             StrConcat => "str_concat",
             StrLen => "str_len",
             StrPersist => "str_persist",
@@ -1021,6 +1046,7 @@ impl Op {
             IteratorMethodCall => "iterator_method_call",
             SplRuntimeCall => "spl_runtime_call",
             ObjectNew => "object_new",
+            StdClassFromHash => "stdclass_from_hash",
             EvalObjectNew => "eval_object_new",
             ObjectCloneShallow => "object_clone_shallow",
             DynamicObjectNew => "dynamic_object_new",
@@ -1078,6 +1104,7 @@ impl Op {
             RuntimeCall => "runtime_call",
             MixedArrayGetForWrite => "mixed_array_get_for_write",
             ExternCall => "extern_call",
+            InternalExtensionCall => "internal_extension_call",
             ClosureNew => "closure_new",
             ClosureCapture => "closure_capture",
             ClosureCall => "closure_call",

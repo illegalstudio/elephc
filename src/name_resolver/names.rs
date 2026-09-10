@@ -378,4 +378,5 @@ pub(super) fn resolve_constant_name(
 fn is_builtin_global_constant(name: &str) -> bool {
     crate::types::predefined_constants::is_registered_constant(name)
         || crate::types::pcntl_constants::is_pcntl_int_constant(name)
+        || crate::internal_extensions::registry().constant(name).is_some()
 }

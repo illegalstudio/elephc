@@ -1,5 +1,5 @@
 //! Purpose:
-//! Patches ReflectionClass and ReflectionObject collection and construction signatures.
+//! Patches ReflectionClass, ReflectionObject, and ReflectionExtension collection signatures.
 //!
 //! Called from:
 //! - patch_builtin_reflection_signatures() through the Reflection checker facade.
@@ -9,7 +9,7 @@
 
 use super::*;
 
-/// Applies ReflectionClass and ReflectionObject specific signature overrides.
+/// Applies collection and construction signature overrides for class-like reflectors.
 pub(super) fn patch_reflection_class_object(class_name: &str, class_info: &mut ClassInfo) {
             if matches!(class_name, "ReflectionClass" | "ReflectionObject") {
                 for (property_name, property_type) in &mut class_info.properties {
@@ -147,6 +147,25 @@ pub(super) fn patch_reflection_class_object(class_name: &str, class_info: &mut C
                     .get_mut(&php_symbol_key("newInstanceWithoutConstructor"))
                 {
                     sig.return_type = PhpType::Mixed;
+                }
+            }
+            if class_name == "ReflectionExtension" {
+                for (property_name, property_type) in &mut class_info.properties {
+                    match property_name.as_str() {
+                        "__classes" => {
+                            *property_type = reflection_extension_class_map_type();
+                        }
+                        "__functions" => {
+                            *property_type = reflection_extension_function_map_type();
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getClasses")) {
+                    sig.return_type = reflection_extension_class_map_type();
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getFunctions")) {
+                    sig.return_type = reflection_extension_function_map_type();
                 }
             }
 }

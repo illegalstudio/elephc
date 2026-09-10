@@ -73,71 +73,6 @@ pub(crate) fn lower_stream_wrapper_restore(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_context_create(options?, params?)`.
-pub(crate) fn lower_stream_context_create(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    ensure_arg_count_between(inst, "stream_context_create", 0, 2)?;
-    if let Some(options) = inst.operands.first().copied() {
-        store_stream_context_options(ctx, options, true)?;
-    }
-    capture_stream_notification_callback(ctx, inst.operands.get(1).copied())?;
-    emit_fd_result(ctx, 1);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `stream_context_get_default(options?)`.
-pub(crate) fn lower_stream_context_get_default(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    ensure_arg_count_between(inst, "stream_context_get_default", 0, 1)?;
-    emit_fd_result(ctx, 0);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `stream_context_set_default(options)`.
-pub(crate) fn lower_stream_context_set_default(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, "stream_context_set_default", 1)?;
-    emit_fd_result(ctx, 0);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `stream_context_set_option(context, options)` and the four-argument form.
-pub(crate) fn lower_stream_context_set_option(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    ensure_arg_count_between(inst, "stream_context_set_option", 2, 4)?;
-    match inst.operands.len() {
-        2 => {
-            let options = expect_operand(inst, 1)?;
-            store_stream_context_options(ctx, options, false)?;
-            emit_bool_result(ctx, true);
-        }
-        4 => {
-            lower_stream_context_set_option_4(ctx, inst)?;
-        }
-        _ => emit_bool_result(ctx, true),
-    }
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `stream_context_set_params(context, params)` as an accepted parameter update.
-pub(crate) fn lower_stream_context_set_params(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, "stream_context_set_params", 2)?;
-    capture_stream_notification_callback(ctx, inst.operands.get(1).copied())?;
-    emit_bool_result(ctx, true);
-    store_if_result(ctx, inst)
-}
-
 /// Captures a literal `notification` callable from stream context params into runtime global state.
 pub(super) fn capture_stream_notification_callback(
     ctx: &mut FunctionContext<'_>,
@@ -259,55 +194,6 @@ pub(super) fn clear_stream_notification_callback(ctx: &mut FunctionContext<'_>) 
     abi::emit_symbol_address(ctx.emitter, addr_reg, "_stream_notification_callback");
     abi::emit_load_int_immediate(ctx.emitter, zero_reg, 0);
     abi::emit_store_to_address(ctx.emitter, zero_reg, addr_reg, 0);
-}
-
-/// Lowers `stream_context_get_options(context)`.
-pub(crate) fn lower_stream_context_get_options(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, "stream_context_get_options", 1)?;
-    let empty_label = ctx.next_label("scgo_empty");
-    let done_label = ctx.next_label("scgo_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
-            ctx.emitter.instruction("ldr x0, [x9]");                            // load the persisted stream-context options pointer
-            ctx.emitter.instruction(&format!("cbz x0, {}", empty_label));       // allocate an empty hash when no context options exist
-            abi::emit_call_label(ctx.emitter, "__rt_incref");
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the empty-hash fallback after retaining options
-            ctx.emitter.label(&empty_label);
-            ctx.emitter.instruction("mov x0, #1");                              // pass the empty fallback hash capacity
-            ctx.emitter.instruction("mov x1, #7");                              // select Mixed values for the fallback hash
-            abi::emit_call_label(ctx.emitter, "__rt_hash_new");
-            ctx.emitter.label(&done_label);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
-            ctx.emitter.instruction("mov rax, QWORD PTR [r9]");                 // load the persisted stream-context options pointer
-            ctx.emitter.instruction("test rax, rax");                           // test whether a context options pointer exists
-            ctx.emitter.instruction(&format!("jz {}", empty_label));            // allocate an empty hash when no context options exist
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the options pointer to incref
-            abi::emit_call_label(ctx.emitter, "__rt_incref");
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the empty-hash fallback after retaining options
-            ctx.emitter.label(&empty_label);
-            ctx.emitter.instruction("mov edi, 1");                              // pass the empty fallback hash capacity
-            ctx.emitter.instruction("mov esi, 7");                              // select Mixed values for the fallback hash
-            abi::emit_call_label(ctx.emitter, "__rt_hash_new");
-            ctx.emitter.label(&done_label);
-        }
-    }
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `stream_context_get_params(context)` to an empty associative hash.
-pub(crate) fn lower_stream_context_get_params(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, "stream_context_get_params", 1)?;
-    emit_empty_mixed_hash(ctx);
-    store_if_result(ctx, inst)
 }
 
 /// Lowers `stream_get_contents(stream, length?, offset?)` to `string|false`.

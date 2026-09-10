@@ -96,6 +96,16 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for name in crate::internal_extensions::registry().constant_names() {
+        let value = crate::internal_extensions::registry()
+            .constant(name)
+            .expect("internal extension constant index must resolve");
+        let expression = crate::internal_extensions::value_expression(value)
+            .unwrap_or_else(|error| panic!("invalid internal constant {name}: {error}"));
+        let php_type = crate::internal_extensions::value_php_type(value)
+            .unwrap_or_else(|error| panic!("invalid internal constant {name}: {error}"));
+        constants.insert(name.to_string(), (expression.kind, php_type));
+    }
     collect_constant_decls(program, &mut constants);
     constants
 }
@@ -224,5 +234,22 @@ mod tests {
         );
         assert!(!ios.contains_key("SIGCHLD"));
         assert!(!ios.contains_key("PCNTL_EAGAIN"));
+    }
+
+    /// Verifies frozen DOM and libxml constants are materialized for EIR lowering.
+    #[test]
+    fn internal_extension_constants_are_seeded_with_values() {
+        use crate::codegen_support::platform::Arch;
+
+        let constants = collect_constants(
+            &vec![],
+            Target::new(Platform::MacOS, Arch::AArch64),
+        );
+        assert_eq!(int_constant(&constants, "LIBXML_NOERROR"), 32);
+        assert_eq!(int_constant(&constants, "LIBXML_HTML_NOIMPLIED"), 8_192);
+        assert_eq!(
+            int_constant(&constants, "Dom\\HTML_NO_DEFAULT_NS"),
+            2_147_483_648
+        );
     }
 }

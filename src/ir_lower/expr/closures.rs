@@ -456,6 +456,7 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::ConstRef(_)
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::This
@@ -740,6 +741,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
@@ -773,4 +775,3 @@ pub(super) fn callable_target_contains_eval_call(target: &CallableTarget) -> boo
 pub(super) fn is_eval_call_name(name: &Name) -> bool {
     php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval"
 }
-

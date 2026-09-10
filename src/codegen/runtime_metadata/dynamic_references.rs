@@ -325,7 +325,7 @@ pub(in crate::codegen) fn typed_builtin_target(inst: &crate::ir::Instruction) ->
     }
 }
 
-/// Returns the literal string payload produced by a `ConstStr` value.
+/// Returns the literal string payload produced by a string or `::class` constant.
 pub(in crate::codegen) fn const_string_value<'a>(
     module: &'a Module,
     function: &'a Function,
@@ -336,17 +336,15 @@ pub(in crate::codegen) fn const_string_value<'a>(
         return None;
     };
     let inst_ref = function.instruction(inst)?;
-    if inst_ref.op != Op::ConstStr {
-        return None;
-    }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
         return None;
     };
-    module
-        .data
-        .strings
-        .get(data.as_raw() as usize)
-        .map(String::as_str)
+    match inst_ref.op {
+        Op::ConstStr => module.data.strings.get(data.as_raw() as usize),
+        Op::ConstClassName => module.data.class_names.get(data.as_raw() as usize),
+        _ => None,
+    }
+    .map(String::as_str)
 }
 
 /// Returns class-like receiver names encoded in scoped constant immediates.

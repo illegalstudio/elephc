@@ -165,6 +165,7 @@ pub enum RuntimeFnId {
     GetDeclaredClasses,
     GetDeclaredInterfaces,
     GetDeclaredTraits,
+    GetExtensionFuncs,
     GetLoadedExtensions,
     GetParentClass,
     InterfaceExists,
@@ -1919,6 +1920,7 @@ impl RuntimeFnId {
                 // bucket would keep an owned name temporary — and skip releasing the hash.
                 | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
+                | RuntimeFnId::Fread
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
@@ -2009,6 +2011,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::Decbin
                 | RuntimeFnId::Dechex
                 | RuntimeFnId::Decoct
+            // Class-name lookups return persistent compiler-owned metadata strings and cannot
+            // alias the object or Mixed container supplied by the caller.
+                | RuntimeFnId::GetClass
+                | RuntimeFnId::GetParentClass
                 | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
                 | RuntimeFnId::Implode
@@ -2101,6 +2107,7 @@ impl RuntimeFnId {
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
             RuntimeFnId::GetDeclaredTraits => "get_declared_traits",
+            RuntimeFnId::GetExtensionFuncs => "get_extension_funcs",
             RuntimeFnId::GetLoadedExtensions => "get_loaded_extensions",
             RuntimeFnId::GetParentClass => "get_parent_class",
             RuntimeFnId::InterfaceExists => "interface_exists",

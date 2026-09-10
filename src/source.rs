@@ -25,6 +25,16 @@ use std::path::Path;
 use crate::errors::CompileError;
 use crate::parser::ast::Program;
 
+/// Parser-only declaration name carrying one physical source's halt byte offset.
+pub(crate) const HALT_OFFSET_SENTINEL: &str = "\0elephc.compiler_halt_offset\0";
+/// Prefix of PHP's hidden per-file halt-offset constant name.
+pub(crate) const HALT_OFFSET_MANGLED_PREFIX: &str = "\0__COMPILER_HALT_OFFSET__\0";
+
+/// Returns whether a declaration name is PHP's hidden physical-file halt metadata.
+pub(crate) fn is_mangled_halt_offset_name(name: &str) -> bool {
+    name.starts_with(HALT_OFFSET_MANGLED_PREFIX)
+}
+
 /// Language profile selected for one physical source file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceMode {
@@ -174,9 +184,35 @@ pub fn finalize_physical_program(
     mode: SourceMode,
     defines: &HashSet<String>,
 ) -> Result<Program, CompileError> {
+    let (program, halt_offset) = extract_halt_offset(program);
+    let program = match halt_offset {
+        Some(offset) => {
+            crate::magic_constants::substitute_halt_compiler_constants(program, offset, path)
+        }
+        None => program,
+    };
     let program = crate::magic_constants::substitute_file_and_scope_constants(program, path);
     crate::strict_php::check_file_with_mode(&program, &path.display().to_string(), mode)?;
     Ok(crate::conditional::apply(program, defines))
+}
+
+/// Removes the parser's terminal halt sentinel and returns its byte offset.
+fn extract_halt_offset(program: Program) -> (Program, Option<i64>) {
+    let mut halt_offset = None;
+    let mut executable = Vec::with_capacity(program.len());
+    for stmt in program {
+        match &stmt.kind {
+            crate::parser::ast::StmtKind::ConstDecl { name, value }
+                if name == HALT_OFFSET_SENTINEL =>
+            {
+                if let crate::parser::ast::ExprKind::IntLiteral(offset) = value.kind {
+                    halt_offset = Some(offset);
+                }
+            }
+            _ => executable.push(stmt),
+        }
+    }
+    (executable, halt_offset)
 }
 
 #[cfg(test)]
@@ -250,5 +286,32 @@ mod tests {
         assert!(!SourceMode::Php.strict_php_is_effective(false));
         assert!(!SourceMode::Lfc.strict_php_is_effective(true));
         assert!(!SourceMode::Internal.strict_php_is_effective(true));
+    }
+
+    /// Verifies physical finalization rewrites public offset reads and retains PHP's hidden key.
+    #[test]
+    fn finalizes_halt_offset_as_file_local_metadata() {
+        let source = "<?php echo __COMPILER_HALT_OFFSET__; __HALT_COMPILER();DATA";
+        let tokens = crate::lexer::tokenize(source).expect("halt source tokenizes");
+        let parsed = crate::parser::parse(&tokens).expect("halt source parses");
+        let path = Path::new("/tmp/elephc-halt-source-test.php");
+        let finalized = finalize_physical_program(
+            parsed,
+            path,
+            SourceMode::Php,
+            &HashSet::new(),
+        )
+        .expect("halt source finalizes");
+        assert!(matches!(
+            &finalized[0].kind,
+            crate::parser::ast::StmtKind::ConstDecl { name, value }
+                if name == "\0__COMPILER_HALT_OFFSET__\0/tmp/elephc-halt-source-test.php"
+                    && value.kind == crate::parser::ast::ExprKind::IntLiteral(55)
+        ));
+        assert!(matches!(
+            &finalized[1].kind,
+            crate::parser::ast::StmtKind::Echo(expr)
+                if expr.kind == crate::parser::ast::ExprKind::IntLiteral(55)
+        ));
     }
 }

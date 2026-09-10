@@ -15,6 +15,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
     for class_name in [
         "ReflectionClass",
         "ReflectionObject",
+        "ReflectionExtension",
         "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",

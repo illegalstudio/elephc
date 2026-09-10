@@ -61,6 +61,7 @@ pub(crate) fn spanned(token: Token, span: Span) -> SpannedToken {
 pub enum Token {
     // Structural
     OpenTag,        // <?php
+    HaltCompiler(usize), // __HALT_COMPILER(), carrying PHP's physical byte offset
     Semicolon,      // ;
     LParen,         // (
     RParen,         // )

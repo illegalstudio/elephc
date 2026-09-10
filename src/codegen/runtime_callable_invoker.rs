@@ -44,11 +44,8 @@ const INVOKER_SAVED_REGS_OFFSET: usize = 32;
 const INVOKER_CALLEE_SAVE_BYTES: usize = 8 * 8;
 /// Exclusive end of the callee-saved save area (`INVOKER_SAVED_REGS_OFFSET` … end-8).
 const INVOKER_SAVED_REGS_END: usize = INVOKER_SAVED_REGS_OFFSET + INVOKER_CALLEE_SAVE_BYTES;
-/// Frame size covering the footer plus every local slot through the save area.
-/// `frame_size - 16` must cover the last save offset; rounded up to 16 for ABI `sp` alignment.
-const INVOKER_FRAME_SIZE: usize = ((INVOKER_SAVED_REGS_END - 8) + 16 + 15) & !15;
-const INVOKER_BOUNDARY_FRAME_SIZE: usize = INVOKER_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE + 16;
-const INVOKER_BOUNDARY_BASE_OFFSET: usize = INVOKER_BOUNDARY_FRAME_SIZE - 16;
+/// First frame offset reserved for owners retained while materializing visible arguments.
+const INVOKER_CLEANUP_BASE_OFFSET: usize = INVOKER_SAVED_REGS_END;
 
 /// Callee-saved registers the invoker body uses as scratch. Must stay in sync with the
 /// hard-coded scratch choices in the indexed/assoc/mixed argument loaders and
@@ -89,14 +86,16 @@ pub(super) struct RuntimeCallableInvoker<'a> {
 struct InvokerEmitContext {
     label_prefix: String,
     label_counter: usize,
+    cleanup_slot_count: usize,
 }
 
 impl InvokerEmitContext {
     /// Creates a fresh label context for one generated invoker body.
-    fn new(invoker_label: &str) -> Self {
+    fn new(invoker_label: &str, cleanup_slot_count: usize) -> Self {
         Self {
             label_prefix: local_label_prefix(invoker_label),
             label_counter: 0,
+            cleanup_slot_count,
         }
     }
 
@@ -106,6 +105,28 @@ impl InvokerEmitContext {
         self.label_counter += 1;
         format!("{}_{}_{}", self.label_prefix, prefix, id)
     }
+
+    /// Returns the frame offset of one visible-argument cleanup owner.
+    fn cleanup_slot_offset(&self, index: usize) -> usize {
+        debug_assert!(index < self.cleanup_slot_count);
+        INVOKER_CLEANUP_BASE_OFFSET + index * 8
+    }
+
+    /// Returns the frame offset of the one-shot returned-argument owner transfer flag.
+    fn return_alias_flag_offset(&self) -> usize {
+        INVOKER_CLEANUP_BASE_OFFSET + self.cleanup_slot_count * 8
+    }
+}
+
+/// Returns the aligned invoker-local frame size for cleanup slots and the alias-transfer flag.
+fn invoker_local_frame_size(cleanup_slot_count: usize) -> usize {
+    let cleanup_end = INVOKER_CLEANUP_BASE_OFFSET + (cleanup_slot_count + 1) * 8;
+    ((cleanup_end.saturating_sub(8)) + 16 + 15) & !15
+}
+
+/// Returns the complete invoker frame size including its exception boundary.
+fn invoker_boundary_frame_size(cleanup_slot_count: usize) -> usize {
+    invoker_local_frame_size(cleanup_slot_count) + TRY_HANDLER_SLOT_SIZE + 16
 }
 
 /// Converts an invoker's global assembly label into a safe prefix for its local labels.
@@ -147,14 +168,12 @@ fn emit_runtime_callable_invoker_impl(
     invoker: &RuntimeCallableInvoker<'_>,
     catch_native_throws: bool,
 ) {
-    let mut ctx = InvokerEmitContext::new(invoker.label);
+    let cleanup_slot_count = invoker.sig.params.len();
+    let mut ctx = InvokerEmitContext::new(invoker.label, cleanup_slot_count);
     let call_reg = abi::nested_call_reg(emitter);
     let escape_label = format!("{}_eval_escape", invoker.label);
-    let frame_size = if catch_native_throws {
-        INVOKER_BOUNDARY_FRAME_SIZE
-    } else {
-        INVOKER_FRAME_SIZE
-    };
+    let frame_size = invoker_boundary_frame_size(cleanup_slot_count);
+    let boundary_base_offset = frame_size - 16;
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -170,26 +189,19 @@ fn emit_runtime_callable_invoker_impl(
         abi::int_arg_reg_name(emitter.target, 0),
         INVOKER_DESCRIPTOR_OFFSET,
     );
-    if catch_native_throws {
-        abi::store_at_offset(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 1),
-            INVOKER_ARG_ARRAY_OFFSET,
-        );
-        emit_invoker_exception_boundary_push(
-            emitter,
-            INVOKER_BOUNDARY_BASE_OFFSET,
-            &escape_label,
-        );
-        abi::load_at_offset(
-            emitter,
-            abi::int_arg_reg_name(emitter.target, 1),
-            INVOKER_ARG_ARRAY_OFFSET,
-        );
-        emit_saved_descriptor_entry_to_call_reg(emitter, call_reg);
-    } else {
-        emit_descriptor_entry_to_call_reg(emitter, call_reg);
-    }
+    abi::store_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 1),
+        INVOKER_ARG_ARRAY_OFFSET,
+    );
+    emit_invoker_cleanup_slot_initializers(emitter, &ctx);
+    emit_invoker_exception_boundary_push(emitter, boundary_base_offset, &escape_label);
+    abi::load_at_offset(
+        emitter,
+        abi::int_arg_reg_name(emitter.target, 1),
+        INVOKER_ARG_ARRAY_OFFSET,
+    );
+    emit_saved_descriptor_entry_to_call_reg(emitter, call_reg);
 
     let ret_ty = emit_loaded_array_callback_call(
         LoadedArraySource::ArgumentRegister(1),
@@ -202,71 +214,55 @@ fn emit_runtime_callable_invoker_impl(
         data,
     );
     emit_boxed_invoker_return(emitter, &ret_ty);
-    if catch_native_throws {
-        emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
-    }
+    emit_invoker_exception_boundary_pop(emitter, boundary_base_offset);
     // Restore before tearing down the frame (and on the escape path below): the boxed
     // Mixed result travels in return registers, which these loads never touch.
     emit_invoker_callee_saved_restores(emitter);
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
+    emitter.label(&escape_label);
+    emit_invoker_exception_boundary_pop(emitter, boundary_base_offset);
+    emit_release_invoker_visible_arg_owners(emitter, invoker.sig, &mut ctx, None);
     if catch_native_throws {
-        emitter.label(&escape_label);
-        emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
         emit_null_invoker_result(emitter);
         emit_invoker_callee_saved_restores(emitter);
         abi::emit_frame_restore(emitter, frame_size);
         abi::emit_return(emitter);
+    } else {
+        emit_invoker_callee_saved_restores(emitter);
+        abi::emit_frame_restore(emitter, frame_size);
+        abi::emit_jump(emitter, "__rt_throw_current");
     }
+}
+
+/// Initializes every optional visible-argument cleanup owner to null.
+fn emit_invoker_cleanup_slot_initializers(
+    emitter: &mut Emitter,
+    ctx: &InvokerEmitContext,
+) {
+    let scratch = abi::secondary_scratch_reg(emitter);
+    abi::emit_load_int_immediate(emitter, scratch, 0);
+    for index in 0..ctx.cleanup_slot_count {
+        abi::store_at_offset(emitter, scratch, ctx.cleanup_slot_offset(index));
+    }
+    abi::store_at_offset(emitter, scratch, ctx.return_alias_flag_offset());
 }
 
 /// Boxes the callable target's return value into the invoker's uniform Mixed result.
 ///
-/// OWNERSHIP — a `Str` return is already OWNED by the time it reaches here, so the Mixed cell
-/// TAKES it rather than copying it. `call_target_with_pushed_args` runs
-/// `restore_concat_offset_after_nested_call`, which unconditionally calls `__rt_str_persist` for a
-/// `Str` return type, and every path that produces `ret_ty` returns `sig.return_type` — the same
-/// value that persist was keyed on (`emit_loaded_indexed_array_callback_call`,
-/// `emit_loaded_assoc_array_callback_call`, and `emit_loaded_mixed_array_callback_call`, which only
-/// forwards to those two). So `ret_ty == Str` here implies a fresh heap copy is live in the string
-/// return registers, owned by nobody.
-///
-/// Boxing that through `emit_box_current_value_as_mixed` used the BORROWED contract:
-/// `__rt_mixed_from_value` persists a SECOND copy for the cell
-/// (`src/codegen_support/runtime/arrays/mixed_from_value.rs`, `__rt_mixed_from_value_string`),
-/// leaving the first orphaned — one leaked heap block per invoked callable returning a string,
-/// which is what every closure / first-class-callable / `array_map` string-result call site was
-/// paying. `emit_box_current_owned_value_as_mixed` moves the pointer/length pair into a fresh cell
-/// instead.
-///
-/// This ELIDES AN ALLOCATION; it adds no release. The Mixed cell owned exactly one string payload
-/// before and owns exactly one now — the only change is WHICH copy it owns — so the number of
-/// frees `__rt_mixed_free_deep` performs is unchanged and no double free can be introduced.
-///
-/// Only `Str` is routed through the owning boxer ON PURPOSE. For a container or object return
-/// `emit_box_current_owned_value_as_mixed` would emit a decref of the original reference, and the
-/// invoker never took one — nothing persisted or retained a container on the way in, so releasing
-/// one here would free a reference the caller still holds.
+/// OWNERSHIP — a PHP function hands its caller one owner for a refcounted return. Fresh values
+/// already carry that owner; a returned visible parameter transfers it through
+/// `emit_release_invoker_visible_arg_owners`. The owning boxer consumes that raw owner into the
+/// uniform Mixed result, while an already-boxed Mixed return is left unchanged. Strings reach this
+/// point as the owned copy made by `restore_concat_offset_after_nested_call`, so moving their
+/// pointer/length into the Mixed cell also avoids the second copy made by the borrowed boxer.
 fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
     let repr = ret_ty.codegen_repr();
-    if repr == PhpType::Str {
-        emit_box_current_owned_value_as_mixed(emitter, &PhpType::Str);
+    if repr == PhpType::Str || repr == PhpType::Callable || repr.is_refcounted() {
+        emit_box_current_owned_value_as_mixed(emitter, &repr);
         return;
     }
     emit_box_current_value_as_mixed(emitter, &repr);
-}
-
-/// Loads the descriptor entry slot from the first invoker argument into `call_reg`.
-fn emit_descriptor_entry_to_call_reg(emitter: &mut Emitter, call_reg: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, x0", call_reg));              // keep descriptor while loading its native entry
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, rdi", call_reg));             // keep descriptor while loading its native entry
-        }
-    }
-    callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
 }
 
 /// Loads the saved descriptor entry slot into `call_reg` after a `setjmp` boundary.
@@ -690,7 +686,7 @@ fn emit_loaded_indexed_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, sig, true, emitter, ctx);
     sig.return_type.clone()
 }
 
@@ -802,7 +798,7 @@ fn emit_loaded_assoc_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, sig, false, emitter, ctx);
     sig.return_type.clone()
 }
 
@@ -2131,14 +2127,185 @@ fn call_target_with_pushed_args(
     call_reg: &str,
     arg_types: &[PhpType],
     sig: &FunctionSig,
+    retain_loaded_arg_owners: bool,
     emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
 ) {
+    if retain_loaded_arg_owners {
+        emit_save_invoker_visible_arg_owners(emitter, arg_types, sig, ctx);
+    }
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
     save_concat_offset_before_nested_call(emitter);
     abi::emit_call_reg(emitter, call_reg);
     restore_concat_offset_after_nested_call(emitter, &sig.return_type);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
+    emit_release_invoker_visible_arg_owners(
+        emitter,
+        sig,
+        ctx,
+        Some(&sig.return_type.codegen_repr()),
+    );
+}
+
+/// Saves each indexed-container owner retained for a visible by-value argument.
+fn emit_save_invoker_visible_arg_owners(
+    emitter: &mut Emitter,
+    arg_types: &[PhpType],
+    sig: &FunctionSig,
+    ctx: &InvokerEmitContext,
+) {
+    let scratch = abi::secondary_scratch_reg(emitter);
+    for index in 0..sig.params.len().min(arg_types.len()) {
+        if invoker_visible_arg_cleanup_type(sig, index).is_none() {
+            continue;
+        }
+        let temp_offset = arg_types
+            .iter()
+            .skip(index + 1)
+            .map(invoker_arg_temp_slot_size)
+            .sum();
+        abi::emit_load_temporary_stack_slot(emitter, scratch, temp_offset);
+        abi::store_at_offset(emitter, scratch, ctx.cleanup_slot_offset(index));
+    }
+}
+
+/// Returns the temporary stack width used by one already-pushed invoker argument.
+fn invoker_arg_temp_slot_size(ty: &PhpType) -> usize {
+    match ty.codegen_repr() {
+        PhpType::Void | PhpType::Never => 0,
+        _ => 16,
+    }
+}
+
+/// Returns the runtime ownership type that an indexed invoker must release after a call.
+fn invoker_visible_arg_cleanup_type(sig: &FunctionSig, index: usize) -> Option<PhpType> {
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let ty = sig.params.get(index)?.1.codegen_repr();
+    (ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable)).then_some(ty)
+}
+
+/// Releases indexed-invoker argument owners, optionally preserving a live call result.
+fn emit_release_invoker_visible_arg_owners(
+    emitter: &mut Emitter,
+    sig: &FunctionSig,
+    ctx: &mut InvokerEmitContext,
+    return_ty: Option<&PhpType>,
+) {
+    if let Some(return_ty) = return_ty {
+        abi::emit_push_result_value(emitter, return_ty);
+    }
+    for index in 0..sig.params.len() {
+        let Some(cleanup_ty) = invoker_visible_arg_cleanup_type(sig, index) else {
+            continue;
+        };
+        let release_label = ctx.next_label("cleanup_release");
+        let done_label = ctx.next_label("cleanup_done");
+        abi::load_at_offset(
+            emitter,
+            abi::int_result_reg(emitter),
+            ctx.cleanup_slot_offset(index),
+        );
+        if let Some(return_ty) = return_ty {
+            emit_transfer_return_alias_owner(
+                emitter,
+                return_ty,
+                &cleanup_ty,
+                ctx,
+                ctx.cleanup_slot_offset(index),
+                &release_label,
+                &done_label,
+            );
+            emitter.label(&release_label);
+        }
+        if cleanup_ty == PhpType::Callable {
+            callable_descriptor::emit_release_current_descriptor(emitter);
+        } else if cleanup_ty == PhpType::Str {
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_call_label(emitter, "__rt_decref_any");
+        }
+        let scratch = abi::secondary_scratch_reg(emitter);
+        abi::emit_load_int_immediate(emitter, scratch, 0);
+        abi::store_at_offset(emitter, scratch, ctx.cleanup_slot_offset(index));
+        if return_ty.is_some() {
+            emitter.label(&done_label);
+        }
+    }
+    if let Some(return_ty) = return_ty {
+        restore_pushed_value_after_release(emitter, return_ty);
+    }
+}
+
+/// Transfers one matching visible-argument owner to an aliased function return.
+fn emit_transfer_return_alias_owner(
+    emitter: &mut Emitter,
+    return_ty: &PhpType,
+    cleanup_ty: &PhpType,
+    ctx: &InvokerEmitContext,
+    cleanup_offset: usize,
+    release_label: &str,
+    done_label: &str,
+) {
+    if !invoker_return_can_alias_cleanup(return_ty, cleanup_ty) {
+        return;
+    }
+
+    let returned_reg = abi::secondary_scratch_reg(emitter);
+    let transfer_flag_reg = abi::tertiary_scratch_reg(emitter);
+    abi::emit_load_temporary_stack_slot(emitter, returned_reg, 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp x0, {}", returned_reg));          // compare the cleanup owner with the preserved callable return
+            emitter.instruction(&format!("b.ne {}", release_label));            // release non-aliased visible arguments normally
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp rax, {}", returned_reg));         // compare the cleanup owner with the preserved callable return
+            emitter.instruction(&format!("jne {}", release_label));             // release non-aliased visible arguments normally
+        }
+    }
+    abi::load_at_offset(emitter, transfer_flag_reg, ctx.return_alias_flag_offset());
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let branch = format!("cbnz {}, {}", transfer_flag_reg, release_label);
+            emitter.instruction(&branch);                                       // only one duplicate argument owner may transfer to the return
+        }
+        Arch::X86_64 => {
+            let test = format!("test {}, {}", transfer_flag_reg, transfer_flag_reg);
+            emitter.instruction(&test);                                         // has another matching argument already transferred its owner?
+            emitter.instruction(&format!("jnz {}", release_label));             // release duplicate aliased argument owners after the first transfer
+        }
+    }
+    abi::emit_load_int_immediate(emitter, transfer_flag_reg, 1);
+    abi::store_at_offset(emitter, transfer_flag_reg, ctx.return_alias_flag_offset());
+    abi::emit_load_int_immediate(emitter, returned_reg, 0);
+    abi::store_at_offset(emitter, returned_reg, cleanup_offset);
+    abi::emit_jump(emitter, done_label);
+}
+
+/// Returns whether the raw return and cleanup slots can carry the same transferred owner.
+fn invoker_return_can_alias_cleanup(return_ty: &PhpType, cleanup_ty: &PhpType) -> bool {
+    let return_ty = return_ty.codegen_repr();
+    let cleanup_ty = cleanup_ty.codegen_repr();
+    if return_ty == cleanup_ty {
+        return matches!(
+            return_ty,
+            PhpType::Str
+                | PhpType::Mixed
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+                | PhpType::Iterable
+                | PhpType::Callable
+        );
+    }
+    matches!(
+        (&return_ty, &cleanup_ty),
+        (PhpType::Array(_), PhpType::Array(_))
+            | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+    )
 }
 
 /// Saves the current concat offset before the nested callable target runs.
@@ -2587,24 +2754,66 @@ mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
 
+    /// Builds a representative signature with string, Mixed, and scalar owners.
+    fn cleanup_test_sig() -> FunctionSig {
+        FunctionSig {
+            params: vec![
+                ("text".to_string(), PhpType::Str),
+                ("context".to_string(), PhpType::Mixed),
+                ("limit".to_string(), PhpType::Int),
+            ],
+            param_type_exprs: vec![None; 3],
+            param_attributes: vec![Vec::new(); 3],
+            defaults: vec![None; 3],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; 3],
+            declared_params: vec![true; 3],
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
+    /// Builds a two-argument Mixed passthrough signature for return-alias ownership tests.
+    fn mixed_alias_test_sig() -> FunctionSig {
+        FunctionSig {
+            params: vec![
+                ("left".to_string(), PhpType::Mixed),
+                ("right".to_string(), PhpType::Mixed),
+            ],
+            param_type_exprs: vec![None; 2],
+            param_attributes: vec![Vec::new(); 2],
+            defaults: vec![None; 2],
+            return_type: PhpType::Mixed,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; 2],
+            declared_params: vec![true; 2],
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
     /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
     #[test]
     fn arm64_invoker_boundary_uses_large_offset_frame_helpers() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        let boundary_base_offset = invoker_boundary_frame_size(3) - 16;
 
         emit_invoker_exception_boundary_push(
             &mut emitter,
-            INVOKER_BOUNDARY_BASE_OFFSET,
+            boundary_base_offset,
             "invoker_escape",
         );
-        emit_invoker_exception_boundary_pop(&mut emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+        emit_invoker_exception_boundary_pop(&mut emitter, boundary_base_offset);
 
         let output = emitter.output();
-        assert!(INVOKER_BOUNDARY_BASE_OFFSET > 255);
+        assert!(boundary_base_offset > 255);
         for offset in [
-            INVOKER_BOUNDARY_BASE_OFFSET,
-            INVOKER_BOUNDARY_BASE_OFFSET - 8,
-            INVOKER_BOUNDARY_BASE_OFFSET - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+            boundary_base_offset,
+            boundary_base_offset - 8,
+            boundary_base_offset - TRY_HANDLER_DIAG_DEPTH_OFFSET,
         ] {
             assert!(output.contains(&format!("    sub x9, x29, #{}\n", offset)));
         }
@@ -2612,5 +2821,72 @@ mod tests {
         assert!(output.contains("    ldr x10, [x9]\n"));
         assert!(!output.contains("stur x10, [x29, #-3"));
         assert!(!output.contains("ldur x10, [x29, #-3"));
+    }
+
+    /// Verifies ordinary indexed invokers release owners and rethrow on both targets.
+    #[test]
+    fn indexed_invokers_release_visible_owners_on_success_and_throw() {
+        for target in [
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            let sig = cleanup_test_sig();
+            emit_runtime_callable_invoker(
+                &mut emitter,
+                &mut data,
+                &RuntimeCallableInvoker {
+                    label: "test_owned_invoker",
+                    sig: &sig,
+                    captures: &[],
+                },
+            );
+            let output = emitter.output();
+            assert!(output.contains("test_owned_invoker_eval_escape"));
+            assert!(output.contains("__rt_heap_free_safe"));
+            assert!(output.contains("__rt_decref_any"));
+            assert!(output.contains("__rt_throw_current"));
+            match target.arch {
+                Arch::AArch64 => assert!(output.contains("bl setjmp")),
+                Arch::X86_64 => assert!(output.contains("call setjmp")),
+            }
+        }
+    }
+
+    /// Verifies all supported targets transfer only one matching Mixed argument owner to the return.
+    #[test]
+    fn indexed_invokers_transfer_one_mixed_return_alias_owner() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            let sig = mixed_alias_test_sig();
+            emit_runtime_callable_invoker(
+                &mut emitter,
+                &mut data,
+                &RuntimeCallableInvoker {
+                    label: "test_mixed_alias_invoker",
+                    sig: &sig,
+                    captures: &[],
+                },
+            );
+            let output = emitter.output();
+            assert!(output.matches("_cleanup_release_").count() >= 4);
+            assert!(output.matches("_cleanup_done_").count() >= 4);
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(output.contains("cmp x0, x10"));
+                    assert!(output.contains("cbnz x11"));
+                }
+                Arch::X86_64 => {
+                    assert!(output.contains("cmp rax, r10"));
+                    assert!(output.contains("test rcx, rcx"));
+                }
+            }
+        }
     }
 }

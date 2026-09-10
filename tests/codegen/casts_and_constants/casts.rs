@@ -223,6 +223,144 @@ echo (BOOLEAN)0 ? "true" : "false";
     assert_eq!(out, "3:2.5:42:false");
 }
 
+/// Verifies `(object)` is an identity cast for an existing userland object.
+///
+/// The concrete class must survive type checking and EIR lowering so the
+/// property read remains a `Marker` property access, not a `stdClass` fallback.
+#[test]
+fn test_cast_object_preserves_existing_object_identity_and_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Marker { public int $value = 7; }
+$source = new Marker();
+$cast = (object) $source;
+echo ($cast === $source ? "same" : "different"), "|", get_class($cast), "|", $cast->value;
+"#,
+    );
+    assert_eq!(out, "same|Marker|7");
+}
+
+/// Verifies each concrete scalar form produces `stdClass { scalar: value }` and null is empty.
+#[test]
+fn test_cast_object_materializes_stdclass_scalar_and_null_forms() {
+    let out = compile_and_run(
+        r#"<?php
+$int = (object) 7;
+$float = (object) 2.5;
+$true = (object) true;
+$false = (object) false;
+$string = (object) "hi";
+$null = (object) null;
+echo get_class($int), ":", $int->scalar, "|";
+echo get_class($float), ":", $float->scalar, "|";
+echo get_class($true), ":", $true->scalar ? "true" : "false", "|";
+echo get_class($false), ":", $false->scalar ? "true" : "false", "|";
+echo get_class($string), ":", $string->scalar, "|";
+echo get_class($null), ":", count(get_object_vars($null));
+"#,
+    );
+    assert_eq!(
+        out,
+        "stdClass:7|stdClass:2.5|stdClass:true|stdClass:false|stdClass:hi|stdClass:0"
+    );
+}
+
+/// Verifies array casts copy keys into public stdClass properties without aliasing the source.
+#[test]
+fn test_cast_object_materializes_array_properties_and_keeps_array_cow() {
+    let out = compile_and_run(
+        r#"<?php
+$source = ["name" => "Ada", "nested" => ["x" => 1]];
+$cast = (object) $source;
+$cast->name = "Grace";
+$cast->nested["x"] = 2;
+echo $source["name"], ":", $source["nested"]["x"], "|";
+echo $cast->name, ":", $cast->nested["x"];
+"#,
+    );
+    assert_eq!(out, "Ada:1|Grace:2");
+}
+
+/// Verifies an indexed array cast uses numeric public properties and keeps the source owner valid.
+#[test]
+fn test_cast_object_materializes_indexed_array_properties() {
+    let out = compile_and_run(
+        r#"<?php
+$source = ["first", "second"];
+$cast = (object) $source;
+$properties = get_object_vars($cast);
+$properties[0] = "changed";
+echo $source[0], ":", $properties[0], ":", $properties[1];
+"#,
+    );
+    assert_eq!(out, "first:changed:second");
+}
+
+/// Exercises repeated object casts with heap debug enabled to catch a missing retain or release.
+#[test]
+fn test_cast_object_scalar_and_array_ownership_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 20; $i++) {
+    $text = (object) ("value" . $i);
+    $array = (object) ["key" => $text->scalar, "n" => $i];
+    echo $array->key, ":", $array->n, ";";
+}
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "value0:0;value1:1;value2:2;value3:3;value4:4;value5:5;value6:6;value7:7;value8:8;value9:9;value10:10;value11:11;value12:12;value13:13;value14:14;value15:15;value16:16;value17:17;value18:18;value19:19;");
+    assert!(!out.stderr.contains("heap debug"), "{}", out.stderr);
+}
+
+/// Verifies runtime-unknown object casts dispatch by their boxed tag rather than assuming stdClass.
+#[test]
+fn test_cast_object_mixed_dispatch_preserves_identity_and_materializes_all_forms() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicMarker { public int $value = 9; }
+function as_object(mixed $value): mixed { return (object) $value; }
+$marker = new DynamicMarker();
+$object = as_object($marker);
+$int = as_object(4);
+$array = as_object(["name" => "Ada"]);
+$null = as_object(null);
+echo ($object === $marker ? "same" : "different"), ":", get_class($object), ":", $object->value, "|";
+echo get_class($int), ":", $int->scalar, "|";
+echo get_class($array), ":", $array->name, "|";
+echo get_class($null), ":", count(get_object_vars($null));
+"#,
+    );
+    assert_eq!(out, "same:DynamicMarker:9|stdClass:4|stdClass:Ada|stdClass:0");
+}
+
+/// Verifies every runtime object-cast arm balances its owners under heap debug.
+///
+/// The `mixed` function parameter forces the raw runtime array-to-hash helper
+/// path, whose shallow clone remains this helper's owner until it is released.
+#[test]
+fn test_cast_object_mixed_dispatch_is_heap_clean_and_cow_isolated() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class DynamicCastMarker { public int $value = 41; }
+function as_object(mixed $value): mixed { return (object) $value; }
+$marker = new DynamicCastMarker();
+for ($i = 0; $i < 12; $i++) {
+    $source = ["text" => "v" . $i, "nested" => ["n" => $i]];
+    $cast = as_object($source);
+    $scalar = as_object("s" . $i);
+    $empty = as_object(null);
+    $same = as_object($marker);
+    $cast->nested["n"] = $i + 1;
+    echo $source["nested"]["n"], ":", $cast->nested["n"], ":", $scalar->scalar, ":", count(get_object_vars($empty)), ":", ($same === $marker ? $same->value : -1), ";";
+}
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "0:1:s0:0:41;1:2:s1:0:41;2:3:s2:0:41;3:4:s3:0:41;4:5:s4:0:41;5:6:s5:0:41;6:7:s6:0:41;7:8:s7:0:41;8:9:s8:0:41;9:10:s9:0:41;10:11:s10:0:41;11:12:s11:0:41;");
+    assert!(!out.stderr.contains("heap debug"), "{}", out.stderr);
+}
+
 // --- gettype ---
 
 // --- PHP float->int cast edge cases ---

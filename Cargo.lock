@@ -672,6 +672,7 @@ dependencies = [
  "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-curl",
+ "elephc-dom",
  "elephc-image",
  "elephc-magician",
  "elephc-monitoring-contract",
@@ -742,6 +743,14 @@ dependencies = [
  "elephc-monitoring-contract",
  "libc",
  "serde_json",
+]
+
+[[package]]
+name = "elephc-dom"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "sha2 0.10.9",
 ]
 
 [[package]]

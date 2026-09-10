@@ -11,6 +11,8 @@
 //! - Returns the exact source lexeme so the resulting name matches what PHP would record.
 //! - Callers that need PHP's narrow exceptions (e.g. `class` is reserved as a constant name,
 //!   and `Foo::class` is the special class-name fetch) must special-case those tokens first.
+//! - `__halt_compiler` is fully reserved except after an instance member operator, where the lexer
+//!   deliberately leaves it as an ordinary identifier before this helper is called.
 
 use crate::lexer::{Token, TokenMetadata};
 
@@ -25,5 +27,8 @@ pub(crate) fn bareword_name_from_token(
     token: &Token,
     metadata: &TokenMetadata,
 ) -> Option<String> {
+    if matches!(token, Token::HaltCompiler(_)) {
+        return None;
+    }
     token.word_spelling(metadata).map(str::to_string)
 }

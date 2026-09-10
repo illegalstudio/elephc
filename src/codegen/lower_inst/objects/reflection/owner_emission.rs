@@ -38,16 +38,106 @@ pub(super) fn emit_reflection_owner_object(
     )?;
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
+        if class_name == "ReflectionExtension" {
+            let extension = crate::internal_extensions::registry()
+                .extension(reflected_name)
+                .ok_or_else(|| {
+                    CodegenIrError::unsupported(format!(
+                        "ReflectionExtension metadata for unknown extension {}",
+                        reflected_name
+                    ))
+                })?;
+            let version = extension.version.as_deref().ok_or_else(|| {
+                CodegenIrError::unsupported(format!(
+                    "ReflectionExtension::getVersion has no version for {}",
+                    reflected_name
+                ))
+            })?;
+            emit_reflection_owner_string_property_by_name(
+                ctx,
+                class_name,
+                "__version",
+                version,
+            )?;
+            let info = reflection_extension_info(reflected_name).ok_or_else(|| {
+                CodegenIrError::unsupported(format!(
+                    "ReflectionExtension::info has no module block for {}",
+                    reflected_name
+                ))
+            })?;
+            emit_reflection_owner_string_property_by_name(ctx, class_name, "__info", info)?;
+            emit_reflection_owner_bool_property(ctx, class_name, "__is_persistent", true)?;
+            emit_reflection_owner_bool_property(ctx, class_name, "__is_temporary", false)?;
+            emit_reflection_owner_string_array_property_by_name(
+                ctx,
+                class_name,
+                "__class_names",
+                &metadata.interface_names,
+            )?;
+            let enum_names = extension
+                .classes
+                .iter()
+                .filter(|class| class.enum_type)
+                .map(|class| class.exported_name.clone())
+                .collect::<Vec<_>>();
+            emit_reflection_owner_string_array_property_by_name(
+                ctx,
+                class_name,
+                "__enum_names",
+                &enum_names,
+            )?;
+            let function_names = extension
+                .functions
+                .iter()
+                .map(|function| function.exported_name.clone())
+                .collect::<Vec<_>>();
+            emit_reflection_owner_string_array_property_by_name(
+                ctx,
+                class_name,
+                "__function_names",
+                &function_names,
+            )?;
+            emit_reflection_constant_array_property_by_name(
+                ctx,
+                class_name,
+                "__constants",
+                &reflection_extension_constant_members(reflected_name)?,
+            )?;
+            emit_reflection_constant_array_property_by_name(
+                ctx,
+                class_name,
+                "__ini_entries",
+                &[],
+            )?;
+            let dependencies = reflection_extension_dependencies(reflected_name)
+                .ok_or_else(|| {
+                    CodegenIrError::unsupported(format!(
+                        "ReflectionExtension::getDependencies for unknown extension {}",
+                        reflected_name
+                    ))
+                })?
+                .iter()
+                .map(|(name, kind)| ((*name).to_string(), (*kind).to_string()))
+                .collect::<Vec<_>>();
+            emit_reflection_string_assoc_property_by_name(
+                ctx,
+                class_name,
+                "__dependencies",
+                &dependencies,
+            )?;
+        }
         if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
         }
-        if is_reflection_class_owner {
+        if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_owner_string_array_property_by_name(
                 ctx,
                 class_name,
                 "__interface_names",
                 &metadata.interface_names,
             )?;
+        }
+        if is_reflection_class_owner {
             emit_reflection_class_array_property_by_name(
                 ctx,
                 class_name,
@@ -138,6 +228,17 @@ pub(super) fn emit_reflection_owner_object(
                 class_name,
                 metadata.parent_class_name.as_deref(),
             )?;
+            if let Some(extension_name) = reflection_extension_name_for_class(reflected_name) {
+                emit_reflection_owner_string_property_by_name(
+                    ctx,
+                    class_name,
+                    "__extension_name",
+                    extension_name,
+                )?;
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                emit_reflection_extension_factory(ctx, extension_name)?;
+                emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
+            }
             emit_reflection_member_array_property_by_name(
                 ctx,
                 class_name,
@@ -148,8 +249,46 @@ pub(super) fn emit_reflection_owner_object(
         } else if class_name == "ReflectionFunction" {
             let (_, short_name) = reflection_name_parts(reflected_name);
             emit_reflection_owner_string_property_by_name(ctx, class_name, "__short_name", short_name)?;
+            if let Some(extension_name) = reflection_extension_name_for_function(reflected_name) {
+                emit_reflection_owner_string_property_by_name(
+                    ctx,
+                    class_name,
+                    "__extension_name",
+                    extension_name,
+                )?;
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                emit_reflection_extension_factory(ctx, extension_name)?;
+                emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
+            }
+        } else if class_name == "ReflectionMethod" {
+            if let Some(extension_name) = metadata
+                .parent_class_name
+                .as_deref()
+                .and_then(reflection_extension_name_for_class)
+            {
+                emit_reflection_owner_string_property_by_name(
+                    ctx,
+                    class_name,
+                    "__extension_name",
+                    extension_name,
+                )?;
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                emit_reflection_extension_factory(ctx, extension_name)?;
+                emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
+            }
         }
         if class_name == "ReflectionEnum" {
+            if let Some(extension_name) = reflection_extension_name_for_class(reflected_name) {
+                emit_reflection_owner_string_property_by_name(
+                    ctx,
+                    class_name,
+                    "__extension_name",
+                    extension_name,
+                )?;
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                emit_reflection_extension_factory(ctx, extension_name)?;
+                emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__extension")?;
+            }
             let case_names = metadata
                 .enum_case_members
                 .iter()
@@ -193,7 +332,9 @@ pub(super) fn emit_reflection_owner_object(
             emit_reflection_method_name_parts(ctx, reflected_name)?;
         }
     }
-    emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
+    if class_name != "ReflectionExtension" {
+        emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
+    }
     if is_reflection_class_owner || class_name == "ReflectionEnum" {
         emit_reflection_owner_bool_property(ctx, class_name, "__is_final", metadata.is_final)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_abstract", metadata.is_abstract)?;
@@ -474,4 +615,3 @@ pub(super) fn reflection_name_parts(reflected_name: &str) -> (&str, &str) {
         None => ("", reflected_name),
     }
 }
-

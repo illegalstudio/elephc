@@ -240,6 +240,65 @@ function pick(int $i): mixed { return $i === 0 ? [1,2,3] : $i; }
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a scalar-only program does not retain the optional DOM bridge.
+#[test]
+fn test_scalar_program_omits_unreachable_dom_bridge() {
+    let dir = make_cli_test_dir("elephc_generic_mixed_without_dom");
+    let source = r#"<?php
+echo 1 + 2;
+"#;
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(!user_asm.contains("__rt_dom_bridge_failure"));
+    assert!(!user_asm.contains("elephc_dom_call"));
+    assert!(!runtime_asm.contains("__rt_dom_bridge_failure:"));
+    assert!(!requirements.iter().any(|library| library == "elephc_dom"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the Mixed object-cast fixture's generated shared echo helper plans the DOM bridge.
+#[test]
+fn test_mixed_object_cast_shared_echo_requires_dom_bridge() {
+    let dir = make_cli_test_dir("elephc_mixed_object_cast_dom_bridge");
+    let source = r#"<?php
+class DynamicMarker { public int $value = 9; }
+function as_object(mixed $value): mixed { return (object) $value; }
+$marker = new DynamicMarker();
+$object = as_object($marker);
+echo $object->value;
+echo $object->value;
+"#;
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(user_asm.contains("_eir_shared_mixed_echo"));
+    assert!(user_asm.contains("elephc_dom_call"));
+    assert!(runtime_asm.contains("__rt_dom_bridge_failure:"));
+    assert!(requirements.iter().any(|library| library == "elephc_dom"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a shared Mixed echo helper still selects the bridge and its runtime helpers.
+#[test]
+fn test_dom_dispatch_keeps_bridge_requirement_when_reachable() {
+    let dir = make_cli_test_dir("elephc_generic_mixed_with_dom");
+    let source = r#"<?php
+function echo_twice(mixed $value): void {
+    echo $value;
+    echo $value;
+}
+$document = new DOMDocument();
+$document->loadXML("<root/>");
+echo_twice($document->documentElement);
+"#;
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(user_asm.contains("__rt_dom_bridge_failure"));
+    assert!(user_asm.contains("_eir_shared_mixed_echo"));
+    assert!(runtime_asm.contains("__rt_dom_bridge_failure:"));
+    assert!(requirements.iter().any(|library| library == "elephc_dom"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `count()`'s TypeError names every non-countable type the way reference PHP does,
 /// from inside the SHARED guard.
 ///

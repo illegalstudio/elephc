@@ -197,6 +197,7 @@ impl Scanner<'_> {
             }
             ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
             | ExprKind::Variable(_) | ExprKind::BoolLiteral(_) | ExprKind::Null
+            | ExprKind::ArrayAppend
             | ExprKind::ConstRef(_) | ExprKind::This
             | ExprKind::MagicConstant(_) => {}
         }

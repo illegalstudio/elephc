@@ -27,6 +27,7 @@ env:
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
+    -p elephc-dom
     -p elephc-pcntl
     -p elephc-xml
     -p elephc-magician
@@ -85,15 +86,15 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
-        # control), libelephc_magician.a (eval), libelephc_web.a,
-        # libelephc_curl.a (curl; its symbols stay
-        # unresolved until a PHP-program link pulls in a real managed
-        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_dom.a
+        # (DOM / libxml / SimpleXML), libelephc_pcntl.a (process control),
+        # libelephc_magician.a (eval), libelephc_web.a, libelephc_curl.a (curl;
+        # its symbols stay unresolved until a PHP-program link pulls in a real
+        # managed libcurl/libssh2/libssl/libcrypto/libz/libnghttp2; see
         # managed-native-smoke), and libelephc_xml.a (xml; likewise unresolved
         # until the link pulls in the managed libelephc_libxml2_shim.a +
-        # libxml2.a, materialized below and in every codegen shard). Build
-        # them before archiving so the archive can capture the .a files (see the
+        # libxml2.a, materialized below and in every codegen shard). Build them
+        # before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
 
@@ -186,6 +187,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Ensure DOM native build tooling
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
+            rm -rf /var/lib/apt/lists/*
+          fi
+
       - name: Cache Rust build state
         uses: actions/cache@v4
         with:
@@ -218,15 +227,15 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
-        # control), libelephc_magician.a (eval), libelephc_web.a,
-        # libelephc_curl.a (curl; its symbols stay
-        # unresolved until a PHP-program link pulls in a real managed
-        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_dom.a
+        # (DOM / libxml / SimpleXML), libelephc_pcntl.a (process control),
+        # libelephc_magician.a (eval), libelephc_web.a, libelephc_curl.a (curl;
+        # its symbols stay unresolved until a PHP-program link pulls in a real
+        # managed libcurl/libssh2/libssl/libcrypto/libz/libnghttp2; see
         # managed-native-smoke), and libelephc_xml.a (xml; likewise unresolved
         # until the link pulls in the managed libelephc_libxml2_shim.a +
-        # libxml2.a, materialized below and in every codegen shard). Build
-        # them before archiving so the archive can capture the .a files (see the
+        # libxml2.a, materialized below and in every codegen shard). Build them
+        # before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
 
@@ -314,6 +323,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Ensure DOM native build tooling
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
+            rm -rf /var/lib/apt/lists/*
+          fi
+
       - name: Cache Rust build state
         uses: actions/cache@v4
         with:
@@ -346,15 +363,15 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
-        # control), libelephc_magician.a (eval), libelephc_web.a,
-        # libelephc_curl.a (curl; its symbols stay
-        # unresolved until a PHP-program link pulls in a real managed
-        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_dom.a
+        # (DOM / libxml / SimpleXML), libelephc_pcntl.a (process control),
+        # libelephc_magician.a (eval), libelephc_web.a, libelephc_curl.a (curl;
+        # its symbols stay unresolved until a PHP-program link pulls in a real
+        # managed libcurl/libssh2/libssl/libcrypto/libz/libnghttp2; see
         # managed-native-smoke), and libelephc_xml.a (xml; likewise unresolved
         # until the link pulls in the managed libelephc_libxml2_shim.a +
-        # libxml2.a, materialized below and in every codegen shard). Build
-        # them before archiving so the archive can capture the .a files (see the
+        # libxml2.a, materialized below and in every codegen shard). Build them
+        # before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
 

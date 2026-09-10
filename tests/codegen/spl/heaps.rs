@@ -126,6 +126,179 @@ foreach ($queue as $key => $value) {
     assert_eq!(out, "high|high:5|3|0=low");
 }
 
+/// Verifies heap debug projections use php-src's private keys and physical heap order.
+#[test]
+fn test_spl_heap_debug_info_matches_php_private_snapshot() {
+    let out = compile_and_run(
+        r#"<?php
+$max = new SplMaxHeap();
+foreach ([1, 5, 2, 4, 3, 6] as $value) {
+    $max->insert($value);
+}
+$debug = $max->__debugInfo();
+echo $debug["\0SplHeap\0flags"];
+echo ":";
+echo $debug["\0SplHeap\0isCorrupted"] ? "1" : "0";
+echo ":";
+foreach ($debug["\0SplHeap\0heap"] as $value) {
+    echo $value;
+    echo ",";
+}
+echo ":";
+echo count($max);
+echo ":";
+echo $max->top();
+echo "\n";
+
+$min = new SplMinHeap();
+foreach ([5, 4, 3, 2, 1] as $value) {
+    $min->insert($value);
+}
+$debug = $min->__debugInfo();
+foreach ($debug["\0SplHeap\0heap"] as $value) {
+    echo $value;
+    echo ",";
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "0:0:6,4,5,1,3,2,:6:6\n1,2,4,5,3,\n");
+}
+
+/// Verifies priority debug heaps retain data/priority pairs and current flags.
+#[test]
+fn test_spl_priority_queue_debug_info_matches_php_pair_snapshot() {
+    let out = compile_and_run(
+        r#"<?php
+$queue = new SplPriorityQueue();
+foreach ([['a', 1], ['b', 5], ['c', 2], ['d', 4], ['e', 3], ['f', 6]] as $pair) {
+    $queue->insert($pair[0], $pair[1]);
+}
+$queue->setExtractFlags(SplPriorityQueue::EXTR_PRIORITY);
+$debug = $queue->__debugInfo();
+echo $debug["\0SplPriorityQueue\0flags"];
+echo ":";
+echo $debug["\0SplPriorityQueue\0isCorrupted"] ? "1" : "0";
+echo ":";
+foreach ($debug["\0SplPriorityQueue\0heap"] as $pair) {
+    echo $pair['data'];
+    echo "=";
+    echo $pair['priority'];
+    echo ",";
+}
+echo ":";
+echo count($queue);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "2:0:f=6,d=4,b=5,a=1,e=3,c=2,:6\n");
+}
+
+/// Verifies post-extraction physical layouts distinguish histories exactly like php-src.
+#[test]
+fn test_spl_heap_debug_info_preserves_php_physical_history_after_extract() {
+    let out = compile_and_run(
+        r#"<?php
+$direct = new SplMaxHeap();
+foreach ([4, 3, 2, 1] as $value) {
+    $direct->insert($value);
+}
+foreach ($direct->__debugInfo()["\0SplHeap\0heap"] as $value) {
+    echo $value;
+    echo ",";
+}
+echo "\n";
+
+$max = new SplMaxHeap();
+foreach ([5, 4, 3, 2, 1] as $value) {
+    $max->insert($value);
+}
+echo $max->extract();
+echo ":";
+foreach ($max->__debugInfo()["\0SplHeap\0heap"] as $value) {
+    echo $value;
+    echo ",";
+}
+echo "\n";
+
+$min = new SplMinHeap();
+foreach ([5, 4, 3, 2, 1] as $value) {
+    $min->insert($value);
+}
+echo $min->extract();
+echo ":";
+foreach ($min->__debugInfo()["\0SplHeap\0heap"] as $value) {
+    echo $value;
+    echo ",";
+}
+echo "\n";
+
+$queue = new SplPriorityQueue();
+foreach ([["a", 5], ["b", 4], ["c", 3], ["d", 2], ["e", 1]] as $pair) {
+    $queue->insert($pair[0], $pair[1]);
+}
+$queue->setExtractFlags(SplPriorityQueue::EXTR_BOTH);
+$extracted = $queue->extract();
+echo $extracted["data"];
+echo "=";
+echo $extracted["priority"];
+echo ":";
+foreach ($queue->__debugInfo()["\0SplPriorityQueue\0heap"] as $pair) {
+    echo $pair["data"];
+    echo "=";
+    echo $pair["priority"];
+    echo ",";
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "4,3,2,1,\n",
+            "5:4,2,3,1,\n",
+            "1:2,3,4,5,\n",
+            "a=5:b=4,d=2,c=3,e=1,\n",
+        )
+    );
+}
+
+/// Verifies debug projection neither invokes `compare()` nor mutates the receiver.
+#[test]
+fn test_spl_heap_debug_info_does_not_compare_or_mutate() {
+    let out = compile_and_run(
+        r#"<?php
+class CountingHeap extends SplHeap {
+    public int $calls = 0;
+
+    protected function compare(mixed $left, mixed $right): int {
+        $this->calls = $this->calls + 1;
+        return $left <=> $right;
+    }
+}
+
+$heap = new CountingHeap();
+foreach ([1, 5, 2, 4, 3, 6] as $value) {
+    $heap->insert($value);
+}
+echo $heap->calls;
+echo ":";
+$debug = $heap->__debugInfo();
+echo $heap->calls;
+echo ":";
+foreach ($debug["\0SplHeap\0heap"] as $value) {
+    echo $value;
+    echo ",";
+}
+echo ":";
+echo count($heap);
+echo ":";
+echo $heap->top();
+"#,
+    );
+    assert_eq!(out, "7:7:6,4,5,1,3,2,:6:6");
+}
+
 /// Verifies object storage attach, ArrayAccess, info updates, iteration, hashes, and detach.
 #[test]
 fn test_spl_object_storage_attach_arrayaccess_and_iteration() {

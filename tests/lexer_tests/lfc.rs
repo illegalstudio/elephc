@@ -41,7 +41,7 @@ fn lfc_tagless_code_and_bom_keep_source_coordinates() {
 /// Verifies physical PHP opening and closing tags are invalid in LFC code.
 #[test]
 fn lfc_rejects_php_tags_at_code_boundaries() {
-    for source in ["<?php echo 1;", "echo 1; ?>"] {
+    for source in ["<?php echo 1;", "<?PHP echo 1;", "echo 1; ?>"] {
         let error = tokenize_with_mode(source, SourceMode::Lfc)
             .expect_err("PHP tags must be rejected in LFC");
         assert!(error.message.contains("not valid in .lfc"));

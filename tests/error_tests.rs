@@ -298,6 +298,12 @@ mod mysqli;
 /// wrappers' argument contracts.
 #[path = "error_tests/curl.rs"]
 mod curl;
+#[path = "error_tests/dom.rs"]
+mod dom;
+#[path = "error_tests/dom_surface.rs"]
+mod dom_surface;
+#[path = "error_tests/dom_reflection_surface.rs"]
+mod dom_reflection_surface;
 
 /// `ext/xml` / `ext/xmlwriter` prelude diagnostics: `XMLParser`'s object model, the
 /// wrappers' argument contracts and `xml_parse_into_struct()`'s output requirements.

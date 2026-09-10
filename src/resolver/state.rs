@@ -24,6 +24,8 @@ pub(super) struct ResolveState {
     pub(super) const_imports: HashMap<String, String>,
     /// Invocation-level symbols used to select `ifdef` branches in every physical file.
     pub(super) conditional_defines: HashSet<String>,
+    /// Hidden halt-offset declarations already emitted for physical source files.
+    pub(super) halt_offset_constants: HashSet<String>,
 }
 
 impl ResolveState {

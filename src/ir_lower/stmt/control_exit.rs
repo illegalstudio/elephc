@@ -289,7 +289,7 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
         .collect::<Vec<_>>();
     for frame in frames {
         if let Some(cleanup) = frame.cleanup {
-            crate::ir_lower::ownership::release_if_owned(ctx, cleanup.value, Some(cleanup.span));
+            emit_loop_cleanup(ctx, cleanup);
         }
         // A by-reference `foreach` over an element source holds a lifetime reference on the
         // element for the whole loop; leaving through `break N`, `return`, or `throw` never
@@ -297,6 +297,24 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
         if let Some(pin) = frame.source_pin {
             crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
         }
+    }
+}
+
+/// Finalizes a foreach iterator before releasing its separate temporary source.
+///
+/// `IterEnd` owns only iterator-state cleanup, while a fresh source expression remains a
+/// distinct lowering temporary. Keeping that order matches php-src's iterator destruction order
+/// on normal exits and on exits lowered through `break`, `return`, or `throw`.
+pub(super) fn emit_loop_cleanup(ctx: &mut LoweringContext<'_, '_>, cleanup: LoopCleanup) {
+    ctx.emit_void(
+        Op::IterEnd,
+        vec![cleanup.iterator.value],
+        None,
+        Op::IterEnd.default_effects(),
+        Some(cleanup.span),
+    );
+    if let Some(source) = cleanup.source {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(cleanup.span));
     }
 }
 

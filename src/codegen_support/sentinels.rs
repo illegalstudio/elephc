@@ -130,21 +130,9 @@ pub(crate) fn emit_branch_if_null_container(
     scratch_reg: &str,
     label: &str,
 ) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("cbz {}, {}", value_reg, label));      // zero container pointers take the caller's null path
-            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
-            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
-            emitter.instruction(&format!("b.eq {}", label));                    // sentinel-null containers take the caller's null path
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", value_reg, value_reg)); // is the container pointer zero (PHP null)?
-            emitter.instruction(&format!("jz {}", label));                      // zero container pointers take the caller's null path
-            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
-            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
-            emitter.instruction(&format!("je {}", label));                      // sentinel-null containers take the caller's null path
-        }
-    }
+    super::abi::emit_branch_if_int_reg_zero(emitter, value_reg, label);
+    super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+    super::abi::emit_branch_if_int_regs_equal(emitter, value_reg, scratch_reg, label);
 }
 
 /// Replaces the in-band `NULL_SENTINEL` in `value_reg` with a zero pointer, leaving any
@@ -173,18 +161,12 @@ pub(crate) fn emit_normalize_null_container_to_zero(
 }
 
 /// Branches to `label` when the tagged scalar in the result registers is PHP null
-/// (tag register == null tag).
+/// (tag register == null tag). Clobbers the ABI secondary scratch register.
 pub(crate) fn emit_branch_if_tagged_scalar_null(emitter: &mut Emitter, label: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("cmp x1, #{}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
-            emitter.instruction(&format!("b.eq {}", label));                    // branch when the tagged scalar is PHP null
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
-            emitter.instruction(&format!("je {}", label));                      // branch when the tagged scalar is PHP null
-        }
-    }
+    let tag_reg = tagged_scalar_tag_reg(emitter);
+    let scratch_reg = super::abi::secondary_scratch_reg(emitter);
+    super::abi::emit_load_int_immediate(emitter, scratch_reg, TAGGED_SCALAR_TAG_NULL);
+    super::abi::emit_branch_if_int_regs_equal(emitter, tag_reg, scratch_reg, label);
 }
 
 /// Narrows the tagged scalar in the result registers to a plain int, coercing null to zero
@@ -287,14 +269,8 @@ pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
 /// untouched would let recycled heap bytes read back as a plausible-looking line number.
 pub(crate) fn emit_throwable_creation_line_unknown(emitter: &mut Emitter, payload_reg: &str) {
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!(
-            "str xzr, [{}, #{}]",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )), // no user `new` behind this Throwable: the creation line is unknown
-        Arch::X86_64 => emitter.instruction(&format!(
-            "mov QWORD PTR [{} + {}], 0",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )), // no user `new` behind this Throwable: the creation line is unknown
+        Arch::AArch64 => emitter.instruction(&format!("str xzr, [{}, #{}]", payload_reg, THROWABLE_CREATION_LINE_OFFSET)), // no user `new` behind this Throwable: the creation line is unknown
+        Arch::X86_64 => emitter.instruction(&format!("mov QWORD PTR [{} + {}], 0", payload_reg, THROWABLE_CREATION_LINE_OFFSET)), // no user `new` behind this Throwable: the creation line is unknown
     }
 }
 

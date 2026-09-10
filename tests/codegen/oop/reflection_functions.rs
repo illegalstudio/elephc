@@ -245,3 +245,55 @@ echo (new ReflectionFunction("reflect_function_invoke_inferred"))->invoke("A", "
     );
     assert_eq!(out, "AB");
 }
+
+/// Verifies DOM-family ReflectionFunction construction preserves PHP's canonical
+/// internal metadata and transports literal and dynamic unknown names as catchable errors.
+#[test]
+fn test_reflection_function_dom_family_names_and_unknowns_match_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$literal = new ReflectionFunction("DOM\\IMPORT_SIMPLEXML");
+echo $literal->getName() . ":" . $literal->getExtensionName() . ":";
+echo $literal->isInternal() ? "I" : "i";
+echo "|";
+
+$name = "dOm\\ImPoRt_sImPlExMl";
+$dynamic = new ReflectionFunction($name);
+echo $dynamic->getName() . ":" . $dynamic->getExtensionName() . ":";
+echo $dynamic->isInternal() ? "I" : "i";
+echo "|";
+
+foreach (["LiBxMl_GeT_ErRoRs", "SiMpLeXmL_LoAd_StRiNg"] as $name) {
+    $ref = new ReflectionFunction($name);
+    echo $ref->getName() . ":" . $ref->getExtensionName() . ":";
+    echo $ref->isInternal() ? "I" : "i";
+    echo "|";
+}
+
+try {
+    new ReflectionFunction("Missing_Reflection_Target");
+    echo "bad|";
+} catch (ReflectionException $error) {
+    echo get_class($error) . ":" . $error->getCode() . ":" . $error->getMessage() . "|";
+}
+
+$name = "MiSsInG_Reflection_Target";
+try {
+    new ReflectionFunction($name);
+    echo "bad|";
+} catch (ReflectionException $error) {
+    echo get_class($error) . ":" . $error->getCode() . ":" . $error->getMessage() . "|";
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Dom\\import_simplexml:dom:I|Dom\\import_simplexml:dom:I|libxml_get_errors:libxml:I|simplexml_load_string:SimpleXML:I|ReflectionException:0:Function Missing_Reflection_Target() does not exist|ReflectionException:0:Function MiSsInG_Reflection_Target() does not exist|"
+    );
+}

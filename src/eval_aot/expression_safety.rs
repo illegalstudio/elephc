@@ -25,6 +25,7 @@ where
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null => true,
+        ExprKind::ArrayAppend => false,
         ExprKind::Variable(name) => {
             facts.is_assigned(name) || scope_reads.is_some_and(|reads| reads.contains(name))
         }

@@ -8,6 +8,7 @@
 //! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
 
 use super::*;
+use crate::ir::Op;
 
 /// Adds internal EIR functions for literal eval fragments accepted by the EIR AOT subset.
 pub(super) fn lower_literal_eval_aot_functions(
@@ -233,4 +234,3 @@ pub(super) fn is_phar_archive_helper_class_name(name: &str) -> bool {
         "phar" | "phardata" | "splfileobject" | "spltempfileobject"
     )
 }
-

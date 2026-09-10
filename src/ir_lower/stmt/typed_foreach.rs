@@ -129,6 +129,16 @@ pub(super) fn lower_foreach(
         Op::IterStart.default_effects(),
         Some(array.span),
     );
+    // php-src transfers an inline DOM collection zval into the internal foreach
+    // iterator once `getIterator()` has retained the collection. Releasing our
+    // duplicate owning temporary here preserves that destruction order: the
+    // collection then dies from the InternalIterator owner property, before the
+    // iterator's own object handle is returned to Zend's LIFO-compatible pool.
+    let release_dom_source_after_iter_start = ctx.value_is_owning_temporary(source)
+        && dom_foreach_temporary_transfers_to_internal_iterator(&source_php_ty);
+    if release_dom_source_after_iter_start {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(array.span));
+    }
     // Take the loop's own lifetime reference on a borrowed fetch-for-write source after
     // `IterStart`.
     // The order is the whole point: `IterStart` splits a by-reference source through
@@ -153,7 +163,7 @@ pub(super) fn lower_foreach(
             }
         }
     } else {
-        let value_ty = foreach_value_type(&source_ty);
+        let value_ty = foreach_value_type(ctx, &source_ty);
         if value_ty == PhpType::Mixed {
             initialize_foreach_mixed_local_if_needed(
                 ctx,
@@ -190,16 +200,17 @@ pub(super) fn lower_foreach(
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
-    let cleanup = ctx
-        .value_is_owning_temporary(source)
-        .then_some(LoopCleanup {
-            value: source,
-            span: array.span,
-        });
+    let cleanup = LoopCleanup {
+        iterator,
+        source: (!release_dom_source_after_iter_start
+            && ctx.value_is_owning_temporary(source))
+            .then_some(source),
+        span: array.span,
+    };
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
-        cleanup,
+        cleanup: Some(cleanup),
         source_pin,
     });
     if let Some(key_var) = key_var {
@@ -226,7 +237,7 @@ pub(super) fn lower_foreach(
         ctx.mark_ref_bound_local(value_var);
         ctx.mark_local_initialized(value_var);
     } else {
-        let value_ty = foreach_value_type(&source_ty);
+        let value_ty = foreach_value_type(ctx, &source_ty);
         let value = ctx.emit_value(
             Op::IterCurrentValue,
             vec![iterator.value],
@@ -242,14 +253,9 @@ pub(super) fn lower_foreach(
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
-    // Release the source when it is a fresh owning temporary (e.g. `foreach
-    // (explode(...) as $p)` or a literal array): the iterator borrows it for the
-    // duration of the loop, so nothing else frees it once iteration ends. (For an
-    // array the iterator aliases the source, so it must NOT be released separately
-    // — that would double-free.)
-    if ctx.value_is_owning_temporary(source) {
-        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(array.span));
-    }
+    // `IterEnd` releases the iterator state before the separate temporary source. This is the
+    // normal-exit counterpart to the cleanup emitted for `break N`, `return`, and `throw`.
+    emit_loop_cleanup(ctx, cleanup);
     // Normal termination is the exit this block IS, so the pin is dropped here. Every other way
     // out — `break`, `break N`, `return`, `throw` — skips this block and is covered by
     // `emit_innermost_loop_cleanups` through the loop frame instead.
@@ -313,7 +319,7 @@ fn pin_by_ref_foreach_borrowed_source(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     span: Span,
-) -> Option<LoopCleanup> {
+) -> Option<LoopSourcePin> {
     let pin =
         crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, source, Some(span));
     if pin.value == source.value {
@@ -323,11 +329,14 @@ fn pin_by_ref_foreach_borrowed_source(
     // leaving it at the `MaybeOwned` default: the cleanup paths below release through
     // `release_if_owned`, which the backend filters on this very state.
     ctx.builder.set_value_ownership(pin.value, Ownership::Owned);
-    Some(LoopCleanup { value: pin, span })
+    Some(LoopSourcePin { value: pin, span })
 }
 
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
-pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
+pub(super) fn foreach_value_type(
+    ctx: &LoweringContext<'_, '_>,
+    source_ty: &PhpType,
+) -> PhpType {
     match source_ty.codegen_repr() {
         PhpType::Array(elem) => match elem.codegen_repr() {
             PhpType::Callable => PhpType::Callable,
@@ -338,8 +347,75 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
             PhpType::Object("PharFileInfo".to_string())
         }
+        PhpType::Object(class_name)
+            if crate::ir_lower::internal_extensions::is_simplexml_element_class(
+                ctx,
+                &class_name,
+            ) =>
+        {
+            simplexml_iterator_current_type(ctx, &class_name)
+        }
         _ => PhpType::Mixed,
     }
+}
+
+/// Returns whether an owning DOM collection temporary is retained by its synthetic iterator.
+///
+/// Legacy XPath queries carry `DOMNodeList|false`; the false arm is safe to release after
+/// `IterStart` has produced the empty iterator state. Other unions remain on the generic
+/// foreach lifetime path because they may contain arrays or directly borrowed iterators.
+fn dom_foreach_temporary_transfers_to_internal_iterator(ty: &PhpType) -> bool {
+    const DOM_COLLECTIONS: &[&str] = &[
+        "DOMNodeList",
+        "DOMNamedNodeMap",
+        "Dom\\NodeList",
+        "Dom\\NamedNodeMap",
+        "Dom\\DtdNamedNodeMap",
+        "Dom\\HTMLCollection",
+        "Dom\\TokenList",
+    ];
+
+    match ty {
+        PhpType::Object(class_name) => {
+            DOM_COLLECTIONS.contains(&class_name.trim_start_matches('\\'))
+        }
+        PhpType::Union(members) => {
+            let has_dom_collection = members.iter().any(|member| {
+                matches!(member, PhpType::Object(class_name)
+                    if DOM_COLLECTIONS.contains(&class_name.trim_start_matches('\\')))
+            });
+            has_dom_collection
+                && members.iter().all(|member| {
+                    matches!(member, PhpType::False | PhpType::Void)
+                        || matches!(member, PhpType::Object(class_name)
+                            if DOM_COLLECTIONS.contains(&class_name.trim_start_matches('\\')))
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Returns the effective `current()` signature for one SimpleXML wrapper class.
+fn simplexml_iterator_current_type(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+) -> PhpType {
+    let class_name = class_name.trim_start_matches('\\');
+    let method_key = crate::names::php_symbol_key("current");
+    let Some(class_info) = ctx.classes.get(class_name) else {
+        return PhpType::Mixed;
+    };
+    let implementation = class_info
+        .method_impl_classes
+        .get(&method_key)
+        .map(String::as_str)
+        .unwrap_or(class_name);
+    ctx.classes
+        .get(implementation)
+        .and_then(|implementation| implementation.methods.get(&method_key))
+        .or_else(|| class_info.methods.get(&method_key))
+        .map(|signature| signature.return_type.clone())
+        .unwrap_or(PhpType::Mixed)
 }
 
 /// Returns the local value type used when a foreach binds the value by reference.

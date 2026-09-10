@@ -295,24 +295,33 @@ fn test_emit_store_zero_to_symbol_uses_native_zero_store_on_linux_x86_64() {
     );
 }
 
-/// Verifies that emit_branch_if_int_result_zero emits "test rax, rax / je label"
-/// to branch when the integer in rax is zero; emit_branch_if_int_result_nonzero
-/// emits "test rax, rax / jne label". The test rax, rax idiom sets the ZF flag
-/// based on the register value without modifying it, which is the standard
-/// zero/nonzero check pattern on x86_64.
+/// Verifies x86_64 zero/nonzero and equality branch helpers retain native condition checks.
+///
+/// The zero helpers emit `test rax, rax` followed by `je`/`jne`; the equality helpers
+/// emit `cmp` followed by `je`/`jne`. These instructions set or consume ZF without
+/// changing their compared values.
 #[test]
 fn test_emit_branch_helpers_use_native_zero_checks_on_linux_x86_64() {
     let mut emitter = test_emitter_x86();
     emit_branch_if_int_result_zero(&mut emitter, "zero_label");
+    emit_branch_if_int_reg_zero(&mut emitter, "r11", "register_zero_label");
     emit_branch_if_int_result_nonzero(&mut emitter, "nonzero_label");
+    emit_branch_if_int_regs_equal(&mut emitter, "r11", "r10", "equal_label");
+    emit_branch_if_int_regs_not_equal(&mut emitter, "r11", "r10", "not_equal_label");
 
     assert_eq!(
         emitter.output(),
         concat!(
             "    test rax, rax\n",
             "    je zero_label\n",
+            "    test r11, r11\n",
+            "    je register_zero_label\n",
             "    test rax, rax\n",
             "    jne nonzero_label\n",
+            "    cmp r11, r10\n",
+            "    je equal_label\n",
+            "    cmp r11, r10\n",
+            "    jne not_equal_label\n",
         )
     );
 }

@@ -403,6 +403,17 @@ impl Checker {
                             PhpType::Mixed | PhpType::Union(_)
                         ) => PhpType::Mixed,
                     CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+                    CastType::Object
+                        if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
+                    {
+                        source_ty
+                    }
+                    CastType::Object
+                        if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
+                    {
+                        PhpType::Mixed
+                    }
+                    CastType::Object => PhpType::Object("stdClass".to_string()),
                 })
             }
             _ => unreachable!("non-basic expression routed to basic inference"),

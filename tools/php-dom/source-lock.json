@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "php": {
+    "version": "8.5.8",
+    "tag": "php-8.5.8",
+    "commit": "26b97507444c4fbda072f57dda1820f7b7d5e467",
+    "archive_url": "https://www.php.net/distributions/php-8.5.8.tar.xz",
+    "archive_sha256": "58910198d19e873048fe87cdfe16bc790025417ede3d1651bfa1c4b533d573f2",
+    "trees": {
+      "ext/dom": "912205e4548629081e1f074eddb2df2899109177",
+      "ext/dom/tests": "5ffbfb1cfe7418165176526f0a86568af58fd71a",
+      "ext/libxml": "dc060c967760d2244f427da5c461bf38b7f759ad",
+      "ext/simplexml": "fefa5563ff5b5336cc468f77a55bb7e725ff9011",
+      "ext/lexbor": "6bdcf7d6e7e9bd3946e87dda140ab1f8e4ef47be",
+      "ext/dom/lexbor": "5b95c87cd4cbec6cb1eac347e79471fad79691b0"
+    },
+    "stubs": {
+      "ext/dom/php_dom.stub.php": {
+        "blob": "7236e80b4d2475c349fd8dc43f0dbc5302fec035",
+        "sha256": "bf8f0ca3fa9e322367bc37f3335865364d36cd7f0af055f8162b530f1d28c956"
+      },
+      "ext/libxml/libxml.stub.php": {
+        "blob": "ce257b54ab4d5dae1f89637186e2861aa6c3d8e4",
+        "sha256": "50f036a2e7420c96507d97a5143f7ff23573553cc797bc15d9709b54318ff639"
+      },
+      "ext/simplexml/simplexml.stub.php": {
+        "blob": "935af16621e9d68a81c5b54c6927ecd93ca5802d",
+        "sha256": "1c8c2d6518a074c199c276bdd241e9f25152ca29160ffeadf66bfbc684d840a9"
+      }
+    }
+  },
+  "libxml2": {
+    "version": "2.15.3",
+    "version_number": 21503,
+    "archive_url": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.3.tar.xz",
+    "archive_sha256": "78262a6e7ac170d6528ebfe2efccdf220191a5af6a6cd61ea4a9a9a5042c7a07"
+  },
+  "lexbor": {
+    "version": "2.7.0",
+    "source": "php-src/ext/lexbor at the pinned PHP commit"
+  },
+  "ledgers": {
+    "dom": {
+      "root": "ext/dom/tests",
+      "phpt_count": 868,
+      "all_file_count": 926,
+      "sorted_phpt_digest": "b8ad9a9366ddafa2442ae786e76bb653c0e9b8c840c8b0abab3dcc320b31d5f3"
+    },
+    "libxml": {
+      "root": "ext/libxml/tests",
+      "phpt_count": 32,
+      "all_file_count": 36,
+      "sorted_phpt_digest": "8ebbfea4d882c7f78e5541fce049910482e63f19000642734b51e7ad40084e66"
+    },
+    "simplexml": {
+      "root": "ext/simplexml/tests",
+      "phpt_count": 156,
+      "all_file_count": 164,
+      "sorted_phpt_digest": "6f43e190d3931b41b627f0d5d09ad88a46b2ac35ab82e11d0db0df8f1b0e6d68"
+    }
+  }
+}

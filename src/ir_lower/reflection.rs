@@ -27,6 +27,7 @@ const BUILTIN_REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionClass",
     "ReflectionObject",
     "ReflectionEnum",
+    "ReflectionExtension",
     "ReflectionClassConstant",
     "ReflectionEnumBackedCase",
     "ReflectionEnumUnitCase",

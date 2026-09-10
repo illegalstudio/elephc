@@ -9,6 +9,12 @@
 
 use super::*;
 
+use crate::ir_lower::expr::{
+    coerce_to_string_at_span, dom_named_node_map_receiver,
+    lower_dom_named_node_map_dimension_error, lower_simplexml_offset,
+};
+use crate::parser::ast::BinOp;
+
 /// Releases the value operand of an array/hash element write when it is an owned
 /// string. These writes PERSIST (copy) a string value into the container instead
 /// of moving it (`__rt_str_persist`), so an owned string operand — e.g. a function
@@ -96,6 +102,26 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let local_type = ctx.local_type(array);
+    if crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &local_type,
+        "write_dimension",
+    )
+    .is_some()
+    {
+        let receiver = ctx.load_local(array, Some(span));
+        lower_simplexml_dimension_write(ctx, receiver, Some(index), value, span);
+        return;
+    }
+    if let Some((class_name, nullable)) = dom_named_node_map_receiver(&local_type) {
+        lower_dom_named_node_map_array_assign(ctx, array, index, value, &class_name, nullable, span);
+        return;
+    }
+    if matches!(local_type.codegen_repr(), PhpType::Void) {
+        lower_null_local_array_assign(ctx, array, index, value, span);
+        return;
+    }
     let array_value = ctx.load_local(array, Some(span));
     let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
     let op = array_set_op(array_value.ir_type);
@@ -161,6 +187,178 @@ pub(super) fn lower_array_assign(
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+}
+
+/// Lowers one SimpleXML dimension write with PHP source-order operand evaluation.
+pub(in crate::ir_lower::stmt) fn lower_simplexml_dimension_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: Option<&Expr>,
+    value: &Expr,
+    span: Span,
+) {
+    let receiver_type = ctx.builder.value_php_type(receiver.value);
+    let opcode = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &receiver_type,
+        "write_dimension",
+    )
+    .expect("SimpleXML dimension write requires the locked handler");
+    let append = index.is_none_or(|index| matches!(index.kind, ExprKind::ArrayAppend));
+    let index_value = if let Some(index) = index {
+        lower_simplexml_offset(ctx, index)
+    } else {
+        let value = ctx.builder.emit_const_null();
+        LoweredValue {
+            value,
+            ir_type: IrType::I64,
+        }
+    };
+    let value_span = value.span;
+    let value_expr = value;
+    let value = lower_expr(ctx, value_expr);
+    let value = if simplexml_dimension_write_needs_numeric_string_coercion(ctx, value_expr, value)
+    {
+        coerce_to_string_at_span(ctx, value, Some(value_span))
+    } else {
+        value
+    };
+    crate::ir_lower::internal_extensions::emit_void_call(
+        ctx,
+        opcode,
+        crate::ir_lower::internal_extensions::FLAG_RECEIVER
+            | if append {
+                crate::ir_lower::internal_extensions::FLAG_ARRAY_APPEND_OFFSET
+            } else {
+                0
+            },
+        vec![receiver.value, index_value.value, value.value],
+        span,
+    );
+    if ctx.value_is_owning_temporary(index_value) {
+        crate::ir_lower::ownership::release_if_owned(
+            ctx,
+            index_value,
+            index.map(|index| index.span).or(Some(span)),
+        );
+    }
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(value_span));
+    }
+    if ctx.value_is_owning_temporary(receiver) {
+        crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
+    }
+}
+
+/// Identifies dynamically typed arithmetic results that php-src stringifies on write-back.
+fn simplexml_dimension_write_needs_numeric_string_coercion(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+    value: LoweredValue,
+) -> bool {
+    if ctx.builder.value_php_type(value.value).codegen_repr() != PhpType::Mixed {
+        return false;
+    }
+    matches!(
+        &expr.kind,
+        ExprKind::BinaryOp {
+            op: BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Mod
+                | BinOp::Pow,
+            ..
+        }
+    )
+}
+
+/// Autovivifies a null local into a PHP associative array for an offset write.
+fn lower_null_local_array_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) {
+    let index = lower_expr(ctx, index);
+    let value = lower_expr(ctx, value);
+    let array_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(1)),
+        array_ty.clone(),
+        Op::HashNew.default_effects(),
+        Some(span),
+    );
+    ctx.emit_void(
+        Op::HashSet,
+        vec![hash.value, index.value, value.value],
+        None,
+        Op::HashSet.default_effects(),
+        Some(span),
+    );
+    release_persisted_string_operand(ctx, index, span);
+    release_persisted_string_operand(ctx, value, span);
+    ctx.store_local(array, hash, array_ty, Some(span));
+}
+
+/// Lowers a write to a DOM named map after evaluating its key and value once.
+fn lower_dom_named_node_map_array_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    class_name: &str,
+    nullable: bool,
+    span: Span,
+) {
+    let receiver = ctx.load_local(array, Some(span));
+    let index = lower_expr(ctx, index);
+    let value = lower_expr(ctx, value);
+    if !nullable {
+        lower_dom_named_node_map_dimension_error(ctx, class_name, span);
+        return;
+    }
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![receiver.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(span),
+    );
+    let null_block = ctx.builder.create_named_block("dom.map_write.null", Vec::new());
+    let map_block = ctx.builder.create_named_block("dom.map_write.error", Vec::new());
+    let merge = ctx.builder.create_named_block("dom.map_write.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: map_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![receiver.value, index.value, value.value],
+        None,
+        Op::RuntimeCall.default_effects(),
+        Some(span),
+    );
+    release_persisted_string_operand(ctx, index, span);
+    release_persisted_string_operand(ctx, value, span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(map_block);
+    lower_dom_named_node_map_dimension_error(ctx, class_name, span);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
 }
 
 /// Coerces a buffer element write value into the scalar storage accepted by `BufferSet`.
@@ -265,4 +463,3 @@ pub(super) fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) 
         value: Box::new(assoc_value_ty),
     }
 }
-

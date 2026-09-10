@@ -887,6 +887,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)

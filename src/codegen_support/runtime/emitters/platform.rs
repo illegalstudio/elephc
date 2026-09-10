@@ -82,6 +82,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_getservbyname(emitter);
     io::emit_getservbyport(emitter);
     io::emit_stream_copy_to_stream(emitter);
+    io::emit_stream_context_registry(emitter);
     io::emit_stream_context_set_option_4(emitter);
     io::emit_get_string_context_option(emitter);
     io::emit_get_int_context_option(emitter);
@@ -94,6 +95,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fread(emitter);
     io::emit_fwrite(emitter);
     io::emit_wrapper_unbox_int(emitter);
+    io::emit_user_wrapper_apply_context(emitter);
     io::emit_user_wrapper_fclose(emitter);
     io::emit_user_wrapper_fread(emitter);
     io::emit_user_wrapper_fwrite(emitter);
@@ -135,6 +137,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_var_dump_value(emitter);
     io::emit_var_dump_open_container(emitter);
     io::emit_var_dump_close_container(emitter);
+    io::emit_object_debug_info(emitter);
     io::emit_var_dump_open_object(emitter);
     io::emit_var_dump_object(emitter);
     io::emit_var_dump_emit_object_key(emitter);

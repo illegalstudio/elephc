@@ -345,6 +345,7 @@ impl Rewriter {
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::Null
+            | ExprKind::ArrayAppend
             | ExprKind::This
             | ExprKind::Variable(_)
             | ExprKind::PreIncrement(_)

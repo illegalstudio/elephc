@@ -284,4 +284,3 @@ pub(super) fn emit_reflection_static_property_array_property_by_name(
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
 }
-

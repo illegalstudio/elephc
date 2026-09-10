@@ -86,6 +86,7 @@ fn compile_lfc_eval_project_and_run(
         descriptor_invoker: true,
         eval_bridge: true,
         eval_scope: true,
+        dom_bridge: false,
         web: false,
         pdo_udf: false,
         // The LFC fixture is an eval program with no Fiber and no Generator, so the

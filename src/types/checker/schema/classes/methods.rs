@@ -15,7 +15,8 @@ use crate::types::traits::FlattenedClass;
 
 use super::super::super::Checker;
 use super::super::validation::{
-    build_method_sig, matches_global_builtin_attribute, validate_override_signature,
+    build_method_sig, inherits_simplexml_element, matches_global_builtin_attribute,
+    validate_override_signature,
     visibility_rank,
 };
 use super::state::ClassBuildState;
@@ -247,6 +248,20 @@ fn apply_instance_method(
     if method_key != "__construct" {
         if let Some(parent_visibility) = state.method_visibilities.get(&method_key) {
             if visibility_rank(&method.visibility) < visibility_rank(parent_visibility) {
+                if method_key == "__debuginfo" && inherits_simplexml_element(checker, class) {
+                    let inherited_class = state
+                        .method_declaring_classes
+                        .get(&method_key)
+                        .map(String::as_str)
+                        .unwrap_or("SimpleXMLElement");
+                    return Err(CompileError::new(
+                        method.span,
+                        &format!(
+                            "Access level to {}::__debugInfo() must be public (as in class {})",
+                            class.name, inherited_class
+                        ),
+                    ));
+                }
                 return Err(CompileError::new(
                     method.span,
                     &format!(

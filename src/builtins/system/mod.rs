@@ -47,6 +47,7 @@ pub mod define;
 pub mod defined;
 pub mod exec;
 pub mod extension_loaded;
+pub mod get_extension_funcs;
 pub mod get_loaded_extensions;
 pub mod getdate;
 pub mod getenv;

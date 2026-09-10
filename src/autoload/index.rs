@@ -496,11 +496,11 @@ fn scan_classmap_file(path: &Path, index: &mut HashMap<String, PathBuf>) {
     if !crate::source::is_composer_source_path(path) {
         return;
     }
-    let Ok(content) = std::fs::read_to_string(path) else {
+    let Ok(content) = std::fs::read(path) else {
         return;
     };
     let mode = crate::source::SourceMode::from_path(path);
-    let Ok(tokens) = crate::lexer::tokenize_with_mode(&content, mode) else {
+    let Ok(tokens) = crate::lexer::tokenize_bytes_with_mode(&content, mode) else {
         return;
     };
     let Ok(ast) = crate::parser::parse_with_mode(&tokens, mode) else {

@@ -14,7 +14,7 @@ pub(in crate::codegen) fn runtime_user_function_sigs(module: &Module) -> HashMap
     let mut functions = module
         .functions
         .iter()
-        .filter(|function| !is_property_init_thunk_function(function))
+        .filter(|function| !is_internal_runtime_thunk_function(function))
         .map(|function| (function.name.clone(), ir_function_sig(function)))
         .collect::<HashMap<_, _>>();
     for group in function_variants::collect_dispatch_groups(module) {
@@ -27,7 +27,13 @@ pub(in crate::codegen) fn runtime_user_function_sigs(module: &Module) -> HashMap
     functions
 }
 
-/// Returns true for synthetic property-default init thunks, which are not PHP callables.
+/// Returns true for synthetic runtime thunks that must not become PHP callables.
+fn is_internal_runtime_thunk_function(function: &Function) -> bool {
+    is_property_init_thunk_function(function)
+        || function.name.starts_with("_user_wrapper_default_")
+}
+
+/// Returns true for synthetic property-default initialization thunks.
 pub(in crate::codegen) fn is_property_init_thunk_function(function: &Function) -> bool {
     function.name.starts_with("_class_propinit_")
 }

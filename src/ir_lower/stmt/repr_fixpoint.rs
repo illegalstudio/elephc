@@ -810,6 +810,7 @@ impl<'a> ConversionScan<'a> {
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::Null
+            | ExprKind::ArrayAppend
             | ExprKind::ConstRef(_)
             | ExprKind::This
             | ExprKind::StaticPropertyAccess { .. }

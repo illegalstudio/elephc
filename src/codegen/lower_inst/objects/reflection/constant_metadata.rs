@@ -412,4 +412,3 @@ pub(super) fn is_reflection_enum(ctx: &FunctionContext<'_>, enum_name: &str) -> 
         .keys()
         .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == enum_key)
 }
-

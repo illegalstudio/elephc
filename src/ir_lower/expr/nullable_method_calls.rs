@@ -370,7 +370,7 @@ pub(super) fn stabilize_borrowed_result_and_release_receiver(
 /// not an owning temporary and is left to normal scope cleanup. This must run
 /// after the call is emitted (and after `return $this` has acquired its own
 /// reference) so the released reference is the receiver's, not the result's.
-pub(super) fn release_owning_receiver_temporary(
+pub(crate) fn release_owning_receiver_temporary(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: LoweredValue,
     span: Span,

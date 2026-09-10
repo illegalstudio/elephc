@@ -45,7 +45,7 @@ pub(super) fn helper_value() -> ValueId {
 
 /// Emits one shared helper: its frame, the caller's body, and the matching return.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn emit_shared_helper(
+pub(in crate::codegen) fn emit_shared_helper(
     module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,

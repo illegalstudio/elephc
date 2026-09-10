@@ -185,6 +185,115 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies wrapper EOF validation, sticky caching, and post-read callback ordering.
+#[test]
+fn execute_program_matches_php_user_stream_wrapper_eof_semantics() {
+    let program = parse_fragment(
+        br#"class EvalEofDiagnosticType {}
+class EvalEofWrapperW {
+    public $path;
+    public $pos;
+    public function stream_open($path, $mode, $options, &$opened_path): bool {
+        $this->path = $path;
+        $this->pos = 0;
+        return true;
+    }
+    public function stream_read($count): string {
+        echo "R";
+        if (str_contains($this->path, "drain")) {
+            $this->pos++;
+            return $this->pos === 1 ? "X" : "";
+        }
+        return "X";
+    }
+    public function stream_eof() {
+        echo "E";
+        if (str_contains($this->path, "throw")) {
+            throw new Exception("post-read");
+        }
+        if (str_contains($this->path, "object")) {
+            return new EvalEofDiagnosticType();
+        }
+        if (str_contains($this->path, "false")) {
+            return false;
+        }
+        return "truthy";
+    }
+    public function stream_seek($offset, $whence): bool {
+        echo "K";
+        $this->pos = $offset;
+        return $whence === 0;
+    }
+}
+class EvalMissingEofWrapperW {
+    public function stream_open($path, $mode, $options, &$opened_path): bool {
+        return true;
+    }
+    public function stream_read($count): string {
+        echo "R";
+        return "";
+    }
+}
+stream_wrapper_register("eofw", "EvalEofWrapperW");
+stream_wrapper_register("noeofw", "EvalMissingEofWrapperW");
+$strict = fopen("eofw://strict", "r");
+echo "A";
+echo feof($strict) ? "T" : "F";
+echo feof($strict) ? "T" : "F";
+echo fseek($strict, 0) === 0 ? "S" : "F";
+echo feof($strict) ? "T" : "F";
+$post = fopen("eofw://post", "r");
+echo "|B";
+echo fread($post, 1);
+echo feof($post) ? "T" : "F";
+echo fread($post, 1);
+$drain = fopen("eofw://drain", "r");
+echo "|C";
+echo stream_get_contents($drain);
+$object = fopen("eofw://object", "r");
+echo "|D";
+echo feof($object) ? "T" : "F";
+$false = fopen("eofw://false", "r");
+echo "|F";
+echo feof($false) ? "T" : "F";
+echo feof($false) ? "T" : "F";
+$missing = fopen("noeofw://missing", "r");
+echo "|M";
+echo feof($missing) ? "T" : "F";
+echo feof($missing) ? "T" : "F";
+echo fread($missing, 1);
+echo feof($missing) ? "T" : "F";
+$throwing = fopen("eofw://throw", "r");
+echo "|X";
+try {
+    fread($throwing, 1);
+    echo "bad";
+} catch (Exception $caught) {
+    echo "C";
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "AETTKSET|BREXTREX|CREREX|DET|FEFEF|MTTRT|XREC"
+    );
+    assert_eq!(
+        values.warnings,
+        vec![
+            "feof(): EvalEofWrapperW::stream_eof value must be of type bool, string given",
+            "feof(): EvalEofWrapperW::stream_eof value must be of type bool, string given",
+            "feof(): EvalEofWrapperW::stream_eof value must be of type bool, EvalEofDiagnosticType given",
+        ]
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval userspace stream wrappers dispatch stream control methods.
 #[test]
 fn execute_program_dispatches_user_stream_wrapper_control_methods() {

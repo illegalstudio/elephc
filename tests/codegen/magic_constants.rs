@@ -412,3 +412,59 @@ fn test_included_file_magic_function_does_not_inherit_calling_function() {
     );
     assert_eq!(out, "[]");
 }
+
+/// Verifies each physical file receives its own exact byte offset before include flattening.
+#[test]
+fn test_compiler_halt_offset_is_physical_file_local() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php require 'inner.php'; echo ':' . __COMPILER_HALT_OFFSET__; __HALT_COMPILER();MAIN",
+            ),
+            (
+                "inner.php",
+                "<?php echo __COMPILER_HALT_OFFSET__; __HALT_COMPILER();INNER",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "55:82");
+}
+
+/// Verifies the literal `constant()` API observes the current physical file's halt offset.
+#[test]
+fn test_compiler_halt_offset_constant_api_is_file_local() {
+    let out = compile_and_run(
+        "<?php echo constant('__COMPILER_HALT_OFFSET__'); __HALT_COMPILER();DATA",
+    );
+    assert_eq!(out, "67");
+}
+
+/// Verifies namespace resolution cannot qualify away PHP's file-local halt constant.
+#[test]
+fn test_compiler_halt_offset_bypasses_namespace_qualification() {
+    let out = compile_and_run(
+        "<?php namespace N; echo __COMPILER_HALT_OFFSET__ . ':' . \\__COMPILER_HALT_OFFSET__ . ':' . constant('__COMPILER_HALT_OFFSET__'); __HALT_COMPILER();DATA",
+    );
+    assert_eq!(out, "147:147:147");
+}
+
+/// Verifies repeated plain includes reuse PHP's hidden per-file offset declaration.
+#[test]
+fn test_compiler_halt_offset_hidden_constant_is_idempotent_per_file() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php require 'inner.php'; require 'inner.php';",
+            ),
+            (
+                "inner.php",
+                "<?php echo __COMPILER_HALT_OFFSET__ . '|'; __HALT_COMPILER();DATA",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "61|61|");
+}

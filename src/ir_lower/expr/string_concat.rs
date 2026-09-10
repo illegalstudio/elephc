@@ -196,6 +196,7 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
@@ -216,4 +217,3 @@ pub(super) fn callable_target_can_reset_concat_storage(target: &CallableTarget) 
         CallableTarget::Method { object, .. } => expr_can_reset_concat_storage(object),
     }
 }
-

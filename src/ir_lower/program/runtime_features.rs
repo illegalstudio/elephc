@@ -8,7 +8,7 @@
 //! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
 
 use super::*;
-use crate::ir::ResourceCleanupKind;
+use crate::ir::{Op, ResourceCleanupKind};
 
 /// Adds optional runtime features referenced by synthetic or lowered EIR functions.
 pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module) {
@@ -20,6 +20,7 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.pdo_udf |= features.pdo_udf;
     module.required_runtime_features.eval_bridge |= features.eval_bridge;
     module.required_runtime_features.eval_scope |= features.eval_scope;
+    module.required_runtime_features.dom_bridge |= features.dom_bridge;
     module.required_runtime_features.popen_resource |= features.popen_resource;
     module.required_runtime_features.directory_resource |= features.directory_resource;
     // Not derived from the instruction stream like the rest: a Fiber object can only exist if the
@@ -33,6 +34,10 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
 /// Derives optional runtime features from the actual EIR instruction stream.
 pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
+    // Mixed dispatch ladders are assembled after this pass.  Their native-wrapper arms do not
+    // carry an `InternalExtensionCall` in EIR, so waiting for that opcode leaves direct
+    // `Mixed`/union property and string contexts with unresolved `elephc_dom_*` references.
+    features.dom_bridge = module_uses_dynamic_dom_dispatch(module);
     for function in all_lowered_functions(module) {
         if function_contains_eval_scope_state(function) {
             features.eval_scope = true;
@@ -91,11 +96,180 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 Op::PdoAdapterAddr => {
                     features.pdo_udf = true;
                 }
+                // Direct native operations are the ordinary bridge path; dynamic Mixed/union
+                // operations are seeded before this loop by `module_uses_dynamic_dom_dispatch`.
+                Op::InternalExtensionCall => {
+                    features.dom_bridge = true;
+                }
                 _ => {}
             }
         }
     }
     features
+}
+
+/// Returns whether codegen will assemble a native-wrapper arm for a dynamic object operation.
+///
+/// The checker installs the complete internal-extension declaration surface in `class_infos`.
+/// That metadata alone must not select the bridge: only a lowered Mixed/union operation that can
+/// match a wrapper method/property (or the SimpleXML dynamic object handlers) does so.
+fn module_uses_dynamic_dom_dispatch(module: &Module) -> bool {
+    all_lowered_functions(module).any(|function| {
+        function.instructions.iter().any(|inst| {
+            if !mixed_receiver_operation(function, inst) {
+                return false;
+            }
+            match inst.op {
+                // The shared `_eir_shared_mixed_echo`/`_eir_shared_mixed_to_string` helpers are
+                // materialized by codegen from these sites. Their synthetic helper function is
+                // not present in EIR, and its ladder may contain native-wrapper arms even when
+                // this particular site has no statically named DOM method. Treat the site as
+                // bridge-capable up front so link planning sees the same requirement as helper
+                // emission.
+                Op::Cast => matches!(
+                    inst.immediate,
+                    Some(Immediate::CastTarget(IrType::Str))
+                ),
+                Op::EchoValue => true,
+                Op::MethodCall | Op::NullsafeMethodCall => {
+                    let Some(method) = instruction_data_string(module, inst) else {
+                        return false;
+                    };
+                    native_wrapper_method_matches(module, method, inst.operands.len())
+                }
+                Op::PropGet | Op::NullsafePropGet => {
+                    let Some(property) = instruction_data_string(module, inst) else {
+                        return false;
+                    };
+                    native_wrapper_virtual_property_matches(module, property)
+                        || (inst.operands.len() >= 4 && simplexml_wrapper_exists(module))
+                }
+                // A runtime property name can match any declared native virtual property.
+                // Four-operand array reads are the equivalent SimpleXML object-handler path.
+                Op::DynamicPropGet => native_wrapper_virtual_property_exists(module),
+                Op::RuntimeCall if inst.operands.len() >= 4 => simplexml_wrapper_exists(module),
+                _ => false,
+            }
+        })
+    })
+}
+
+/// Returns whether the first operand of an instruction is a boxed Mixed/union receiver.
+fn mixed_receiver_operation(function: &Function, inst: &crate::ir::Instruction) -> bool {
+    inst.operands
+        .first()
+        .and_then(|value| function.value(*value))
+        .is_some_and(|value| {
+            matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        })
+}
+
+/// Resolves a data-backed method/property name without turning malformed EIR into a panic.
+fn instruction_data_string<'a>(
+    module: &'a Module,
+    inst: &crate::ir::Instruction,
+) -> Option<&'a str> {
+    let data = match inst.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return None,
+    };
+    module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
+}
+
+/// Returns whether one native-wrapper method can match the dynamic call's ABI arity.
+fn native_wrapper_method_matches(module: &Module, method: &str, operand_count: usize) -> bool {
+    let key = crate::names::php_symbol_key(method);
+    module.class_infos.iter().any(|(class_name, class_info)| {
+        if !is_native_wrapper_or_descendant(module, class_name) {
+            return false;
+        }
+        let Some(signature) = class_info.methods.get(&key) else {
+            return false;
+        };
+        let supplied = operand_count.saturating_sub(1);
+        supplied == signature.params.len()
+            || signature
+                .variadic
+                .as_ref()
+                .is_some_and(|_| {
+                    supplied >= crate::types::call_args::regular_param_count(signature)
+                })
+    })
+}
+
+/// Returns whether a named property is implemented by a native virtual handler.
+fn native_wrapper_virtual_property_matches(module: &Module, property: &str) -> bool {
+    module.class_infos.iter().any(|(class_name, class_info)| {
+        if !is_native_wrapper_or_descendant(module, class_name)
+            || !class_info.properties.iter().any(|(name, _)| name == property)
+        {
+            return false;
+        }
+        let declaring = class_info
+            .property_declaring_classes
+            .get(property)
+            .map(String::as_str)
+            .unwrap_or(class_name.as_str());
+        crate::internal_extensions::operation_registry()
+            .property(declaring, property, false)
+            .is_some()
+    })
+}
+
+/// Returns whether any native wrapper exposes a virtual property or SimpleXML handler.
+fn native_wrapper_virtual_property_exists(module: &Module) -> bool {
+    module.class_infos.iter().any(|(class_name, class_info)| {
+        is_native_wrapper_or_descendant(module, class_name)
+            && class_info.properties.iter().any(|(property, _)| {
+                let declaring = class_info
+                    .property_declaring_classes
+                    .get(property)
+                    .map(String::as_str)
+                    .unwrap_or(class_name.as_str());
+                crate::internal_extensions::operation_registry()
+                    .property(declaring, property, false)
+                    .is_some()
+            })
+    })
+}
+
+/// Returns true when the locked surface contains a native wrapper in the SimpleXML family.
+fn simplexml_wrapper_exists(module: &Module) -> bool {
+    module.class_infos.keys().any(|class_name| {
+        is_native_wrapper_or_descendant(module, class_name)
+            && is_simplexml_class(module, class_name)
+    })
+}
+
+/// Returns whether `class_name` is a native wrapper or inherits from one.
+fn is_native_wrapper_or_descendant(module: &Module, class_name: &str) -> bool {
+    crate::internal_extensions::is_native_wrapper_class(class_name)
+        || crate::internal_extensions::is_native_wrapper_descendant(
+            &module.class_infos,
+            class_name,
+        )
+}
+
+/// Walks the checked parent chain to identify a SimpleXML wrapper or descendant.
+fn is_simplexml_class(module: &Module, class_name: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    for _ in 0..=module.class_infos.len() {
+        let Some(name) = current else {
+            break;
+        };
+        if name.eq_ignore_ascii_case("SimpleXMLElement") {
+            return true;
+        }
+        current = module
+            .class_infos
+            .get(&name)
+            .and_then(|class_info| class_info.parent.clone());
+    }
+    false
 }
 
 /// Returns true when a lowered function owns hidden eval scope handle slots.

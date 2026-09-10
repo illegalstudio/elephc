@@ -452,6 +452,24 @@ pub(crate) fn insert_enum_metadata(
         .iter()
         .map(|interface| interface.as_str().to_string())
         .collect();
+    let property_declaring_class_slots = properties
+        .iter()
+        .map(|(property, _)| {
+            property_declaring_classes
+                .get(property)
+                .cloned()
+                .unwrap_or_else(|| name.to_string())
+        })
+        .collect();
+    let property_visibility_slots = properties
+        .iter()
+        .map(|(property, _)| {
+            property_visibilities
+                .get(property)
+                .cloned()
+                .unwrap_or(Visibility::Public)
+        })
+        .collect();
 
     checker.classes.insert(
         name.to_string(),
@@ -489,8 +507,10 @@ pub(crate) fn insert_enum_metadata(
             properties,
             property_offsets,
             property_declaring_classes,
+            property_declaring_class_slots,
             defaults,
             property_visibilities,
+            property_visibility_slots,
             property_set_visibilities: HashMap::new(),
             declared_properties,
             property_declared_slots,

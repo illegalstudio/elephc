@@ -20,6 +20,7 @@ pub(crate) const REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionClass",
     "ReflectionObject",
     "ReflectionEnum",
+    "ReflectionExtension",
     "ReflectionFunction",
     "ReflectionMethod",
     "ReflectionProperty",

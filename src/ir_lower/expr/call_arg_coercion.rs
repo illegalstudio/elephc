@@ -53,6 +53,16 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     let bindable = sig.declared_params.get(index).copied().unwrap_or(false)
         && !sig.ref_params.get(index).copied().unwrap_or(false);
     let param_ty = param_ty.codegen_repr();
+    if param_ty == PhpType::Str {
+        if let Some(result) = lower_simplexml_scalar_cast_at_span(
+            ctx,
+            &CastType::String,
+            value,
+            arg.span,
+        ) {
+            return result;
+        }
+    }
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
     }
@@ -83,7 +93,9 @@ fn apply_scalar_param_cast(
         CastType::String => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
         // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
-        CastType::Int | CastType::Float | CastType::Array => value,
+        // Object casts are not scalar parameter bindings; keep this arm explicit so a
+        // future binding rule cannot accidentally turn an object into a temporary scalar.
+        CastType::Int | CastType::Float | CastType::Array | CastType::Object => value,
     }
 }
 
@@ -116,14 +128,21 @@ pub(super) fn coerce_operands_to_params(
                 ir_type: IrType::I64,
             };
             operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
-        } else if param_ty == PhpType::Str
-            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
-        {
+        } else if param_ty == PhpType::Str {
             let lowered = LoweredValue {
                 value,
                 ir_type: ctx.builder.value_type(value),
             };
-            operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
+            if let Some(converted) = lower_simplexml_scalar_cast_at_span(
+                ctx,
+                &CastType::String,
+                lowered,
+                Span::dummy(),
+            ) {
+                operands[index] = converted.value;
+            } else if matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)) {
+                operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
+            }
         } else if sig.declared_params.get(index).copied().unwrap_or(false) {
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order

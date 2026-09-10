@@ -230,6 +230,11 @@ impl Checker {
         if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
             return Some(PhpType::Mixed);
         }
+        if (is_simplexml_wrapper_type(self, existing) && is_array_type(new_ty))
+            || (is_array_type(existing) && is_simplexml_wrapper_type(self, new_ty))
+        {
+            return Some(PhpType::Mixed);
+        }
         if matches!(existing, PhpType::Union(_)) {
             return None;
         }
@@ -381,5 +386,35 @@ impl Checker {
             PhpType::Array(_) | PhpType::AssocArray { .. } => actual_ty.clone(),
             _ => declared_ty.clone(),
         }
+    }
+}
+
+/// Reports whether one type is an indexed or associative PHP array.
+fn is_array_type(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
+/// Reports whether one type contains exactly one SimpleXML class plus optional failure arms.
+fn is_simplexml_wrapper_type(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class_name) => {
+            let class_name = class_name.trim_start_matches('\\');
+            class_name.eq_ignore_ascii_case("SimpleXMLElement")
+                || checker.is_subclass_of(class_name, "SimpleXMLElement")
+        }
+        PhpType::Union(members) => {
+            let mut found_wrapper = false;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never | PhpType::False => {}
+                    PhpType::Object(_) if is_simplexml_wrapper_type(checker, member) => {
+                        found_wrapper = true;
+                    }
+                    _ => return false,
+                }
+            }
+            found_wrapper
+        }
+        _ => false,
     }
 }

@@ -58,8 +58,10 @@ pub use symbols::{
 #[cfg(test)]
 pub use symbols::{emit_load_symbol_to_local_slot, emit_store_local_slot_to_symbol};
 pub use values::{
-    emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero, emit_decref_if_refcounted,
-    emit_float_result_to_int_result, emit_incref_if_refcounted, emit_int_result_to_float_result,
-    emit_jump, emit_load, emit_load_int_immediate, emit_php_float_to_int,
+    emit_branch_if_int_reg_zero, emit_branch_if_int_regs_equal, emit_branch_if_int_regs_not_equal,
+    emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero,
+    emit_decref_if_refcounted, emit_float_result_to_int_result, emit_incref_if_refcounted,
+    emit_int_result_to_float_result, emit_jump, emit_load, emit_load_int_immediate,
+    emit_php_float_to_int,
     emit_release_local_ref_cell, emit_store, emit_write_stdout,
 };

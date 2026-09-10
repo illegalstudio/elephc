@@ -296,12 +296,22 @@ pub(super) fn declared_mixed_property_set_candidates(
 pub(super) fn emit_branch_if_mixed_unboxed_not_object(ctx: &mut FunctionContext<'_>, target_label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6");                              // check whether the boxed receiver holds an object payload
-            ctx.emitter.instruction(&format!("b.ne {}", target_label));         // non-object dynamic property writes are ignored
+            abi::emit_load_int_immediate(ctx.emitter, "x9", 6);
+            abi::emit_branch_if_int_regs_not_equal(
+                ctx.emitter,
+                "x0",
+                "x9",
+                target_label,
+            );
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6");                              // check whether the boxed receiver holds an object payload
-            ctx.emitter.instruction(&format!("jne {}", target_label));          // non-object dynamic property writes are ignored
+            abi::emit_load_int_immediate(ctx.emitter, "r10", 6);
+            abi::emit_branch_if_int_regs_not_equal(
+                ctx.emitter,
+                "rax",
+                "r10",
+                target_label,
+            );
         }
     }
 }
@@ -355,15 +365,13 @@ pub(super) fn emit_branch_if_stacked_object_is_stdclass(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", object_stack_offset);
             ctx.emitter.instruction("ldr x10, [x9]");                           // load the stacked object's class id
             abi::emit_load_int_immediate(ctx.emitter, "x11", stdclass_id as i64);
-            ctx.emitter.instruction("cmp x10, x11");                            // check whether the runtime receiver is stdClass
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // route stdClass writes through the dynamic-property helper
+            abi::emit_branch_if_int_regs_equal(ctx.emitter, "x10", "x11", matched_label);
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", object_stack_offset);
             ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the stacked object's class id
             abi::emit_load_int_immediate(ctx.emitter, "r12", stdclass_id as i64);
-            ctx.emitter.instruction("cmp r10, r12");                            // check whether the runtime receiver is stdClass
-            ctx.emitter.instruction(&format!("je {}", matched_label));          // route stdClass writes through the dynamic-property helper
+            abi::emit_branch_if_int_regs_equal(ctx.emitter, "r10", "r12", matched_label);
         }
     }
 }

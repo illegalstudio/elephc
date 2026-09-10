@@ -33,6 +33,18 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
                 empty_string(),
             ),
             builtin_property(
+                "__extension_name",
+                Visibility::Private,
+                Some(mixed_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__extension",
+                Visibility::Private,
+                Some(mixed_type()),
+                false_bool(),
+            ),
+            builtin_property(
                 "__attrs",
                 Visibility::Private,
                 Some(array_type()),
@@ -247,8 +259,8 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_string_method("getName", "__name"),
             builtin_reflection_class_string_method("__toString", "__string"),
             builtin_reflection_constant_false_union_method("getDocComment"),
-            builtin_reflection_constant_false_union_method("getExtensionName"),
-            builtin_reflection_constant_null_mixed_method("getExtension"),
+            builtin_reflection_class_mixed_method("getExtensionName", "__extension_name"),
+            builtin_reflection_class_mixed_method("getExtension", "__extension"),
             builtin_reflection_class_string_method("getShortName", "__short_name"),
             builtin_reflection_class_string_method("getNamespaceName", "__namespace_name"),
             builtin_reflection_class_bool_method("inNamespace", "__in_namespace"),
@@ -375,6 +387,194 @@ pub(super) fn builtin_reflection_object_class() -> FlattenedClass {
     class
 }
 
+/// Builds the bounded `ReflectionExtension` shell used for DOM bridge registry visibility.
+pub(super) fn builtin_reflection_extension_class() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionExtension".to_string(),
+        span: dummy(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties: vec![
+            builtin_property(
+                "__name",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__class_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__enum_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__classes",
+                Visibility::Private,
+                Some(array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__function_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__functions",
+                Visibility::Private,
+                Some(array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__constants",
+                Visibility::Private,
+                Some(mixed_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__ini_entries",
+                Visibility::Private,
+                Some(mixed_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__dependencies",
+                Visibility::Private,
+                Some(mixed_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__version",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__info",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__is_persistent",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_temporary",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                false_bool(),
+            ),
+        ],
+        methods: vec![
+            builtin_reflection_owner_constructor_method(vec![(
+                "name",
+                Some(TypeExpr::Str),
+                None,
+                false,
+            )]),
+            builtin_reflection_class_string_method("getName", "__name"),
+            builtin_reflection_class_array_method(
+                "getClassNames",
+                "__class_names",
+                string_array_type(),
+            ),
+            builtin_reflection_extension_classes_method(),
+            builtin_reflection_extension_functions_method(),
+            builtin_reflection_class_mixed_method("getConstants", "__constants"),
+            builtin_reflection_class_mixed_method("getINIEntries", "__ini_entries"),
+            builtin_reflection_class_mixed_method("getDependencies", "__dependencies"),
+            builtin_reflection_class_string_method("getVersion", "__version"),
+            builtin_reflection_extension_info_method(),
+            builtin_reflection_class_bool_method("isPersistent", "__is_persistent"),
+            builtin_reflection_class_bool_method("isTemporary", "__is_temporary"),
+        ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
+}
+
+/// Builds PHP's parameterless `ReflectionExtension::info()` writer over its populated module block.
+pub(super) fn builtin_reflection_extension_info_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let argument_count = function_call(
+        "count",
+        vec![variable_expr("args", dummy_span)],
+        dummy_span,
+    );
+    let arity_message = concat_expr(
+        string_lit(
+            "ReflectionExtension::info() expects exactly 0 arguments, ",
+            dummy_span,
+        ),
+        concat_expr(
+            argument_count.clone(),
+            string_lit(" given", dummy_span),
+            dummy_span,
+        ),
+        dummy_span,
+    );
+    ClassMethod {
+        name: "info".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: Some("args".to_string()),
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: None,
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: binary_expr(
+                        argument_count,
+                        BinOp::Gt,
+                        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+                        dummy_span,
+                    ),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Throw(Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::unqualified("ArgumentCountError"),
+                                args: vec![arity_message],
+                            },
+                            dummy_span,
+                        )),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Echo(reflection_this_property("__info", dummy_span)),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds the synthetic `ReflectionEnum` class with flattened ReflectionClass members.
 pub(super) fn builtin_reflection_enum_class() -> FlattenedClass {
     let mut class = builtin_reflection_class();
@@ -424,6 +624,7 @@ pub(super) fn reflection_enum_inherited_method_is_supported(method_name: &str) -
             | "getname"
             | "getshortname"
             | "getnamespacename"
+            | "getinterfacenames"
             | "innamespace"
             | "isfinal"
             | "isabstract"

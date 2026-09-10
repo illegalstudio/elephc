@@ -112,11 +112,10 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                         continue;
                     }
-                    if class_info
-                        .methods
-                        .get("__tostring")
-                        .map(|sig| sig.return_type.clone())
-                        != Some(PhpType::Str)
+                    if class_info.methods.get("__tostring").is_some_and(|sig| {
+                        sig.declared_return
+                            && !matches!(&sig.return_type, PhpType::Str | PhpType::Never)
+                    })
                     {
                         errors.push(CompileError::new(
                             method.span,

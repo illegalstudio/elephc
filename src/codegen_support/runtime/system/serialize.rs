@@ -563,6 +563,14 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #-2");                                        // synthetic __PHP_Incomplete_Class id
     emitter.instruction("cmp x1, x10");                                         // is this a semantic __PHP_Incomplete_Class payload?
     emitter.instruction("b.eq __rt_serialize_object_incomplete");               // serialize its retained class name and property hash
+    emit_symbol_address(emitter, "x9", "_class_dom_serialize_deny_modes");
+    emitter.instruction("ldr x10, [x9, x1, lsl #3]");                           // load php-src's DOM serialization policy
+    emitter.instruction("str x10, [sp, #56]");                                  // preserve the policy across serialization hooks
+    emitter.instruction("cmp x10, #2");                                         // does ZEND_ACC_NOT_SERIALIZABLE reject this class?
+    emitter.instruction("b.ne __rt_serialize_object_dom_policy_ready");         // node fallback policies still permit user hooks
+    emitter.instruction("mov x1, x10");                                         // pass hard-denial mode to the exception helper
+    emitter.instruction("b __rt_serialize_dom_denied");                         // reject before __serialize, exactly like php-src
+    emitter.label("__rt_serialize_object_dom_policy_ready");
     emit_symbol_address(emitter, "x9", "_class_name_entries");
     emitter.instruction("add x10, x9, x1, lsl #4");                             // entry = base + class_id*16
     emitter.instruction("ldr x11, [x10]");                                      // class name pointer
@@ -634,7 +642,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the class id
     emit_symbol_address(emitter, "x9", "_class_sleep_ptrs");
     emitter.instruction("ldr x10, [x9, x1, lsl #3]");                           // __sleep method symbol (0 if none)
-    emitter.instruction("cbz x10, __rt_serialize_object_default");              // no __sleep → walk every property
+    emitter.instruction("cbz x10, __rt_serialize_object_no_sleep");             // no __sleep → apply DOM fallback or walk properties
     emitter.instruction("str x10, [sp, #16]");                                  // park the __sleep target across the call
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // capture the post-prefix write offset
@@ -674,6 +682,13 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // deallocate the object frame
     emitter.instruction("ret");                                                 // return with the object appended
+
+    emitter.label("__rt_serialize_object_no_sleep");
+    emitter.instruction("ldr x1, [sp, #56]");                                   // reload the DOM serialization policy
+    emitter.instruction("cmp x1, #1");                                          // do native DOM nodes use the overridable denial fallback?
+    emitter.instruction("b.ne __rt_serialize_object_default");                  // ordinary objects serialize their declared properties
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the concrete DOM wrapper to the exception helper
+    emitter.instruction("b __rt_serialize_dom_denied");                         // no user hook replaced DOMNode::__sleep
 
     emitter.label("__rt_serialize_object_default");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the class id
@@ -874,6 +889,80 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate the dedup frame
     emitter.instruction("ret");                                                 // return the back-reference flag in x0
+
+    emit_dom_serialize_denied_aarch64(emitter);
+}
+
+/// Emits the AArch64 exception path used when php-src forbids serializing a DOM wrapper.
+///
+/// On entry `x0` is the concrete object and `x1` is denial mode 1 (subclass hooks
+/// permitted) or 2 (hard denial). The helper builds the exact PHP message, owns
+/// its persisted string, publishes an `Exception`, and tail-calls the unwinder.
+fn emit_dom_serialize_denied_aarch64(emitter: &mut Emitter) {
+    use crate::codegen_support::abi::emit_symbol_address;
+
+    emitter.blank();
+    emitter.comment("--- runtime: serialize DOM denial exception ---");
+    emitter.label_global("__rt_serialize_dom_denied");
+    emitter.instruction("sub sp, sp, #64");
+    emitter.instruction("stp x29, x30, [sp, #48]");
+    emitter.instruction("add x29, sp, #48");
+    emitter.instruction("str x0, [sp, #0]");
+    emitter.instruction("str x1, [sp, #8]");
+    emitter.instruction("ldr x9, [x0]");
+    emit_symbol_address(emitter, "x10", "_class_name_entries");
+    emitter.instruction("add x10, x10, x9, lsl #4");
+    emitter.instruction("ldr x11, [x10]");
+    emitter.instruction("ldr x12, [x10, #8]");
+    emitter.instruction("str x11, [sp, #16]");
+    emitter.instruction("str x12, [sp, #24]");
+    emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("str xzr, [x9]");
+    emit_append_literal_aarch64(emitter, b"Serialization of '", "the DOM serialization denial prefix");
+    emitter.instruction("ldr x0, [sp, #16]");
+    emitter.instruction("ldr x1, [sp, #24]");
+    emitter.instruction("bl __rt_concat_append");
+    emitter.instruction("ldr x9, [sp, #8]");
+    emitter.instruction("cmp x9, #2");
+    emitter.instruction("b.eq __rt_serialize_dom_denied_hard_suffix");
+    emit_append_literal_aarch64(
+        emitter,
+        b"' is not allowed, unless serialization methods are implemented in a subclass",
+        "the overridable DOM serialization denial suffix",
+    );
+    emitter.instruction("b __rt_serialize_dom_denied_message_ready");
+    emitter.label("__rt_serialize_dom_denied_hard_suffix");
+    emit_append_literal_aarch64(
+        emitter,
+        b"' is not allowed",
+        "the hard DOM serialization denial suffix",
+    );
+    emitter.label("__rt_serialize_dom_denied_message_ready");
+    emit_symbol_address(emitter, "x1", "_concat_buf");
+    emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x2, [x9]");
+    emitter.instruction("bl __rt_str_persist");
+    emitter.instruction("str x1, [sp, #32]");
+    emitter.instruction("str x2, [sp, #40]");
+    emitter.instruction("mov x0, #56");
+    emitter.instruction("bl __rt_heap_alloc");
+    emitter.instruction("mov x9, #6");
+    emitter.instruction("str x9, [x0, #-8]");
+    emitter.instruction("bl __rt_object_handle_acquire");
+    emit_symbol_address(emitter, "x9", "_spl_exception_class_id");
+    emitter.instruction("ldr x9, [x9]");
+    emitter.instruction("str x9, [x0]");
+    emitter.instruction("ldr x10, [sp, #32]");
+    emitter.instruction("str x10, [x0, #8]");
+    emitter.instruction("ldr x10, [sp, #40]");
+    emitter.instruction("str x10, [x0, #16]");
+    emitter.instruction("str xzr, [x0, #24]");
+    emitter.instruction("str xzr, [x0, #40]");
+    emit_symbol_address(emitter, "x9", "_exc_value");
+    emitter.instruction("str x0, [x9]");
+    emitter.instruction("ldp x29, x30, [sp, #48]");
+    emitter.instruction("add sp, sp, #64");
+    emitter.instruction("b __rt_throw_current");
 }
 
 /// Emits the AArch64 sequence that decrements `_ser_value_counter` by one,
@@ -1431,6 +1520,14 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the class id
     emitter.instruction("cmp rax, -2");                                         // synthetic __PHP_Incomplete_Class id
     emitter.instruction("je __rt_serialize_object_incomplete_x");               // serialize its retained class name and property hash
+    emit_symbol_address(emitter, "r10", "_class_dom_serialize_deny_modes");
+    emitter.instruction("mov r11, QWORD PTR [r10 + rax*8]");                    // load php-src's DOM serialization policy
+    emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // preserve the policy across serialization hooks
+    emitter.instruction("cmp r11, 2");                                          // does ZEND_ACC_NOT_SERIALIZABLE reject this class?
+    emitter.instruction("jne __rt_serialize_object_dom_policy_ready");          // node fallback policies still permit user hooks
+    emitter.instruction("mov rsi, r11");                                        // pass hard-denial mode to the exception helper
+    emitter.instruction("call __rt_serialize_dom_denied");                      // reject before __serialize, exactly like php-src
+    emitter.label("__rt_serialize_object_dom_policy_ready");
     emit_symbol_address(emitter, "r10", "_class_name_entries");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // class id
     emitter.instruction("shl rcx, 4");                                          // class_id * 16 (entry stride)
@@ -1504,7 +1601,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emit_symbol_address(emitter, "r10", "_class_sleep_ptrs");
     emitter.instruction("mov r10, QWORD PTR [r10 + rax*8]");                    // __sleep method symbol (0 if none)
     emitter.instruction("test r10, r10");                                       // does the class define __sleep?
-    emitter.instruction("jz __rt_serialize_object_default");                    // no → walk every property
+    emitter.instruction("jz __rt_serialize_object_no_sleep");                   // no → apply the native DOM fallback or walk properties
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // park the __sleep target across the call
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // capture the post-prefix write offset
@@ -1545,6 +1642,13 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 64");                                         // deallocate the object frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with the object appended
+
+    emitter.label("__rt_serialize_object_no_sleep");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // reload the DOM serialization policy
+    emitter.instruction("cmp rsi, 1");                                          // do native DOM nodes use the overridable denial fallback?
+    emitter.instruction("jne __rt_serialize_object_default");                   // ordinary objects serialize their declared properties
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the concrete DOM wrapper to the exception helper
+    emitter.instruction("call __rt_serialize_dom_denied");                      // no user hook replaced DOMNode::__sleep
 
     emitter.label("__rt_serialize_object_default");
     emit_symbol_address(emitter, "r10", "_class_serprop_ptrs");
@@ -1753,6 +1857,83 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // deallocate the dedup frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the back-reference flag in rax
+
+    emit_dom_serialize_denied_x86_64(emitter);
+}
+
+/// Emits the x86_64 exception path used when php-src forbids serializing a DOM wrapper.
+///
+/// On entry `rdi` is the concrete object and `rsi` is denial mode 1 (subclass
+/// hooks permitted) or 2 (hard denial). The helper builds PHP's exact message,
+/// persists it, publishes an `Exception`, and tail-calls the unwinder.
+fn emit_dom_serialize_denied_x86_64(emitter: &mut Emitter) {
+    use crate::codegen_support::abi::emit_symbol_address;
+
+    emitter.blank();
+    emitter.comment("--- runtime: serialize DOM denial exception ---");
+    emitter.label_global("__rt_serialize_dom_denied");
+    emitter.instruction("push rbp");
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 48");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");
+    emitter.instruction("mov rax, QWORD PTR [rdi]");
+    emit_symbol_address(emitter, "r10", "_class_name_entries");
+    emitter.instruction("shl rax, 4");
+    emitter.instruction("add r10, rax");
+    emitter.instruction("mov r11, QWORD PTR [r10]");
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");
+    emit_symbol_address(emitter, "r10", "_concat_off");
+    emitter.instruction("mov QWORD PTR [r10], 0");
+    emit_append_literal_x86_64(emitter, b"Serialization of '", "the DOM serialization denial prefix");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");
+    emitter.instruction("call __rt_concat_append");
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 2");
+    emitter.instruction("je __rt_serialize_dom_denied_hard_suffix");
+    emit_append_literal_x86_64(
+        emitter,
+        b"' is not allowed, unless serialization methods are implemented in a subclass",
+        "the overridable DOM serialization denial suffix",
+    );
+    emitter.instruction("jmp __rt_serialize_dom_denied_message_ready");
+    emitter.label("__rt_serialize_dom_denied_hard_suffix");
+    emit_append_literal_x86_64(
+        emitter,
+        b"' is not allowed",
+        "the hard DOM serialization denial suffix",
+    );
+    emitter.label("__rt_serialize_dom_denied_message_ready");
+    emit_symbol_address(emitter, "rax", "_concat_buf");
+    emit_symbol_address(emitter, "r10", "_concat_off");
+    emitter.instruction("mov rdx, QWORD PTR [r10]");
+    emitter.instruction("call __rt_str_persist");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");
+    emitter.instruction("mov rax, 56");
+    emitter.instruction("call __rt_heap_alloc");
+    emitter.instruction(&format!(
+        "mov r10, 0x{:x}",
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
+    ));
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");
+    emitter.instruction("call __rt_object_handle_acquire");
+    emit_symbol_address(emitter, "r10", "_spl_exception_class_id");
+    emitter.instruction("mov r10, QWORD PTR [r10]");
+    emitter.instruction("mov QWORD PTR [rax], r10");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");
+    emitter.instruction("mov QWORD PTR [rax + 8], r11");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");
+    emitter.instruction("mov QWORD PTR [rax + 16], r11");
+    emitter.instruction("mov QWORD PTR [rax + 24], 0");
+    emitter.instruction("mov QWORD PTR [rax + 40], 0");
+    emit_symbol_address(emitter, "r10", "_exc_value");
+    emitter.instruction("mov QWORD PTR [r10], rax");
+    emitter.instruction("mov rsp, rbp");
+    emitter.instruction("pop rbp");
+    emitter.instruction("jmp __rt_throw_current");
 }
 
 /// Emits the x86_64 sequence that decrements `_ser_value_counter` by one, undoing

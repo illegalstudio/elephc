@@ -137,6 +137,7 @@ pub(super) fn peek_cast(tokens: &[SpannedToken], pos: usize) -> Option<CastType>
             Some(CastType::Bool)
         }
         Token::Identifier(name) if name.eq_ignore_ascii_case("array") => Some(CastType::Array),
+        Token::Identifier(name) if name.eq_ignore_ascii_case("object") => Some(CastType::Object),
         _ => None,
     }
 }

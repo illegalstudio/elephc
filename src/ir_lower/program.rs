@@ -17,7 +17,7 @@ use crate::codegen::RuntimeFeatures;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{
     validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType, LocalKind, Module,
-    Op, TraitMethodInfo,
+    TraitMethodInfo,
 };
 use crate::ir_lower::{builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
@@ -114,7 +114,24 @@ pub(crate) fn lower(
         &constants,
         &fiber_return_sigs,
     );
+    super::internal_extension_method_bodies::lower_referenced_internal_extension_method_bodies(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    );
     lower_referenced_builtin_spl_methods(&mut module, check_result, &constants, &fiber_return_sigs);
+    // SPL lowering materializes `InternalIterator`'s public synthetic methods from the
+    // `new InternalIterator(...)` in DOM/SplFixedArray `getIterator()` bodies.  Those methods
+    // call the private typed owner helpers, so run the synthetic-body closure once more after
+    // that late lowering step.  Keeping this pass demand-driven avoids emitting the narrow SPL
+    // schema (or its helper methods) for programs that never construct an iterator.
+    super::internal_extension_method_bodies::lower_referenced_internal_extension_method_bodies(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    );
     builtin_datetime::lower_referenced_builtin_datetime_methods(
         &mut module,
         check_result,

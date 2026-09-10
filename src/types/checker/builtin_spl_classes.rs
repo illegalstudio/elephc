@@ -77,6 +77,21 @@ pub(crate) fn inject_builtin_spl_classes(
     Ok(())
 }
 
+/// Injects the narrow SPL schema needed before any synthetic iterator body can construct it.
+///
+/// DOM bridge activation is discovered while type-checking expressions, after ordinary builtin
+/// class registration has already run. `InternalIterator` declares `SplFixedArray` owner slots
+/// and synthetic helpers, so both classes must be present before class-info construction. This
+/// avoids a second, incomplete source scan while leaving unrelated SPL classes gated. Runtime
+/// metadata remains reachability-filtered, so a program that never constructs the iterator pays
+/// no emitted class-table cost.
+pub(crate) fn inject_builtin_internal_iterator(
+    class_map: &mut HashMap<String, FlattenedClass>,
+) {
+    containers::insert_spl_fixed_array(class_map);
+    containers::insert_internal_iterator(class_map);
+}
+
 /// Patches builtin SPL storage signatures in the compiler metadata registry.
 pub(crate) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
     patch::patch_builtin_spl_storage_signatures(checker);

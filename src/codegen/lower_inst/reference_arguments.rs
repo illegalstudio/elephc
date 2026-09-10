@@ -333,7 +333,7 @@ pub(super) fn emit_ref_arg_cell_block(
     let pushed = writebacks.len();
     for (index, cell) in temp_cells.iter_mut().enumerate() {
         let source_ty = ctx.load_value_to_result(cell.source_value)?;
-        coerce_ref_cell_store_value(ctx, &source_ty, &cell.cell_ty)?;
+        coerce_ref_cell_store_value(ctx, &source_ty, &cell.cell_ty, true)?;
         abi::emit_push_result_value(ctx.emitter, &cell.cell_ty);
         // A push writes ONE word for every representation except `Str`/`TaggedScalar`, so
         // the cell's second word is whatever the stack happened to hold. The heap path this
@@ -415,7 +415,7 @@ pub(super) fn materialize_temporary_ref_arg_cell(
 ) -> Result<()> {
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = param_ty.codegen_repr();
-    coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+    coerce_ref_cell_store_value(ctx, &source_ty, &target_ty, false)?;
     abi::emit_push_result_value(ctx.emitter, &target_ty);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");

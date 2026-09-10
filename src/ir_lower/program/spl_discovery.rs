@@ -8,6 +8,7 @@
 //! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
 
 use super::*;
+use crate::ir::Op;
 
 /// Lowers the small builtin SPL method slice currently consumed by the EIR backend.
 pub(super) fn lower_referenced_builtin_spl_methods(

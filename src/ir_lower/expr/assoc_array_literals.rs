@@ -247,8 +247,11 @@ pub(in crate::ir_lower) fn method_call_expr_type_for_ir(
 ) -> Option<PhpType> {
     let class_name = instance_callable_object_class(ctx, object)?;
     let method_key = php_symbol_key(method);
-    class_method_signature(ctx, &class_name, &method_key)
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+    crate::internal_extensions::method_result_type_override(&class_name, &method_key)
+        .or_else(|| {
+            class_method_signature(ctx, &class_name, &method_key)
+                .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        })
 }
 
 /// Returns the declared method result type plus `null` when a nullsafe receiver may be null.

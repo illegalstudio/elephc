@@ -12,6 +12,7 @@
 mod block_emit;
 pub(crate) mod callable_reachability;
 pub(crate) mod context;
+mod debug_info_adapters;
 mod enum_singletons;
 mod eval_callable_helpers;
 mod eval_class_constant_helpers;
@@ -36,6 +37,7 @@ mod shared_helper;
 mod shared_mixed_string;
 mod shared_state;
 pub(crate) mod stack_guard;
+mod user_wrapper_adapters;
 pub mod value_placement;
 mod web;
 use runtime_metadata::*;
@@ -388,6 +390,13 @@ fn finalize_user_asm(
         Some(&allowed_class_names),
     );
     emit_intrinsic_method_wrappers(module, &mut emitter);
+    debug_info_adapters::emit_debug_info_adapters(module, &runtime_classes, &mut emitter);
+    user_wrapper_adapters::emit_user_wrapper_adapters(
+        module,
+        &runtime_classes,
+        &mut emitter,
+        &mut data,
+    );
     if emit.is_library() {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
         sorted_exports.sort_by(|a, b| a.c_name.cmp(&b.c_name));
@@ -412,6 +421,7 @@ fn finalize_user_asm(
         &runtime_classes,
         &module.enum_infos,
         Some(&allowed_class_names),
+        module.required_runtime_features.dom_bridge,
         emit_eval_reflection_metadata,
         // The source path now feeds `Throwable::getFile()` and the ` in <file>:<line>`
         // suffix of the uncaught-exception report as well as the eval Reflection
@@ -422,7 +432,6 @@ fn finalize_user_asm(
         module.source_path.as_deref(),
         module.target,
     );
-
     let data_output = data.emit(module.target);
     let mut user_asm = emitter.output();
     if !data_output.is_empty() {
