@@ -1584,3 +1584,28 @@ The new predicate snapshot regression also reveals two leaked Mixed cells (88
 bytes), despite correct output. Track that ownership failure separately; this
 filter change does not claim to resolve it or the remaining udiff/uintersect,
 multisort and eval metadata failures. The PR remains draft and must not be merged.
+
+### Retire loop-carried payloads after reference promotion
+
+Both new predicate failures leave exactly two Mixed allocations after three loop
+iterations. Deferred ReleaseLocalSlot correctly recognizes that a back-edge can
+carry a promoted reference cell into the first syntactic assignment, but its
+backend skips cleanup on that representation. The following store still writes
+through the cell, leaking the preceding iteration's payload. Use the existing
+runtime-state-aware writeback cleanup for dynamic slots so raw owners and reference
+payloads are both retired, without releasing the shared cell itself. Keep the
+always-reference parameter exclusion unchanged.
+
+Clear the referenced payload before its decref to make destructor unwinding safe,
+including both string words, and support Callable's dedicated descriptor release.
+Add native heap/tagged counter and string regressions in main/functions, including
+a descriptor retained across loop iterations. Add a five-target EIR/emitter gate
+and an example of resetting a captured batch counter. Preserve the original
+predicate regressions, their output and their clean-heap assertions.
+
+Cargo build, test compilation, assembly-comment checks and diff hygiene pass.
+No tests run locally. Filtering landed as 5c2e13e21 and CI 34459854569 is running.
+The preceding run was cancelled after the push; its completed shards also expose
+a callable-property checker failure (an untyped property written inside a method
+is still read as Void). That and the previously recorded failures remain separate
+work. Runtime confirmation of the reference-loop fix is pending the next CI head.

@@ -67,3 +67,54 @@ echo "done";
     assert_eq!(out.stdout, "CapturedReferenceOwner|drop|1|1|1|done", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Loop reinitialization replaces the payload of an already captured cell without leaking its old box.
+#[test]
+fn test_core_reference_capture_loop_reinitialization_retires_boxed_payloads() {
+    let source = r#"<?php
+function repeatCapturedCounter(): void {
+    for ($i = 0; $i < 5; $i++) {
+        $count = 0;
+        $increment = function() use (&$count): void { $count++; };
+        $increment();
+        echo $count, "|";
+        unset($increment);
+    }
+}
+repeatCapturedCounter();
+for ($i = 0; $i < 5; $i++) {
+    $count = 0;
+    $increment = function() use (&$count): void { $count++; };
+    $increment();
+    echo $count, "|";
+    unset($increment);
+}
+unset($count);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1|".repeat(10), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "1|".repeat(10));
+}
+
+/// Existing descriptors observe the replacement string through their shared cell on later iterations.
+#[test]
+fn test_core_reference_capture_loop_reinitialization_keeps_live_aliases() {
+    let source = r#"<?php
+$saved = static fn(): string => "";
+for ($i = 0; $i < 4; $i++) {
+    $text = str_repeat("x", $i + 1);
+    $read = function() use (&$text): string { return $text; };
+    if ($i === 0) { $saved = $read; }
+    echo $read(), ":", $saved(), "|";
+    unset($read);
+}
+unset($text, $saved);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "x:x|xx:xx|xxx:xxx|xxxx:xxxx|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), out.stdout);
+}

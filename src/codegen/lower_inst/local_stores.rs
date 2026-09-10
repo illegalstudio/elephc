@@ -263,11 +263,13 @@ pub(super) fn lower_release_local_slot(
     let ty = ctx.local_php_type(slot)?.codegen_repr();
     let offset = ctx.local_offset(slot)?;
     if ctx.release_local_slot_may_observe_ref_cell(inst_id) {
-        // A merged path can hold either raw storage or a cell pointer. Slots
-        // with a runtime representation flag release only the raw path; slots
-        // that are always cells (notably by-ref params) remain excluded.
+        // A loop back-edge can promote the slot after this store was lowered.
+        // Retire the replaced payload on both runtime representations without
+        // releasing the reference cell that closures and local owners still share.
         if ctx.ref_cell_state_offset(slot).is_some() {
-            super::super::frame::emit_owned_local_cleanup(ctx, slot, offset, &ty);
+            if matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted() {
+                ctx.release_local_before_refcounted_writeback(slot)?;
+            }
         }
         return Ok(());
     }

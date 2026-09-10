@@ -164,3 +164,14 @@ $savedGreeting = $deferred->callback;
 unset($deferred);
 echo $savedGreeting(), "\n";
 unset($savedGreeting);
+
+// A captured counter can be reset for each batch without replacing its shared reference cell.
+for ($batch = 0; $batch < 3; $batch++) {
+    $processed = 0;
+    $record = function() use (&$processed): void { $processed++; };
+    $record();
+    $record();
+    echo "Batch ", $batch, ": ", $processed, "\n";
+    unset($record);
+}
+unset($processed);

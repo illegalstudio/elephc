@@ -886,7 +886,7 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
     ) -> Result<()> {
         let ty = self.local_php_type(slot)?.codegen_repr();
-        if !(matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+        if !(matches!(ty, PhpType::Str | PhpType::Callable | PhpType::Mixed | PhpType::Union(_))
             || ty.is_refcounted())
         {
             return Err(CodegenIrError::unsupported(format!(
@@ -929,15 +929,19 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
-    /// Releases a string or Mixed payload stored through a local ref-cell pointer.
+    /// Clears a ref-cell payload before retiring it, leaving the shared cell alive during cleanup.
     fn release_ref_cell_value(&mut self, slot: LocalSlotId, ty: &PhpType) -> Result<()> {
         let offset = self.local_offset(slot)?;
         let cell_reg = abi::symbol_scratch_reg(self.emitter);
         let result_reg = abi::int_result_reg(self.emitter);
         abi::load_at_offset(self.emitter, cell_reg, offset);
         abi::emit_load_from_address(self.emitter, result_reg, cell_reg, 0);
+        abi::emit_store_zero_to_address(self.emitter, cell_reg, 0);
         if *ty == PhpType::Str {
+            abi::emit_store_zero_to_address(self.emitter, cell_reg, 8);
             abi::emit_call_label(self.emitter, "__rt_heap_free_safe");
+        } else if *ty == PhpType::Callable {
+            abi::emit_call_label(self.emitter, "__rt_callable_descriptor_release");
         } else {
             abi::emit_decref_if_refcounted(self.emitter, ty);
         }
