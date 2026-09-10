@@ -7,6 +7,7 @@
 //! Key details:
 //! - Each staged reference owns its current payload independently of the caller.
 //! - Partial staging releases markers, payload leases, and transferred value arguments.
+//! - PHP array declarations use boxed slots because native callees can change the array layout.
 
 use super::*;
 
@@ -134,10 +135,10 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
         return None;
     }
     match param_type.variants().first()? {
-        EvalParameterTypeVariant::Array
-        | EvalParameterTypeVariant::Class(_)
+        EvalParameterTypeVariant::Class(_)
         | EvalParameterTypeVariant::Iterable
         | EvalParameterTypeVariant::Object => Some(NativeFunctionRawRefKind::OwnedHeap),
+        EvalParameterTypeVariant::Array => None,
         EvalParameterTypeVariant::Bool => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_BOOL }),
         EvalParameterTypeVariant::Float => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_FLOAT }),
         EvalParameterTypeVariant::Int => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_INT }),

@@ -11,6 +11,37 @@
 use super::super::*;
 use super::support::*;
 
+/// PHP array reference declarations stage the box itself, matching the native packed-or-hash ABI.
+#[test]
+fn native_array_reference_staging_owns_a_boxed_slot() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let array = values.array_new(0).unwrap();
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 1);
+    assert!(function.set_param_type(0, EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false)));
+    assert!(function.set_param_by_ref(0, true));
+    let bound = bind_evaluated_native_function_args(
+        &function,
+        vec![EvaluatedCallArg {
+            name: None, value: array.borrowed(),
+            ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "items".into() }),
+        }],
+        &mut context, &mut values,
+    ).unwrap();
+    assert_eq!(bound.ref_slots.len(), 1);
+    let BoundNativeFunctionRefSlot::Mixed { original, slot, .. } = &bound.ref_slots[0] else {
+        panic!("array references must stage a boxed value, not its raw payload");
+    };
+    assert_eq!(*original, array);
+    assert_eq!(**slot, array.as_ptr());
+    assert_eq!(values.cell_owners[&(array.as_ptr() as usize)], 2);
+    write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
+    for marker in bound.values { values.release(marker).unwrap(); }
+    assert_eq!(values.cell_owners[&(array.as_ptr() as usize)], 1);
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 1);
+}
+
 /// Call completion and pre-invocation failures retire internal cells without releasing caller borrows.
 #[test]
 fn native_function_retires_bound_cell_owners_on_every_dispatch_exit() {

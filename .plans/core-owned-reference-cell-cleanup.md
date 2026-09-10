@@ -652,3 +652,15 @@ plus structural coverage for all five targets. Build, test compilation,
 assembly-comment checks and generated-document audits pass. No tests ran
 locally. CI on fa8a7ee5c remains red, including eval by-reference array writeback
 and previously recorded checker/ownership failures. The PR stays draft.
+
+### Eval native array reference ABI
+
+Magician now stages a declared PHP array reference as an owned boxed cell, not
+as a raw array payload. Native array declarations use the packed-or-hash boxed
+ABI, so the previous raw slot was interpreted and written back with the wrong
+representation. Scalar, string, iterable and concrete object staging is
+unchanged. Added a staging-owner unit regression and an executable heap fixture
+covering direct/named/dynamic replacements, layout changes, unchanged references
+and surviving aliases. The existing CI regression checks the exact missing A/B
+values. Compiler build and compiler/Magician test compilation pass; execution
+remains delegated to CI.
