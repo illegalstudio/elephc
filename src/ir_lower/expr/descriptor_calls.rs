@@ -68,6 +68,12 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     args: &[Expr],
     span: Span,
 ) -> Option<LoweredValue> {
+    if let [Expr { kind: ExprKind::Spread(source), .. }] = args {
+        // The descriptor invoker already accepts raw or boxed argument arrays and
+        // validates their runtime keys. Preserve a sole spread as that container,
+        // including declared PHP arrays whose physical representation is Mixed.
+        return Some(lower_expr(ctx, source));
+    }
     if crate::types::call_args::has_named_args(args) {
         return Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span));
     }

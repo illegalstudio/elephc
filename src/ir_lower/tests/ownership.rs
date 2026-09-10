@@ -30,9 +30,25 @@ echo makeProducedArray()[0];
         let call = function.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
         let argument = function.instructions[call].operands[0];
         assert!(function.instructions[call].result_php_type.is_php_array(), "{target}");
+        let owner_slot = function.instructions[..call].iter().find_map(|inst| {
+            if inst.op != Op::StoreLocal || inst.operands != [argument] {
+                return None;
+            }
+            let Some(crate::ir::Immediate::LocalSlot(slot)) = inst.immediate else {
+                return None;
+            };
+            function.instructions[..call].iter().any(|publish| {
+                publish.op == Op::PushCallOperandOwner
+                    && publish.immediate == Some(crate::ir::Immediate::LocalSlot(slot))
+            }).then_some(slot)
+        }).expect("object argument must be published in an unwind-visible owner slot");
         assert!(function.instructions[call + 1..].iter().any(|inst| {
-            inst.op == Op::Release && inst.operands == [argument]
+            inst.op == Op::ReleaseLocalSlot
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(owner_slot))
         }), "{target}: {}", print_module(&module));
+        assert!(!function.instructions[call + 1..].iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [argument]
+        }), "{target}: the published slot, not its call operand SSA, owns retirement");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

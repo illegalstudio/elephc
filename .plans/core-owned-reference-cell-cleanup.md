@@ -2262,3 +2262,22 @@ both same-place and distinct widened receivers. Existing heap and output coverag
 remains the executable gate. Cargo check --tests, exporter build, generated docs
 and target-boundary audits, assembly-comment alignment and diff hygiene pass.
 Generated documentation is unchanged. No local tests execute.
+
+### Forward sole boxed descriptor spreads and assert actual owner routes
+
+The descriptor construction fixture exposes ArrayLen on a declared PHP array's
+physical Mixed representation. Forward a sole spread directly to the existing
+descriptor invoker, which already validates boxed/indexed/hash containers and
+their keys. Add five-target structural coverage and heap regressions for both
+positional and named keys. Keep the separate growing-container fixture on a
+multi-argument concrete spread so its construction-root assertions still apply.
+
+Repair three structural expectations without relaxing owner guarantees: named
+coercions distinguish an intermediate string pin from a final callable root;
+spread staging acquires its borrowed evaluation view before storing it; and
+object argument retirement recognizes published local cleanup rather than only
+SSA Release. Native Sol reviewed container forwarding and repaired the stale
+assertions, with coordinator corrections to fixture typing and Option patterns.
+Cargo check --tests, exporter build, documentation and target-boundary audits,
+assembly-comment alignment and diff hygiene pass. Generated docs are unchanged.
+No local tests or compiler repros execute; new and existing regressions await CI.

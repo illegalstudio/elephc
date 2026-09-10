@@ -93,6 +93,30 @@ echo "done";
     );
 }
 
+/// Sole boxed spreads keep positional and named keys while retiring temporary argument containers.
+#[test]
+fn test_descriptor_sole_boxed_spread_preserves_keys_and_owners() {
+    let source = r#"<?php
+function soleSpreadTarget(string $left, string $right): string { return $left . ":" . $right; }
+function soleSpreadArguments(bool $named): array {
+    if ($named) { return ["right" => "b", "left" => "a"]; }
+    return ["a", "b"];
+}
+function invokeSoleSpread(callable $callback, bool $named): mixed {
+    return $callback(...soleSpreadArguments($named));
+}
+$callback = soleSpreadTarget(...);
+for ($i = 0; $i < 3; $i++) {
+    echo invokeSoleSpread($callback, false), "|", invokeSoleSpread($callback, true), ";";
+}
+unset($callback);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "a:b|a:b;".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A successful call retires a widened by-reference local's incidental value view exactly once.
 #[test]
 fn test_widened_string_reference_place_success_path_balances_heap() {

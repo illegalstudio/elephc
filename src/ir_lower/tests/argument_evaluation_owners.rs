@@ -405,7 +405,7 @@ function exerciseSpread(string $text): void {
 /// Named Mixed coercions borrow evaluation slots and never release the ledger's stored lease.
 #[test]
 fn mixed_named_string_and_callable_coercions_do_not_double_retire_evaluation_owners() {
-    use crate::ir::{Immediate, LocalKind, Op, Ownership};
+    use crate::ir::{Immediate, LocalKind, Op, ValueDef};
 
     let source = r#"<?php
 function evaluationCallbackFirst(): int { return 1; }
@@ -419,7 +419,7 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
     $callback = $choice > 0 ? evaluationCallbackFirst(...) : evaluationCallbackSecond(...);
     eval($code);
     takeNamedString(text: $source->text, later: 1);
-    takeNamedCallable(callback: $callback, later: 2);
+    takeNamedCallable(later: 2, callback: $callback);
 }
 "#;
     for target in [
@@ -435,7 +435,11 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
             .iter()
             .find(|function| function.name == "exerciseMixedNamed")
             .unwrap();
-        let borrowed_evaluation_values = function
+        let string_cast = function.instructions.iter().find_map(|inst| {
+            (inst.op == Op::Cast && inst.result_php_type == crate::types::PhpType::Str)
+                .then_some(inst.result?)
+        }).expect("named Mixed string must use an explicit owned cast");
+        let string_evaluation_pins = function
             .instructions
             .iter()
             .filter_map(|inst| {
@@ -444,6 +448,16 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
                     return None;
                 }
                 let stored = *inst.operands.first()?;
+                let ValueDef::Instruction { inst: acquire, .. } = function.value(stored)?.def else {
+                    return None;
+                };
+                let acquire = function.instruction(acquire)?;
+                if acquire.op != Op::Acquire
+                    || acquire.immediate != Some(Immediate::Bool(true))
+                    || acquire.operands != [string_cast]
+                {
+                    return None;
+                }
                 let slot = function.instructions.iter().find_map(|store| {
                     let Immediate::LocalSlot(slot) = store.immediate.as_ref()? else {
                         return None;
@@ -453,19 +467,60 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
                         && function.locals[(*slot).as_raw() as usize].kind == LocalKind::OwnedTemp)
                     .then_some(*slot)
                 })?;
-                function.value(value)
-                    .is_some_and(|value| value.ownership == Ownership::Borrowed)
-                    .then_some((value, slot))
+                Some((value, slot))
             })
             .collect::<Vec<_>>();
-        assert!(borrowed_evaluation_values.len() >= 2, "{target}");
-        for (borrowed, slot) in borrowed_evaluation_values {
-            assert_evaluation_owner_retires_once(function, borrowed, slot, target);
-        }
-        assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedUnbox), "{target}");
-        assert!(function.instructions.iter().any(|inst| {
-            inst.op == Op::Cast && inst.result_php_type == crate::types::PhpType::Str
-        }), "{target}");
+        assert_eq!(string_evaluation_pins.len(), 1, "{target}");
+        assert_evaluation_owner_retires_once(
+            function,
+            string_evaluation_pins[0].0,
+            string_evaluation_pins[0].1,
+            target,
+        );
+        let callable_unbox = function.instructions.iter().find_map(|inst| {
+            (inst.op == Op::MixedUnbox
+                && inst.result_php_type == crate::types::PhpType::Callable
+                && inst.operands.first().is_some_and(|source| {
+                    matches!(
+                        function.value(*source).unwrap().php_type.codegen_repr(),
+                        crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)
+                    )
+                }))
+                .then_some(inst.result?)
+        }).expect("named callable must be extracted from widened Mixed storage");
+        let forwarding_source = |mut value| loop {
+            let ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else {
+                break value;
+            };
+            let producer = function.instruction(inst).unwrap();
+            if !matches!(producer.op, Op::Acquire | Op::Borrow | Op::Move) {
+                break value;
+            }
+            value = producer.operands[0];
+        };
+        let (call_index, callback_operand) = function.instructions.iter().enumerate()
+            .find_map(|(index, inst)| {
+                let operand = inst.operands.get(1).copied()?;
+                (inst.op == Op::Call && forwarding_source(operand) == callable_unbox)
+                    .then_some((index, operand))
+            })
+            .expect("extracted callable must reach the named call");
+        let callable_root = function.instructions[..call_index].iter().find_map(|store| {
+            if store.op != Op::StoreLocal || store.operands != [callback_operand] {
+                return None;
+            }
+            let Some(Immediate::LocalSlot(slot)) = store.immediate else {
+                return None;
+            };
+            function.instructions[..call_index].iter().any(|publish| {
+                publish.op == Op::PushCallOperandOwner
+                    && publish.immediate == Some(Immediate::LocalSlot(slot))
+            }).then_some(slot)
+        }).expect("callable unbox must have a published final root");
+        assert!(function.instructions[call_index + 1..].iter().any(|inst| {
+            inst.op == Op::ReleaseLocalSlot
+                && inst.immediate == Some(Immediate::LocalSlot(callable_root))
+        }), "{target}: callable final root must retire after the call");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
@@ -513,10 +568,21 @@ function exerciseOwnedSpread(string $text): void {
             })?;
             function.value(value).is_some_and(|value| {
                     value.ownership == Ownership::Borrowed
-                        && value.php_type.codegen_repr().is_php_array()
+                        && (value.php_type.is_php_array()
+                            || matches!(
+                                value.php_type.codegen_repr(),
+                                crate::types::PhpType::Array(_)
+                                    | crate::types::PhpType::AssocArray { .. }
+                            ))
                 })
             .then_some((value, slot))
         }).expect("spread evaluation must expose a borrowed owner view");
+        let staged = function.instructions.iter().find_map(|inst| {
+            (inst.op == Op::Acquire && inst.operands == [borrowed_spread.0]).then_some(inst.result?)
+        }).expect("spread temp must acquire its borrowed evaluation view");
+        assert!(function.instructions.iter().any(|inst| {
+            inst.op == Op::StoreLocal && inst.operands == [staged]
+        }), "{target}: spread temp must store its own acquired lease");
         assert!(!function.instructions.iter().any(|inst| {
             inst.op == Op::Release && inst.operands == [borrowed_spread.0]
         }), "{target}: spread staging must not release the borrowed ledger value");
@@ -537,10 +603,10 @@ fn descriptor_argument_containers_cover_throwing_and_growing_sources_on_all_targ
 
     let source = r#"<?php
 function descriptorArgument(): mixed { return "owned"; }
-function descriptorSpread(): array { return [1, 2, 3, 4]; }
+function descriptorSpread() { return [1, 2, 3, 4]; }
 function exerciseDescriptorOwners(callable $callback): void {
     $callback(descriptorArgument());
-    $callback(...descriptorSpread());
+    $callback(descriptorArgument(), ...descriptorSpread());
 }
 "#;
     for target in [
@@ -644,6 +710,44 @@ function exerciseDescriptorOwners(callable $callback): void {
                 }), "{target}: container mutation must write growth back to its published slot");
             }
         }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// A sole declared-array spread reaches descriptor validation without raw indexed operations.
+#[test]
+fn descriptor_sole_boxed_spread_preserves_its_container_on_all_targets() {
+    use crate::ir::{Op, ValueDef};
+
+    let source = r#"<?php
+function boxedDescriptorArguments(): array { return ["right" => 2, "left" => 1]; }
+function invokeBoxedDescriptorSpread(callable $callback): mixed {
+    return $callback(...boxedDescriptorArguments());
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        let function = module.functions.iter()
+            .find(|function| function.name == "invokeBoxedDescriptorSpread").unwrap();
+        let invoke = function.instructions.iter()
+            .find(|inst| inst.op == Op::CallableDescriptorInvoke).expect("descriptor invocation");
+        let mut container = invoke.operands[1];
+        loop {
+            let ValueDef::Instruction { inst, .. } = function.value(container).unwrap().def else {
+                panic!("{target}: the spread must remain an instruction result");
+            };
+            let producer = function.instruction(inst).unwrap();
+            if matches!(producer.op, Op::Acquire | Op::Borrow | Op::Move) {
+                container = producer.operands[0];
+                continue;
+            }
+            assert_eq!(producer.op, Op::Call, "{target}: preserve the original boxed array");
+            assert_eq!(producer.result_php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+            break;
+        }
+        assert!(!function.instructions.iter().any(|inst| {
+            matches!(inst.op, Op::ArrayNew | Op::ArrayLen | Op::ArrayGet)
+        }), "{target}: boxed argument keys must reach the invoker without indexed reinterpretation");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
