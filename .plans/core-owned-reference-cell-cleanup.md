@@ -1066,3 +1066,24 @@ remain conservative and preserve reference-return exclusions.
 Added all-target EIR ordering coverage and repeated CUF/FCC/closure heap checks
 requiring temporary object arrays to retire before a same-frame catch. Local
 verification is build and test compilation only, not executable test runs.
+
+### Managed native reference defaults
+
+CI job 102746649421 exposes the actual failing path: the FCC factory specializes
+to a native call, whose omitted reference default lives in a temporary stack
+cell. The returned closure captures that address, but the caller discards it.
+This explains the observed 1:1 result instead of 2:3 without changing closure
+mutation or count semantics.
+
+Native default arguments now allocate typed managed reference cells. A scoped
+owner record retires the caller lease on return or throw; escaping captures
+retain independent leases. Fresh EIR array/hash defaults also receive unwind
+roots so their original owners do not leak when the native callee throws.
+Existing caller locals and element addresses remain reference places. The
+constructor-promoted borrowed-property fallback remains separate and is not
+claimed fixed here.
+
+Added all-target assembly/EIR coverage, interleaved escaping captures with two
+defaults, and repeated same-frame exception cleanup with payload destructors.
+Updated the old stack-only documentation. Build, test compilation and assembly
+comment checks are the local validation; no tests were executed locally.

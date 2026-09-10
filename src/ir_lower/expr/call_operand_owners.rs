@@ -43,7 +43,7 @@ pub(super) fn root_non_aliasing_callback_operands(
     roots
 }
 
-/// Roots by-value argument temporaries after evaluation and before the callee may unwind.
+/// Roots value arguments and fresh container defaults before the callee may unwind.
 /// A result-independent call or a separately owned callee parameter permits normal retirement.
 /// Reverse publication preserves the existing first-to-last user-argument cleanup order.
 pub(super) fn root_user_call_operands(
@@ -61,7 +61,12 @@ pub(super) fn root_user_call_operands(
         || return_alias == &ReturnArgAlias::None;
     let mut roots = Vec::new();
     for (index, operand) in operands.iter_mut().enumerate().rev() {
-        if signature.is_some_and(|sig| sig.ref_params.get(index).copied().unwrap_or(false)) {
+        if signature.is_some_and(|sig| sig.ref_params.get(index).copied().unwrap_or(false))
+            && !matches!(ctx.builder.value_defining_op(*operand), Some(Op::ArrayNew | Op::HashNew))
+        {
+            // Actual reference places must preserve their caller storage. A fresh default
+            // container has no place: backend staging retains its own managed-cell payload,
+            // and the original EIR owner must also retire when the callee throws.
             continue;
         }
         if !independent_result

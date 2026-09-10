@@ -1,32 +1,23 @@
 //! Purpose:
-//! Heap-balance coverage for a call that OMITS an optional by-reference argument
-//! (`f($x)` against `f($x, int &$out = 7)`). The callee still needs an address to write
-//! through, so the caller materializes a cell for it — and since no caller variable stands
-//! behind that cell, nothing ever reads it back.
+//! Heap-balance coverage for calls that omit optional by-reference arguments.
+//! Default cells supply mutable storage without a caller variable to write back.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - THIS IS A REGRESSION SUITE FOR A REAL LEAK. That cell used to be
-//!   `__rt_heap_alloc(16)` (`materialize_temporary_ref_arg_cell`) that nothing freed: one
-//!   16-byte block per call, unbounded in a loop. It is now a caller-stack cell in the same
-//!   block as the scalar-to-Mixed writeback cells, released once after the call
-//!   (`src/codegen/lower_inst/reference_arguments.rs`). Measured before the fix, three calls
-//!   leaked three blocks in every shape below; after it, each is balanced.
+//! - Default cells have managed heap ownership and a caller-side unwind lease. Closures can
+//!   retain them after the call; otherwise caller cleanup retires the cell and its payload.
 //! - The loop counts are deliberately larger than one so a per-call leak cannot hide inside
 //!   the fixed startup allocations `--gc-stats` also reports.
-//! - EVERY MATERIALIZATION PATH IS COVERED, and the routing was CHECKED rather than assumed
-//!   (an earlier version of this file claimed `$counter->bump($i)` exercised the
-//!   receiver-REGISTER lowering; it does not — a typed local receiver goes through the same
-//!   direct-call materializer a plain function does). The four stagers and the fixture that
-//!   genuinely reaches each one:
+//! - Typed local receivers use direct-call materialization. Mixed receivers and parent calls
+//!   cover the register and local-receiver stagers respectively:
 //!
 //!   | materializer | fixture |
 //!   |---|---|
 //!   | direct call | `test_omitted_by_ref_default_arg_is_balanced` (and the method/static ones) |
 //!   | static method (hidden called-class id) | `test_omitted_by_ref_default_arg_on_static_method_is_balanced` |
-//!   | receiver REGISTER (`nested_call_reg`) | `test_omitted_by_ref_default_arg_on_mixed_receiver_is_balanced` — a `mixed`-typed receiver forces the register dispatch (verified in the emitted assembly: `mov x19, x1` for the receiver, with the cell pushed before it) |
+//!   | receiver REGISTER (`nested_call_reg`) | `test_omitted_by_ref_default_arg_on_mixed_receiver_is_balanced` |
 //!   | receiver LOCAL (`parent::m()`) | `test_omitted_by_ref_default_arg_on_parent_call_is_balanced` |
 //!
 //!   A refcounted cell type (`array`) has its own fixture too, because releasing the cell's

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Verifies temporary reference arguments owned by callable descriptor invokers.
+//! Verifies temporary reference arguments in native and descriptor-specialized calls.
 //!
 //! Called from:
 //! - The runtime GC codegen integration suite.
@@ -8,6 +8,54 @@
 //! - Default cells retire on return and throw, but escaping captures retain their own cell lease.
 
 use crate::support::*;
+
+/// Two captured defaults remain independent and mutable after native and specialized calls return.
+#[test]
+fn test_core_native_reference_defaults_survive_multiple_escaping_captures() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeDefaultCapture(array &$left = [], array &$right = [7], int $value = 0): callable {
+    return function() use (&$left, &$right): int {
+        $left[] = 1; $right[] = 2;
+        return count($left) * 10 + count($right);
+    };
+}
+for ($i = 0; $i < 3; $i++) {
+    $first = nativeDefaultCapture(value: $i);
+    $factory = nativeDefaultCapture(...);
+    $second = $factory(value: $i);
+    unset($factory);
+    $third = call_user_func_array("nativeDefaultCapture", ["value" => $i]);
+    echo $first(), ":", $second(), ":", $third(), "|";
+    echo $first(), ":", $second(), ":", $third(), "|";
+    unset($first, $second, $third);
+}
+echo "done";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "12:12:12|23:23:23|".repeat(3) + "done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Unwinding retires every default cell and its original array before entering a same-frame catch.
+#[test]
+fn test_core_native_reference_defaults_retire_before_catch() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NativeDefaultPayload { public function __destruct() { echo "drop|"; } }
+function throwNativeDefaults(array &$left = [], array &$right = []): void {
+    $left = [new NativeDefaultPayload()];
+    $right = ["key" => new NativeDefaultPayload()];
+    throw new Exception("default");
+}
+for ($i = 0; $i < 3; $i++) {
+    try { throwNativeDefaults(); } catch (Exception $error) { echo "caught|"; }
+    unset($error);
+}
+echo "done";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "drop|drop|caught|".repeat(3) + "done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
 
 /// Callable defaults balance their current boxed array even when the callee replaces its layout.
 #[test]

@@ -12,6 +12,47 @@ use crate::codegen::platform::Target;
 use crate::ir::{Effects, Immediate, LocalKind, Op};
 use std::path::Path;
 
+/// Native omitted references use managed cells and scoped owners on every supported ABI.
+#[test]
+fn omitted_reference_defaults_have_managed_unwind_leases_on_every_target() {
+    let source = r#"<?php
+function keepDefaultReferences(array &$left = [], array &$right = [7], int $value = 0): callable {
+    $left[] = $value;
+    return function() use (&$left, &$right): int {
+        $left[] = 1; $right[] = 2;
+        return count($left) * 10 + count($right);
+    };
+}
+function callDefaultReferences(int $value): callable {
+    return keepDefaultReferences(value: $value);
+}
+$callback = callDefaultReferences(3);
+echo $callback();
+unset($callback);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let caller = module.functions.iter()
+            .find(|function| function.name == "callDefaultReferences").unwrap();
+        assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::PushCallOperandOwner).count(),
+            2, "{name}: both original default arrays need unwind owners");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let caller_asm = asm.split_once("callDefaultReferences:\n").unwrap().1;
+        let call = caller_asm.lines().find(|line| {
+            let line = line.trim_start();
+            (line.starts_with("call ") || line.starts_with("bl ")) && line.contains("keepDefaultReferences")
+        }).expect("native reference call");
+        let call_offset = caller_asm.find(call).unwrap();
+        let before = &caller_asm[..call_offset];
+        assert_eq!(before.matches("__rt_reference_cell_new").count(), 2, "{name}");
+        assert!(before.contains("__rt_cleanup_call_operand_owner"), "{name}");
+        let after = &caller_asm[call_offset..];
+        assert!(after.contains("__rt_reference_cell_release"), "{name}");
+    }
+}
+
 /// Named regular references use caller element addresses for direct, method and spread calls.
 #[test]
 fn named_array_element_references_preserve_places_on_every_target() {
