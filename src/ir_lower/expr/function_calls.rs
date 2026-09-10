@@ -126,6 +126,20 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return call;
     }
     if is_user_function {
+        let return_alias = ctx
+            .return_alias_summaries
+            .function(canonical)
+            .cloned()
+            .unwrap_or(ReturnArgAlias::Unknown);
+        let independent_result = !Ownership::php_type_needs_lifetime_tracking(&php_type)
+            || return_alias == ReturnArgAlias::None;
+        let mut operands = operands;
+        let roots = if independent_result && !sig.as_ref().is_some_and(|sig| sig.by_ref_return) {
+            let ref_params = sig.as_ref().map(|sig| sig.ref_params.as_slice()).unwrap_or(&[]);
+            root_user_call_operands(ctx, &mut operands, ref_params, expr.span)
+        } else {
+            Vec::new()
+        };
         let data = ctx.intern_function_name(canonical);
         let call = ctx.emit_value(
             Op::Call,
@@ -138,20 +152,24 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         // Plain user calls release owned argument temporaries the same way method and
         // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
         // that returns its own array argument typed `iterable`) from being freed.
-        let return_alias = ctx
-            .return_alias_summaries
-            .function(canonical)
-            .cloned()
-            .unwrap_or(ReturnArgAlias::Unknown);
         let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
-        release_owned_call_arg_temporaries_with_signature(
-            ctx,
-            &operands,
-            Some(call.value),
-            &return_alias,
-            sig.as_ref(),
-            expr.span,
-        );
+        if roots.is_empty() {
+            release_owned_call_arg_temporaries_with_signature(
+                ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), expr.span,
+            );
+        } else {
+            for (_, slot) in roots.iter().rev() {
+                retire_owned_call_operand(ctx, *slot, expr.span);
+            }
+            let unrooted = operands.iter().enumerate()
+                .filter(|(index, _)| !roots.iter().any(|(root, _)| root == index))
+                .map(|(_, value)| *value).collect::<Vec<_>>();
+            // Rooting requires an independent result, so filtered operands need
+            // no parameter-index alias mapping or signature-specific suppression.
+            release_owned_call_arg_temporaries(
+                ctx, &unrooted, Some(call.value), &ReturnArgAlias::None, expr.span,
+            );
+        }
         return call;
     }
     if ctx.has_eval_barrier()

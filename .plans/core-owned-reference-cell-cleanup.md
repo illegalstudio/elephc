@@ -856,3 +856,19 @@ Extended the nested-array example and kept negative scalar/Mixed receiver checks
 Build, test compilation, assembly comments, generated builtin docs and contract
 audits pass. No tests ran locally. CI on 541bd9814 still reports typed callback
 array rejection and the six-block opaque usort cleanup leak, which remain open.
+
+### User-call argument unwind roots
+
+Direct user calls with independent results now register owned by-value arguments
+in the existing scoped cleanup chain before entering the callee. A same-frame
+catch cannot bypass their retirement. Reverse publication preserves the existing
+first-to-last normal argument cleanup order while leaving later owners visible
+if an earlier destructor throws. Reference arguments, by-reference returns and
+possible argument-result transfers retain their previous paths.
+
+Added all-target EIR coverage and a heap regression for temporary versus borrowed
+callbacks, including a passthrough-return control. The existing opaque usort
+fixture exercises a throwing comparator passed through a user-function boundary.
+This change protects callee execution and ABI materialization; it does not claim
+to fix temporaries abandoned while evaluating a later source argument. Build,
+test compilation and diff hygiene pass, without local test execution.

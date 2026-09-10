@@ -10,6 +10,27 @@
 
 use crate::support::*;
 
+/// A temporary callback passed through a user function is retired before its caller's catch.
+#[test]
+fn test_user_call_temporary_callback_unwind_retires_captures() {
+    let source = r#"<?php
+class TemporaryCallbackOwner { public function __destruct() { echo "released|"; } }
+function temporaryThrowingCallback(): callable {
+    $owner = new TemporaryCallbackOwner();
+    return function() use ($owner): void { throw new Exception("stop"); };
+}
+function runTemporaryCallback(callable $callback): void { $callback(); }
+function keepTemporaryCallback(callable $callback): callable { return $callback; }
+try { runTemporaryCallback(temporaryThrowingCallback()); }
+catch (Exception $error) { echo "caught|"; unset($error); }
+$kept = keepTemporaryCallback(temporaryThrowingCallback());
+try { runTemporaryCallback($kept); }
+catch (Exception $error) { echo "kept|"; unset($error); }
+unset($kept);
+"#;
+    assert_clean_sort(source, "released|caught|kept|released|");
+}
+
 /// Runtime-selected sort descriptors share the direct boxed-array copy and exceptional publication.
 #[test]
 fn test_core_boxed_usort_opaque_descriptor_cow_and_throw_cleanup() {

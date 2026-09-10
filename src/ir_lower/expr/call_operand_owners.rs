@@ -2,7 +2,7 @@
 //! Roots owned expression operands across calls that can unwind out of their caller.
 //!
 //! Called from:
-//! - Descriptor invocation, callback builtin and eval call lowering.
+//! - User calls, descriptor invocation, callback builtins and eval call lowering.
 //!
 //! Key details:
 //! - Scoped unwind records retire roots before same-frame catches; frame cleanup sees cleared slots.
@@ -35,6 +35,26 @@ pub(super) fn root_non_aliasing_callback_operands(
     let mut roots = Vec::new();
     for (index, operand) in operands.iter_mut().enumerate() {
         if def.ref_params.get(index).copied().unwrap_or(false) { continue; }
+        let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
+        let (value, root) = root_owned_call_operand(ctx, value, span);
+        *operand = value.value;
+        if let Some(slot) = root { roots.push((index, slot)); }
+    }
+    roots
+}
+
+/// Roots by-value argument temporaries after evaluation and before the callee may unwind.
+/// Callers must prove that the result does not transfer an argument's ownership.
+/// Reverse publication preserves the existing first-to-last user-argument cleanup order.
+pub(super) fn root_user_call_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+    ref_params: &[bool],
+    span: Span,
+) -> Vec<(usize, crate::ir::LocalSlotId)> {
+    let mut roots = Vec::new();
+    for (index, operand) in operands.iter_mut().enumerate().rev() {
+        if ref_params.get(index).copied().unwrap_or(false) { continue; }
         let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
         let (value, root) = root_owned_call_operand(ctx, value, span);
         *operand = value.value;

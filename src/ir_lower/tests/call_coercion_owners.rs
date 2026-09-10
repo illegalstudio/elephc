@@ -8,6 +8,41 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
+/// Temporary callable arguments are rooted around independent calls, unlike aliasing returns.
+#[test]
+fn user_callable_argument_owners_are_unwind_visible_on_all_targets() {
+    use crate::ir::Op;
+    let source = r#"<?php
+function runOwnedCallback(callable $callback): void { $callback(); }
+function preserveCallback(callable $callback): callable { return $callback; }
+function callbackOwnerCaller(int $seed): void {
+    runOwnedCallback(function() use ($seed): void { echo $seed; });
+}
+function callbackAliasCaller(int $seed): callable {
+    return preserveCallback(function() use ($seed): void { echo $seed; });
+}
+callbackOwnerCaller($argc);
+$callback = callbackAliasCaller($argc);
+$callback();
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let owner = module.functions.iter().find(|f| f.name == "callbackOwnerCaller").unwrap();
+        let push = owner.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner).unwrap();
+        let call = owner.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        let pop = owner.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner).unwrap();
+        assert!(push < call && call < pop, "{target}: protect the callee's whole activation");
+        let alias = module.functions.iter().find(|f| f.name == "callbackAliasCaller").unwrap();
+        assert!(!alias.instructions.iter().any(|inst| inst.op == Op::PushCallOperandOwner),
+            "{target}: a passthrough return keeps its argument ownership");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_cleanup_call_operand_descriptor"), "{target}");
+    }
+}
+
 /// Static type-name results cannot keep an owned boxed read alive through argument-alias suppression.
 #[test]
 fn gettype_releases_boxed_read_arguments_on_all_targets() {
