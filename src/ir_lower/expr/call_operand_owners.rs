@@ -10,7 +10,7 @@
 
 use super::*;
 
-/// Roots non-reference callback-builtin operands when the result cannot alias their ownership.
+/// Roots callback and XML-setter operands when the result cannot alias their ownership.
 pub(super) fn root_non_aliasing_callback_operands(
     ctx: &mut LoweringContext<'_, '_>,
     def: &crate::builtins::registry::BuiltinDef,
@@ -18,18 +18,24 @@ pub(super) fn root_non_aliasing_callback_operands(
     result_type: &PhpType,
     span: Span,
 ) -> Vec<(usize, crate::ir::LocalSlotId)> {
-    use crate::builtins::semantics::{BuiltinLowering, BuiltinResultOwnership};
+    use crate::builtins::semantics::{BuiltinArgumentLowering, BuiltinLowering, BuiltinResultOwnership};
     use crate::ir::RuntimeCallTarget;
-    let BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)
-        | RuntimeCallTarget::ProfiledFunction { target, .. }) = def.spec.semantics.lowering else {
-        return Vec::new();
+    let needs_unwind_roots = match def.spec.semantics.lowering {
+        BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)
+            | RuntimeCallTarget::ProfiledFunction { target, .. }) => {
+            target.string_callback_operand_index().is_some()
+        }
+        _ => matches!(
+            def.spec.semantics.argument_lowering,
+            BuiltinArgumentLowering::XmlHandlerSetter,
+        ),
     };
     let independent_result = !crate::ir::Ownership::php_type_needs_lifetime_tracking(result_type)
         || matches!(
             def.spec.semantics.result_ownership,
             BuiltinResultOwnership::NonHeap | BuiltinResultOwnership::Fresh | BuiltinResultOwnership::Independent
         );
-    if target.string_callback_operand_index().is_none() || !independent_result {
+    if !needs_unwind_roots || !independent_result {
         return Vec::new();
     }
     let mut roots = Vec::new();

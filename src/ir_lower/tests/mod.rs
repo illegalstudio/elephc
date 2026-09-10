@@ -31,6 +31,7 @@ mod reference_cells;
 mod static_properties;
 mod synthetic_arrays;
 mod throwable_constructors;
+mod xml_parser_arguments;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
 fn lower_source(source: &str) -> crate::ir::Module {

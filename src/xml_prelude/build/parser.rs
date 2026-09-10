@@ -1367,113 +1367,76 @@ pub(super) fn decl_fn_xml_set_object() -> Stmt {
         .build()
 }
 
-/// `__elephc_xml_set_element_handler` — transcribed from the PHP form.
+/// Validates boxed parser arguments before narrowing them for native method dispatch.
+fn handler_setter(event: &str, handlers: &[&str]) -> Stmt {
+    use crate::names::Name;
+    use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget};
+    let php_name = format!("xml_set_{event}_handler");
+    let mut declaration = function(&format!("__elephc_{php_name}"))
+        .param("parser", t_mixed());
+    for handler in handlers {
+        declaration = declaration.param(handler, t_mixed());
+    }
+    let is_parser = Expr::new(ExprKind::InstanceOf {
+        value: Box::new(e_var("parser")),
+        target: InstanceOfTarget::Name(Name::unqualified("XMLParser")),
+    }, crate::span::Span::dummy());
+    declaration.returns(TypeExpr::Bool).body(vec![
+        s_if(is_parser, vec![s_return(e_method_call(
+            e_var("parser"), &format!("__elephc_set_{event}_handler"),
+            handlers.iter().map(|handler| e_var(handler)).collect(),
+        ))], vec![], None),
+        s_throw(e_new("TypeError", vec![e_binop(
+            e_binop(e_str(&format!("{php_name}(): Argument #1 ($parser) must be of type XMLParser, ")),
+                BinOp::Concat, e_call("get_debug_type", vec![e_var("parser")])),
+            BinOp::Concat, e_str(" given"),
+        )])),
+    ]).build()
+}
+
+/// Builds the guarded element handler setter.
 pub(super) fn decl_fn_elephc_xml_set_element_handler() -> Stmt {
-    function("__elephc_xml_set_element_handler")
-        .param("parser", t_class("XMLParser"))
-        .param("start_handler", t_mixed())
-        .param("end_handler", t_mixed())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_method_call(e_var("parser"), "__elephc_set_element_handler", vec![e_var("start_handler"), e_var("end_handler")])),
-        ])
-        .build()
+    handler_setter("element", &["start_handler", "end_handler"])
 }
 
-/// `__elephc_xml_set_character_data_handler` — transcribed from the PHP form.
+/// Builds the guarded character data handler setter.
 pub(super) fn decl_fn_elephc_xml_set_character_data_handler() -> Stmt {
-    function("__elephc_xml_set_character_data_handler")
-        .param("parser", t_class("XMLParser"))
-        .param("handler", t_mixed())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_method_call(e_var("parser"), "__elephc_set_character_data_handler", vec![e_var("handler")])),
-        ])
-        .build()
+    handler_setter("character_data", &["handler"])
 }
 
-/// `__elephc_xml_set_processing_instruction_handler` — transcribed from the PHP form.
+/// Builds the guarded processing instruction handler setter.
 pub(super) fn decl_fn_elephc_xml_set_processing_instruction_handler() -> Stmt {
-    function("__elephc_xml_set_processing_instruction_handler")
-        .param("parser", t_class("XMLParser"))
-        .param("handler", t_mixed())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_method_call(e_var("parser"), "__elephc_set_processing_instruction_handler", vec![e_var("handler")])),
-        ])
-        .build()
+    handler_setter("processing_instruction", &["handler"])
 }
 
-/// `__elephc_xml_set_default_handler` — transcribed from the PHP form.
+/// Builds the guarded default handler setter.
 pub(super) fn decl_fn_elephc_xml_set_default_handler() -> Stmt {
-    function("__elephc_xml_set_default_handler")
-        .param("parser", t_class("XMLParser"))
-        .param("handler", t_mixed())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_method_call(e_var("parser"), "__elephc_set_default_handler", vec![e_var("handler")])),
-        ])
-        .build()
+    handler_setter("default", &["handler"])
 }
 
-/// `__elephc_xml_set_unparsed_entity_decl_handler` — transcribed from the PHP form.
+/// Builds the guarded unparsed entity decl handler setter.
 pub(super) fn decl_fn_elephc_xml_set_unparsed_entity_decl_handler() -> Stmt {
-    function("__elephc_xml_set_unparsed_entity_decl_handler")
-        .param("parser", t_class("XMLParser"))
-        .param("handler", t_mixed())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_method_call(e_var("parser"), "__elephc_set_unparsed_entity_decl_handler", vec![e_var("handler")])),
-        ])
-        .build()
+    handler_setter("unparsed_entity_decl", &["handler"])
 }
 
-/// `__elephc_xml_set_notation_decl_handler` — transcribed from the PHP form.
+/// Builds the guarded notation decl handler setter.
 pub(super) fn decl_fn_elephc_xml_set_notation_decl_handler() -> Stmt {
-    function("__elephc_xml_set_notation_decl_handler")
-        .param("parser", t_class("XMLParser"))
-        .param("handler", t_mixed())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_method_call(e_var("parser"), "__elephc_set_notation_decl_handler", vec![e_var("handler")])),
-        ])
-        .build()
+    handler_setter("notation_decl", &["handler"])
 }
 
-/// `__elephc_xml_set_external_entity_ref_handler` — transcribed from the PHP form.
+/// Builds the guarded external entity ref handler setter.
 pub(super) fn decl_fn_elephc_xml_set_external_entity_ref_handler() -> Stmt {
-    function("__elephc_xml_set_external_entity_ref_handler")
-        .param("parser", t_class("XMLParser"))
-        .param("handler", t_mixed())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_method_call(e_var("parser"), "__elephc_set_external_entity_ref_handler", vec![e_var("handler")])),
-        ])
-        .build()
+    handler_setter("external_entity_ref", &["handler"])
 }
 
-/// `__elephc_xml_set_start_namespace_decl_handler` — transcribed from the PHP form.
+/// Builds the guarded start namespace decl handler setter.
 pub(super) fn decl_fn_elephc_xml_set_start_namespace_decl_handler() -> Stmt {
-    function("__elephc_xml_set_start_namespace_decl_handler")
-        .param("parser", t_class("XMLParser"))
-        .param("handler", t_mixed())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_method_call(e_var("parser"), "__elephc_set_start_namespace_decl_handler", vec![e_var("handler")])),
-        ])
-        .build()
+    handler_setter("start_namespace_decl", &["handler"])
 }
 
-/// `__elephc_xml_set_end_namespace_decl_handler` — transcribed from the PHP form.
+/// Builds the guarded end namespace decl handler setter.
 pub(super) fn decl_fn_elephc_xml_set_end_namespace_decl_handler() -> Stmt {
-    function("__elephc_xml_set_end_namespace_decl_handler")
-        .param("parser", t_class("XMLParser"))
-        .param("handler", t_mixed())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_method_call(e_var("parser"), "__elephc_set_end_namespace_decl_handler", vec![e_var("handler")])),
-        ])
-        .build()
+    handler_setter("end_namespace_decl", &["handler"])
 }
 
 /// `xml_parse` — transcribed from the PHP form.

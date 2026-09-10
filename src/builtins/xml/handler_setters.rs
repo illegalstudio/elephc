@@ -270,11 +270,14 @@ pub(super) fn check_setter(
         };
         if position == 0 {
             let ty = cx.checker.infer_type(value, cx.env)?;
-            let is_parser = matches!(
-                ty.codegen_repr(),
-                PhpType::Object(ref name) if php_symbol_key(name) == "xmlparser"
-            );
-            if !is_parser {
+            let can_be_parser = match ty.codegen_repr() {
+                PhpType::Object(ref name) => php_symbol_key(name) == "xmlparser",
+                PhpType::Mixed => true,
+                _ => false,
+            };
+            // A declared-array extract is boxed. The prelude validates its runtime
+            // class before narrowing the parser and reading any object storage.
+            if !can_be_parser {
                 return Err(CompileError::new(
                     value.span,
                     &format!(

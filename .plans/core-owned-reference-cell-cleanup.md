@@ -1117,3 +1117,25 @@ regression remains unchanged. Build and test compilation pass; executable
 validation remains delegated to CI, with no local test execution.
 The builtin-doc generation and audits pass without generated-file changes;
 assembly-comment alignment and git diff hygiene also pass.
+
+### Boxed XML parser setter arguments
+
+CI on 29887b6c9 still rejects the XML named-handler fixture when a declared
+array return supplies the parser through unpacking. Its extract is Mixed, not
+a concrete object pointer. Permit boxed parser candidates in the checker and
+make all nine internal setter twins accept Mixed. Each twin checks XMLParser
+identity before narrowing for method dispatch, and throws a catchable TypeError
+with the public function name and runtime type otherwise. Keep statically
+invalid concrete arguments rejected.
+
+The setter argument policy now roots owned operands across the prelude call so
+parser rejection and handler validation cannot leak temporary arguments. The
+PHP oracle mirrors the shared synthetic setter builder. Added all-target EIR
+and assembly coverage, all-setter dispatch through a boxed parser, named/unpacked
+arguments, invalid scalar/container/object cases, evaluation-order assertions
+and heap checks. Existing XML unpack regressions remain unchanged.
+
+Build and test compilation pass. The builtin-doc skill workflow passes, including
+regenerated XML source anchors, and diff hygiene passes. No tests were executed locally;
+the new runtime and oracle assertions still require CI. Other CI failures remain
+open and are not claimed fixed by this XML boundary change.
