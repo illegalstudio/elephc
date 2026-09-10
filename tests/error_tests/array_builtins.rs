@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Splice return typing must not accept a non-array receiver or arbitrary Mixed array returns.
+#[test]
+fn test_error_declared_array_splice_keeps_non_array_boundaries_checked() {
+    expect_error(
+        "<?php $values = 7; array_splice($values, 0, 1);",
+        "array_splice() first argument must be array",
+    );
+    expect_error(
+        "<?php function notAnArray(mixed $value): array { return $value; } notAnArray(7);",
+        "return type expects",
+    );
+}
+
 /// A boxed PHP array operand must not hide an invalid first or second merge argument.
 #[test]
 fn test_error_php_array_merge_rejects_non_array_operands() {

@@ -754,3 +754,16 @@ Build, test compilation and diff hygiene pass; no tests ran locally. CI on
 22ef9aecb confirms codegen shard 8 passes on both Linux architectures after the
 handler and local-capture fixes. Other shards still fail, including typed array
 callbacks, array_sum, splice return typing and ownership cleanup regressions.
+
+### Declared array splice results
+
+The array_splice checker now preserves the declared PHP array result contract
+instead of degrading it to unrestricted Mixed. The backend already boxes the
+removed-elements array for this representation, so no runtime acceptance or
+storage changes are needed. Added all-target lowering coverage and negative
+checks for scalar receivers and arbitrary Mixed returns. Existing heap fixtures
+cover empty/full removal, nested values, replacement growth and aliases.
+
+Build, test compilation, generated builtin documentation and contract audits
+pass. No local tests ran. This typing correction does not expand the runtime's
+existing indexed-only splice implementation to boxed associative arrays.

@@ -10,6 +10,34 @@
 
 use crate::ir::print_module;
 
+/// Declared array splice results remain boxed arrays at the caller and return boundaries.
+#[test]
+fn declared_array_splice_results_keep_the_boxed_contract_on_every_target() {
+    let source = r#"<?php
+function removeDeclaredRange(array &$values, int $offset, int $length): array {
+    return array_splice($values, $offset, $length);
+}
+$values = [["x"], ["y"]];
+$removed = removeDeclaredRange($values, 0, 1);
+echo $removed[0][0], count($values);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name == "removeDeclaredRange").unwrap();
+        assert!(function.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::RuntimeCall
+                && inst.result_php_type.is_php_array()
+        }), "{target}: splice must preserve the PHP array result proof");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        assert!(asm.contains("__rt_array_splice_refcounted"), "{target}");
+    }
+}
+
 /// Loop storage boxes physical arrays without erasing the PHP array contract needed by later calls.
 #[test]
 fn loop_carried_php_arrays_keep_their_checked_contract_on_every_target() {
