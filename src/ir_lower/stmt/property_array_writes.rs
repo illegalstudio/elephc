@@ -324,7 +324,8 @@ pub(super) fn property_store_keeps_independent_ref(property_ty: &PhpType, value_
     {
         return true;
     }
-    if matches!(property_ty, PhpType::Str) {
+    // Callable slots retain through the descriptor ABI, outside is_refcounted().
+    if matches!(property_ty, PhpType::Str | PhpType::Callable) {
         return true;
     }
     property_ty.is_refcounted()

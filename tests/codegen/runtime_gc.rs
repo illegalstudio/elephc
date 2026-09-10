@@ -29,6 +29,9 @@ mod assoc_rebind_release;
 mod by_ref_place_args;
 #[path = "runtime_gc/omitted_by_ref_default_args.rs"]
 mod omitted_by_ref_default_args;
+
+#[path = "runtime_gc/callable_property_owners.rs"]
+mod callable_property_owners;
 #[path = "runtime_gc/foreach_object_source.rs"]
 mod foreach_object_source;
 #[path = "runtime_gc/stack_args.rs"]

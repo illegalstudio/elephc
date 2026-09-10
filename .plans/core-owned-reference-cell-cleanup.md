@@ -1511,3 +1511,21 @@ on 5ff1f9a2d confirms codegen shard 7 succeeds on both Linux targets, and the ne
 property key-sort regression passes on x86_64. It also confirms the new constructor
 escaping-closure fixture leaks a descriptor and its captured cell, while multisort,
 callback filtering and additional exception/metadata ownership failures remain.
+
+### Retire callable temporaries after retained property stores
+
+The new escaping-constructor closure regression has correct output but leaks seven
+blocks per iteration on all executable CI targets. PropSet retains callable
+descriptors through their dedicated ABI, whereas the source-retirement predicate
+only recognizes strings and is_refcounted(), which excludes Callable. Include the
+callable storage case in that retaining-store contract so temporary closures and
+first-class descriptors release their original owner immediately after publication.
+Borrowed callable parameters remain untouched, and Mixed-to-Mixed moving stores
+keep their existing discipline. This is not a change to promoted reference-property
+ownership, which remains an independent audit item.
+
+Keep the original failing constructor test unchanged. Add native heap/tagged tests
+for closure replacement, borrowed callback parameters, copied descriptors surviving
+object destruction and first-class method receiver lifetime. Add a five-target EIR
+gate requiring a source Release only for temporary descriptors, and extend the
+closure example. Test compilation and diff hygiene pass; no local tests are run.

@@ -150,3 +150,17 @@ $greetings = greetingCallbacks("Hello, ");
 $greet = $greetings[0];
 unset($greetings);
 echo $greet("Elephc"), "\n";
+
+// A copied callback keeps its captures alive after its owning object is released.
+class DeferredGreeting {
+    public $callback;
+
+    public function __construct(string $name) {
+        $this->callback = static fn(): string => "Welcome, " . $name;
+    }
+}
+$deferred = new DeferredGreeting("Elephc");
+$savedGreeting = $deferred->callback;
+unset($deferred);
+echo $savedGreeting(), "\n";
+unset($savedGreeting);

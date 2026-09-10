@@ -19,6 +19,7 @@ mod array_reference_outputs;
 mod array_implode;
 mod array_membership;
 mod call_coercion_owners;
+mod callable_property_owners;
 mod corpus;
 mod debug_info;
 mod descriptor_ownership;
