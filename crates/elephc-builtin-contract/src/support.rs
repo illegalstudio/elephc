@@ -437,7 +437,7 @@ mod tests {
         }
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(shared_runtime, 82);
+        assert_eq!(shared_runtime, 83);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 595 + curl_surface);
         assert_eq!(unsupported, 453);

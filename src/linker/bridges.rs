@@ -124,6 +124,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "mbstring",
         whole_archive: false,
         apple_frameworks: &[],
+        apple_libraries: &[],
         needs_libdl: true,
         php_extensions: &["mbstring"],
         monitoring: MonitoringPolicy::GenericTiming,
