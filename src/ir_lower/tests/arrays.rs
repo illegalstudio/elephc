@@ -10,6 +10,31 @@
 
 use crate::ir::print_module;
 
+/// Loop storage boxes physical arrays without erasing the PHP array contract needed by later calls.
+#[test]
+fn loop_carried_php_arrays_keep_their_checked_contract_on_every_target() {
+    let source = r#"<?php
+function writeLoopArray(array $array, mixed $key, mixed $value): array {
+    $array[$key] = $value;
+    return $array;
+}
+$result = [];
+for ($i = 0; $i < 3; $i++) {
+    $result = writeLoopArray([], "name", $i);
+    $result = writeLoopArray($result, 0, $i);
+}
+echo $result["name"], ":", $result[0];
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Literal storage follows the boxed nullsafe-chain result instead of guessing scalar metadata.
 #[test]
 fn nullsafe_literal_results_use_mixed_slots_on_every_target() {

@@ -740,3 +740,17 @@ consumer and caller reuse, plus all-target release-entry assertions. Build and
 test compilation pass; executable checks remain delegated to CI. This addresses
 one confirmed source of the opaque usort leak without claiming its entire failure
 or the remaining array/checker issues are resolved.
+
+### Loop-carried declared array contracts
+
+The loop-storage lattice now preserves the logical PHP array contract when a
+concrete entry array is reassigned from a declared array result. Its physical
+representation remains boxed, without degrading the checker environment to an
+unrestricted Mixed value. Scalar, nullable and unknown evidence still removes
+the array proof. Added symmetric positive/negative join tests and an all-target
+lowering regression matching the existing mixed-key-write executable fixture.
+
+Build, test compilation and diff hygiene pass; no tests ran locally. CI on
+22ef9aecb confirms codegen shard 8 passes on both Linux architectures after the
+handler and local-capture fixes. Other shards still fail, including typed array
+callbacks, array_sum, splice return typing and ownership cleanup regressions.
