@@ -10,6 +10,38 @@
 
 use crate::support::*;
 
+/// Runtime index operands keep the detached array base across direct, named and first-class calls.
+#[test]
+fn test_core_runtime_index_reference_addresses_preserve_array_base_and_cow() {
+    let source = r#"<?php
+function runtimeReferenceIndex(): int { echo "i"; return 1; }
+function replaceRuntimeReference(mixed &$value): void { $value = "updated"; }
+function replaceRuntimeStringReference(string &$value): void { $value = "kept"; }
+for ($i = 0; $i < 3; $i++) {
+    $direct = [10, 20]; $directCopy = $direct;
+    replaceRuntimeReference($direct[runtimeReferenceIndex()]);
+    echo $direct[1], ":", $directCopy[1], "|";
+    $named = [30, 40]; $namedCopy = $named;
+    replaceRuntimeReference(value: $named[runtimeReferenceIndex()]);
+    echo $named[1], ":", $namedCopy[1], "|";
+    $fcc = [50, 60]; $fccCopy = $fcc;
+    $callback = replaceRuntimeReference(...);
+    $callback($fcc[runtimeReferenceIndex()]);
+    echo $fcc[1], ":", $fccCopy[1], "|";
+    $strings = ["first", str_repeat("s", 12)]; $stringsCopy = $strings;
+    replaceRuntimeStringReference($strings[runtimeReferenceIndex()]);
+    echo $strings[1], ":", $stringsCopy[1], "|";
+    unset($direct, $directCopy, $named, $namedCopy, $fcc, $fccCopy, $callback, $strings, $stringsCopy);
+}
+"#;
+    let expected = "iupdated:20|iupdated:40|iupdated:60|ikept:ssssssssssss|".repeat(3);
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected, "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
 /// Push separates boxed local and property cells while preserving reference aliases and value copies.
 #[test]
 fn test_core_boxed_array_push_publishes_local_and_property_owners() {

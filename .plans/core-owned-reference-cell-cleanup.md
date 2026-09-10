@@ -1529,3 +1529,26 @@ for closure replacement, borrowed callback parameters, copied descriptors surviv
 object destruction and first-class method receiver lifetime. Add a five-target EIR
 gate requiring a source Release only for temporary descriptors, and extend the
 closure example. Test compilation and diff hygiene pass; no local tests are run.
+
+### Preserve array bases across large-frame index loads
+
+The named element-reference fixture fails on both ARM executable targets but not
+x86_64: function calls with runtime indices leave the original values unchanged,
+while constant-index method controls work. The final AArch64 element-address path
+loads the array into x9 before loading the index into x10. A spilled index beyond
+255 bytes uses x9 to compute its frame address, replacing the array base with a
+stack address. The callee writes a Mixed pointer to that unrelated stack location,
+which explains both the missing update and the leaked replacement cell/string.
+
+Load the index first, then the array base. Keep x86_64 addressing unchanged. Add a
+five-target stack-only emitter gate with forty padding locals and both one-word
+and string-pair elements, plus native heap/tagged regressions for runtime indices,
+direct/named/FCC calls and unchanged COW snapshots. Keep the original failing test
+unchanged. Test compilation and diff checks pass; no tests run locally. The edited
+emitter's assembly comments pass alignment. The whole arrays.rs audit reports the
+same 45 missing comments as the committed baseline, outside the changed emitter.
+
+The predicate and callable-property commits were pushed as e7d7e318a and 46ffde68f.
+CI run 34457105141 is running on the latter; runtime validation remains pending.
+A fresh fetch confirms origin/main c91beb343468 is already an ancestor, so there
+is no outstanding main rebase and no history rewrite or merge was performed.

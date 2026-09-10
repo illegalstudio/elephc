@@ -24,6 +24,9 @@ use super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
+#[cfg(test)]
+mod element_address_tests;
+
 /// Lowers indexed-array allocation through the shared runtime constructor.
 pub(super) fn lower_array_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let capacity = expect_capacity(inst)?.max(4);
@@ -2397,8 +2400,10 @@ fn emit_array_elem_addr_result_aarch64(
     index: ValueId,
     elem_size: i64,
 ) -> Result<()> {
-    ctx.load_value_to_reg(array, "x9")?;
+    // A spilled index beyond the unscaled frame range uses x9 as its address scratch.
+    // Load it first so the array base is not replaced by the index's stack address.
     ctx.load_value_to_reg(index, "x10")?;
+    ctx.load_value_to_reg(array, "x9")?;
     ctx.emitter.instruction("cmp x10, #0");                                     // keep negative by-reference offsets aligned with the materialized slot
     ctx.emitter.instruction("csel x10, xzr, x10, lt");                          // clamp unsupported negative offsets to the safe slot
     match elem_size {
