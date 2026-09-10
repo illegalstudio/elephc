@@ -11,10 +11,11 @@ use super::*;
 
 /// Lowers one source call argument, unwrapping named syntax while preserving source position.
 pub(super) fn lower_call_source_arg(ctx: &mut LoweringContext<'_, '_>, arg: &Expr) -> crate::ir::ValueId {
-    match &arg.kind {
-        ExprKind::NamedArg { value, .. } => lower_expr(ctx, value).value,
-        _ => lower_expr(ctx, arg).value,
-    }
+    let (value, span) = match &arg.kind {
+        ExprKind::NamedArg { value, .. } => (lower_expr(ctx, value), value.span),
+        _ => (lower_expr(ctx, arg), arg.span),
+    };
+    root_evaluated_call_argument(ctx, value, span).value
 }
 
 /// Builds the variadic tail array for a named-argument call plan.

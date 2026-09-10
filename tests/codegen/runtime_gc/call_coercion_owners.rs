@@ -10,6 +10,38 @@
 
 use crate::support::*;
 
+/// A callable selected at runtime crosses a declared callable boundary with an owned descriptor.
+#[test]
+fn test_core_merged_callable_arguments_survive_named_spread_and_throw_paths() {
+    let source = r#"<?php
+function mergedCallbackFirst(): string { return "first"; }
+function mergedCallbackSecond(): string { return "second"; }
+function runMergedCallback(callable $callback, bool $fail): void {
+    echo $callback(), "|";
+    if ($fail) { throw new RuntimeException("stop"); }
+}
+function exerciseMergedCallback(int $choice): void {
+    $callback = $choice > 0 ? mergedCallbackFirst(...) : mergedCallbackSecond(...);
+    runMergedCallback($callback, false);
+    runMergedCallback(fail: false, callback: $callback);
+    runMergedCallback(...[$callback, false]);
+    try { runMergedCallback(fail: true, callback: $callback); }
+    catch (RuntimeException $error) { echo "caught|"; unset($error); }
+    echo $callback(), "|";
+    unset($callback);
+}
+exerciseMergedCallback($argc);
+exerciseMergedCallback(-$argc);
+echo "done";
+"#;
+    let expected = "first|first|first|first|caught|first|second|second|second|second|caught|second|done";
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{assembly}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}\n{assembly}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
 /// Static CUF, FCC and closure calls retire temporary arrays before a same-frame catch.
 #[test]
 fn test_core_static_callable_argument_owners_retire_on_throw() {

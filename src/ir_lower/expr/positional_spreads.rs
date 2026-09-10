@@ -46,6 +46,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
     let spread = lower_expr(ctx, inner);
+    let spread = root_evaluated_call_argument(ctx, spread, inner.span);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
     store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
@@ -93,7 +94,8 @@ pub(super) fn lower_positional_spread_args_with_signature(
                 args[spread_idx].span,
             )
         };
-        operands.push(lower_expr(ctx, &expr).value);
+        let value = lower_expr(ctx, &expr);
+        operands.push(root_evaluated_call_argument(ctx, value, expr.span).value);
     }
 
     if sig.variadic.is_some() {
@@ -130,7 +132,9 @@ pub(super) fn lower_positional_spread_args_with_signature(
             )
         };
         let tail = coerce_spread_variadic_array(ctx, sig, tail, args[spread_idx].span);
-        operands.push(tail.value);
+        operands.push(
+            root_evaluated_call_argument(ctx, tail, args[spread_idx].span).value,
+        );
     }
 
     Some(operands)

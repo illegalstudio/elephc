@@ -491,48 +491,18 @@ fn spent_hash_context_raises_phps_exact_type_error_for_all_three_calls() {
     );
 }
 
-/// KNOWN BOUNDED REGRESSION — the rejected-reuse path leaks TWO heap blocks.
+/// Rejected spent-context calls retire property-derived arguments before unwinding.
 ///
-/// This test used to assert `live_blocks=0`. It cannot any more, and the reason is worth
-/// stating precisely because the number must never be allowed to drift.
-///
-/// `hash_update` / `hash_final` / `hash_copy` are elephc-PHP wrappers now
-/// (`elephc::hash_prelude`), so the guard's `\TypeError` is raised by the runtime helper
-/// INSIDE a PHP function frame and unwinds THROUGH it. A builtin that throws through a
-/// PHP frame strands one block per unwind — a PRE-EXISTING defect this migration merely
-/// reaches. It is hash-independent and reproduces with no hashing at all:
-///
-/// ```php
-/// class R { public mixed $m = null; }
-/// function f(R $r): bool { $v = $r->m; throw new TypeError("x"); }
-/// $r = new R(); try { f($r); } catch (TypeError $e) {}
-/// ```
-///
-/// leaks one block under `--heap-debug`; the same function WITHOUT the local is clean,
-/// and the same builtin throwing at top level with no wrapper frame is clean. Every
-/// pure-PHP workaround was measured and none helps: binding the argument to a local,
-/// leaving it inline, binding the result, `try`/`finally`, and catch-and-rethrow all
-/// still leak on the throwing path (catch-and-rethrow leaks TWO). Fixing it properly
-/// means fixing frame cleanup during unwind, not the prelude.
-///
-/// The SUCCESS path is unaffected and stays exactly clean — see
-/// `hash_contexts_in_containers_leave_a_clean_heap`, which runs 1 000 contexts through
-/// `hash_copy`/`hash_final` at `allocs == frees`. What leaks here is bounded by the
-/// number of REJECTED calls, three in this program, costing two blocks.
-///
-/// `--heap-debug` is the authoritative instrument for elephc's own heap. It cannot see
-/// the elephc-crypto context itself, which the bridge allocates outside elephc's heap —
-/// that side is covered by the ownership argument on `elephc_crypto_final` (it still
-/// finalizes a CLONE and still never frees, so `__rt_hash_ctx_free` remains the single
-/// destructor and still runs exactly once) and by the flat-RSS measurement recorded on
-/// `hash_contexts_in_containers_leave_a_clean_heap`.
+/// `hash_copy()` evaluates the owned `$context->algo` string before its runtime copy
+/// helper rejects the finalized context. The source-argument evaluation ledger keeps
+/// that string reachable during the throw, then same-frame unwind cleanup retires it.
 #[test]
-fn rejected_reuse_leaks_one_block_per_rejected_call() {
+fn rejected_reuse_leaves_a_clean_elephc_heap() {
     assert_program_output_and_live_blocks(
         "hashctx_spent_heap",
         SPENT_CONTEXT_SRC,
         SPENT_CONTEXT_EXPECTED,
-        2,
+        0,
     );
 }
 

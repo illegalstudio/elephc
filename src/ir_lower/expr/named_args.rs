@@ -69,7 +69,8 @@ pub(super) fn lower_named_args_with_signature_options(
                 operands.push(source_values[*source_index]);
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
-                operands.push(lower_expr(ctx, default).value);
+                let value = lower_expr(ctx, default);
+                operands.push(root_evaluated_call_argument(ctx, value, default.span).value);
             }
             crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => {
                 return lower_args(ctx, args);
@@ -122,6 +123,7 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
     let first_named_pos = plan.first_named_pos?;
     let prefix_expr = plan.positional_prefix_expr(call_span)?;
     let prefix = lower_expr(ctx, &prefix_expr);
+    let prefix = root_evaluated_call_argument(ctx, prefix, prefix_expr.span);
     if !matches!(ctx.builder.value_php_type(prefix.value).codegen_repr(), PhpType::AssocArray { .. }) {
         return None;
     }
@@ -146,7 +148,8 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
                 operands.push(source_values.get(*source_index).copied().flatten()?);
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
-                operands.push(lower_expr(ctx, default).value);
+                let value = lower_expr(ctx, default);
+                operands.push(root_evaluated_call_argument(ctx, value, default.span).value);
             }
             crate::types::call_args::PlannedRegularArg::SpreadElement {
                 prefix_element_idx,
@@ -185,7 +188,8 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
                         *spread_span,
                     )
                 };
-                operands.push(lower_expr(ctx, &expr).value);
+                let value = lower_expr(ctx, &expr);
+                operands.push(root_evaluated_call_argument(ctx, value, expr.span).value);
             }
         }
     }
@@ -298,6 +302,7 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
         return None;
     }
     let prefix = lower_expr(ctx, &prefix_expr);
+    let prefix = root_evaluated_call_argument(ctx, prefix, prefix_expr.span);
     let prefix_type = ctx.builder.value_php_type(prefix.value);
     let prefix_temp_name = ctx.declare_hidden_temp(prefix_type.clone());
     store_value_into_temp(ctx, &prefix_temp_name, prefix_type, prefix, prefix_expr.span);
@@ -341,13 +346,15 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
                         false,
                         plan.source_args.get(*source_index).map(|arg| arg.span).unwrap_or(call_span),
                     );
-                    operands.push(lower_expr(ctx, &expr).value);
+                    let value = lower_expr(ctx, &expr);
+                    operands.push(root_evaluated_call_argument(ctx, value, expr.span).value);
                 } else {
                     operands.push(source_values.get(*source_index).copied().flatten()?);
                 }
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
-                operands.push(lower_expr(ctx, default).value);
+                let value = lower_expr(ctx, default);
+                operands.push(root_evaluated_call_argument(ctx, value, default.span).value);
             }
             crate::types::call_args::PlannedRegularArg::SpreadElement {
                 element_idx: _,
@@ -388,7 +395,8 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
                         *spread_span,
                     )
                 };
-                operands.push(lower_expr(ctx, &expr).value);
+                let value = lower_expr(ctx, &expr);
+                operands.push(root_evaluated_call_argument(ctx, value, expr.span).value);
             }
         }
     }

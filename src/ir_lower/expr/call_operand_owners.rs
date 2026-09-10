@@ -10,6 +10,116 @@
 
 use super::*;
 
+/// Starts a nested source-argument evaluation ledger.
+pub(super) fn begin_call_argument_evaluation(ctx: &mut LoweringContext<'_, '_>) {
+    ctx.call_argument_evaluation_scopes.push(
+        crate::ir_lower::context::CallArgumentEvaluationScope {
+            expression_depth: ctx.expression_depth,
+            owners: Vec::new(),
+        },
+    );
+}
+
+/// Publishes an independently owned by-value argument before the next source argument runs.
+pub(super) fn root_evaluated_call_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if !ctx
+        .call_argument_evaluation_scopes
+        .last()
+        .is_some_and(|scope| scope.expression_depth == ctx.expression_depth)
+        || !ctx.value_needs_release_after_use(value)
+    {
+        return value;
+    }
+    let ty = ctx.builder.value_php_type(value.value);
+    if matches!(ty.codegen_repr(), PhpType::Buffer(_)) {
+        return value;
+    }
+    let temp_name = ctx.declare_owned_hidden_temp(ty.clone());
+    let rooted = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    ctx.store_local(&temp_name, rooted, ty, Some(span));
+    let slot = ctx.local_slots[&temp_name];
+    register_owned_call_operand(ctx, slot, span);
+    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    let borrowed_ty = ctx.builder.value_php_type(rooted.value);
+    let borrowed = ctx
+        .builder
+        .emit_with_effects(
+            Op::LoadLocal,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            rooted.ir_type,
+            borrowed_ty,
+            Ownership::Borrowed,
+            Op::LoadLocal.default_effects(),
+            Some(span),
+        )
+        .expect("call argument evaluation owner load produces a value");
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument evaluation scope")
+        .owners
+        .push(crate::ir_lower::context::CallArgumentEvaluationOwner {
+            value: borrowed,
+            temp_name,
+            slot,
+            span,
+        });
+    LoweredValue {
+        value: borrowed,
+        ir_type: rooted.ir_type,
+    }
+}
+
+/// Pops evaluation records in LIFO order and transfers final operands to ordinary call cleanup.
+/// Intermediate owners are republished until the enclosing call finishes or unwinds.
+pub(super) fn finish_call_argument_evaluation(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+) -> Vec<(crate::ir::LocalSlotId, Span)> {
+    let scope = ctx
+        .call_argument_evaluation_scopes
+        .pop()
+        .expect("call argument evaluation scope must be balanced");
+    debug_assert_eq!(scope.expression_depth, ctx.expression_depth);
+    let mut intermediates = Vec::new();
+    for owner in scope.owners.into_iter().rev() {
+        unregister_owned_call_operand(ctx, owner.slot, owner.span);
+        let transferred = take_owned_temp(ctx, &owner.temp_name, owner.span);
+        let mut retained_by_call = false;
+        for operand in operands.iter_mut() {
+            if *operand == owner.value {
+                *operand = transferred.value;
+                retained_by_call = true;
+            }
+        }
+        if !retained_by_call {
+            intermediates.push((transferred, owner.span));
+        }
+    }
+    intermediates.reverse();
+    intermediates
+        .into_iter()
+        .filter_map(|(value, span)| {
+            let (_, slot) = root_owned_call_operand(ctx, value, span);
+            slot.map(|slot| (slot, span))
+        })
+        .collect()
+}
+
+/// Retires non-operand evaluation owners after the enclosing call's ordinary cleanup.
+pub(super) fn retire_call_argument_intermediates(
+    ctx: &mut LoweringContext<'_, '_>,
+    roots: &[(crate::ir::LocalSlotId, Span)],
+) {
+    for (slot, span) in roots.iter().rev() {
+        retire_owned_call_operand(ctx, *slot, *span);
+    }
+}
+
 /// Roots callback, validation and XML-setter operands with independently owned results.
 pub(super) fn root_non_aliasing_callback_operands(
     ctx: &mut LoweringContext<'_, '_>,
@@ -130,16 +240,28 @@ pub(super) fn register_owned_call_operand(
     );
 }
 
+/// Removes a published owner record without releasing the slot it protects.
+fn unregister_owned_call_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    slot: crate::ir::LocalSlotId,
+    span: Span,
+) {
+    ctx.emit_void(
+        Op::PopCallOperandOwner,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::PopCallOperandOwner.default_effects(),
+        Some(span),
+    );
+}
+
 /// Clears a rooted operand before releasing it, including when its destructor throws.
 pub(crate) fn retire_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,
     slot: crate::ir::LocalSlotId,
     span: Span,
 ) {
-    ctx.emit_void(
-        Op::PopCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(slot)),
-        Op::PopCallOperandOwner.default_effects(), Some(span),
-    );
+    unregister_owned_call_operand(ctx, slot, span);
     ctx.emit_void(
         Op::ReleaseLocalSlot,
         Vec::new(),

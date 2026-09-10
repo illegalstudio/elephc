@@ -8,6 +8,184 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
+/// Verifies that one exact call operand is stored in a final root spanning its call.
+fn assert_final_operand_root_spans_call(
+    function: &crate::ir::Function,
+    call_index: usize,
+    operand: crate::ir::ValueId,
+    target: &str,
+    detail: &str,
+) -> crate::ir::LocalSlotId {
+    use crate::ir::{Immediate, Op};
+
+    let stores = function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == Op::StoreLocal && inst.operands == [operand])
+        .collect::<Vec<_>>();
+    assert_eq!(stores.len(), 1, "{target}: {detail} must have one final root store");
+    let Some(Immediate::LocalSlot(slot)) = stores[0].immediate else {
+        panic!("{target}: {detail} final root must name a slot");
+    };
+    let push = function
+        .instructions
+        .iter()
+        .position(|inst| {
+            inst.op == Op::PushCallOperandOwner
+                && inst.immediate == Some(Immediate::LocalSlot(slot))
+        })
+        .unwrap_or_else(|| panic!("{target}: {detail} final root must be published"));
+    let pop = function
+        .instructions
+        .iter()
+        .position(|inst| {
+            inst.op == Op::PopCallOperandOwner
+                && inst.immediate == Some(Immediate::LocalSlot(slot))
+        })
+        .unwrap_or_else(|| panic!("{target}: {detail} final root must be detached"));
+    let release = function
+        .instructions
+        .iter()
+        .position(|inst| {
+            inst.op == Op::ReleaseLocalSlot
+                && inst.immediate == Some(Immediate::LocalSlot(slot))
+        })
+        .unwrap_or_else(|| panic!("{target}: {detail} final root must be retired"));
+    assert!(push < call_index && call_index < pop && pop < release, "{target}: {detail}");
+    for op in [Op::PushCallOperandOwner, Op::PopCallOperandOwner, Op::ReleaseLocalSlot] {
+        assert_eq!(function.instructions.iter().filter(|inst| {
+            inst.op == op && inst.immediate == Some(Immediate::LocalSlot(slot))
+        }).count(), 1, "{target}: {detail} must contain one {op:?}");
+    }
+    assert!(!function.instructions.iter().any(|inst| {
+        inst.op == Op::Release && inst.operands == [operand]
+    }), "{target}: {detail} final rooted SSA must not also be released directly");
+    slot
+}
+
+/// Follows an owned source through its evaluation slot into the transferred SSA value.
+fn assert_evaluation_owner_transfer(
+    function: &crate::ir::Function,
+    source: crate::ir::ValueId,
+    target: &str,
+) -> crate::ir::ValueId {
+    use crate::ir::{Immediate, LocalKind, Op, Ownership};
+
+    let retains = function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == Op::Acquire && inst.operands == [source])
+        .collect::<Vec<_>>();
+    assert_eq!(retains.len(), 1, "{target}: source must acquire one evaluation lease");
+    let retained = retains[0].result.unwrap();
+    let stores = function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == Op::StoreLocal && inst.operands == [retained])
+        .collect::<Vec<_>>();
+    assert_eq!(stores.len(), 1, "{target}: evaluation lease must have one owner slot");
+    let Some(Immediate::LocalSlot(slot)) = stores[0].immediate else {
+        panic!("{target}: evaluation owner must name a slot");
+    };
+    assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::OwnedTemp, "{target}");
+    for op in [Op::PushCallOperandOwner, Op::PopCallOperandOwner, Op::UnsetLocal] {
+        assert_eq!(function.instructions.iter().filter(|inst| {
+            inst.op == op && inst.immediate == Some(Immediate::LocalSlot(slot))
+        }).count(), 1, "{target}: evaluation owner must contain one {op:?}");
+    }
+    assert!(!function.instructions.iter().any(|inst| {
+        inst.op == Op::ReleaseLocalSlot
+            && inst.immediate == Some(Immediate::LocalSlot(slot))
+    }), "{target}: transferred evaluation owner must not release its cleared slot");
+    let loads = function
+        .instructions
+        .iter()
+        .filter(|inst| {
+            inst.op == Op::LoadLocal
+                && inst.immediate == Some(Immediate::LocalSlot(slot))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(loads.len(), 2, "{target}: evaluation slot must lend once and transfer once");
+    let borrowed = loads
+        .iter()
+        .find_map(|inst| {
+            let value = inst.result?;
+            function
+                .value(value)
+                .is_some_and(|value| value.ownership == Ownership::Borrowed)
+                .then_some(value)
+        })
+        .expect("evaluation owner must expose one borrow");
+    let transferred = loads
+        .iter()
+        .find_map(|inst| {
+            let value = inst.result?;
+            (value != borrowed).then_some(value)
+        })
+        .expect("evaluation owner must transfer one value");
+    assert!(!function.instructions.iter().any(|inst| {
+        inst.op == Op::Release && inst.operands == [borrowed]
+    }), "{target}: evaluation borrow must not be released");
+    assert_eq!(function.instructions.iter().filter(|inst| {
+        inst.op == Op::Release && inst.operands == [source]
+    }).count(), 1, "{target}: source SSA must retire once after its evaluation retain");
+    assert_eq!(function.instructions.iter().filter(|inst| {
+        inst.op == Op::Release && inst.operands == [transferred]
+    }).count(), 1, "{target}: transferred SSA must retire once after its final retain");
+    transferred
+}
+
+/// Merged callable storage is extracted and rooted before positional, named and spread calls.
+#[test]
+fn merged_callable_parameters_have_owned_descriptor_storage_on_all_targets() {
+    use crate::ir::{Op, Ownership};
+    use crate::types::PhpType;
+    let source = r#"<?php
+function callableFirst(): int { return 1; }
+function callableSecond(): int { return 2; }
+function consumeMergedCallback(callable $callback, int $suffix): int { return $callback() + $suffix; }
+function invokeMergedCallback(int $choice): void {
+    $callback = $choice > 0 ? callableFirst(...) : callableSecond(...);
+    echo consumeMergedCallback($callback, 10);
+    echo consumeMergedCallback(suffix: 20, callback: $callback);
+    echo consumeMergedCallback(...[$callback, 30]);
+}
+invokeMergedCallback($argc);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|f| f.name == "invokeMergedCallback").unwrap();
+        let extractions: Vec<_> = function.instructions.iter().filter(|inst| {
+            inst.op == Op::MixedUnbox && inst.result_php_type == PhpType::Callable
+        }).collect();
+        assert_eq!(extractions.len(), 3, "{target}: every call surface must repair the callable ABI");
+        for extraction in extractions {
+            let value = extraction.result.unwrap();
+            assert_eq!(function.value(value).unwrap().ownership, Ownership::Owned, "{target}");
+            let transferred = assert_evaluation_owner_transfer(function, value, target);
+            let retained = function.instructions.iter().find(|inst| {
+                inst.op == Op::Acquire && inst.operands == [transferred]
+            }).expect("the transferred descriptor needs an independent invocation root");
+            let operand = retained.result.unwrap();
+            let call_index = function.instructions.iter().position(|inst| {
+                inst.op == Op::Call && inst.operands.contains(&operand)
+            }).expect("the rooted descriptor must be passed to its call");
+            assert_final_operand_root_spans_call(
+                function,
+                call_index,
+                operand,
+                target,
+                "extracted callable descriptor",
+            );
+        }
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_mixed_unbox"), "{target}");
+    }
+}
+
 /// Statically resolved CUF, FCC and closure calls protect temporary arguments on every ABI.
 #[test]
 fn static_callable_arguments_have_unwind_roots_on_all_targets() {
@@ -34,10 +212,15 @@ echo staticCufOwner($argc), staticFccOwner($argc), staticClosureOwner($argc);
         );
         for name in ["staticCufOwner", "staticFccOwner", "staticClosureOwner"] {
             let function = module.functions.iter().find(|f| f.name == name).unwrap();
-            let push = function.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner).unwrap();
             let call = function.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
-            let pop = function.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner).unwrap();
-            assert!(push < call && call < pop, "{target}: {name} must protect its temporary array");
+            let operand = function.instructions[call].operands[0];
+            assert_final_operand_root_spans_call(
+                function,
+                call,
+                operand,
+                target,
+                &format!("{name} temporary array"),
+            );
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
@@ -209,7 +392,7 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
 /// Temporary callable arguments are rooted around independent calls, unlike aliasing returns.
 #[test]
 fn user_callable_argument_owners_are_unwind_visible_on_all_targets() {
-    use crate::ir::Op;
+    use crate::ir::{Immediate, LocalKind, Op, ValueDef};
     let source = r#"<?php
 function runOwnedCallback(callable $callback): void { $callback(); }
 function preserveCallback(callable $callback): callable { return $callback; }
@@ -229,13 +412,54 @@ $callback();
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let owner = module.functions.iter().find(|f| f.name == "callbackOwnerCaller").unwrap();
-        let push = owner.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner).unwrap();
         let call = owner.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
-        let pop = owner.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner).unwrap();
-        assert!(push < call && call < pop, "{target}: protect the callee's whole activation");
+        assert_final_operand_root_spans_call(
+            owner,
+            call,
+            owner.instructions[call].operands[0],
+            target,
+            "owned callback argument",
+        );
         let alias = module.functions.iter().find(|f| f.name == "callbackAliasCaller").unwrap();
-        assert!(!alias.instructions.iter().any(|inst| inst.op == Op::PushCallOperandOwner),
-            "{target}: a passthrough return keeps its argument ownership");
+        let call = alias.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        let callback = alias.instructions[call].operands[0];
+        let ValueDef::Instruction { inst, .. } = alias.value(callback).unwrap().def else {
+            panic!("{target}: aliasing callback must be an evaluation transfer");
+        };
+        let load = alias.instruction(inst).unwrap();
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else {
+            panic!("{target}: aliasing callback transfer must name its evaluation slot");
+        };
+        assert_eq!(load.op, Op::LoadLocal, "{target}");
+        assert_eq!(alias.locals[slot.as_raw() as usize].kind, LocalKind::OwnedTemp, "{target}");
+        let store = alias.instructions.iter().find(|candidate| {
+            candidate.op == Op::StoreLocal
+                && candidate.immediate == Some(Immediate::LocalSlot(slot))
+        }).expect("aliasing callback evaluation owner store");
+        let retained = store.operands[0];
+        let retain = alias.instructions.iter().find(|candidate| {
+            candidate.op == Op::Acquire && candidate.result == Some(retained)
+        }).expect("aliasing callback evaluation retain");
+        let source = retain.operands[0];
+        let ValueDef::Instruction { inst, .. } = alias.value(source).unwrap().def else {
+            panic!("{target}: callback source must be instruction-defined");
+        };
+        assert_eq!(alias.instruction(inst).unwrap().op, Op::ClosureNew, "{target}");
+        let push = alias.instructions.iter().position(|candidate| {
+            candidate.op == Op::PushCallOperandOwner
+                && candidate.immediate == Some(Immediate::LocalSlot(slot))
+        }).unwrap();
+        let pop = alias.instructions.iter().position(|candidate| {
+            candidate.op == Op::PopCallOperandOwner
+                && candidate.immediate == Some(Immediate::LocalSlot(slot))
+        }).unwrap();
+        assert!(push < pop && pop < call, "{target}: evaluation owner transfers before aliasing call");
+        assert_eq!(alias.instructions.iter().filter(|candidate| {
+            candidate.op == Op::PushCallOperandOwner
+        }).count(), 1, "{target}: aliasing call has only its evaluation root");
+        assert!(!alias.instructions.iter().any(|candidate| {
+            candidate.op == Op::Release && candidate.operands == [callback]
+        }), "{target}: passthrough return transfers the callback owner to its result");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         assert!(asm.contains("__rt_cleanup_call_operand_descriptor"), "{target}");
     }
@@ -244,7 +468,7 @@ $callback();
 /// Callee-owned array parameters remain rooted even when opaque dispatch makes return aliasing unknown.
 #[test]
 fn owned_shadow_arguments_have_unwind_roots_with_unknown_results_on_all_targets() {
-    use crate::ir::{Immediate, Op, ValueDef};
+    use crate::ir::{Immediate, LocalKind, Op, ValueDef};
     let source = r#"<?php
 function invokeShadowTarget(callable $target, array $arguments): mixed {
     return call_user_func_array($target, $arguments);
@@ -268,17 +492,48 @@ $callback();
         );
         for name in ["shadowArgumentCaller", "laterCallbackCaller"] {
             let function = module.functions.iter().find(|f| f.name == name).unwrap();
-            let push = function.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner).unwrap();
             let call = function.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
-            let pop = function.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner).unwrap();
-            assert!(push < call && call < pop, "{target}: {name} must protect its array argument");
-            let Some(Immediate::LocalSlot(slot)) = function.instructions[push].immediate else { panic!("missing root slot"); };
+            let array_operand_index = if name == "shadowArgumentCaller" { 1 } else { 0 };
+            let slot = assert_final_operand_root_spans_call(
+                function,
+                call,
+                function.instructions[call].operands[array_operand_index],
+                target,
+                &format!("{name} owned array argument"),
+            );
             assert_ne!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), crate::types::PhpType::Callable,
                 "{target}: raw callable passthrough must retain its transfer contract");
             if name == "laterCallbackCaller" {
                 let callback = function.instructions[call].operands[1];
-                let ValueDef::Instruction { inst, .. } = function.value(callback).unwrap().def else { panic!("missing closure"); };
-                assert_eq!(function.instruction(inst).unwrap().op, Op::ClosureNew);
+                let ValueDef::Instruction { inst, .. } = function.value(callback).unwrap().def else {
+                    panic!("missing callback evaluation transfer");
+                };
+                let callback_load = function.instruction(inst).unwrap();
+                let Some(Immediate::LocalSlot(callback_slot)) = callback_load.immediate else {
+                    panic!("missing callback evaluation slot");
+                };
+                assert_eq!(callback_load.op, Op::LoadLocal, "{target}");
+                assert_eq!(
+                    function.locals[callback_slot.as_raw() as usize].kind,
+                    LocalKind::OwnedTemp,
+                    "{target}",
+                );
+                let retained = function.instructions.iter().find(|instruction| {
+                    instruction.op == Op::StoreLocal
+                        && instruction.immediate == Some(Immediate::LocalSlot(callback_slot))
+                }).expect("callback evaluation owner store").operands[0];
+                let source = function.instructions.iter().find(|instruction| {
+                    instruction.op == Op::Acquire && instruction.result == Some(retained)
+                }).expect("callback evaluation retain").operands[0];
+                let ValueDef::Instruction { inst, .. } = function.value(source).unwrap().def else {
+                    panic!("missing closure source");
+                };
+                assert_eq!(function.instruction(inst).unwrap().op, Op::ClosureNew, "{target}");
+                let pop = function.instructions.iter().position(|instruction| {
+                    instruction.op == Op::PopCallOperandOwner
+                        && instruction.immediate == Some(Immediate::LocalSlot(callback_slot))
+                }).unwrap();
+                assert!(pop < call, "{target}: aliasing callback evaluation root transfers before the call");
                 assert!(!function.instructions.iter().any(|instruction| {
                     instruction.op == Op::Release && instruction.operands == [callback]
                 }), "{target}: rooting parameter zero must not renumber the returned callback");
@@ -405,9 +660,9 @@ echo coercionCaller($argc);
         );
         let caller = module.functions.iter().find(|function| function.name == "coercionCaller").unwrap();
         assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::PushCallOperandOwner).count(),
-            2, "{target}: both source arrays retain independent EIR roots");
+            4, "{target}: both source arrays have evaluation and final EIR roots");
         assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::PopCallOperandOwner).count(),
-            2, "{target}: both source roots must be detached");
+            4, "{target}: both source evaluation and final roots must be detached");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = asm.split_once("@fn name=coercionCaller ").unwrap().1
             .split_once("@endfn name=coercionCaller").unwrap().0;
@@ -416,9 +671,9 @@ echo coercionCaller($argc);
             (line.starts_with("bl ") || line.starts_with("call ")) && line.contains("coercionTarget")
         }).unwrap_or_else(|| panic!("{target}: missing native call in {body}"));
         let (before, after) = body.split_once(invoke).unwrap();
-        // Two explicit EIR roots protect the source arrays, and two backend roots protect
-        // the implicit Mixed boxes. Each layer must publish and retire its own owners.
-        assert_eq!(before.matches("publish temporary call operand owner").count(), 4, "{target}: {body}");
+        // Two evaluation roots protect source-order lowering, two final EIR roots span the
+        // call, and two backend roots protect the implicit Mixed boxes.
+        assert_eq!(before.matches("publish temporary call operand owner").count(), 6, "{target}: {body}");
         assert_eq!(after.matches("detach temporary call operand owner").count(), 4, "{target}: {body}");
         let implicit = after.split_once("op=pop_call_operand_owner").unwrap().0;
         assert_eq!(implicit.matches("detach temporary call operand owner").count(), 2, "{target}: {body}");

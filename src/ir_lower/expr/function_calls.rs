@@ -86,7 +86,8 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
-    let operands = if is_extern || is_user_function {
+    begin_call_argument_evaluation(ctx);
+    let mut operands = if is_extern || is_user_function {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
@@ -101,6 +102,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         call_return_type(ctx, canonical, &operands)
     };
     if is_extern {
+        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
         let data = ctx.intern_function_name(canonical);
         let call = ctx.emit_value(
             Op::ExternCall,
@@ -120,6 +122,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             &ReturnArgAlias::Unknown,
             expr.span,
         );
+        retire_call_argument_intermediates(ctx, &evaluation_intermediates);
         return call;
     }
     if is_user_function {
@@ -128,7 +131,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             .function(canonical)
             .cloned()
             .unwrap_or(ReturnArgAlias::Unknown);
-        let mut operands = operands;
+        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
         let roots = root_user_call_operands(
             ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
         );
@@ -148,15 +151,17 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         release_owned_call_arg_temporaries_with_roots(
             ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), &roots, expr.span,
         );
+        retire_call_argument_intermediates(ctx, &evaluation_intermediates);
         return call;
     }
     if ctx.has_eval_barrier()
         && plain_positional_call_args(args)
         && canonical_builtin_function_name(canonical).is_none()
     {
+        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
         let dynamic_name = php_symbol_key(canonical.trim_start_matches('\\'));
         let data = ctx.intern_function_name(&dynamic_name);
-        return ctx.emit_value(
+        let call = ctx.emit_value(
             Op::EvalFunctionCall,
             operands,
             Some(Immediate::Data(data)),
@@ -164,9 +169,14 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             Op::EvalFunctionCall.default_effects(),
             Some(expr.span),
         );
+        retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+        return call;
     }
     let eval_literal = eval_literal_fragment(canonical, args);
-    emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    let call = emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal);
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    call
 }
 
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.

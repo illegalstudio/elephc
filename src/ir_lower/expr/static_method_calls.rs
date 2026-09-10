@@ -64,8 +64,9 @@ pub(super) fn lower_static_method_call(
     let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();
+    begin_call_argument_evaluation(ctx);
     let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
-    let operands =
+    let mut operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
     let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
     let data = ctx.intern_string(&name);
@@ -89,6 +90,16 @@ pub(super) fn lower_static_method_call(
         }
         _ => result_type,
     };
+    let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    let roots = root_user_call_operands(
+        ctx,
+        &mut operands,
+        sig.as_ref(),
+        &return_alias,
+        &result_type,
+        expr.span,
+    );
     let call = ctx.emit_value(
         Op::StaticMethodCall,
         operands.clone(),
@@ -97,16 +108,17 @@ pub(super) fn lower_static_method_call(
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     );
-    let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
     let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
-    release_owned_call_arg_temporaries_with_signature(
+    release_owned_call_arg_temporaries_with_roots(
         ctx,
         &operands,
         Some(call.value),
         &return_alias,
         sig.as_ref(),
+        &roots,
         expr.span,
     );
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     call
 }
 

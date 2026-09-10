@@ -132,7 +132,19 @@ pub(super) fn lower_method_call_with_receiver(
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
+    begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let mut arg_values = arg_values;
+    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
+    let roots = root_user_call_operands(
+        ctx,
+        &mut arg_values,
+        sig.as_ref(),
+        &return_alias,
+        &result_type,
+        expr.span,
+    );
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
@@ -143,16 +155,17 @@ pub(super) fn lower_method_call_with_receiver(
         op.default_effects(),
         Some(expr.span),
     );
-    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
     let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
-    release_owned_call_arg_temporaries_with_signature(
+    release_owned_call_arg_temporaries_with_roots(
         ctx,
         &arg_values,
         Some(call.value),
         &return_alias,
         sig.as_ref(),
+        &roots,
         expr.span,
     );
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }

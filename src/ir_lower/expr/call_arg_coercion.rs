@@ -11,7 +11,12 @@ use super::*;
 
 /// Lowers positional/named/spread call arguments in source order.
 pub(super) fn lower_args(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) -> Vec<crate::ir::ValueId> {
-    args.iter().map(|arg| lower_expr(ctx, arg).value).collect()
+    args.iter()
+        .map(|arg| {
+            let value = lower_expr(ctx, arg);
+            root_evaluated_call_argument(ctx, value, arg.span).value
+        })
+        .collect()
 }
 
 /// Lowers one argument while applying by-reference storage normalization from a signature.
@@ -28,7 +33,12 @@ pub(super) fn lower_arg_with_signature(
         return value;
     }
     let lowered = lower_expr(ctx, arg);
-    coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+    let lowered = coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg);
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        lowered.value
+    } else {
+        root_evaluated_call_argument(ctx, lowered, arg.span).value
+    }
 }
 
 /// Coerces a positional argument to storage owned explicitly by EIR when required.
@@ -57,6 +67,12 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         return coerce_to_float(ctx, value, arg);
     }
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if param_ty == PhpType::Callable
+        && !sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        return unbox_callable_param_storage(ctx, value, Some(arg.span));
+    }
     if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return coerce_to_string(ctx, value, arg);
     }
@@ -66,6 +82,25 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         }
     }
     value
+}
+
+/// Extracts a statically checked callable whose merge storage became a Mixed cell.
+/// The backend retains the descriptor, so the extracted EIR value must own that lease.
+fn unbox_callable_param_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let result = ctx.emit_owned_value(
+        Op::MixedUnbox,
+        vec![value.value],
+        None,
+        PhpType::Callable,
+        Op::MixedUnbox.default_effects() | crate::ir::Effects::REFCOUNT_OP,
+        span,
+    );
+    release_coerced_source_if_owned(ctx, value, span);
+    result
 }
 
 /// Applies a declared-parameter scalar binding to an already-lowered argument value.
@@ -115,7 +150,8 @@ pub(super) fn coerce_operands_to_params(
                 value,
                 ir_type: IrType::I64,
             };
-            operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
+            let coerced = coerce_to_float_at_span(ctx, lowered, None);
+            operands[index] = root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
         } else if param_ty == PhpType::Str
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
         {
@@ -123,7 +159,14 @@ pub(super) fn coerce_operands_to_params(
                 value,
                 ir_type: ctx.builder.value_type(value),
             };
-            operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
+            let coerced = coerce_to_string_at_span(ctx, lowered, None);
+            operands[index] = root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
+        } else if param_ty == PhpType::Callable
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let lowered = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
+            let coerced = unbox_callable_param_storage(ctx, lowered, None);
+            operands[index] = root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
         } else if sig.declared_params.get(index).copied().unwrap_or(false) {
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order
@@ -135,7 +178,9 @@ pub(super) fn coerce_operands_to_params(
                     value,
                     ir_type: ctx.builder.value_type(value),
                 };
-                operands[index] = apply_scalar_param_cast(ctx, cast, lowered, None).value;
+                let coerced = apply_scalar_param_cast(ctx, cast, lowered, None);
+                operands[index] =
+                    root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
             }
         }
     }
@@ -334,7 +379,8 @@ fn lower_args_with_signature_options(
             let Some(Some(default)) = sig.defaults.get(idx) else {
                 break;
             };
-            operands.push(lower_expr(ctx, default).value);
+            let value = lower_expr(ctx, default);
+            operands.push(root_evaluated_call_argument(ctx, value, default.span).value);
         }
     }
     if sig.variadic.is_some() {

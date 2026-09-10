@@ -94,6 +94,22 @@ pub(crate) struct ClosureCapture {
     pub value: ValueId,
 }
 
+/// Records one temporary owner published while a call argument list is evaluated.
+#[derive(Debug, Clone)]
+pub(crate) struct CallArgumentEvaluationOwner {
+    pub value: ValueId,
+    pub temp_name: String,
+    pub slot: LocalSlotId,
+    pub span: Span,
+}
+
+/// Keeps one call's evaluation owners distinct from nested expression lowering.
+#[derive(Debug, Clone)]
+pub(crate) struct CallArgumentEvaluationScope {
+    pub expression_depth: usize,
+    pub owners: Vec<CallArgumentEvaluationOwner>,
+}
+
 /// Rollback point for a speculative statement lowering.
 pub(crate) struct LoweringSnapshot {
     function: Function,
@@ -121,6 +137,7 @@ pub(crate) struct LoweringSnapshot {
     closure_count: usize,
     expression_depth: usize,
     reference_call_context: Option<(usize, Option<PhpType>)>,
+    call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -186,6 +203,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) expression_depth: usize,
     /// Requested reference-call depth and the payload type recorded by the resolved callee.
     pub(crate) reference_call_context: Option<(usize, Option<PhpType>)>,
+    /// Nested owner ledgers for source-order call argument evaluation.
+    pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     initialized_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
@@ -418,6 +437,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             hidden_temp_counter: 0,
             expression_depth: 0,
             reference_call_context: None,
+            call_argument_evaluation_scopes: Vec::new(),
             write_operand_is_borrowed: false,
             eval_barrier_active: false,
             eval_executed: false,
@@ -460,6 +480,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             hidden_temp_counter: self.hidden_temp_counter,
             expression_depth: self.expression_depth,
             reference_call_context: self.reference_call_context.clone(),
+            call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
             eval_executed: self.eval_executed,
             eval_scope_read_param: self.eval_scope_read_param.clone(),
@@ -499,6 +520,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.hidden_temp_counter = snapshot.hidden_temp_counter;
         self.expression_depth = snapshot.expression_depth;
         self.reference_call_context = snapshot.reference_call_context;
+        self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
         self.eval_executed = snapshot.eval_executed;
         self.eval_scope_read_param = snapshot.eval_scope_read_param;
@@ -2870,7 +2892,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
-    /// Returns whether the value is a read from a one-shot hidden expression temp.
+    /// Returns whether the value is an owning read from a one-shot hidden expression temp.
+    ///
+    /// Argument-evaluation ledgers deliberately expose a borrowed read while the slot owns
+    /// the retained lease. That explicit metadata is authoritative until the ledger takes
+    /// the slot, so coercion and staging must not consume the borrowed read independently.
     pub(crate) fn value_is_owned_temp_load(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
@@ -2882,6 +2908,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         };
         self.builder.local_kind(slot) == LocalKind::OwnedTemp
+            && self.builder.value_ownership(value) != Ownership::Borrowed
     }
 
     /// Returns whether a concrete local heap load may require an owned-unbox release.

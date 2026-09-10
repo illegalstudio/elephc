@@ -1955,3 +1955,22 @@ promotion effects. Add focused five-target emitter/EIR and heap-debug/tagged
 regressions. Cargo check --tests, builtin documentation audits and diff hygiene
 pass. No local tests execute. Generated docs explicitly describe the boxed-path
 limits instead of claiming full PHP reference parity.
+
+### Publish argument owners before later source arguments can throw
+
+Track nested source-order evaluation scopes separately from final call roots.
+Publish independently owned argument values immediately, expose explicit borrowed
+loads to coercion and staging, then transfer final operands without a destructor
+gap. Keep intermediate owners rooted until the enclosing call completes or unwinds.
+Respect Borrowed metadata for OwnedTemp loads, preserving ordinary owning takes.
+Apply the same lifetime handoff to functions, methods, static callables and named
+or spread argument normalization. Repair the physical Mixed-to-Callable parameter
+boundary with an explicitly owned descriptor extraction.
+
+Add five-target EIR assertions and heap-debug/tagged regressions, and restore the
+spent hash-context regression's exact zero-live-block expectation. Update existing
+structural checks to correlate evaluation and invocation owners by slot, retaining
+exact retirement counts rather than relying on the first push or pop. Native Sol
+implemented and reviewed the bounded owner ledger; the coordinator reviewed its
+handoff and coercion integration. Compile-only validation covers the changed tests;
+runtime behavior still requires CI. No tests execute locally.

@@ -19,10 +19,12 @@ pub(super) fn lower_static_callable_call(
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
             let sig = ctx.functions.get(&function_name).cloned();
+            begin_call_argument_evaluation(ctx);
             let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             let return_alias = ctx.return_alias_summaries.function(&function_name)
                 .cloned().unwrap_or(ReturnArgAlias::Unknown);
+            let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             let roots = root_user_call_operands(
                 ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
             );
@@ -39,6 +41,7 @@ pub(super) fn lower_static_callable_call(
             release_owned_call_arg_temporaries_with_roots(
                 ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), &roots, expr.span,
             );
+            retire_call_argument_intermediates(ctx, &evaluation_intermediates);
             Some(call)
         }
         StaticCallableBinding::ExternFunction(function_name) => {
@@ -46,17 +49,21 @@ pub(super) fn lower_static_callable_call(
                 .extern_functions
                 .get(&function_name)
                 .map(function_sig_from_extern_for_descriptor);
-            let operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
+            begin_call_argument_evaluation(ctx);
+            let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
+            let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::ExternCall,
                 operands,
                 Some(Immediate::Data(data)),
                 php_type,
                 Op::ExternCall.default_effects(),
                 Some(expr.span),
-            ))
+            );
+            retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+            Some(call)
         }
         StaticCallableBinding::Builtin(function_name) => {
             if let Some(value) =
@@ -95,8 +102,10 @@ pub(super) fn lower_static_callable_call(
             signature,
             captures,
         } => {
+            begin_call_argument_evaluation(ctx);
             let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
+            let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
             let roots = root_user_call_operands(
                 ctx, &mut arg_values, Some(&signature), &ReturnArgAlias::Unknown, &php_type, expr.span,
             );
@@ -116,6 +125,7 @@ pub(super) fn lower_static_callable_call(
                 ctx, &arg_values, Some(call.value), &ReturnArgAlias::Unknown,
                 Some(&signature), &roots, expr.span,
             );
+            retire_call_argument_intermediates(ctx, &evaluation_intermediates);
             Some(call)
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {

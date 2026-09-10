@@ -212,6 +212,7 @@ pub(super) fn lower_assoc_spread_only_args(
         return None;
     }
     let spread = lower_expr(ctx, inner);
+    let spread = root_evaluated_call_argument(ctx, spread, inner.span);
     let spread_type = ctx.builder.value_php_type(spread.value);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
     store_value_into_temp(ctx, &temp_name, spread_type, spread, arg.span);
@@ -220,7 +221,8 @@ pub(super) fn lower_assoc_spread_only_args(
     for (idx, (param_name, _)) in sig.params.iter().enumerate() {
         let default = sig.defaults.get(idx).and_then(|default| default.as_ref());
         let param_expr = assoc_spread_param_expr(&spread_expr, param_name, default, arg.span);
-        operands.push(lower_expr(ctx, &param_expr).value);
+        let value = lower_expr(ctx, &param_expr);
+        operands.push(root_evaluated_call_argument(ctx, value, param_expr.span).value);
     }
     Some(operands)
 }
