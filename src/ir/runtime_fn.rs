@@ -966,7 +966,8 @@ impl RuntimeFnId {
             // boundary that performs it, not at the surrounding array operation.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayFind | RuntimeFnId::ArrayAny
             | RuntimeFnId::ArrayAll | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayUdiff
-            | RuntimeFnId::ArrayUintersect => crate::ir::Effects::from_bits_retain(
+            | RuntimeFnId::ArrayUintersect | RuntimeFnId::ArrayWalk
+            | RuntimeFnId::ArrayWalkRecursive => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
                     & !crate::ir::Effects::NETWORK_IO.bits(),
@@ -1331,16 +1332,15 @@ impl RuntimeFnId {
     pub const fn intrinsic_effects(self) -> crate::ir::Effects {
         use crate::ir::Effects as E;
         match self {
-            RuntimeFnId::ArrayMap
-            | RuntimeFnId::ArrayWalk
-            | RuntimeFnId::ArrayWalkRecursive => {
+            RuntimeFnId::ArrayMap => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
             // of the selected callback's effect summary. Validation may also throw.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
             | RuntimeFnId::ArrayAny | RuntimeFnId::ArrayAll
-            | RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect => self.effects(),
+            | RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect
+            | RuntimeFnId::ArrayWalk | RuntimeFnId::ArrayWalkRecursive => self.effects(),
             RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
             ),

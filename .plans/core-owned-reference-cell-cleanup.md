@@ -1938,3 +1938,20 @@ same-place operand. Add five-target EIR/emitter assertions, explicit reference
 aliases, property receivers and heap-debug/tagged runtime regressions. Keep the
 restricted two-array contract explicit. Grok reviewed alias and detached-owner
 paths. Cargo check --tests and diff hygiene pass; no local test executes.
+
+### Walk boxed PHP arrays without publishing borrowed interior references
+
+Add target-complete boxed walk and recursive-walk helpers with COW isolation,
+progressive callback-argument ownership and exception-safe cleanup. Register each
+borrowed hash-entry slot for the callback's duration and restore the registry on
+normal return, nested unwind and web reset. Reject unsupported opaque descriptors
+and reference escapes through closure captures or promoted property bindings.
+Managed references remain valid; descriptor reference returns still copy their
+pointee into an owned result rather than publishing the borrowed address.
+
+An independent native review caught and corrected ARM64 string cleanup's register
+selection, an unnecessary blanket reference-return rejection and missing local
+promotion effects. Add focused five-target emitter/EIR and heap-debug/tagged
+regressions. Cargo check --tests, builtin documentation audits and diff hygiene
+pass. No local tests execute. Generated docs explicitly describe the boxed-path
+limits instead of claiming full PHP reference parity.

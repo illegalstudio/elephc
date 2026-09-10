@@ -906,6 +906,53 @@ exercise([false, false]);
     assert_eq!(out, "2:2:ww:rr:2:boolean:1:1:0:2");
 }
 
+/// Verifies boxed declared arrays preserve COW, by-reference writes, actual keys, and recursive
+/// leaf order when the callback receives runtime-typed Mixed values.
+#[test]
+fn test_declared_array_walks_preserve_references_keys_and_cow() {
+    let out = compile_and_run(
+        r#"<?php
+function walk_declared(array $values): void {
+    $copy = $values;
+    $alias = $values;
+    array_walk($values, static function (mixed &$value, mixed $key) use (&$alias): void {
+        if ($key === "first") {
+            $alias["first"] = 100;
+            unset($alias[7]);
+        }
+        echo gettype($value), "/", gettype($key), "/", $key, ";";
+        $value = $value + 10;
+    });
+    echo $values["first"], ",", $values[7], "|", $copy["first"], ",", $copy[7], "|";
+    echo $alias["first"], ",", count($alias), ":";
+}
+
+function walk_recursive_declared(array $values): void {
+    $copy = $values;
+    $alias = $values;
+    array_walk_recursive($values, static function (mixed &$value, mixed $key) use (&$alias): void {
+        if ($key === "leaf") {
+            $alias[9] = 40;
+            unset($alias["outer"]);
+        }
+        echo gettype($value), "/", gettype($key), "/", $key, ";";
+        $value = $value + 10;
+    });
+    echo $values["outer"]["leaf"], ",", $values[9], "|";
+    echo $copy["outer"]["leaf"], ",", $copy[9], "|", $alias[9], ",", count($alias);
+}
+
+walk_declared(["first" => 1, 7 => 2]);
+walk_recursive_declared(["outer" => ["leaf" => 3], 9 => 4]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "integer/string/first;integer/integer/7;11,12|1,2|100,1:\
+         integer/string/leaf;integer/integer/9;13,14|3,4|40,1"
+    );
+}
+
 /// Verifies the reported repro: array_map with an untyped closure over a heterogeneous
 /// array preserves each element (the string element must not coerce to integer 0).
 #[test]

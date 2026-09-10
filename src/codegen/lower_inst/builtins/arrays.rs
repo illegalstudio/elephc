@@ -43,6 +43,7 @@ mod boxed_aggregate;
 mod boxed_reduce;
 mod boxed_predicates;
 mod boxed_set_comparator;
+mod boxed_walk;
 mod boxed_reverse;
 mod boxed_mutation;
 mod boxed_unshift;

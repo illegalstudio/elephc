@@ -10,6 +10,54 @@
 
 use crate::ir::print_module;
 
+/// Declared array walks select the boxed COW and descriptor path on every supported target.
+#[test]
+fn declared_array_walks_use_boxed_callback_storage_on_every_target() {
+    let source = r#"<?php
+function walkDeclared(array $values): void {
+    $walked = $values;
+    array_walk($walked, static function (mixed &$value, mixed $key): void {
+        $value = $value;
+    });
+    $recursive = $values;
+    array_walk_recursive($recursive, static function (mixed &$value, mixed $key): void {
+        $value = $value;
+    });
+}
+walkDeclared(["outer" => ["leaf" => 1], 2]);
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        let call = if target == "linux-x86_64" { "call" } else { "bl" };
+        let cow_call = format!("{call} __rt_array_cell_ensure_unique");
+        let walk_call = format!("{call} __rt_array_walk_boxed");
+        let cows = asm.lines().enumerate().filter_map(|(index, line)| {
+            (line.trim() == cow_call).then_some(index)
+        }).collect::<Vec<_>>();
+        let walks = asm.lines().enumerate().filter_map(|(index, line)| {
+            (line.trim() == walk_call).then_some(index)
+        }).collect::<Vec<_>>();
+        assert!(cows.len() >= 2, "{target}: {asm}");
+        assert_eq!(walks.len(), 2, "{target}: {asm}");
+        assert!(walks.iter().enumerate().all(|(index, walk)| {
+            cows.iter().filter(|cow| *cow < walk).count() > index
+        }), "{target}: each walk must separate its own receiver\n{asm}");
+    }
+}
+
 /// Declared array inputs select column extraction that understands both container layouts.
 #[test]
 fn declared_array_columns_use_boxed_row_lookup_on_every_target() {

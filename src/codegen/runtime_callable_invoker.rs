@@ -14,6 +14,8 @@
 //!   the eval exception-boundary escape path, so allocator-parked caller values survive the invoke.
 //! - Exception-boundary slots use ABI frame helpers because the expanded save area pushes ARM64
 //!   offsets beyond the signed 9-bit `ldur`/`stur` immediate range.
+//! - Reference-returning descriptors copy the pointee into an owned Mixed result before retiring
+//!   the returned cell lease.
 
 mod argument_owners;
 mod owned_value_args;
@@ -207,7 +209,6 @@ fn emit_runtime_callable_invoker_impl(
         INVOKER_ARG_ARRAY_OFFSET,
     );
     emit_saved_descriptor_entry_to_call_reg(emitter, call_reg);
-
     let ret_ty = emit_loaded_array_callback_call(
         LoadedArraySource::ArgumentRegister(1),
         &PhpType::Mixed,

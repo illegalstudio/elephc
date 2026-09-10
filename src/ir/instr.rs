@@ -940,10 +940,13 @@ impl Op {
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
-            | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
+            | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
+            ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
+                | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
+                | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
             IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
             | PtrReadString => {
@@ -985,9 +988,11 @@ impl Op {
             AcquireRefCell => E::all(),
             HashUnset | PropUnset | OffsetUnset => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP
                 | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArraySet | HashSet | ArrayPush | HashAppend | PropSet
+            ArraySet | HashSet | ArrayPush | HashAppend
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            PropSet => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP | E::WRITES_HEAP
+                | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
             // checks its load factor and may grow/rehash the table before it even knows whether

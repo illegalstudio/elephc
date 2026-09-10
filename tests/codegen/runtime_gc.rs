@@ -53,6 +53,7 @@ mod boxed_array_membership;
 mod boxed_array_spread;
 mod boxed_array_map;
 mod boxed_array_reduce;
+mod boxed_array_walk;
 mod boxed_array_aggregates;
 mod boxed_array_multisort;
 mod instanceof_operand_owners;

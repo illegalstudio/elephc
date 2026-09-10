@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Promoted by-reference parameters retain their original ref-cell aliasing.
+//! - Promoted properties cannot publish an active boxed-walk entry borrow.
 
 use super::*;
 
@@ -149,9 +150,21 @@ pub(super) fn emit_reference_property_bind(
     base_reg: &str,
 ) -> Result<()> {
     super::super::materialize_local_ref_arg_address(ctx, value)?;
+    let pointer_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, base_reg);
+    abi::emit_push_reg(ctx.emitter, pointer_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
+    let safe = ctx.next_label("reference_property_bind_safe");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &safe);
+    abi::emit_pop_reg(ctx.emitter, pointer_reg);
+    abi::emit_pop_reg(ctx.emitter, base_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_unmanaged_reference_escape_error");
+    ctx.emitter.label(&safe);
+    abi::emit_pop_reg(ctx.emitter, pointer_reg);
+    abi::emit_pop_reg(ctx.emitter, base_reg);
     abi::emit_store_to_address(
         ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
+        pointer_reg,
         base_reg,
         slot.offset,
     );

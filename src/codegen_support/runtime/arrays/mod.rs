@@ -104,6 +104,7 @@ mod array_udiff_uintersect;
 mod array_union;
 mod array_unshift;
 mod array_walk;
+mod array_walk_boxed;
 mod array_walk_recursive;
 mod asort;
 mod assoc_diff_intersect;
@@ -387,7 +388,9 @@ pub use array_union::emit_array_union;
 pub use array_unshift::emit_array_unshift;
 /// Emit array unshift (prepend) helper.
 pub use array_walk::emit_array_walk;
-/// Emit array walk helper.
+/// Emit boxed array walk and recursive walk helper.
+pub use array_walk_boxed::emit_array_walk_boxed;
+/// Emit recursive array walk helper.
 pub use array_walk_recursive::emit_array_walk_recursive;
 /// Emit recursive array walk helper.
 pub use asort::emit_asort;

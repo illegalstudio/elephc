@@ -8,8 +8,12 @@
 //! - The two payload words stay compatible with borrowed reference addresses.
 //! - Heap kind 7 identifies an owned cell; bits 8 through 14 describe its payload.
 //! - Singleton cells separate on clone, while cells with live aliases remain shared.
+//! - Exact active boxed-walk borrows are recognized separately from ordinary owner-zero cells.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::sentinels::{
+    emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
+};
 use crate::types::PhpType;
 
 /// Returns the descriptor tag for the actual stored property representation.
@@ -32,6 +36,8 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     emit_release(emitter);
     emit_clone(emitter);
     emit_owner_lookup(emitter);
+    emit_unmanaged_borrow_lookup(emitter);
+    emit_unmanaged_borrow_escape_error(emitter);
 }
 
 /// Allocates a zeroed two-word cell; C argument zero supplies its payload descriptor tag.
@@ -255,6 +261,99 @@ fn emit_owner_lookup(emitter: &mut Emitter) {
 
 }
 
+/// Reports whether the supplied address is an active boxed-array-walk element borrow.
+fn emit_unmanaged_borrow_lookup(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.label_global("__rt_reference_cell_is_unmanaged_borrow");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_unmanaged_ref_borrow_top", 0);
+            emitter.label("__rt_reference_cell_unmanaged_borrow_scan");
+            emitter.instruction("cbz x9, __rt_reference_cell_unmanaged_borrow_none"); // an empty chain cannot contain the candidate address
+            emitter.instruction("ldr x10, [x9, #8]");                           // read this active node's borrowed hash-entry slot
+            emitter.instruction("cmp x0, x10");                                 // require the exact exposed cell, not another array-interior address
+            emitter.instruction("b.eq __rt_reference_cell_unmanaged_borrow_found");  // report an active unmanaged borrow to the escape boundary
+            emitter.instruction("ldr x9, [x9]");                                // continue through nested and reentrant boxed walks
+            emitter.instruction("b __rt_reference_cell_unmanaged_borrow_scan"); // scan the complete stack-backed borrow chain
+            emitter.label("__rt_reference_cell_unmanaged_borrow_found");
+            emitter.instruction("mov x0, #1");                                  // boolean true: this reference may not be published
+            abi::emit_return(emitter);
+            emitter.label("__rt_reference_cell_unmanaged_borrow_none");
+            emitter.instruction("mov x0, xzr");                                 // boolean false: ordinary references retain their existing behavior
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_unmanaged_ref_borrow_top", 0);
+            emitter.label("__rt_reference_cell_unmanaged_borrow_scan");
+            emitter.instruction("test r10, r10");                               // an empty chain cannot contain the candidate address
+            emitter.instruction("jz __rt_reference_cell_unmanaged_borrow_none");  // leave ordinary references accepted
+            emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                // read this active node's borrowed hash-entry slot
+            emitter.instruction("cmp rax, r11");                                // require the exact exposed cell, not another array-interior address
+            emitter.instruction("je __rt_reference_cell_unmanaged_borrow_found");  // report an active unmanaged borrow to the escape boundary
+            emitter.instruction("mov r10, QWORD PTR [r10]");                    // continue through nested and reentrant boxed walks
+            emitter.instruction("jmp __rt_reference_cell_unmanaged_borrow_scan");  // scan the complete stack-backed borrow chain
+            emitter.label("__rt_reference_cell_unmanaged_borrow_found");
+            emitter.instruction("mov eax, 1");                                  // boolean true: this reference may not be published
+            abi::emit_return(emitter);
+            emitter.label("__rt_reference_cell_unmanaged_borrow_none");
+            emitter.instruction("xor eax, eax");                                // boolean false: ordinary references retain their existing behavior
+        }
+    }
+    abi::emit_return(emitter);
+}
+
+/// Allocates the catchable `Error` used when an unmanaged reference crosses a lifetime boundary.
+fn emit_unmanaged_borrow_escape_error(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.label_global("__rt_unmanaged_reference_escape_error_new");
+    abi::emit_frame_prologue(emitter, 32);
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 56);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its object handle
+            abi::emit_call_label(emitter, "__rt_object_handle_acquire");
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_error_class_id", 0);
+            emitter.instruction("str x9, [x0]");                                // store the per-program Error class id
+            abi::emit_symbol_address(emitter, "x9", "_unmanaged_reference_escape_msg");
+            emitter.instruction("str x9, [x0, #8]");                            // borrow the fixed diagnostic message
+            emitter.instruction("mov x9, #73");                                 // message byte length
+            emitter.instruction("str x9, [x0, #16]");                           // publish the complete message pair
+            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
+            emit_throwable_creation_line_unknown(emitter, "x0");
+            emitter.instruction("str xzr, [x0, #40]");                          // previous defaults to null
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(emitter, "r10", x86_64_heap_kind_word(6) as i64);
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocation before acquiring its object handle
+            abi::emit_call_label(emitter, "__rt_object_handle_acquire");
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_error_class_id", 0);
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the per-program Error class id
+            abi::emit_symbol_address(emitter, "r10", "_unmanaged_reference_escape_msg");
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // borrow the fixed diagnostic message
+            emitter.instruction("mov QWORD PTR [rax + 16], 73");                // publish the message byte length
+            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
+            emit_throwable_creation_line_unknown(emitter, "rax");
+            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous defaults to null
+        }
+    }
+    abi::emit_frame_restore(emitter, 32);
+    abi::emit_return(emitter);
+
+    emitter.blank();
+    emitter.label_global("__rt_unmanaged_reference_escape_error");
+    abi::emit_frame_prologue(emitter, 16);
+    abi::emit_call_label(emitter, "__rt_unmanaged_reference_escape_error_new");
+    abi::emit_store_reg_to_symbol(
+        emitter,
+        abi::int_result_reg(emitter),
+        "_exc_value",
+        0,
+    );
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_jump(emitter, "__rt_throw_current");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +411,9 @@ mod tests {
             let assembly = emitter.output();
             for entry in ["__rt_reference_cell_new", "__rt_reference_cell_clone",
                 "__rt_reference_cell_value_release", "__rt_reference_cell_free_deep",
+                "__rt_reference_cell_is_unmanaged_borrow",
+                "__rt_unmanaged_reference_escape_error_new",
+                "__rt_unmanaged_reference_escape_error",
                 "__rt_local_ref_cell_release_managed", "__rt_gc_collect_cycles_count_reference",
                 "__rt_gc_collect_cycles_free_reference", "__rt_gc_mark_reachable_reference"] {
                 assert!(assembly.contains(&format!("{entry}:")), "{name}: missing {entry}");
@@ -334,5 +436,26 @@ mod tests {
         assert_eq!(payload_tag(&PhpType::Array(Box::new(PhpType::Int))), 4);
         assert_eq!(payload_tag(&PhpType::Mixed), 7);
         assert_eq!(payload_tag(&PhpType::Callable), 10);
+    }
+
+    /// Active borrowed cells use exact-address lookup and a catchable Error on every ABI.
+    #[test]
+    fn unmanaged_reference_escape_guard_is_target_complete() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_reference_cells(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains("_rt_unmanaged_ref_borrow_top"), "{name}");
+            assert!(assembly.contains("_unmanaged_reference_escape_msg"), "{name}");
+            assert!(assembly.contains("_spl_error_class_id"), "{name}");
+            assert!(assembly.contains("__rt_object_handle_acquire"), "{name}");
+            assert!(assembly.contains("__rt_throw_current"), "{name}");
+            let compare = if name == "linux-x86_64" {
+                "cmp rax, r11"
+            } else {
+                "cmp x0, x10"
+            };
+            assert!(assembly.contains(compare), "{name}: borrowed lookup must compare exact cells");
+        }
     }
 }

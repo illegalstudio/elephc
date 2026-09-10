@@ -15,6 +15,16 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
     super::super::ensure_arg_count(inst, "array_walk", 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
+    if super::boxed_walk::lower_boxed_array_walk(
+        ctx,
+        inst,
+        array,
+        callback,
+        "array_walk",
+        false,
+    )? {
+        return Ok(());
+    }
     let elem_ty = eight_byte_callback_array_element_type(ctx.value_php_type(array)?, "array_walk")?;
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {

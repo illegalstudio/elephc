@@ -289,6 +289,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_global_argv", 8, target));
     out.push_str(&comm_directive("_exc_handler_top", 8, target));
     out.push_str(&comm_directive("_exc_call_frame_top", 8, target));
+    // Head of the stack-resident boxed-array-walk borrow chain. Each active callback
+    // publishes the exact hash-entry value slot it lends as `mixed &$value`, allowing
+    // escape boundaries to reject only that unmanaged reference instead of ordinary
+    // frame aliases. The owning walk boundary restores the saved head after unwinding.
+    out.push_str(&comm_directive("_rt_unmanaged_ref_borrow_top", 8, target));
     out.push_str(&comm_directive("_php_backtrace_next_line", 8, target));
     for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
         out.push_str(&comm_directive(symbol, 8, target));
@@ -572,6 +577,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _buffer_registry_exhausted_msg\n_buffer_registry_exhausted_msg:\n    .ascii \"Fatal error: buffer registry exhausted\\n\"\n");
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
+    out.push_str(".globl _unmanaged_reference_escape_msg\n_unmanaged_reference_escape_msg:\n    .ascii \"Escaping a borrowed boxed array_walk() element reference is not supported\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");

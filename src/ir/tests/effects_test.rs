@@ -9,6 +9,19 @@
 
 use crate::ir::{Effects, Op, RuntimeFnId};
 
+/// Reference publication checks access borrow state and may allocate a catchable Error.
+#[test]
+fn reference_publication_effects_preserve_borrow_guards_and_local_promotion() {
+    let guard = Effects::READS_GLOBAL | Effects::WRITES_GLOBAL | Effects::READS_HEAP
+        | Effects::WRITES_HEAP | Effects::ALLOC_HEAP | Effects::MAY_THROW
+        | Effects::REFCOUNT_OP;
+    for op in [Op::ClosureNew, Op::PropSet] {
+        assert!(op.default_effects().contains(guard), "{op:?}");
+        assert!(!op.default_effects().is_pure(), "{op:?}");
+    }
+    assert!(Op::ClosureNew.default_effects().contains(Effects::READS_LOCAL | Effects::WRITES_LOCAL));
+}
+
 /// Tandem sorting separates owners, changes both arrays and rejects invalid runtime inputs.
 #[test]
 fn multisort_effects_preserve_mutation_cow_and_validation() {
@@ -31,6 +44,8 @@ fn array_callback_effects_preserve_barriers_without_claiming_io_boundaries() {
         RuntimeFnId::ArrayReduce,
         RuntimeFnId::ArrayUdiff,
         RuntimeFnId::ArrayUintersect,
+        RuntimeFnId::ArrayWalk,
+        RuntimeFnId::ArrayWalkRecursive,
     ] {
         assert_eq!(target.effects(), expected, "{target:?}");
         assert_eq!(target.intrinsic_effects(), expected, "{target:?}");

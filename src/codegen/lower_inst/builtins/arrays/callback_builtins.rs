@@ -132,6 +132,16 @@ pub(crate) fn lower_array_walk_recursive(
     super::super::ensure_arg_count(inst, "array_walk_recursive", 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
+    if super::boxed_walk::lower_boxed_array_walk(
+        ctx,
+        inst,
+        array,
+        callback,
+        "array_walk_recursive",
+        true,
+    )? {
+        return Ok(());
+    }
     require_array_like_operand(ctx.value_php_type(array)?, "array_walk_recursive")?;
     let source_arg_ty = PhpType::Array(Box::new(PhpType::Int));
     lower_single_array_callback_builtin(

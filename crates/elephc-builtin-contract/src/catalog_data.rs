@@ -5141,7 +5141,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "Applies a user function to every member of an array.",
+        summary: "Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-walk.php"),
@@ -5178,7 +5178,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "Applies a user function recursively to every member of an array.",
+        summary: "Applies a user function recursively to array leaf values. AOT boxed arrays pass a writable leaf reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-walk-recursive.php"),
