@@ -1915,3 +1915,14 @@ tests without changing a PHP source or diagnostic assertion. Static comparison
 confirms that all eight source strings are identical to the previous fixture.
 The existing timeout prefix still matches each case. Prior test compilation and
 diff hygiene pass; executable validation remains CI-only.
+
+### Retire instanceof operands without losing owners across target evaluation
+
+Both native and eval predicates borrow their inputs. Retire independently owned
+value and class-name operands, including strings detached from Mixed local slots.
+Root the first operand before evaluating a dynamic target that can throw, and
+preserve borrowed objects and implicit static targets through storage-aware
+cleanup. Add five-target EIR assertions and heap-debug/tagged regressions for
+normal return, detached strings, borrowed objects and throwing target expressions.
+Grok reviewed the operand lifetime paths. Cargo check --tests and diff hygiene
+pass. No tests execute locally; runtime validation remains assigned to CI.
