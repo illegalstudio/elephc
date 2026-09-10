@@ -38,6 +38,7 @@ pub(in crate::codegen::lower_inst::builtins) mod values;
 mod basic;
 mod boxed_map_callback;
 mod boxed_merge;
+mod boxed_membership;
 mod boxed_reverse;
 mod boxed_mutation;
 mod filter;

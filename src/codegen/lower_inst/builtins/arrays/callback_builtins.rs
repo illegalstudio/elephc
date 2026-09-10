@@ -441,6 +441,9 @@ pub(super) fn lower_in_array_with_mode(
     array_ty: PhpType,
     mode: InArrayMode,
 ) -> Result<()> {
+    if super::boxed_membership::needs_dynamic_membership(&needle_ty, &array_ty) {
+        return super::boxed_membership::lower_dynamic_membership(ctx, needle, array, mode);
+    }
     if search::try_lower_assoc_in_array(
         ctx,
         needle,

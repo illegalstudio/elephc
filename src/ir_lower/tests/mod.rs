@@ -17,6 +17,7 @@ use crate::ir::{print_module, Terminator};
 mod arrays;
 mod array_reference_outputs;
 mod array_implode;
+mod array_membership;
 mod call_coercion_owners;
 mod corpus;
 mod debug_info;

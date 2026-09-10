@@ -1575,6 +1575,7 @@ impl RuntimeFnId {
             self,
             RuntimeFnId::Abs
                 | RuntimeFnId::Gettype
+                | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
         )
     }
@@ -1597,7 +1598,7 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::Gettype => true,
+            RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }

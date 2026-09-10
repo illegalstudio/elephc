@@ -420,3 +420,31 @@ boxed scalar, string, nested-array and object reads with a clean-heap gate.
 Build, test compilation, generated-document audits and diff hygiene pass.
 The documentation skill regenerated the internal ownership description and
 registry entry. No tests were executed locally.
+
+### Boxed array membership
+
+Declared PHP array parameters and Mixed haystacks now reach a checked in_array
+scanner. It borrows stack-shaped cells, traverses the existing logical array
+iterator, and delegates value comparisons to the shared strict/loose helpers.
+It neither copies the array nor changes its PHP cursor. Invalid dynamic
+haystacks raise TypeError before metadata access. The generic descriptor policy
+now admits this operation without narrowing either input to integer arrays.
+
+The strict Mixed comparator also now compares floats numerically rather than
+by bit identity, preserving signed-zero equality and rejecting NaN equality.
+Added heap regressions for scalar and compound values, dynamic strictness,
+cursor preservation, opaque/FCC/CUF calls, invalid inputs and float edges.
+Structural coverage includes every supported target. The array example now
+shows membership through a reusable declared-array parameter.
+
+CI on ab6302f2f confirms clean shard 10 on Linux ARM64 and x86_64. The ARM64
+list-unpack leak no longer appears in its completed shard. Array merge callable
+and hydration cleanup-throw failures no longer appear in ARM64 shard 15, but
+that shard still reports a string leak in returned-array usort coverage.
+Callback, by-reference mutation, boxed callable reads, nullable keys and
+native/eval hydration ownership remain open gates, not review-ready claims.
+
+Build, test compilation, assembly-comment alignment, all generated-document
+audits and diff hygiene pass. The documentation skill updated the membership
+callable policy in the registry and internal reference. No local tests were
+executed; executable membership behavior and heap cleanup still await CI.

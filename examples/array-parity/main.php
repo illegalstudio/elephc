@@ -19,6 +19,12 @@ function printNewestFirst(array $events, bool $keepIds): void {
 printNewestFirst([10 => "opened", "note" => "reviewed", 40 => "closed"], true);
 printNewestFirst(["opened", "reviewed", "closed"], false);
 
+// --- membership through a reusable PHP array parameter ---
+function eventIsAllowed(string $event, array $allowed): bool {
+    return in_array($event, $allowed, true);
+}
+echo 'allowed: ', eventIsAllowed('reviewed', ['first' => 'opened', 'next' => 'reviewed']) ? 'yes' : 'no', "\n";
+
 // --- remove queue endpoints without changing an earlier value snapshot ---
 function takeQueueEdges(array &$queue): void {
     echo 'first: ', array_shift($queue), ', last: ', array_pop($queue), "\n";

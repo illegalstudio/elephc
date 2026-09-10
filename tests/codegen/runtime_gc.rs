@@ -45,6 +45,7 @@ mod callback_argument_cleanup;
 mod call_coercion_owners;
 mod eval_sparse_arrays;
 mod boxed_array_merge;
+mod boxed_array_membership;
 mod boxed_array_spread;
 mod boxed_array_map;
 mod boxed_array_implode;
