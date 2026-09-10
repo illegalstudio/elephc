@@ -275,8 +275,8 @@ fn test_string_empty_falsy() {
 
 // --- Bug fix: compound assignment in for-loop update ---
 
-/// EC-2 (#485): mb_ereg_match() — start-anchored regex match, reusing the PCRE2 engine and
-/// enforcing the start-anchor via regmatch[0].rm_so == 0. Verified vs PHP 8.5: it is a prefix
+/// Verifies the shared mbregex engine anchors matching at the subject start.
+/// PHP 8.5 treats the operation as a prefix
 /// match at offset 0 (`'ab'`/`'abc'` = true, `'bc'`/`'abc'` = false); `\z` forces end-anchoring.
 #[test]
 fn test_mb_ereg_match_start_anchored() {

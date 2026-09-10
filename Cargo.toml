@@ -16,6 +16,7 @@ categories = ["compilers", "command-line-utilities"]
 # libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_crypto.a
 # (hash/HMAC family), libelephc_bcmath.a (arbitrary-precision decimal math),
 # libelephc_iconv.a (character-set conversion and RFC 2047 MIME headers),
+# libelephc_mbstring.a (shared multibyte encoding and Unicode engine),
 # libelephc_phar.a (runtime phar:// archive reads),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo),
@@ -29,8 +30,8 @@ categories = ["compilers", "command-line-utilities"]
 # see crates/elephc-curl/build.rs for how its own gated tests opt into a real
 # link.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml"]
 resolver = "2"
 
 [[bin]]
@@ -99,6 +100,7 @@ elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
 elephc-crypto = { path = "crates/elephc-crypto" }
 elephc-bcmath = { path = "crates/elephc-bcmath" }
+elephc-mbstring = { path = "crates/elephc-mbstring" }
 elephc-phar = { path = "crates/elephc-phar" }
 elephc-tz = { path = "crates/elephc-tz" }
 elephc-image = { path = "crates/elephc-image" }

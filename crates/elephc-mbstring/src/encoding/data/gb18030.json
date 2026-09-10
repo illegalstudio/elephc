@@ -1,0 +1,33 @@
+{
+    "php_version": "8.5.10",
+    "encodings": {
+        "GB18030": {
+            "pairs": {
+                "file": "gb18030-pairs.bin",
+                "sha256": "e4c635ea5808694c9fba1864b694838303571f96b9da18818ec58025bb4cd641"
+            },
+            "bmp": {
+                "file": "gb18030-bmp.bin",
+                "sha256": "912b0f6eead631204cb6dfebc8a92597c72d82d5aa3c3de21b604141dab73111"
+            },
+            "encode": {
+                "file": "gb18030-encode.bin",
+                "sha256": "10c45417bb4f5255ba28b734aa22b016a9b068655683d2f9ebd37c868ac787a6"
+            }
+        },
+        "GB18030-2022": {
+            "pairs": {
+                "file": "gb18030-2022-pairs.bin",
+                "sha256": "60a9f6220637d7ff1c092370aca7b576f71aca9ff4de6f843e5e9f3ea37da0ed"
+            },
+            "bmp": {
+                "file": "gb18030-2022-bmp.bin",
+                "sha256": "e18dbb7d7d9de187a8ea000f266219f4524da3265806783ee782776a53f5d310"
+            },
+            "encode": {
+                "file": "gb18030-2022-encode.bin",
+                "sha256": "a59455d96b28b0771c5dc0867952ce13a4707623677cfbb7280e912bd2a9679d"
+            }
+        }
+    }
+}

@@ -111,6 +111,23 @@ pub(super) fn eval_reflection_function_new(
         })
         .map(Some);
     }
+    if eval_builtin_uses_owned_arguments(&lookup_name) {
+        let object = values.new_object("ReflectionFunction")?;
+        let result = eval_native_constructor_with_evaluated_args(
+            "ReflectionFunction", object, positional_args(args), context, values,
+        ).and_then(|()| values.object_identity(object));
+        return match result {
+            Ok(identity) => {
+                // Keep native reflection metadata while routing invocation through the shared eval binding.
+                context.register_eval_reflection_function(identity, &lookup_name);
+                Ok(Some(object))
+            }
+            Err(status) => {
+                let _ = eval_release_value(context, values, object);
+                Err(status)
+            }
+        };
+    }
     if closure_target.is_some() {
         return eval_reflection_function_object_result(
             &requested_name,

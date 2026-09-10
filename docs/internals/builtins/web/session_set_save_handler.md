@@ -38,7 +38,7 @@ function session_set_save_handler(mixed $handler_or_open = null, mixed $register
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

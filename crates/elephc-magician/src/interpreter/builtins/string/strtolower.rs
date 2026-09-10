@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the string-case hook.
+//! - Unchanged string inputs preserve native identity; changed results preserve arbitrary PHP bytes.
 
 eval_builtin! {
     contract: "strtolower",
@@ -56,11 +57,14 @@ pub(in crate::interpreter) fn eval_string_case_named_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut bytes = values.string_bytes(value)?;
+    if bytes.is_empty() && matches!(name, "ucfirst" | "lcfirst") { return values.string_literal(""); }
+    let mut changed = false;
     match name {
         "strtolower" => {
             for byte in &mut bytes {
                 if byte.is_ascii_uppercase() {
                     *byte += b'a' - b'A';
+                    changed = true;
                 }
             }
         }
@@ -68,21 +72,24 @@ pub(in crate::interpreter) fn eval_string_case_named_result(
             for byte in &mut bytes {
                 if byte.is_ascii_lowercase() {
                     *byte -= b'a' - b'A';
+                    changed = true;
                 }
             }
         }
         "ucfirst" => {
             if bytes.first().is_some_and(|byte| byte.is_ascii_lowercase()) {
                 bytes[0] -= b'a' - b'A';
+                changed = true;
             }
         }
         "lcfirst" => {
             if bytes.first().is_some_and(|byte| byte.is_ascii_uppercase()) {
                 bytes[0] += b'a' - b'A';
+                changed = true;
             }
         }
         _ => return Err(EvalStatus::UnsupportedConstruct),
     }
-    let value = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-    values.string(&value)
+    if !changed && values.type_tag(value)? == 1 { values.copy_value(value) }
+    else { values.string_bytes_value(&bytes) }
 }

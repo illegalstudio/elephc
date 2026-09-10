@@ -21,7 +21,7 @@
 
 use super::*;
 
-/// Binds native AOT callable args using the selected by-reference degradation mode.
+/// Binds borrowed native arguments and returns the defaults that the caller must release after writeback.
 pub(super) fn bind_native_callable_bound_args_with_mode(
     signature: Option<NativeCallableSignature>,
     mut args: Vec<EvaluatedCallArg>,
@@ -38,11 +38,20 @@ pub(super) fn bind_native_callable_bound_args_with_mode(
     if !signature.bridge_supported() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if signature.param_names().len() == signature.param_count() {
-        bind_native_signature_args(&signature, args, by_ref_mode, context, values)
-    } else {
-        positional_evaluated_bound_args(Some(&signature), args, by_ref_mode, context, values)
+}
+
+/// Releases every default created during native binding, including after a later binding error.
+pub(super) fn release_native_call_defaults(
+    defaults: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut failure = None;
+    for value in defaults.into_iter().rev() {
+        if let Err(status) = values.release(value) {
+            failure = Some(status);
+        }
     }
+    failure.map_or(Ok(()), Err)
 }
 
 /// Binds positional-only native AOT args and validates registered by-reference slots.
@@ -233,6 +242,7 @@ pub(super) fn bind_native_signature_args(
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
+    defaults: &mut Vec<RuntimeCellHandle>,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let mut bound_args = vec![None; signature.param_count()];
     let variadic_index = native_callable_variadic_index(signature);

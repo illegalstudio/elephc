@@ -100,6 +100,7 @@ fn bind_evaluated_native_function_args_with_mode(
             by_ref_mode,
             context,
             values,
+            staged,
         );
     }
     let mut bound_args = vec![None; function.param_count()];
@@ -249,7 +250,8 @@ fn bind_evaluated_native_variadic_function_args(
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<BoundNativeFunctionArgs, EvalStatus> {
+    staged: &mut BoundNativeFunctionArgs,
+) -> Result<(), EvalStatus> {
     let variadic_index = native_function_variadic_index(function).ok_or(EvalStatus::RuntimeFatal)?;
     let has_param_names = function.param_names().len() == function.param_count();
     let mut regular_args = vec![None; variadic_index];
@@ -403,6 +405,7 @@ fn bind_evaluated_native_variadic_function_args(
         by_ref_mode,
         context,
         values,
+        staged,
     )
 }
 
@@ -461,6 +464,7 @@ fn apply_native_function_arg_types(
     bound_args: &mut [BoundMethodArg],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
+    owners: &mut Vec<RuntimeCellHandle>,
 ) -> Result<(), EvalStatus> {
     for (position, bound_arg) in bound_args.iter_mut().enumerate() {
         let param_index = if variadic_index.is_some_and(|index| position >= index) {

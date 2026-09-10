@@ -143,7 +143,7 @@ pub(in crate::interpreter) fn execute_stmt(
                 execute_statements(else_branch, context, scope, values)
             }
         }
-        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(eval_expr(
+        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(eval_owned_expr(
             expr, context, scope, values,
         )?)),
         EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
@@ -229,6 +229,10 @@ pub(in crate::interpreter) fn execute_stmt(
             if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
                 eval_release_value(context, values, replaced)?;
             }
+            Ok(EvalControl::None)
+        }
+        EvalStmt::GcCollect => {
+            values.collect_cycles()?;
             Ok(EvalControl::None)
         }
         EvalStmt::While { condition, body } => {

@@ -15,7 +15,7 @@ Computes the difference of arrays.
 
 **Parameters**:
 - `$array` (`array`)
-- `...$arrays` — variadic: collects excess arguments into `$arrays`.
+- `...$arrays` - variadic: collects excess arguments into `$arrays`.
 
 **Returns**: `array`
 

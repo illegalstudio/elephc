@@ -48,7 +48,7 @@ function array_uintersect(array $array1, array $array2, callable $callback): arr
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

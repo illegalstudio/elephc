@@ -14,6 +14,9 @@ mod function_binding;
 mod function_staging;
 mod method_binding;
 mod native_execution;
+mod literal_arguments;
+mod native_staging;
+pub(in crate::interpreter) mod builtin_arguments;
 
 use super::*;
 
@@ -22,6 +25,8 @@ pub(in crate::interpreter) use function_binding::*;
 use function_staging::stage_native_function_invoker_args;
 pub(in crate::interpreter) use method_binding::*;
 pub(in crate::interpreter) use native_execution::*;
+pub(in crate::interpreter) use literal_arguments::with_literal_call_arguments;
+use native_staging::stage_native_function_invoker_args;
 
 /// Evaluates an eval-declared user function with PHP-style argument binding.
 pub(in crate::interpreter) fn eval_dynamic_function(
@@ -43,7 +48,39 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    let mut evaluated_args = Vec::with_capacity(args.len());
+    eval_call_arg_values_observed(args, context, caller_scope, values, |_, _| {})
+}
+
+/// Reports each directly evaluated argument before binding so callers can manage known temporary owners.
+pub(in crate::interpreter) fn eval_call_arg_values_observed(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+    mut observe: impl FnMut(&EvalExpr, RuntimeCellHandle),
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    let mut evaluated = Vec::with_capacity(args.len());
+    evaluate_call_arguments(args, context, caller_scope, values, &mut observe, None, &mut evaluated, None)?;
+    Ok(evaluated)
+}
+
+/// Captures owned builtin inputs, using shared reference modes when a contract is supplied.
+/// Without a contract, call_user_func captures independent values even for reference parameters.
+pub(in crate::interpreter) fn eval_owned_call_arg_values(
+    args: &[EvalCallArg], context: &mut ElephcEvalContext, caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps, owners: &mut Vec<RuntimeCellHandle>, evaluated: &mut Vec<EvaluatedCallArg>,
+    contract: Option<&elephc_builtin_contract::BuiltinContract>,
+) -> Result<(), EvalStatus> {
+    evaluate_call_arguments(args, context, caller_scope, values, &mut |_, _| {}, Some(owners), evaluated, contract)
+}
+
+/// Evaluates source arguments with legacy targets or explicit owners selected by the parameter contract.
+fn evaluate_call_arguments(
+    args: &[EvalCallArg], context: &mut ElephcEvalContext, caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps, observe: &mut impl FnMut(&EvalExpr, RuntimeCellHandle),
+    mut owners: Option<&mut Vec<RuntimeCellHandle>>, evaluated_args: &mut Vec<EvaluatedCallArg>,
+    contract: Option<&elephc_builtin_contract::BuiltinContract>,
+) -> Result<(), EvalStatus> {
     let mut saw_named = false;
 
     let evaluated = (|| {

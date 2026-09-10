@@ -15,7 +15,7 @@ Outputs a formatted string.
 
 **Parameters**:
 - `$format` (`string`)
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `...$values` - variadic: collects excess arguments into `$values`.
 
 **Returns**: `int`
 

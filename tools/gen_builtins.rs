@@ -52,7 +52,8 @@ fn main() {
         entry.insert("eval".to_string(), eval_support_json(contract));
         entry.insert(
             "eval_only".to_string(),
-            json!(matches!(aot_support(contract), BackendSupport::Unsupported(_))),
+            json!(matches!(aot_support(contract), BackendSupport::Unsupported(_))
+                && matches!(eval_support(contract), BackendSupport::Implemented(_))),
         );
     }
 
@@ -113,7 +114,8 @@ fn contract_record_json(contract: &BuiltinContract) -> Value {
         "examples": contract.examples,
         "php_manual": contract.php_manual,
         "deprecated": contract.deprecation,
-        "eval_only": matches!(aot_support(contract), BackendSupport::Unsupported(_)),
+        "eval_only": matches!(aot_support(contract), BackendSupport::Unsupported(_))
+            && matches!(eval_support(contract), BackendSupport::Implemented(_)),
         "aot": aot_support_json(contract),
         "eval": eval_support_json(contract),
     })

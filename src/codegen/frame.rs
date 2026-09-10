@@ -36,6 +36,9 @@ use super::local_analysis::LocalSlotAnalysis;
 use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
 
+mod destructor_cleanup;
+pub(super) use destructor_cleanup::is_destructor;
+
 const FRAME_FOOTER_BYTES: usize = 16;
 // Every activation has readable reader/line words, including synthetic frames hidden from backtraces.
 const EXCEPTION_ACTIVATION_BYTES: usize = 40;
@@ -61,6 +64,7 @@ pub(super) struct FrameLayout {
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
+    pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
     pub(super) exception_cleanup_activation: bool,
@@ -131,6 +135,14 @@ pub(super) fn layout_for_function(
         offset += TRY_HANDLER_SLOT_SIZE;
         try_handler_offsets.insert(token, offset);
     }
+    let mut exception_guard_offsets = HashMap::new();
+    for inst in &function.instructions {
+        if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionGuardOwned))) {
+            let token = inst.result.expect("owned-value guard produces its stack token");
+            offset += EXCEPTION_GUARD_SLOT_SIZE;
+            exception_guard_offsets.insert(token, offset);
+        }
+    }
     let mut callee_saved_offsets = Vec::new();
     for reg in allocation.used_callee_saved() {
         offset += 8;
@@ -161,6 +173,7 @@ pub(super) fn layout_for_function(
         local_offsets,
         ref_cell_state_offsets,
         try_handler_offsets,
+        exception_guard_offsets,
         concat_base_offset,
         exception_activation_offset,
         exception_cleanup_activation: exception_activations,
@@ -549,6 +562,10 @@ pub(super) fn emit_exception_cleanup_callback(
     entry_label: &str,
 ) {
     if !ctx.exception_cleanup_activation {
+        return;
+    }
+    if is_destructor(ctx.function) {
+        destructor_cleanup::emit_callback(ctx, entry_label);
         return;
     }
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
@@ -1264,6 +1281,9 @@ pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset
     let result_reg = abi::int_result_reg(ctx.emitter);
     let done = ctx.next_label("main_refcounted_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
+    if is_destructor(ctx.function) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -1307,6 +1327,10 @@ fn emit_function_local_epilogue_cleanup(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
 ) {
+    if ctx.exception_activation_offset.is_some() && is_destructor(ctx.function) {
+        destructor_cleanup::emit_call(ctx);
+        return;
+    }
     // Instrument exit runs FIRST — before the early return for cleanup-free
     // functions — so every return path records the exit. It preserves the
     // return value across its own call.

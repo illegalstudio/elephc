@@ -12,6 +12,11 @@ use super::*;
 /// Emits x86_64 value predicates, raw handles, and cast wrappers.
 pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_is_array_like");
+    emitter.instruction("push rbp");                                            // preserve linkage and align the borrowed dereference call
+    emitter.instruction("mov rax, rdi");                                        // adapt the C value argument to the native Mixed convention
+    emitter.instruction("call __rt_mixed_deref");                               // inspect referenced arrays using their current concrete value
+    emitter.instruction("pop rbp");                                             // restore the C caller before evaluating the concrete tag
+    emitter.instruction("mov rdi, rax");                                        // keep the existing leaf checks on the unwrapped receiver
     emitter.instruction("test rdi, rdi");                                       // null handles cannot be indexed as arrays
     emitter.instruction("jz __elephc_eval_value_is_array_like_false");          // report false for null runtime cells
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag

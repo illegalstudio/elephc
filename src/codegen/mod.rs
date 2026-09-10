@@ -21,6 +21,7 @@ mod eval_constructor_helpers;
 mod eval_error_handler_helpers;
 mod eval_handler_helpers;
 mod eval_method_helpers;
+mod eval_value_helpers;
 mod eval_property_helpers;
 mod eval_ref_arg_helpers;
 mod eval_reflection_helpers;
@@ -31,6 +32,7 @@ mod frame;
 mod function_variants;
 mod literal_defaults;
 mod local_analysis;
+mod mbstring_configuration;
 pub(crate) mod lower_inst;
 mod lower_term;
 mod runtime_callable_invoker;
@@ -40,6 +42,7 @@ mod runtime_metadata;
 mod shared_count_guard;
 mod shared_helper;
 mod shared_mixed_string;
+mod shared_mbstring_callable;
 mod shared_state;
 pub(crate) mod stack_guard;
 pub mod value_placement;
@@ -380,6 +383,7 @@ fn finalize_user_asm(
     mut shared: shared_state::SharedCodegenState,
 ) -> Result<GeneratedUserAsm> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
+    mbstring_configuration::emit(module, &mut emitter, &mut data);
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
     if eval_bridge {
@@ -468,6 +472,7 @@ fn finalize_user_asm(
             module.target,
             &sorted_exports,
             heap_debug,
+            module.mbstring_startup.as_ref().map(|_| "__rt_mbstring_startup_status"),
         );
     }
     let property_initializer_ids = module.functions.iter()

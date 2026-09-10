@@ -8,14 +8,14 @@ sidebar:
 ## ucwords()
 
 ```php
-function ucwords(string $string, string $separators = ' \t\r\n\x0c\x0b'): string
+function ucwords(string $string, string $separators = " \t\r\n\x0C\x0B"): string
 ```
 
 Uppercases the first character of each word in a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$separators` (`string`), default `' \t\r\n\x0c\x0b'`, optional
+- `$separators` (`string`), default `" \t\r\n\x0C\x0B"`, optional
 
 **Returns**: `string`
 

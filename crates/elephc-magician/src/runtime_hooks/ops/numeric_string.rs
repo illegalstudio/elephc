@@ -180,9 +180,7 @@ macro_rules! impl_numeric_string_ops {
 
     /// Emits one boxed Mixed cell to stdout through the generated runtime wrapper.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
-        unsafe {
-            __elephc_eval_value_echo(value.as_ptr());
-        }
+        self.protected_output(OutputAction::Echo, [value.as_ptr() as u64, 0, 0, 0, 0, 0])?;
         Ok(())
     }
 
@@ -220,33 +218,19 @@ macro_rules! impl_numeric_string_ops {
             Some(id) => (1, i64::try_from(id).map_err(|_| EvalStatus::RuntimeFatal)?),
             None => (0, 0),
         };
-        let started = unsafe {
-            __elephc_eval_ob_start_ex(
-                has_handler,
-                id,
-                chunk_size,
-                flags,
-                name.as_ptr(),
-                name.len() as i64,
-            )
-        };
-        Ok(started != 0)
+        let request = self.protected_output(OutputAction::Start, [has_handler as u64,
+            id as u64, chunk_size as u64, flags as u64, name.as_ptr() as u64, name.len() as u64])?;
+        Ok(request.result != 0)
     }
 
     /// Pops the top runtime output buffer through the composite bridge helpers.
     fn ob_get_end(&mut self, flush: bool) -> Result<Option<Vec<u8>>, EvalStatus> {
-        let mut ptr = std::ptr::null();
-        let mut len = 0i64;
-        let ok = unsafe {
-            if flush {
-                __elephc_eval_ob_get_flush_pop(&mut ptr, &mut len)
-            } else {
-                __elephc_eval_ob_get_clean_pop(&mut ptr, &mut len)
-            }
-        };
-        if ok == 0 {
+        let request = self.protected_output(OutputAction::GetEnd, [u64::from(flush), 0, 0, 0, 0, 0])?;
+        if request.result == 0 {
             return Ok(None);
         }
+        let ptr = request.bytes;
+        let len = request.length;
         if len > 0 && ptr.is_null() {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -326,17 +310,17 @@ macro_rules! impl_numeric_string_ops {
 
     /// Truncates the top runtime output buffer through the generated ob bridge.
     fn ob_clean(&mut self) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_ob_clean() } != 0)
+        Ok(self.protected_output(OutputAction::Clean, [0; 6])?.result != 0)
     }
 
     /// Flushes the top runtime output buffer to its parent sink through the ob bridge.
     fn ob_flush(&mut self) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_ob_flush() } != 0)
+        Ok(self.protected_output(OutputAction::Flush, [0; 6])?.result != 0)
     }
 
     /// Pops (and optionally flushes) the top runtime output buffer through the ob bridge.
     fn ob_end(&mut self, flush: bool) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_ob_end(i64::from(flush)) } != 0)
+        Ok(self.protected_output(OutputAction::End, [u64::from(flush), 0, 0, 0, 0, 0])?.result != 0)
     }
 
     /// Reads one buffer's `(used, size)` stats through the generated ob bridge.

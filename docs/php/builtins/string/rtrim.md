@@ -8,14 +8,14 @@ sidebar:
 ## rtrim()
 
 ```php
-function rtrim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string
+function rtrim(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string
 ```
 
 Strips whitespace (or other characters) from the end of a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$characters` (`string`), default `' \n\r\t\x0b\x0c\x00'`, optional
+- `$characters` (`string`), default `" \n\r\t\x0B\x0C\x00"`, optional
 
 **Returns**: `string`
 

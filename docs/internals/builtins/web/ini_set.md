@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function ini_set(string $option, mixed $value): mixed
+function ini_set(string $option, string|int|float|bool|null $value): string|false
 ```
 
 ## What the type checker enforces
@@ -38,7 +38,7 @@ function ini_set(string $option, mixed $value): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

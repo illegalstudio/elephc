@@ -773,8 +773,8 @@ fn lower_hash_append_aarch64(
     ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve temporary slots for the hash pointer and computed append key
     ctx.load_value_to_reg(hash, "x0")?;
     ctx.emitter.instruction("str x0, [sp, #0]");                                // preserve the hash pointer across value materialization
-    emit_hash_append_key_scan_aarch64(ctx);
-    ctx.emitter.instruction("str x11, [sp, #8]");                               // preserve the next PHP integer append key
+    abi::emit_call_label(ctx.emitter, "__rt_hash_next_index");
+    ctx.emitter.instruction("str x0, [sp, #8]");                                // preserve the checked next index before acquiring a value owner
     materialize_hash_value_aarch64(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("ldr x0, [sp, #0]");                                // pass the hash pointer to hash_set
     ctx.emitter.instruction("ldr x1, [sp, #8]");                                // pass the computed integer append key
@@ -830,8 +830,8 @@ fn lower_hash_append_x86_64(
     ctx.emitter.instruction("sub rsp, 32");                                     // reserve aligned slots for the hash pointer and computed append key
     ctx.load_value_to_reg(hash, "rdi")?;
     ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");                        // preserve the hash pointer across value materialization
-    emit_hash_append_key_scan_x86_64(ctx);
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r11");                    // preserve the next PHP integer append key
+    abi::emit_call_label(ctx.emitter, "__rt_hash_next_index");
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // preserve the checked next index before acquiring a value owner
     materialize_hash_value_x86_64(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // pass the hash pointer to hash_set
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // pass the computed integer append key

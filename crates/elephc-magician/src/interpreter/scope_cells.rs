@@ -52,6 +52,7 @@ pub(in crate::interpreter) fn set_scope_cell(
     name: impl Into<String>,
     cell: RuntimeCellHandle,
     ownership: ScopeCellOwnership,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     update_scope_cell(context, scope, name.into(), |scope, name| {
         scope.set_respecting_references(name, cell, ownership)
@@ -139,4 +140,27 @@ pub(in crate::interpreter) fn execute_global_stmt(
         scope.mark_global_alias(name.clone());
     }
     Ok(())
+}
+
+/// Releases activation-owned cells after return, throw, static, and by-reference values escape.
+pub(in crate::interpreter) fn finish_activation_scope(
+    scope: &mut ElephcEvalScope,
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut cleanup = Ok(());
+    for value in scope.drain_owned_cells() {
+        if let Err(status) = eval_release_value(context, values, value) {
+            cleanup = Err(status);
+        }
+    }
+    match (result, cleanup) {
+        (Ok(value), Err(status)) => {
+            let _ = eval_release_value(context, values, value);
+            Err(status)
+        }
+        (Err(status), _) => Err(status),
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }

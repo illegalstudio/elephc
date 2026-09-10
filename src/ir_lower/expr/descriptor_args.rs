@@ -92,6 +92,7 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
+        ctx.refresh_argument_array_guard(array, arg.span);
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
         positional_index += 1;
     }

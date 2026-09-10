@@ -25,6 +25,7 @@ pub(crate) struct EvalRefArgSlot {
     pub(crate) param_ty: PhpType,
     pub(crate) raw_offset: usize,
     pub(crate) original_offset: usize,
+    /// Whether this staging slot owns its raw heap value independently from the argument array.
     pub(crate) raw_refcounted_owned: bool,
 }
 

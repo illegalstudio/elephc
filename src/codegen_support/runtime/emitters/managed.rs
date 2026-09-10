@@ -56,6 +56,8 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_hash_normalize_key(emitter);
     arrays::emit_hash_clone_shallow(emitter);
     arrays::emit_hash_ensure_unique(emitter);
+    arrays::emit_hash_pin(emitter);
+    arrays::emit_hash_write_guards(emitter);
     arrays::emit_hash_new(emitter);
     arrays::emit_hash_grow(emitter);
     arrays::emit_hash_may_have_cyclic_values(emitter);
@@ -183,6 +185,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_gc_control(emitter);
     arrays::emit_gc_destructors(emitter);
     arrays::emit_gc_collect_cycles(emitter);
+    arrays::emit_mixed_reference(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_cast_array(emitter);
@@ -217,7 +220,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
         eval_bridge::emit_object_clone_shallow_runtime(emitter);
     }
     if features.eval_bridge {
-        eval_bridge::emit_eval_bridge_runtime(emitter);
+        eval_bridge::emit_eval_bridge_runtime(emitter, features);
     } else if features.eval_scope {
         // Scope-only programs run compiled eval fragments natively: they need
         // the self-contained value wrappers plus the native scope helpers

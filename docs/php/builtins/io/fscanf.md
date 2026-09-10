@@ -16,7 +16,7 @@ Parses input from a file according to a format.
 **Parameters**:
 - `$stream` (`resource`)
 - `$format` (`string`)
-- `...$vars` — variadic: collects excess arguments into `$vars`.
+- `...$vars` - variadic: collects excess arguments into `$vars`.
 
 **Returns**: `array`
 

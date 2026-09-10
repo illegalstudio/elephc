@@ -196,6 +196,16 @@ macro_rules! impl_lifecycle_scalar_ops {
         Self::handle(unsafe { __elephc_eval_value_string(value.as_ptr(), value.len() as u64) })
     }
 
+    /// Boxes a PHP literal and registers its native payload as an interned logical origin.
+    fn string_literal(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_string_literal(value.as_ptr(), value.len() as u64) })
+    }
+
+    /// Boxes arbitrary literal bytes with the same native interned origin as UTF-8 literals.
+    fn string_literal_bytes(&mut self, value: &[u8]) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_string_literal(value.as_ptr(), value.len() as u64) })
+    }
+
     /// Creates a boxed string Mixed cell from raw PHP bytes through the generated runtime wrapper.
     fn string_bytes_value(&mut self, value: &[u8]) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_string(value.as_ptr(), value.len() as u64) })

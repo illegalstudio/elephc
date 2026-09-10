@@ -202,7 +202,7 @@ impl Parser {
         Ok(body)
     }
 
-    /// Parses `unset($name[, ...]);` with variable, array-access, and property operands.
+    /// Removes unset operands in source order, followed by one cycle-collection safe point.
     pub(in crate::parser) fn parse_unset_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LParen)?;
@@ -255,6 +255,7 @@ impl Parser {
         }
         self.expect(TokenKind::RParen)?;
         self.expect_semicolon()?;
+        statements.push(EvalStmt::GcCollect);
         Ok(statements)
     }
 

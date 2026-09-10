@@ -40,7 +40,7 @@ sidebar:
 function get_called_class(): string
 ```
 
-## What the type checker enforces
+## Signature constraints
 
 - **Arity**: takes no arguments.
 

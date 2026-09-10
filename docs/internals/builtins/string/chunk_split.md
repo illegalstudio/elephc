@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function chunk_split(string $string, int $length = 76, string $separator = '\r\n'): string
+function chunk_split(string $string, int $length = 76, string $separator = "\r\n"): string
 ```
 
 ## What the type checker enforces

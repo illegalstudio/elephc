@@ -38,7 +38,7 @@ function cairo_set_source_rgb(mixed $context, float $red, float $green, float $b
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

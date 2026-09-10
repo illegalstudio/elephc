@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function wordwrap(string $string, int $width = 75, string $break = '\n', bool $cut_long_words = false): string
+function wordwrap(string $string, int $width = 75, string $break = "\n", bool $cut_long_words = false): string
 ```
 
 ## What the type checker enforces

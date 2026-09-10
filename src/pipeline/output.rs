@@ -27,7 +27,7 @@ pub(super) fn dynamic_eval_capability_warning(
 ) -> Option<&'static str> {
     (runtime_features.eval_bridge && !runtime_features.regex).then_some(concat!(
         "warning: dynamic eval was compiled without optional regex support\n",
-        "evaluated code that uses preg_* or mb_ereg_match() will fail at runtime; enable it with:\n",
+        "evaluated code that uses preg_* will fail at runtime; enable it with:\n",
         "  elephc native add pcre2\n",
         "  elephc --with-regex <source-file>",
     ))

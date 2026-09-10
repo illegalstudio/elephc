@@ -104,11 +104,12 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     let scope_parameter_is_by_ref =
         method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
     let mut function_scope = ElephcEvalScope::new();
-    bind_method_scope_args(
+    let binding_result = bind_method_scope_args(
         &mut function_scope,
         &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
     frame.bind_scope(&function_scope);
     context.push_function_args(frame);
@@ -432,6 +433,7 @@ fn eval_closure_with_optional_binding(
         &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
     frame.bind_scope(&function_scope);
     context.push_function_args_with_backtrace(
@@ -564,6 +566,8 @@ pub(in crate::interpreter) fn persist_static_locals(
 ) -> Result<(), EvalStatus> {
     for name in names {
         if let Some(cell) = scope.visible_cell(name) {
+            if context.static_local(function_name, name) == Some(cell) { continue; }
+            let cell = values.retain(cell)?;
             if let Some(replaced) =
                 context.set_static_local(function_name.to_string(), name.clone(), cell)
             {
@@ -723,7 +727,8 @@ fn visit_static_var_declarations(
             | EvalStmt::UnsetDynamicStaticPropertyName { .. }
             | EvalStmt::UnsetProperty { .. }
             | EvalStmt::UnsetStaticProperty { .. }
-            | EvalStmt::UnsetVar { .. } => {}
+            | EvalStmt::UnsetVar { .. }
+            | EvalStmt::GcCollect => {}
         }
     }
 }

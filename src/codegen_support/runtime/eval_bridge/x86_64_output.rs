@@ -92,6 +92,8 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_install_ob_handler_hook");
     crate::codegen::abi::emit_symbol_address(emitter, "r9", "_elephc_eval_ob_handler_fn"); // materialize the eval handler hook slot
     emitter.instruction("mov QWORD PTR [r9], rdi");                             // install the magician ob-handler callback
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_elephc_eval_ob_release_fn"); // locate the buffer-retirement callback slot
+    emitter.instruction("mov QWORD PTR [r9], rsi");                             // install callback-owner retirement alongside invocation support
     emitter.instruction("ret");                                                 // return to Rust
 
     label_c_global(emitter, "__elephc_eval_ob_get_clean_pop");

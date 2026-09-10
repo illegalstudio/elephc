@@ -1,0 +1,38 @@
+string(15) "[α:é] [α:é]"
+string(3) "X X"
+string(12) "a|\1|ab|\1|b"
+string(5) "|b|\9"
+58c358a958ce58b158
+string(11) "[a][]b[a][]"
+string(3) "XXb"
+string(3) "xxb"
+string(3) "aab"
+abc
+i
+X
+A
+string(3) "Xbc"
+5b005c0031005d006200
+955c61
+pattern
+replacement
+subject
+NULL
+pattern
+replacement
+subject
+options
+string(6) "éXαX"
+ASCII
+array(1) {
+  [0]=>
+  string(1) "a"
+}
+string(3) "XbX"
+array(1) {
+  [0]=>
+  string(1) "a"
+}
+string(2) "XX"
+bool(false)
+No pattern was provided

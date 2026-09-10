@@ -134,7 +134,7 @@ pub(crate) fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
     }
 }
 
-/// Releases the payload of a local reference-counted cell and the cell itself.
+/// Releases one tracked local reference-cell owner and its payload when ownership ends.
 ///
 /// The runtime contains payload exceptions, frees the cell, then propagates the exception.
 /// Scalar payloads use a null release entry; strings and heap values use their typed helper.

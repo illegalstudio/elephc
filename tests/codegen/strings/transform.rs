@@ -9,6 +9,20 @@
 
 use super::*;
 
+/// Keeps form feed outside PHP's default trim mask in native calls, eval, and constant-folded pipes.
+#[test]
+fn test_trim_preserves_form_feed_with_default_mask() {
+    let body = r#"$subject = " \x0b\x0cA\x0c\x0b ";
+echo bin2hex(trim($subject)), "|", bin2hex(ltrim($subject)), "|", bin2hex(rtrim($subject));"#;
+    for eval in [false, true] {
+        let source = if eval { format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);") }
+            else { format!("<?php {body}") };
+        assert_eq!(compile_and_run(&source), "0c410c|0c410c0b20|200b0c410c", "eval={eval}");
+    }
+    let pipe = r#"<?php echo bin2hex("\x0cA\x0c" |> trim(...));"#;
+    assert_eq!(compile_and_run(pipe), "0c410c");
+}
+
 /// Verifies strtolower converts all alphabetic characters to lowercase.
 #[test]
 fn test_strtolower() {

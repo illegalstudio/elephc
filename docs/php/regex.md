@@ -6,10 +6,12 @@ sidebar:
 ---
 
 elephc implements PHP regular expressions with PCRE2 through an Elephc-owned
-opaque shim over PCRE2's POSIX-compatible wrapper. Regex support is pay-for-use:
-programs without regex do not link PCRE2, while programs using `preg_*`,
-`mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator` require the
-managed `pcre2` package during the final native link.
+opaque shim over PCRE2's POSIX-compatible wrapper. Programs using `preg_*`,
+`RegexIterator`, or `RecursiveRegexIterator` require the managed `pcre2` package
+during the final native link. Mbstring and opaque eval also use PCRE2 for output
+MIME-pattern selection. Mbstring regex functions, including `mb_ereg_match`, use
+the separate managed Oniguruma provider. Programs without these features do not
+link PCRE2 merely because the package is declared.
 
 ## Install the managed package
 
@@ -91,7 +93,7 @@ for a complete project.
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
 | `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array` | Split string by regex; supports no-empty, delimiter-capture, offset-capture, and positive limits |
-| `mb_ereg_match()` | `mb_ereg_match($pattern, $subject, $options = null): bool` | Test whether the pattern matches at the **start** of the subject (anchored, like PHP's mbregex). The pattern is a bare mbregex pattern with no delimiters. Runs on the same PCRE2-backed runtime; UTF-8/ASCII patterns are supported, and the `i` option enables case-insensitive matching (other recognized mbregex options are accepted without additional effect) |
+| `mb_ereg_match()` | `mb_ereg_match($pattern, $string, $options = null): bool` | Test a bare multibyte regex at the start of the string through Oniguruma, using the current `mb_regex_encoding()` and `mb_regex_set_options()` settings. An explicit options argument overrides the current options for this call |
 
 ## Pattern syntax
 

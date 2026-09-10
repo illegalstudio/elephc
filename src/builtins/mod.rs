@@ -22,6 +22,8 @@ mod array;
 mod callables;
 mod curl;
 mod io;
+pub(crate) mod mbstring;
+mod mbstring_callback;
 mod string;
 mod math;
 mod spl;

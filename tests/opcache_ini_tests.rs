@@ -17,8 +17,7 @@
 //!   other into the same array slot. `plain_details_false_returns_flat_strings` is that
 //!   repro; a regression shows up as a non-zero exit from `run_binary`.
 //! - The probe programs narrow with `is_array()` before indexing/counting because
-//!   `ini_get_all` is `array|false` (its return hint is deliberately omitted so ordinary
-//!   union return inference handles the exits — see `CLI_INI_GET_ALL_TEMPLATE`). Sorted
+//!   `ini_get_all` declares `array|false` through the shared CLI/web wrapper. Sorted
 //!   order is checked with an explicit `strcmp` walk rather than `sort()`, which does not
 //!   accept a narrowed union element type on this branch. (`array_keys()` no longer has that
 //!   restriction — it accepts a `mixed` argument and dispatches on the runtime tag; see
@@ -30,10 +29,18 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2;
+
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// The number of `opcache.*` directives the default (8.5) target registers.
 const OPCACHE_DIRECTIVE_COUNT: usize = 54;
+
+/// Shared Core and mbstring rows join the existing opcache rows in unfiltered enumeration.
+const ALL_DIRECTIVE_COUNT: usize = OPCACHE_DIRECTIVE_COUNT
+    + elephc_builtin_contract::mbstring_abi::ini::core::DIRECTIVES.len()
+    + elephc_builtin_contract::mbstring_abi::ini::catalog::DIRECTIVES.len();
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
 fn make_test_dir(prefix: &str) -> PathBuf {
@@ -74,6 +81,7 @@ fn compile_with_ini(
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    managed_pcre2::configure_host_managed_pcre2(&mut cmd, dir);
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     for (key, value) in ini {
@@ -164,7 +172,7 @@ fn plain_details_false_returns_flat_strings() {
     let (out, _) = run_binary(&bin);
     assert_eq!(
         out,
-        format!("{OPCACHE_DIRECTIVE_COUNT}\n1\ndisable\n128\n5\n"),
+        format!("{ALL_DIRECTIVE_COUNT}\n1\ndisable\n128\n5\n"),
         "ini_get_all(null, false) must return flat raw INI strings"
     );
 }
@@ -188,7 +196,7 @@ fn default_details_returns_entry_arrays() {
     let (out, _) = run_binary(&bin);
     assert_eq!(
         out,
-        format!("{OPCACHE_DIRECTIVE_COUNT}\n1|1|7\n128|128|4\n"),
+        format!("{ALL_DIRECTIVE_COUNT}\n1|1|7\n128|128|4\n"),
         "ini_get_all() detail entries must carry global_value/local_value/access"
     );
 }
@@ -217,7 +225,7 @@ fn keys_are_sorted_ascending() {
     let bin = compile(&dir, src, "app");
     let (out, _) = run_binary(&bin);
     assert_eq!(
-        out, "SORTED\nopcache.blacklist_filename\nopcache.validate_timestamps\n",
+        out, "SORTED\narg_separator.input\nopcache.validate_timestamps\n",
         "ini_get_all keys must be sorted ascending"
     );
 }
@@ -290,8 +298,8 @@ fn known_module_without_directives_returns_empty_array() {
 ///
 /// DOCUMENTED DIVERGENCE: reference PHP's unfiltered surface is 403 entries on the reference
 /// build because every loaded module contributes; elephc models only the directive blocks it
-/// owns, so a CLI binary's unfiltered surface is the 54 opcache directives (87 under `--web`,
-/// where the session block joins). The RULE is reproduced; the POPULATION is elephc's.
+/// owns: Core, mbstring, and opcache directives, plus session settings under `--web`.
+/// The filtering rule is shared; the population follows elephc's supported directive catalogs.
 #[test]
 fn core_selects_the_unfiltered_surface() {
     let dir = make_test_dir("opcache_ini_core");
@@ -311,7 +319,7 @@ fn core_selects_the_unfiltered_surface() {
     let (out, err) = run_binary(&bin);
     assert_eq!(
         out,
-        format!("{OPCACHE_DIRECTIVE_COUNT}={OPCACHE_DIRECTIVE_COUNT}\n1\n7\n"),
+        format!("{ALL_DIRECTIVE_COUNT}={ALL_DIRECTIVE_COUNT}\n1\n7\n"),
         "'core' must yield the same surface as the null (unfiltered) extension"
     );
     assert!(

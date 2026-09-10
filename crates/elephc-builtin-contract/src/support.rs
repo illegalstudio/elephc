@@ -142,6 +142,9 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Returns the expected Magician route for one shared contract.
 pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
+    if runtime_builtin_id(contract.id) == Some(RuntimeBuiltinId::SharedIni) {
+        return BackendSupport::Implemented(BackendImplementation::Registry);
+    }
     if contract.internal {
         return BackendSupport::Unsupported(UnsupportedReason::InternalCompilerSurface);
     }
@@ -338,6 +341,7 @@ mod tests {
         let mut eval_registry = 0;
         let mut eval_internal = 0;
         let mut eval_pending = 0;
+        let mut reference_pending = 0;
         let mut aot_registry = 0;
         let mut aot_external = 0;
 
@@ -351,6 +355,9 @@ mod tests {
                 }
                 BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending) => {
                     eval_pending += 1;
+                }
+                BackendSupport::Unsupported(UnsupportedReason::ReferenceAdaptersPending) => {
+                    reference_pending += 1;
                 }
                 other => panic!("unexpected eval support for {}: {other:?}", contract.name),
             }
@@ -366,6 +373,7 @@ mod tests {
         // The thirty-four prelude-provided `curl_*` contracts are published only
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
+        // The shared INI helper is internal but participates in both runtime registries.
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
         assert_eq!(eval_registry, 616 + curl_surface);
@@ -429,7 +437,7 @@ mod tests {
         }
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(shared_runtime, 19);
+        assert_eq!(shared_runtime, 82);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 595 + curl_surface);
         assert_eq!(unsupported, 453);

@@ -1,8 +1,7 @@
 //! Purpose:
-//! Fixture tests for `scripts/verify-release-artifact.sh`: a packed curl
-//! archive is compile-probed after `native add curl` in the empty WORKDIR, a
-//! packed xml archive after `native add libxml2`, archive-less capabilities
-//! stay skipped, and a real link failure still fails.
+//! Fixture tests for `scripts/verify-release-artifact.sh`: packed curl, mbstring,
+//! and XML archives are compile-probed after their native requirements are
+//! installed, archive-less capabilities stay skipped, and link failures fail.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness (`cargo test --test verify_release_artifact`).
@@ -10,8 +9,8 @@
 //! Key details:
 //! - The script unpacks into an empty prefix on purpose, so these tests ship a
 //!   mock `elephc` inside a tarball rather than the real compiler.
-//! - The mock accepts `native add curl` before `--with-curl` and `native add
-//!   libxml2` before `--with-xml`; it never downloads or builds catalog sources.
+//! - The mock accepts the managed curl, Oniguruma, PCRE2, and libxml2 packages
+//!   before their bridge probes; it never downloads or builds catalog sources.
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -42,11 +41,10 @@ fn scratch(label: &str) -> PathBuf {
 
 /// Writes a mock packaged `elephc` that implements the probe's exact calls.
 ///
-/// `--print-capabilities` reports `tls` (archive-only), `curl` and `xml`
-/// (archive plus managed native package), `regex` and `mysqli` (no archive).
-/// `--with-tls` always "links". `--with-curl` fail-closes unless `native add
-/// curl` has already created a project marker, and `--with-xml` likewise
-/// unless `native add libxml2` has. A `broken` capability, when advertised,
+/// `--print-capabilities` reports `tls` as archive-only, plus `curl`, `mbstring`,
+/// and `xml` with managed native requirements. `regex` and `mysqli` have no
+/// archives. Managed bridge calls fail until native add creates their markers.
+/// A `broken` capability, when advertised,
 /// always fails with a truncated-archive error so a real link failure still
 /// FAILs without inventing a native add.
 fn write_mock_elephc(path: &Path, advertise_broken: bool) {
@@ -68,6 +66,7 @@ case "${{1:-}}" in
   --print-capabilities)
     echo -e 'bridge\ttls\tlibelephc_tls.a'
     echo -e 'bridge\tcurl\tlibelephc_curl.a'
+    echo -e 'bridge\tmbstring\tlibelephc_mbstring.a'
     echo -e 'bridge\txml\tlibelephc_xml.a'
     {broken_line}    echo -e 'capability\tregex'
     echo -e 'capability\tmysqli'
@@ -100,6 +99,14 @@ case "${{1:-}}" in
     echo "ld: archive is truncated" >&2
     exit 1
     ;;
+  --with-mbstring)
+    if [ ! -f "$state_dir/added-oniguruma" ]; then
+      echo "mbstring matching requires managed native package oniguruma" >&2
+      exit 1
+    fi
+    printf '#!/bin/sh\necho ok\n' > probe
+    chmod +x probe
+    ;;
   native)
     if [ "${{2:-}}" = "add" ] && [ -n "${{3:-}}" ]; then
       touch "$state_dir/added-$3"
@@ -129,6 +136,7 @@ fn pack_tarball(staging: &Path, tarball: &Path, advertise_broken: bool) {
     write_mock_elephc(&pack.join("elephc"), advertise_broken);
     fs::write(pack.join("libelephc_tls.a"), b"tls-archive\n").expect("write tls archive");
     fs::write(pack.join("libelephc_curl.a"), b"curl-archive\n").expect("write curl archive");
+    fs::write(pack.join("libelephc_mbstring.a"), b"mbstring-archive\n").expect("write mbstring archive");
     fs::write(pack.join("libelephc_xml.a"), b"xml-archive\n").expect("write xml archive");
     if advertise_broken {
         fs::write(pack.join("libelephc_broken.a"), b"broken-archive\n")
@@ -139,7 +147,13 @@ fn pack_tarball(staging: &Path, tarball: &Path, advertise_broken: bool) {
         .arg(tarball)
         .args(["-C"])
         .arg(&pack)
-        .args(["elephc", "libelephc_tls.a", "libelephc_curl.a", "libelephc_xml.a"])
+        .args([
+            "elephc",
+            "libelephc_tls.a",
+            "libelephc_curl.a",
+            "libelephc_mbstring.a",
+            "libelephc_xml.a",
+        ])
         .args(if advertise_broken {
             vec!["libelephc_broken.a"]
         } else {
@@ -164,15 +178,18 @@ fn run_probe(tarball: &Path) -> (bool, String) {
     (output.status.success(), combined)
 }
 
-/// A tarball that packs `libelephc_curl.a` must `ok` curl after add-first, not FAIL.
+/// Packed curl, mbstring, and XML archives link after their managed packages are added.
 #[test]
-fn packed_curl_is_ok_after_native_add() {
+fn packed_managed_bridges_are_ok_after_native_add() {
     let dir = scratch("curl_ok");
     let tarball = dir.join("elephc-fixture.tar.gz");
     pack_tarball(&dir, &tarball, false);
 
     let (ok, log) = run_probe(&tarball);
     assert!(ok, "probe should pass after add-first native add; log:\n{log}");
+    assert!(log.contains("adding managed native package oniguruma before --with-mbstring"), "{log}");
+    assert!(log.contains("mock: native add oniguruma"), "{log}");
+    assert!(log.contains("ok    bridge mbstring (libelephc_mbstring.a)"), "{log}");
     assert!(
         log.contains("ok    bridge curl (libelephc_curl.a)"),
         "curl must be reported ok after native add then one --with-curl; log:\n{log}"

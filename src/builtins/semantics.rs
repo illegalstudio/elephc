@@ -500,7 +500,9 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::One(target),
-        argument_lowering: BuiltinArgumentLowering::Standard,
+        argument_lowering: if target.uses_mbstring_runtime() {
+            BuiltinArgumentLowering::PreserveValues
+        } else { BuiltinArgumentLowering::Standard },
         callable: if target.runtime_callable_supported() {
             BuiltinCallablePolicy::DynamicRuntime(target)
         } else {

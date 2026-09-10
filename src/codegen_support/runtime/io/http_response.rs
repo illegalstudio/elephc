@@ -1,16 +1,15 @@
 //! Purpose:
-//! Emits the web-gated `__rt_http_response_code` and `__rt_header` runtime helpers
-//! backing PHP's `http_response_code()` and `header()` under `--web`. Mirrors the
-//! `__rt_stdout_write` / `__rt_php_input` web-gating discipline.
+//! Emits status/header helpers and joins shared MIME state when mbstring is selected.
+//! Web builds also forward accepted headers to their response sink.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
 //! - The EIR lowering of the `http_response_code` / `header` builtins calls these labels.
 //!
 //! Key details:
-//! - In a `--web` build each routine forwards to a bridge setter via `bl_c`
-//!   (`elephc_web_set_status` / `elephc_web_header`); in a non-web build it is a
-//!   no-op and never names the bridge symbols, so non-web binaries link without them.
+//! - Web builds forward status/header operations through their bridge setters.
+//! - Mbstring builds additionally track validated MIME metadata outside the web bridge.
+//! - Non-web binaries never reference web bridge symbols.
 //! - `__rt_http_response_code`: status code in the first int arg register
 //!   (`x0`/`rdi`); returns the resulting status in `x0`/`rax`.
 //! - `__rt_header`: the four `header()` C-ABI args are already in the integer
@@ -73,10 +72,13 @@ fn emit_http_response_code_x86_64(emitter: &mut Emitter, web: bool) {
 ///
 /// The four `header()` C-ABI arguments (line pointer, line length, `$replace`,
 /// `$response_code`) are already in the integer argument registers when this is
-/// called. In `--web` it forwards them to `elephc_web_header`; in non-web it is a
-/// no-op and never references the bridge symbol. The frame save/restore must not
-/// touch the argument registers.
-pub fn emit_header(emitter: &mut Emitter, web: bool) {
+/// called. Mbstring builds validate response metadata before optional web publication.
+/// Other builds retain their existing web-forwarding or CLI no-op behavior.
+pub fn emit_header(emitter: &mut Emitter, web: bool, mbstring: bool) {
+    if mbstring {
+        super::response_metadata::emit_header(emitter, web);
+        return;
+    }
     if emitter.target.arch == Arch::X86_64 {
         emit_header_x86_64(emitter, web);
         return;

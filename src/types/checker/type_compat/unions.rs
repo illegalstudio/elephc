@@ -368,6 +368,11 @@ impl Checker {
         if !Self::is_generic_array_hint(declared_ty) {
             return declared_ty.clone();
         }
+        if let PhpType::Union(members) = actual_ty {
+            if members.iter().all(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })) {
+                return actual_ty.clone();
+            }
+        }
         match actual_ty {
             PhpType::Array(element)
                 if matches!(element.as_ref(), PhpType::Object(_))

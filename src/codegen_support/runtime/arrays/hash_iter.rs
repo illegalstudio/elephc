@@ -8,6 +8,7 @@
 //! Key details:
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -78,12 +79,10 @@ pub fn emit_hash_iter(emitter: &mut Emitter) {
     emitter.label("__rt_hash_iter_resume");
     emitter.instruction("sub x6, x1, #1");                                      // decode slot index = cursor - 1
 
-    // -- compute entry address: base + 40 + index * 64 --
+    // -- compute entry address: entries + index * 64 --
     emitter.label("__rt_hash_iter_entry");
     emitter.instruction("mov x7, #64");                                         // x7 = hash entry size in bytes
-    emitter.instruction("mul x8, x6, x7");                                      // x8 = slot index * 64
-    emitter.instruction("add x8, x0, x8");                                      // advance from the hash base to the selected slot
-    emitter.instruction("add x8, x8, #40");                                     // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x8", "x0", "x6");
 
     // -- a saved cursor may name an entry deleted by the loop body --
     emitter.instruction("ldr x10, [x8]");                                       // inspect the occupied marker before returning this slot

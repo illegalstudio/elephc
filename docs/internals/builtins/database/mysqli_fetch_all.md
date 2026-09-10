@@ -38,7 +38,7 @@ function mysqli_fetch_all(mixed $result, int $mode = 2): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

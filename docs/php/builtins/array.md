@@ -9,14 +9,14 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`array_all()`](./array/array_all.md) | `(mixed $array, mixed $callback): bool` | `bool` | ✓ | — |
-| [`array_any()`](./array/array_any.md) | `(mixed $array, mixed $callback): bool` | `bool` | ✓ | — |
+| [`array_all()`](./array/array_all.md) | `(mixed $array, mixed $callback): bool` | `bool` | ✓ | - |
+| [`array_any()`](./array/array_any.md) | `(mixed $array, mixed $callback): bool` | `bool` | ✓ | - |
 | [`array_chunk()`](./array/array_chunk.md) | `(array $array, int $length, bool $preserve_keys = false): array` | `array` | ✓ | ✓ |
 | [`array_column()`](./array/array_column.md) | `(array $array, string $column_key): array` | `array` | ✓ | ✓ |
 | [`array_combine()`](./array/array_combine.md) | `(array $keys, array $values): array` | `array` | ✓ | ✓ |
 | [`array_count_values()`](./array/array_count_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_diff()`](./array/array_diff.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
-| [`array_diff_assoc()`](./array/array_diff_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | — |
+| [`array_diff_assoc()`](./array/array_diff_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | - |
 | [`array_diff_key()`](./array/array_diff_key.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_fill()`](./array/array_fill.md) | `(int $start_index, int $count, mixed $value): array` | `array` | ✓ | ✓ |
 | [`array_fill_keys()`](./array/array_fill_keys.md) | `(array $keys, mixed $value): array` | `array` | ✓ | ✓ |
@@ -24,12 +24,12 @@ sidebar:
 | [`array_find()`](./array/array_find.md) | `(mixed $array, mixed $callback): mixed` | `mixed` | ✓ | — |
 | [`array_flip()`](./array/array_flip.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_intersect()`](./array/array_intersect.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
-| [`array_intersect_assoc()`](./array/array_intersect_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | — |
+| [`array_intersect_assoc()`](./array/array_intersect_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | - |
 | [`array_intersect_key()`](./array/array_intersect_key.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
-| [`array_is_list()`](./array/array_is_list.md) | `(mixed $array): bool` | `bool` | ✓ | — |
+| [`array_is_list()`](./array/array_is_list.md) | `(mixed $array): bool` | `bool` | ✓ | - |
 | [`array_key_exists()`](./array/array_key_exists.md) | `(string $key, array $array): bool` | `bool` | ✓ | ✓ |
-| [`array_key_first()`](./array/array_key_first.md) | `(array $array): mixed` | `mixed` | ✓ | — |
-| [`array_key_last()`](./array/array_key_last.md) | `(array $array): mixed` | `mixed` | ✓ | — |
+| [`array_key_first()`](./array/array_key_first.md) | `(array $array): mixed` | `mixed` | ✓ | - |
+| [`array_key_last()`](./array/array_key_last.md) | `(array $array): mixed` | `mixed` | ✓ | - |
 | [`array_keys()`](./array/array_keys.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_map()`](./array/array_map.md) | `(?callable $callback, array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_merge()`](./array/array_merge.md) | `(...$arrays): array` | `array` | ✓ | ✓ |
@@ -55,7 +55,7 @@ sidebar:
 | [`array_unshift()`](./array/array_unshift.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
 | [`array_values()`](./array/array_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_walk()`](./array/array_walk.md) | `(array $array, callable $callback): void` | `void` | ✓ | ✓ |
-| [`array_walk_recursive()`](./array/array_walk_recursive.md) | `(array $array, callable $callback): void` | `void` | ✓ | — |
+| [`array_walk_recursive()`](./array/array_walk_recursive.md) | `(array $array, callable $callback): void` | `void` | ✓ | - |
 | [`arsort()`](./array/arsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`asort()`](./array/asort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`call_user_func()`](./array/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` | ✓ | ✓ |

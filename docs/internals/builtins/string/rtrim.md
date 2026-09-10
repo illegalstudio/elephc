@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function rtrim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string
+function rtrim(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string
 ```
 
 ## What the type checker enforces

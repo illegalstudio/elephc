@@ -60,7 +60,7 @@ use crate::codegen::{
     emit_box_runtime_payload_as_mixed,
 };
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::types::{FunctionSig, PhpType};
 
@@ -77,9 +77,11 @@ const INVOKER_SAVED_REGS_OFFSET: usize = 40;
 const INVOKER_CALLEE_SAVE_BYTES: usize = 8 * 8;
 /// Exclusive end of the callee-saved save area (`INVOKER_SAVED_REGS_OFFSET` … end-8).
 const INVOKER_SAVED_REGS_END: usize = INVOKER_SAVED_REGS_OFFSET + INVOKER_CALLEE_SAVE_BYTES;
-/// Frame size covering the footer plus every local slot through the save area.
-/// `frame_size - 16` must cover the last save offset; rounded up to 16 for ABI `sp` alignment.
-const INVOKER_FRAME_SIZE: usize = ((INVOKER_SAVED_REGS_END - 8) + 16 + 15) & !15;
+/// Guard records follow the saved registers and own conversions through native exception unwinding.
+const INVOKER_ARGUMENT_GUARD: usize = INVOKER_SAVED_REGS_END + EXCEPTION_GUARD_SLOT_SIZE - 8;
+const INVOKER_RESULT_GUARD: usize = INVOKER_ARGUMENT_GUARD + EXCEPTION_GUARD_SLOT_SIZE;
+/// The frame footer follows both guards with target-required stack alignment.
+const INVOKER_FRAME_SIZE: usize = (INVOKER_RESULT_GUARD + 16 + 15) & !15;
 const INVOKER_BOUNDARY_FRAME_SIZE: usize = INVOKER_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE + 16;
 const INVOKER_BOUNDARY_BASE_OFFSET: usize = INVOKER_BOUNDARY_FRAME_SIZE - 16;
 
@@ -560,7 +562,7 @@ fn emit_loaded_mixed_array_callback_call(
 
     emitter.label(&done_label);
     abi::emit_release_temporary_stack(emitter, 16); // discard preserved borrowed argument-container payload
-    sig.return_type.clone()
+    if ctx.mbstring_operation.is_some() { PhpType::Mixed } else { sig.return_type.clone() }
 }
 
 /// Emits callback dispatch for an indexed argument array.
@@ -575,6 +577,10 @@ fn emit_loaded_indexed_array_callback_call(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    if let Some(operation) = ctx.mbstring_operation {
+        mbstring::emit_indexed(emitter, ctx, array_source, operation);
+        return PhpType::Mixed;
+    }
     let (
         array_reg,
         len_reg,
@@ -781,6 +787,10 @@ fn emit_loaded_assoc_array_callback_call(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    if let Some(operation) = ctx.mbstring_operation {
+        mbstring::emit_assoc(emitter, ctx, data, array_source, operation);
+        return PhpType::Mixed;
+    }
     let hash_reg = match emitter.target.arch {
         Arch::AArch64 => "x20",
         Arch::X86_64 => "r13",
@@ -827,7 +837,7 @@ fn emit_loaded_assoc_array_callback_call(
                 push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done);
                 emitter.label(&missing);
-                emit_call_user_func_array_missing_arg_abort(emitter, data);
+                emit_call_user_func_array_missing_arg_error(emitter, data);
                 emitter.label(&done);
             }
             arg_types.push(PhpType::Int);
@@ -851,7 +861,7 @@ fn emit_loaded_assoc_array_callback_call(
             let loaded_ty = push_loaded_hash_value_arg(&elem_ty, target_ty, emitter, ctx, data);
             abi::emit_jump(emitter, &done);
             emitter.label(&missing);
-            emit_call_user_func_array_missing_arg_abort(emitter, data);
+            emit_call_user_func_array_missing_arg_error(emitter, data);
             emitter.label(&done);
             loaded_ty
         };
@@ -940,6 +950,10 @@ fn emit_indexed_required_arg_count_check(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) {
+    if let Some(operation) = ctx.mbstring_operation {
+        emit_mbstring_argument_count_check(operation, len_reg, emitter, ctx);
+        return;
+    }
     let required_count = (0..regular_param_count)
         .filter(|idx| sig.defaults.get(*idx).and_then(Option::as_ref).is_none())
         .map(|idx| idx + 1)
@@ -950,8 +964,48 @@ fn emit_indexed_required_arg_count_check(
     }
     let ok_label = ctx.next_label("invoker_indexed_required_ok");
     emit_compare_len_ge(emitter, len_reg, required_count, &ok_label);
-    emit_call_user_func_array_missing_arg_abort(emitter, data);
+    emit_call_user_func_array_missing_arg_error(emitter, data);
     emitter.label(&ok_label);
+}
+
+/// Lets the shared mbstring coordinator report invalid arity before typed argument adaptation.
+fn emit_mbstring_argument_count_check(
+    operation: elephc_builtin_contract::RuntimeBuiltinId, len_reg: &str,
+    emitter: &mut Emitter, ctx: &mut InvokerEmitContext,
+) {
+    let parameters = elephc_builtin_contract::lookup_id(operation.builtin_id()).expect("mbstring contract").params.len();
+    let minimum = (0..=parameters).find(|&count| operation.supports_arity(count)).expect("mbstring minimum arity");
+    let maximum = (0..=parameters).rev().find(|&count| operation.supports_arity(count)).expect("mbstring maximum arity");
+    let fail = ctx.next_label("mbstring_arity_fail");
+    let done = ctx.next_label("mbstring_arity_ok");
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.instruction(&format!("cmp {len_reg}, #{minimum}"));             // compare actual indexed arguments with the shared minimum
+        emitter.instruction(&format!("b.lo {fail}"));                           // retain the actual short count for PHP error construction
+        emitter.instruction(&format!("cmp {len_reg}, #{maximum}"));             // compare actual indexed arguments with the shared maximum
+        emitter.instruction(&format!("b.ls {done}"));                           // adapt values only for an accepted argument count
+        emitter.label(&fail);
+        abi::emit_load_int_immediate(emitter, "x0", i64::from(operation.as_u32()));
+        emitter.instruction("mov x1, #0");                                      // arity rejection occurs before the coordinator reads argument pointers
+        emitter.instruction(&format!("mov x2, {len_reg}"));                     // preserve the supplied count in the PHP ArgumentCountError
+        emitter.instruction("mov x3, #0");                                      // caller strictness does not change arity diagnostics
+        emitter.instruction("mov x4, #0");                                      // this native adapter carries no eval context
+        emitter.instruction("bl __rt_mbstring_native");                         // construct and throw through the shared protected coordinator
+        emitter.instruction("brk #0");                                          // an invalid count cannot return a PHP value
+    } else {
+        emitter.instruction(&format!("cmp {len_reg}, {minimum}"));              // compare actual indexed arguments with the shared minimum
+        emitter.instruction(&format!("jb {fail}"));                             // preserve the actual short count for PHP error construction
+        emitter.instruction(&format!("cmp {len_reg}, {maximum}"));              // compare actual indexed arguments with the shared maximum
+        emitter.instruction(&format!("jbe {done}"));                            // adapt values only for an accepted argument count
+        emitter.label(&fail);
+        abi::emit_load_int_immediate(emitter, "rdi", i64::from(operation.as_u32()));
+        emitter.instruction("xor esi, esi");                                    // arity rejection occurs before any argument pointer access
+        emitter.instruction(&format!("mov rdx, {len_reg}"));                    // report the supplied count through PHP ArgumentCountError
+        emitter.instruction("xor ecx, ecx");                                    // strictness does not affect arity diagnostics
+        emitter.instruction("xor r8d, r8d");                                    // this native adapter carries no eval context
+        emitter.instruction("call __rt_mbstring_native");                       // finish Rust work before native throwable propagation
+        emitter.instruction("ud2");                                             // an invalid count cannot return a PHP value
+    }
+    emitter.label(&done);
 }
 
 /// Emits a length >= immediate branch.
@@ -1432,6 +1486,7 @@ fn load_boxed_invoker_ref_cell_to_raw_regs(
 }
 
 /// Coerces and pushes a loaded indexed-array element as a call argument.
+/// Typed object parameters borrow the argument container's owner, just as native direct calls do.
 fn push_loaded_array_element_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
@@ -1443,6 +1498,13 @@ fn push_loaded_array_element_arg(
         owned_value_args::coerce(emitter, ctx, data, source_elem_ty, target_ty);
     if !boxed_to_mixed {
         abi::emit_incref_if_refcounted(emitter, &pushed_ty);
+    }
+    if boxed_to_mixed
+        || (pushed_ty.is_refcounted() && !matches!(pushed_ty, PhpType::Object(_)))
+        || pushed_ty == PhpType::Callable
+        || (pushed_ty == PhpType::Str && source_elem_ty.codegen_repr() == PhpType::Mixed)
+    {
+        argument_owners::capture(emitter, ctx, &pushed_ty);
     }
     abi::emit_push_result_value(emitter, &pushed_ty);
     pushed_ty
@@ -3142,25 +3204,59 @@ fn widen_callback_arg_type(left: &PhpType, right: &PhpType) -> PhpType {
     left.clone()
 }
 
-/// Emits a fatal diagnostic for missing callback arguments.
-fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut DataSection) {
+/// Throws a catchable `ArgumentCountError` for a descriptor missing a required argument.
+fn emit_call_user_func_array_missing_arg_error(emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) =
-        data.add_string(b"Fatal error: call_user_func_array(): missing required argument\n");
+        data.add_string(b"call_user_func_array(): missing required argument");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #2");                                  // write the missing-argument diagnostic to stderr
-            abi::emit_symbol_address(emitter, "x1", &message_label);
-            emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the missing-argument diagnostic byte length to write()
-            emitter.syscall(4);
-            abi::emit_exit(emitter, 1);
+            emitter.instruction("mov x0, #56");                                // request the compact Throwable payload
+            emitter.instruction("bl __rt_heap_alloc");                         // allocate the ArgumentCountError object
+            emitter.instruction("mov x9, #6");                                 // heap kind 6 identifies a throwable object
+            emitter.instruction("str x9, [x0, #-8]");                          // stamp the allocation before acquiring its PHP handle
+            emitter.instruction("bl __rt_object_handle_acquire");              // assign the object its runtime handle
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_argument_count_error_class_id", 0);
+            emitter.instruction("str x9, [x0]");                               // identify the catchable ArgumentCountError class
+            abi::emit_symbol_address(emitter, "x9", &message_label);
+            emitter.instruction("str x9, [x0, #8]");                           // store the immutable diagnostic bytes
+            abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
+            emitter.instruction("str x9, [x0, #16]");                          // store the diagnostic byte length
+            emitter.instruction("str xzr, [x0, #24]");                         // exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
+                emitter, "x0",
+            );
+            emitter.instruction("str xzr, [x0, #40]");                         // previous exception defaults to null
+            abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
+            emitter.instruction("b __rt_throw_current");                       // release argument guards and enter PHP exception handling
         }
         Arch::X86_64 => {
-            emitter.instruction("mov edi, 2");                                  // write the missing-argument diagnostic to stderr
-            abi::emit_symbol_address(emitter, "rsi", &message_label);
-            emitter.instruction(&format!("mov edx, {}", message_len));          // pass the missing-argument diagnostic byte length to write()
-            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
-            emitter.instruction("syscall");                                     // emit the missing-argument diagnostic
-            abi::emit_exit(emitter, 1);
+            emitter.instruction("mov eax, 56");                                // request the compact Throwable payload
+            emitter.instruction("call __rt_heap_alloc");                       // allocate the ArgumentCountError object
+            abi::emit_load_int_immediate(
+                emitter,
+                "r10",
+                crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,
+            );
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");               // stamp the canonical throwable heap kind
+            emitter.instruction("call __rt_object_handle_acquire");            // assign the object its runtime handle
+            abi::emit_load_symbol_to_reg(
+                emitter,
+                "r10",
+                "_spl_argument_count_error_class_id",
+                0,
+            );
+            emitter.instruction("mov QWORD PTR [rax], r10");                   // identify the catchable ArgumentCountError class
+            abi::emit_symbol_address(emitter, "r10", &message_label);
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");               // store the immutable diagnostic bytes
+            abi::emit_load_int_immediate(emitter, "r10", message_len as i64);
+            emitter.instruction("mov QWORD PTR [rax + 16], r10");              // store the diagnostic byte length
+            emitter.instruction("mov QWORD PTR [rax + 24], 0");                // exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
+                emitter, "rax",
+            );
+            emitter.instruction("mov QWORD PTR [rax + 40], 0");                // previous exception defaults to null
+            abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
+            emitter.instruction("jmp __rt_throw_current");                     // release argument guards and enter PHP exception handling
         }
     }
 }

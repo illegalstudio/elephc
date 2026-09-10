@@ -8,7 +8,7 @@ sidebar:
 ## ini_get_all()
 
 ```php
-function ini_get_all(?string $extension = null, bool $details = true): mixed
+function ini_get_all(?string $extension = null, bool $details = true): array|false
 ```
 
 Returns every configuration directive, optionally with its access level and scope.
@@ -17,11 +17,11 @@ Returns every configuration directive, optionally with its access level and scop
 - `$extension` (`?string`), default `null`, optional
 - `$details` (`bool`), default `true`, optional
 
-**Returns**: `mixed`
+**Returns**: `array|false`
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected shared_ini prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

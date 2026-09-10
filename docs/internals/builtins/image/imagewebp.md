@@ -38,7 +38,7 @@ function imagewebp(mixed $image, ?string $file = null, int $quality = -1): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -13,6 +13,7 @@ use super::externs::*;
 use super::tags::{bitwise_op_tag, compare_op_tag};
 use super::ElephcRuntimeOps;
 use elephc_builtin_contract::{RuntimeBuiltinId, RuntimeBuiltinStatus};
+use elephc_builtin_contract::output_abi::OutputAction;
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
 use crate::interpreter::RuntimeValueOps;
@@ -23,6 +24,7 @@ mod construction_raw;
 mod lifecycle_scalars;
 mod native_results;
 mod numeric_string;
+mod output;
 mod reflection;
 
 use collection_calls::impl_collection_call_ops;
@@ -62,7 +64,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         id: RuntimeBuiltinId,
         args: &[RuntimeCellHandle],
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-        if !id.supports_arity(args.len()) {
+        if !id.supports_arity(args.len()) && !RuntimeBuiltinId::MBSTRING.contains(&id) {
             return Ok(None);
         }
         let raw_args = args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();

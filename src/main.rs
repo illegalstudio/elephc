@@ -10,6 +10,7 @@
 
 mod autoload;
 mod brand;
+mod bridge_sources;
 mod builtins;
 mod cli;
 mod codegen;
@@ -46,6 +47,7 @@ mod numeric_string;
 mod object_cast_prelude;
 mod opcache;
 mod opcache_prelude;
+mod shared_ini_prelude;
 mod optimize;
 mod otlp;
 mod parser;

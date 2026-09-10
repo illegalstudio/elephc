@@ -1,0 +1,13 @@
+{
+    "php_version": "8.5.10",
+    "encodings": {
+        "GB18030": {
+            "decode": "b03573db1c305ebc6b61ded709f54945f7b157b974913bf7c6863b512e716067",
+            "encode": "e84cd57d685d8e1e83495c6594674f07c1cff94cf9d72cc8278cbbb7cc7a31e2"
+        },
+        "GB18030-2022": {
+            "decode": "011518ca604ba52dea6048f1269d355adb8b6cd9ca245c4a1f3d1f7caee681e2",
+            "encode": "c9bca5b957e6ddd09cf2e46f86cdba8f76f133c5d1aa160ea0fa17afbd3914cb"
+        }
+    }
+}

@@ -25,23 +25,21 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Result ownership**: `non_heap`
+- **Effects**: `static (17 declared effects)`
+- **Requirements**: `static (2 requirements)`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
 - **Typed EIR target**: `runtime.mb_ereg_match`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
-- **Concrete helpers referenced directly by this lowering**:
-  - `__rt_mb_ereg_match`
 
 ## Signature summary
 
 ```php
-function mb_ereg_match(string $pattern, string $subject, ?string $options = null): bool
+function mb_ereg_match(string $pattern, string $string, ?string $options = null): bool
 ```
 
 ## What the type checker enforces
@@ -50,10 +48,9 @@ function mb_ereg_match(string $pattern, string $subject, ?string $options = null
 
 ## Eval interpreter (magician)
 
-- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/mb_ereg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/mb_ereg_match.rs) (`eval_builtin!`)
-- **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `interpreter-specific-value-semantics`.
-- **Dispatch hooks**: `direct`, `values`
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_match.rs) (`eval_builtin!`)
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(69)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references
 

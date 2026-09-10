@@ -1079,13 +1079,13 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
         }
         PhpType::Str => {
             emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset));    // load the string property pointer
-            emitter.instruction(&format!("ldr x2, [x9, #{}]", slot.offset + 8));// load the string property length
+            emitter.instruction(&format!("ldr x2, [x9, #{}]", slot.offset + 8)); // load the string property length
             emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string
             emitter.instruction("bl __rt_mixed_from_value");                    // persist and box the string property payload
         }
         PhpType::TaggedScalar => {
             emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // load the nullable integer property payload
-            emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset + 8));//load the nullable integer property tag
+            emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset + 8)); // load the nullable integer property tag
             emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
         }
         PhpType::Mixed | PhpType::Union(_) => {
@@ -1299,7 +1299,7 @@ fn emit_aarch64_store_cast_scalar(
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for scalar coercion
     emitter.instruction(&format!("bl {}", helper));                             // coerce the eval value to the declared property type
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the store
-    emitter.instruction(&format!("str {}, [x9, #{}]", result_reg, slot.offset));// store the coerced scalar into the property slot
+    emitter.instruction(&format!("str {}, [x9, #{}]", result_reg, slot.offset)); // store the coerced scalar into the property slot
     emit_aarch64_clear_scalar_property_marker(emitter, slot);
 }
 

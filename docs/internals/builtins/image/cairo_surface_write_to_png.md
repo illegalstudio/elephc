@@ -38,7 +38,7 @@ function cairo_surface_write_to_png(mixed $surface, string $filename): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

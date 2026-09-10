@@ -234,6 +234,16 @@ pub(super) fn lower_static_callable_call(
     }
 }
 
+/// Keeps invalid positional mbstring callable arities on the boxed runtime diagnostic path.
+pub(super) fn builtin_callable_needs_runtime_arity(name: &str, args: &[Expr]) -> bool {
+    use crate::builtins::semantics::BuiltinLowering;
+    use crate::ir::RuntimeCallTarget;
+    if args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args) { return false; }
+    let Some(definition) = crate::builtins::registry::lookup(name) else { return false; };
+    let BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)) = definition.spec.semantics.lowering else { return false; };
+    target.mbstring_operation().is_some_and(|operation| !operation.supports_arity(args.len()))
+}
+
 /// Resolves a PHP string callback using case-insensitive function lookup rules.
 pub(super) fn resolve_static_string_callable(
     ctx: &LoweringContext<'_, '_>,

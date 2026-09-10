@@ -4399,6 +4399,7 @@ fn decl_fn_ini_get() -> Stmt {
         .param("option", TypeExpr::Str)
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
+            crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_GET),
             s_assign("__elephc_oc", e_call("__elephc_opcache_ini_string", vec![e_var("option")])),
             s_if(
                 e_binop(e_var("__elephc_oc"), BinOp::StrictNotEq, e_bool(false)),
@@ -4493,9 +4494,10 @@ fn decl_fn_elephc_session_name_valid() -> Stmt {
 fn decl_fn_ini_set() -> Stmt {
     function("ini_set")
         .param("option", TypeExpr::Str)
-        .param_untyped("value")
+        .param("value", t_nullable(t_union(vec![TypeExpr::Str, TypeExpr::Int, TypeExpr::Float, TypeExpr::Bool])))
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
+            crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_SET),
             s_assign("old", e_str("")),
             s_if(
                 e_binop(e_call("__elephc_opcache_ini_string", vec![e_var("option")]), BinOp::StrictNotEq, e_bool(false)),

@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function ini_get_all(?string $extension = null, bool $details = true): mixed
+function ini_get_all(?string $extension = null, bool $details = true): array|false
 ```
 
 ## What the type checker enforces
@@ -38,7 +38,7 @@ function ini_get_all(?string $extension = null, bool $details = true): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

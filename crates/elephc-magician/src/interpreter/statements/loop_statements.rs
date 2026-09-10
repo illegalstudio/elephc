@@ -179,7 +179,7 @@ pub(super) fn execute_foreach_array_stmt(
     let len = values.array_len(array)?;
     for index in 0..len {
         let key = values.array_iter_key(array, index)?;
-        let value = values.array_get(array, key)?;
+        let value = values.array_iter_value(array, index)?;
         if let Some(key_name) = key_name {
             for replaced in set_scope_cell(
                 context,
@@ -187,6 +187,7 @@ pub(super) fn execute_foreach_array_stmt(
                 key_name.to_string(),
                 key,
                 ScopeCellOwnership::Owned,
+                values,
             )? {
                 values.release(replaced)?;
             }
@@ -199,6 +200,7 @@ pub(super) fn execute_foreach_array_stmt(
             value_name.to_string(),
             value,
             ScopeCellOwnership::Owned,
+            values,
         )? {
             values.release(replaced)?;
         }
@@ -284,6 +286,7 @@ pub(super) fn execute_foreach_iterator_stmt(
                 key_name.to_string(),
                 key,
                 ScopeCellOwnership::Owned,
+                values,
             )? {
                 values.release(replaced)?;
             }
@@ -294,6 +297,7 @@ pub(super) fn execute_foreach_iterator_stmt(
             value_name.to_string(),
             value,
             ScopeCellOwnership::Owned,
+            values,
         )? {
             values.release(replaced)?;
         }

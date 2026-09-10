@@ -8,6 +8,7 @@
 //! Key details:
 //! - GC helpers must honor cycle-collection suppression, mark bits, and parent/child references without double-releasing values.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 
@@ -33,7 +34,11 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current collector-active flag before starting a new x86_64 collection pass
     emitter.instruction("test r9, r9");                                         // is the collector already running?
     emitter.instruction("jnz __rt_gc_collect_cycles_done");                     // nested collection attempts are ignored to avoid recursive frees
-    emitter.instruction("mov QWORD PTR [r8], 1");                               // mark the collector active for the duration of this x86_64 cycle pass
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r9", "_gc_release_suppressed", 0);
+    emitter.instruction("test r9, r9");                                         // inspect whether an enclosing release is still processing children
+    emitter.instruction("jnz __rt_gc_collect_cycles_done");                     // defer collection until partially released containers are gone
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collecting");
+    emitter.instruction("mov QWORD PTR [r8], 1");                               // guard nested collection before invoking PHP destructors
 
     // -- set up a collector frame --
     // Stack layout:
@@ -72,6 +77,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the full kind word with any stale x86_64 reachable metadata
     emitter.instruction("mov rcx, 0xffffffff0006ffff");                         // preserve heap marker, storage, completed destructors, and pins while clearing marks
     emitter.instruction("and r11, rcx");                                        // clear the x86_64 transient reachable metadata while preserving kind and value_type bits
+    emitter.instruction("or r11, 0x20000");                                     // record membership in the current collection before any destructor allocation
     emitter.instruction("mov QWORD PTR [r8 + 8], r11");                         // persist the cleared x86_64 kind word back into the heap header
     emitter.label("__rt_gc_collect_cycles_clear_next");
     emitter.instruction("add r8, r9");                                          // advance by the current block payload size
@@ -86,7 +92,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_root_loop");
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the current candidate heap header for the x86_64 root scan
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // have we scanned every block in the initial heap window?
-    emitter.instruction("jae __rt_gc_collect_cycles_free_init");                // yes — move on to freeing the still-unreachable graph nodes
+    emitter.instruction("jae __rt_gc_collect_cycles_destruct_init");            // begin destruction of the still-unreachable graph nodes
     emitter.instruction("mov r9d, DWORD PTR [r8]");                             // load this candidate block payload size before any nested rescans
     emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // load this candidate block refcount from the heap header
     emitter.instruction("test r10d, r10d");                                     // is this candidate block live?
@@ -190,10 +196,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_count_hash_loop");
     emitter.instruction("cmp r11, r10");                                        // have we inspected every hash entry slot?
     emitter.instruction("jae __rt_gc_collect_cycles_count_next");               // yes — move on to the next source block in the rescan
-    emitter.instruction("mov r8, r11");                                         // preserve the logical hash slot index while scaling it into an entry byte offset
-    emitter.instruction("imul r8, 64");                                         // scale the slot index by 64 bytes per hash entry
-    emitter.instruction("add r8, 40");                                          // skip the 40-byte hash header to reach the selected entry
-    emitter.instruction("lea r8, [r9 + r8]");                                   // compute the address of the selected hash entry inside the source hash table
+    hash_layout::emit_entry_address(emitter, "r8", "r9", "r11");
     emitter.instruction("cmp QWORD PTR [r8], 1");                               // is this hash entry occupied?
     emitter.instruction("jne __rt_gc_collect_cycles_count_hash_next");          // skip empty and tombstone entries that carry no outgoing edge
     emitter.instruction("mov rax, QWORD PTR [r8 + 40]");                        // load the runtime value_tag stored for this hash entry
@@ -259,7 +262,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r10, r10");                                        // initialize the source object property index to zero for the incoming-edge scan
     emitter.label("__rt_gc_collect_cycles_count_object_loop");
     emitter.instruction("cmp r10, rax");                                        // have we inspected every property slot in this source object?
-    emitter.instruction("jae __rt_gc_collect_cycles_count_next");               // yes — move on to the next source block in the rescan
+    emitter.instruction("jae __rt_gc_collect_cycles_count_object_dynamic");     // include the dynamic-property hash after declared slots
     emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // load the compile-time property tag for the selected source object property
     emitter.instruction("mov r8, r10");                                         // preserve the logical property index while scaling it into a byte offset
     emitter.instruction("imul r8, 16");                                         // scale the property index by 16 bytes per object property slot
@@ -282,6 +285,17 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_count_object_next");
     emitter.instruction("add r10, 1");                                          // advance to the next object property slot in the source object
     emitter.instruction("jmp __rt_gc_collect_cycles_count_object_loop");        // continue comparing source object property children against the candidate
+
+    emitter.label("__rt_gc_collect_cycles_count_object_dynamic");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // reload the validated class id of the source object
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("cmp QWORD PTR [r11 + r10 * 8], 0");                    // check whether the declared layout includes a dynamic-property hash
+    emitter.instruction("je __rt_gc_collect_cycles_count_next");                // objects without a tail contribute no additional heap edge
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes");
+    emitter.instruction("mov rcx, QWORD PTR [r11 + r10 * 8]");                  // locate the dynamic tail within the declared object payload
+    emitter.instruction("cmp QWORD PTR [r9 + rcx - 8], rsi");                   // compare the owned property hash with the current candidate
+    emitter.instruction("jne __rt_gc_collect_cycles_count_next");               // ignore a different or uninitialized property hash
+    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // count the object-to-hash edge in the current candidate total
 
     emitter.label("__rt_gc_collect_cycles_count_next");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the current source heap header after any nested child scans
@@ -368,10 +382,10 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_object_free_deep");                          // deep-free the remaining unreachable object node and its properties
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the object node
     emitter.label("__rt_gc_collect_cycles_free_array");
-    emitter.instruction("call __rt_array_free_deep");                           // deep-free the unreachable array node and its nested payloads
+    CLEANUP.call(emitter, "__rt_array_free_deep", false);                           // deep-free the unreachable array node and its nested payloads
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the array node
     emitter.label("__rt_gc_collect_cycles_free_hash");
-    emitter.instruction("call __rt_hash_free_deep");                            // deep-free the unreachable hash node and its owned entries
+    CLEANUP.call(emitter, "__rt_hash_free_deep", false);                            // deep-free the unreachable hash node and its owned entries
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the hash node
     emitter.label("__rt_gc_collect_cycles_free_mixed");
     emitter.instruction("call __rt_mixed_free_deep");                           // deep-free the unreachable mixed box and its boxed child

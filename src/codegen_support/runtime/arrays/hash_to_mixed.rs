@@ -21,6 +21,7 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 /// Emits the `__rt_hash_to_mixed` runtime helper.
 /// Converts all entry payloads of an associative array to boxed Mixed cells.
 /// COW is enforced first via `__rt_hash_ensure_unique` so entries can be safely rewritten.
+/// Guarded payload borrows acquire new owners; existing borrowed Mixed cells are cloned.
 /// Each entry is stamped with value_type tag 7. The hash header is also stamped with 7.
 /// The input owner is consumed by the COW boundary and the returned hash is its replacement owner.
 /// Dispatches to `emit_hash_to_mixed_linux_x86_64` on x86_64; uses ARM64 otherwise.
@@ -126,7 +127,8 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
 
 /// Generates the x86_64 Linux version of the `__rt_hash_to_mixed` runtime helper.
 /// Converts each hash entry payload to a boxed Mixed cell via `__rt_hash_to_mixed_x86_box_owned`,
-/// stamps the hash header with value_type 7, and returns the unique hash pointer.
+/// retaining guarded borrows or cloning their old boxes before publishing owned replacements.
+/// Stamps the hash header with value_type 7 and returns the unique hash pointer.
 /// Calling convention: rdi = hash pointer, rax = converted hash pointer.
 fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();

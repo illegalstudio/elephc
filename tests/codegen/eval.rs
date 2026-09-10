@@ -55,9 +55,9 @@ fn assert_scope_eir_aot_without_bridge(
     );
 }
 
-/// Verifies dynamic eval compiles and runs without any native project or PCRE2 artifact.
+/// Requires the shared MIME provider for opaque eval without enabling optional preg_* calls.
 #[test]
-fn test_dynamic_eval_without_regex_needs_no_native_project() {
+fn test_dynamic_eval_requires_mime_provider_without_regex_capability() {
     let dir = make_cli_test_dir("elephc_dynamic_eval_without_native_project");
     fs::write(
         dir.join("main.php"),
@@ -68,14 +68,23 @@ eval($code);
     )
     .unwrap();
 
-    let compile = elephc_cli_command(&dir)
+    let missing = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(!missing.status.success(), "opaque eval requires its shared MIME provider");
+    let missing_stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(missing_stderr.contains("requires managed native package pcre2")
+        && missing_stderr.contains("elephc native add pcre2"), "{missing_stderr}");
+
+    let compile = elephc_cli_command_with_managed_pcre2(&dir)
         .args(["--quiet", "main.php"])
         .output()
         .expect("failed to invoke elephc CLI");
     let compile_stderr = String::from_utf8_lossy(&compile.stderr);
     assert!(
         compile.status.success(),
-        "dynamic eval without regex should compile without a native project:\n{compile_stderr}"
+        "dynamic eval should compile with its managed MIME provider:\n{compile_stderr}"
     );
     assert!(
         compile_stderr.contains("dynamic eval was compiled without optional regex support")
@@ -84,7 +93,7 @@ eval($code);
     );
     assert!(
         !compile_stderr.contains("native project error"),
-        "eval-only compilation must not resolve managed PCRE2:\n{compile_stderr}"
+        "the installed MIME provider should satisfy compilation:\n{compile_stderr}"
     );
 
     let run = Command::new(dir.join("main"))
@@ -115,7 +124,7 @@ eval($code);
     )
     .unwrap();
 
-    let compile = elephc_cli_command(&dir)
+    let compile = elephc_cli_command_with_managed_pcre2(&dir)
         .args(["--quiet", "main.php"])
         .output()
         .expect("failed to invoke elephc CLI");

@@ -8,7 +8,7 @@ sidebar:
 ## chunk_split()
 
 ```php
-function chunk_split(string $string, int $length = 76, string $separator = '\r\n'): string
+function chunk_split(string $string, int $length = 76, string $separator = "\r\n"): string
 ```
 
 Splits a string into fixed-length chunks separated by a given string.
@@ -16,7 +16,7 @@ Splits a string into fixed-length chunks separated by a given string.
 **Parameters**:
 - `$string` (`string`)
 - `$length` (`int`), default `76`, optional
-- `$separator` (`string`), default `'\r\n'`, optional
+- `$separator` (`string`), default `"\r\n"`, optional
 
 **Returns**: `string`
 

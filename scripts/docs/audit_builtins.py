@@ -199,7 +199,8 @@ def _check_backend_contracts(
 
     for record in raw:
         supported = bool((record.get("aot") or {}).get("supported"))
-        if bool(record.get("eval_only")) == supported:
+        expected_eval_only = not supported and bool((record.get("eval") or {}).get("supported"))
+        if bool(record.get("eval_only")) != expected_eval_only:
             errors.append(f"{record['name']} has an inconsistent eval_only flag")
     stats["backend_contract_checks"] = len(non_registry)
 

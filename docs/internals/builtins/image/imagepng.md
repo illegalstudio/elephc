@@ -38,7 +38,7 @@ function imagepng(mixed $image, ?string $file = null, int $quality = -1, int $fi
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

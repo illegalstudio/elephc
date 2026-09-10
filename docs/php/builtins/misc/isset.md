@@ -15,7 +15,7 @@ Determines whether a variable is set and is not null.
 
 **Parameters**:
 - `$var` (`mixed`)
-- `...$vars` — variadic: collects excess arguments into `$vars`.
+- `...$vars` - variadic: collects excess arguments into `$vars`.
 
 **Returns**: `bool`
 

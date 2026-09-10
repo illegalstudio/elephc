@@ -14,7 +14,7 @@ function session_set_cookie_params(...$args): bool
 Sets the session cookie's lifetime, path, domain, and flags.
 
 **Parameters**:
-- `...$args` — variadic: collects excess arguments into `$args`.
+- `...$args` - variadic: collects excess arguments into `$args`.
 
 **Returns**: `bool`
 

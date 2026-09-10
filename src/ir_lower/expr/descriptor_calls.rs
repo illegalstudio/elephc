@@ -86,6 +86,7 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
+    guarded: bool,
 ) -> LoweredValue {
     let elem_ty = PhpType::Mixed;
     let array_ty = PhpType::Array(Box::new(elem_ty.clone()));
@@ -113,6 +114,7 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
+        ctx.refresh_argument_array_guard(array, arg.span);
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
     }
     take_published_container(ctx, owner, array_ty, span)
@@ -123,6 +125,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
+    guarded: bool,
 ) -> LoweredValue {
     let hash_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
@@ -232,6 +235,7 @@ pub(super) fn lower_first_class_callable_expr_call(
 ) -> Option<LoweredValue> {
     match &callee.kind {
         ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            if builtin_callable_needs_runtime_arity(name, args) { return None; }
             Some(lower_function_call(ctx, name, args, expr))
         }
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
@@ -241,6 +245,7 @@ pub(super) fn lower_first_class_callable_expr_call(
             let signature = static_callable_binding_for_expr(ctx, callee)
                 .and_then(|target| signature_for_static_callable_binding(ctx, target));
             let callable = lower_first_class_callable(ctx, target, callee);
+            guard_owned_descriptor_callback(ctx, callable, expr.span);
             let result_type = signature
                 .as_ref()
                 .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))

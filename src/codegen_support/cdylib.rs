@@ -22,6 +22,7 @@ use crate::exports::{is_string_return_signature, ExportedFunction, ELEPHC_ABI_VE
 
 mod boundary;
 mod owned_string;
+mod lifecycle;
 
 pub(crate) const STATUS_OK: i32 = 0;
 pub(crate) const STATUS_INVALID_ARGUMENT: i32 = 1;
@@ -53,6 +54,7 @@ pub(crate) fn emit_cdylib_exports(
     target: Target,
     exports: &[&ExportedFunction],
     heap_debug: bool,
+    startup: Option<&str>,
 ) {
     reserve_boundary_data(data);
     let (invalid_ptr, invalid_len) = data.add_string(b"invalid string export arguments");
@@ -69,6 +71,7 @@ pub(crate) fn emit_cdylib_exports(
                 (&invalid_ptr, invalid_len),
                 (&allocation_ptr, allocation_len),
                 (&runtime_ptr, runtime_len),
+                startup,
             );
         } else {
             boundary::emit_scalar_export(
@@ -78,10 +81,24 @@ pub(crate) fn emit_cdylib_exports(
                 (&invalid_ptr, invalid_len),
                 (&allocation_ptr, allocation_len),
                 (&runtime_ptr, runtime_len),
+                startup,
             );
         }
     }
-    emit_lifecycle_exports(emitter, target, heap_debug);
+    lifecycle::emit(emitter, target, heap_debug, startup, (&runtime_ptr, runtime_len));
+}
+
+/// Runs optional non-PHP initialization after host inputs are saved and before installing the PHP handler.
+fn emit_startup_check(emitter: &mut Emitter, startup: Option<&str>, failed: &str) {
+    let Some(symbol) = startup else { return; };
+    abi::emit_call_label(emitter, symbol);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("cbnz w0, {failed}")),    // return an initialization failure through the existing host boundary
+        Arch::X86_64 => {
+            emitter.instruction("test eax, eax");                               // inspect non-unwinding initialization status
+            emitter.instruction(&format!("jnz {failed}"));                      // preserve the host process on initialization failure
+        }
+    }
 }
 
 /// Builds a deterministic local-label suffix from a public PHP export name.
@@ -384,7 +401,7 @@ mod tests {
         let mut emitter = Emitter::new_cdylib(target);
         let mut data = DataSection::new();
         let export = string_export();
-        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
         let asm = emitter.output();
         assert!(asm.contains("_roundtrip:"));
         assert!(asm.contains("bl _setjmp"));
@@ -422,7 +439,7 @@ mod tests {
             let mut emitter = Emitter::new_cdylib(target);
             let mut data = DataSection::new();
             let export = string_export();
-            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
             let asm = emitter.output();
 
             assert!(
@@ -440,30 +457,36 @@ mod tests {
         }
     }
 
-    /// AArch64 lifecycle initialization preserves the host return address around
-    /// the stack-limit helper call instead of returning to its own post-call instruction.
+    /// Lifecycle initialization preserves linkage and aligns helper calls on every target.
     #[test]
-    fn aarch64_cdylib_init_preserves_the_host_return_address() {
+    fn cdylib_init_preserves_the_host_frame_on_all_targets() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
             Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
         ] {
             let mut emitter = Emitter::new_cdylib(target);
             let mut data = DataSection::new();
             let export = string_export();
-            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
             let asm = emitter.output();
             let init_label = format!("{}:", target.extern_symbol("elephc_init"));
             let shutdown_label = format!("{}:", target.extern_symbol("elephc_shutdown"));
             let init_start = asm.find(&init_label).unwrap();
             let init_end = asm[init_start..].find(&shutdown_label).unwrap() + init_start;
             let init = &asm[init_start..init_end];
-            let save = init.find("stp x29, x30, [sp, #0]").unwrap();
-            let call = init.find("bl __rt_stack_limit_init").unwrap();
-            let restore = init.find("ldp x29, x30, [x9]").unwrap();
+            let (save, call, restore) = match target.arch {
+                Arch::AArch64 => ("stp x29, x30, [sp, #0]", "bl __rt_stack_limit_init", "ldp x29, x30, [x9]"),
+                Arch::X86_64 => ("push rbp", "call __rt_stack_limit_init", "leave"),
+            };
+            let save = init.find(save).unwrap();
+            let call = init.find(call).unwrap();
+            let restore = init.find(restore).unwrap();
             assert!(
                 save < call && call < restore,
-                "{target:?} did not preserve x30 around cdylib initialization:\n{init}"
+                "{target:?} did not preserve the native frame around initialization:\n{init}"
             );
         }
     }
@@ -475,7 +498,7 @@ mod tests {
         let mut emitter = Emitter::new_cdylib(target);
         let mut data = DataSection::new();
         let export = string_export();
-        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
         let asm = emitter.output();
         assert!(asm.contains("roundtrip:"));
         assert!(asm.contains("call setjmp"));
@@ -493,8 +516,8 @@ mod tests {
         );
     }
 
-    /// Every supported target saves all four owned-string host arguments before the
-    /// lazy initializer and reloads output addresses from stable frame slots afterward.
+    /// Every target saves owned-string host arguments before stack/configuration startup
+    /// and installs the PHP exception handler only after the non-unwinding initializer.
     #[test]
     fn preserves_owned_string_host_arguments_across_lazy_stack_init_for_all_targets() {
         for target in [
@@ -507,9 +530,15 @@ mod tests {
             let mut emitter = Emitter::new_cdylib(target);
             let mut data = DataSection::new();
             let export = string_export();
-            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false,
+                Some("__rt_mbstring_startup_status"));
             let asm = emitter.output();
             let lazy_init = asm.find("__rt_stack_limit_init").unwrap();
+            let configure = asm.find("__rt_mbstring_startup_status").unwrap();
+            let call = if target.arch == Arch::AArch64 { "bl" } else { "call" };
+            let handler = asm.find(&format!("{call} {}", target.extern_symbol("setjmp"))).unwrap();
+            assert!(lazy_init < configure && configure < handler,
+                "{target:?} must initialize before installing the PHP handler:\n{asm}");
             let first_output_load = match target.arch {
                 Arch::AArch64 => asm[lazy_init..].find("ldur x9, [x29, #-24]").unwrap() + lazy_init,
                 Arch::X86_64 => {

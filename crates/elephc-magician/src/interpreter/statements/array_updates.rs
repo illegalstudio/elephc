@@ -166,7 +166,7 @@ pub(super) fn eval_array_unset_element_stmt(
             if let Some(array) =
                 eval_array_unset_target_result(array, index, context, scope, values)?
             {
-                for replaced in set_scope_cell(context, scope, name.clone(), array, ownership)? {
+                for replaced in set_scope_cell(context, scope, name.clone(), array, ownership, values)? {
                     values.release(replaced)?;
                 }
             }
@@ -305,7 +305,7 @@ pub(super) fn eval_array_access_unset_result(
     })
 }
 
-/// Rebuilds an array without the strict-equal key requested by `unset($array[$key])`.
+/// Rebuilds an unset array with preserved keys, append history, and balanced temporary ownership.
 pub(super) fn eval_array_without_key_result(
     array: RuntimeCellHandle,
     index: RuntimeCellHandle,
@@ -393,10 +393,8 @@ pub(super) fn eval_non_object_array_append_var_stmt(
     } else {
         values.array_new(1)?
     };
-    let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
-    let array = values.array_set(array, index, value)?;
-    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
+    let array = eval_array_append_value(array, value, context, scope, values)?;
+    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership, values)? {
         values.release(replaced)?;
     }
     Ok(())
@@ -623,9 +621,7 @@ pub(super) fn eval_static_property_array_append_result(
     } else {
         values.array_new(1)?
     };
-    let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
-    let array = values.array_set(array, index, value)?;
+    let array = eval_array_append_value(array, value, context, scope, values)?;
     eval_static_property_set_result(class_name, property, array, context, values)
 }
 

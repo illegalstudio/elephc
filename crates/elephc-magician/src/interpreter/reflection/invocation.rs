@@ -46,8 +46,7 @@ pub(super) fn eval_reflection_method_invoke_args_array(
     evaluated_args: Vec<EvaluatedCallArg>,
 ) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
     let args = bind_evaluated_function_args(
-        &[String::from("object"), String::from("args")],
-        evaluated_args,
+        &[String::from("object"), String::from("args")], evaluated_args,
     )?;
     Ok((args[0], args[1]))
 }

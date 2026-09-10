@@ -110,6 +110,33 @@ pub(in crate::interpreter) fn eval_throw_type_error<T>(
     eval_throw_builtin_exception("TypeError", message, context, values)
 }
 
+/// Creates and schedules an `ArgumentCountError` through eval's normal Throwable channel.
+pub(in crate::interpreter) fn eval_throw_argument_count_error<T>(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object("ArgumentCountError")?;
+    let mut owners = Vec::new();
+    let constructed = (|| {
+        let message = values.string(message)?;
+        owners.push(message);
+        let code = values.int(0)?;
+        owners.push(code);
+        values.construct_object(exception, vec![message, code])
+    })();
+    let mut cleanup = Ok(());
+    for owner in owners.into_iter().rev() {
+        if let Err(status) = values.release(owner) { cleanup = Err(status); }
+    }
+    if let Err(status) = constructed.and(cleanup) {
+        let _ = values.release(exception);
+        return Err(status);
+    }
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
 /// Creates and schedules a `ValueError` through eval's normal Throwable channel.
 pub(in crate::interpreter) fn eval_throw_builtin_value_error<T>(
     message: &str,

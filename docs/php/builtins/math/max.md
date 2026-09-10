@@ -15,7 +15,7 @@ Find highest value.
 
 **Parameters**:
 - `$value` (`mixed`)
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `...$values` - variadic: collects excess arguments into `$values`.
 
 **Returns**: `mixed`
 

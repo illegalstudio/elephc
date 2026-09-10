@@ -8,6 +8,7 @@
 //! Key details:
 //! - PHP string coercion treats `false` and `null` as empty strings, while
 //!   integer true and ordinary ints use the existing `__rt_itoa` helper.
+//! - Constant string values register lazy interned origins before native copies can create aliases.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -28,6 +29,9 @@ pub(super) fn lower_const_str(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_ini_literal");
+    }
     store_if_result(ctx, inst)
 }
 

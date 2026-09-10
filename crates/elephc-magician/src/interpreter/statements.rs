@@ -11,6 +11,7 @@
 
 mod abstract_requirements;
 mod array_updates;
+mod array_append;
 mod attributes_magic_validation;
 mod callable_objects;
 mod class_declarations;

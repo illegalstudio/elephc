@@ -1,6 +1,6 @@
 ---
 title: "mb_ereg_match()"
-description: "Tests whether a regex pattern matches the beginning of a string (multibyte)."
+description: "Tests a raw multibyte regex at the string start using the current regex encoding and options."
 sidebar:
   order: 759
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## mb_ereg_match()
 
 ```php
-function mb_ereg_match(string $pattern, string $subject, ?string $options = null): bool
+function mb_ereg_match(string $pattern, string $string, ?string $options = null): bool
 ```
 
-Tests whether a regex pattern matches the beginning of a string (multibyte).
+Tests a raw multibyte regex at the string start using the current regex encoding and options.
 
 **Parameters**:
 - `$pattern` (`string`)
-- `$subject` (`string`)
+- `$string` (`string`)
 - `$options` (`?string`), default `null`, optional
 
 **Returns**: `bool`

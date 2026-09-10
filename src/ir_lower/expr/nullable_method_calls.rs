@@ -353,7 +353,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                         && conditionally_releasable
                         && ctx.arg_and_result_types_can_alias(*value, result))
             });
-            if !callee_owns && !independently_boxed && result_reuses_arg {
+            if !owned_object_result && !callee_owns && !independently_boxed && result_reuses_arg {
                 // Both suppression reasons above are MAY facts, so an unconditional skip is
                 // right only on the calls that actually hand the payload back. Emitting a
                 // conditional release instead lets each call decide at runtime: the codegen
@@ -385,6 +385,9 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
             }
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
         }
+    }
+    if let Some(value) = guarded_result {
+        ctx.unguard_call_argument(value, span);
     }
 }
 

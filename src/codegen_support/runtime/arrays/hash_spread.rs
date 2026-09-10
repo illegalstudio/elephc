@@ -14,6 +14,7 @@
 //! - `__rt_hash_project_spread` preserves integer keys and normalizes numeric
 //!   string property names to the integer keys produced by PHP array casts.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -81,9 +82,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("cmp x6, x5");                                          // has every destination slot been inspected?
     emitter.instruction("b.ge __rt_hash_spread_key_scan_done");                 // finish scanning once the cursor reaches capacity
     emitter.instruction("mov x9, #64");                                         // x9 = hash entry size in bytes
-    emitter.instruction("mul x10, x6, x9");                                     // convert the slot cursor into a byte offset
-    emitter.instruction("add x10, x0, x10");                                    // advance from the hash base to the selected slot
-    emitter.instruction("add x10, x10, #40");                                   // skip the fixed hash header to reach the entry fields
+    hash_layout::emit_entry_address(emitter, "x10", "x0", "x6");
     emitter.instruction("ldr x11, [x10]");                                      // load the occupied marker for this slot
     emitter.instruction("cmp x11, #1");                                         // is this slot a live entry?
     emitter.instruction("b.ne __rt_hash_spread_key_scan_next");                 // ignore empty or tombstone slots while deriving the next key
@@ -252,10 +251,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_x86_key_scan");
     emitter.instruction("cmp r8, r11");                                         // has every destination slot been inspected?
     emitter.instruction("jge __rt_hash_spread_x86_key_scan_done");              // finish scanning once the cursor reaches capacity
-    emitter.instruction("mov rcx, r8");                                         // copy the slot cursor before scaling it into a byte offset
-    emitter.instruction("shl rcx, 6");                                          // convert the slot cursor into a 64-byte hash-entry offset
-    emitter.instruction("add rcx, r10");                                        // advance from the hash base to the selected entry block
-    emitter.instruction("add rcx, 40");                                         // skip the fixed hash header to reach the entry fields
+    hash_layout::emit_entry_address(emitter, "rcx", "r10", "r8");
     emitter.instruction("cmp QWORD PTR [rcx], 1");                              // is this slot a live entry?
     emitter.instruction("jne __rt_hash_spread_x86_key_scan_next");              // ignore empty or tombstone slots while deriving the next key
     emitter.instruction("cmp QWORD PTR [rcx + 16], -1");                        // is the normalized key an integer key?

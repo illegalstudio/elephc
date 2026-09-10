@@ -81,7 +81,8 @@ fn compile_lfc_eval_project_and_run(
         .expect("CLI should emit LFC eval assembly");
     let runtime_features = elephc::codegen::RuntimeFeatures {
         regex: true,
-        mb_strlen: false,
+        mbstring: false,
+        mbregex: false,
         phar_archive: false,
         descriptor_invoker: true,
         eval_bridge: true,

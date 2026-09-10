@@ -134,6 +134,7 @@ use array_builtin_args::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
 use positional_spreads::*;
+use packed_builtin_args::*;
 use named_args::*;
 use named_spreads::*;
 use variadic_args::*;

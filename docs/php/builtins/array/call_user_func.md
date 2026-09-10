@@ -15,7 +15,7 @@ Calls a callback with the given arguments.
 
 **Parameters**:
 - `$callback` (`callable`)
-- `...$args` — variadic: collects excess arguments into `$args`.
+- `...$args` - variadic: collects excess arguments into `$args`.
 
 **Returns**: `mixed`
 

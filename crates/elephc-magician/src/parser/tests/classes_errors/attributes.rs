@@ -53,6 +53,14 @@ class DynEvalAttributed {}"#,
     );
 }
 
+/// Retains non-UTF-8 attribute literals as bytes instead of changing them or rejecting the metadata.
+#[test]
+fn string_literal_bytes_survive_attribute_metadata() {
+    let program = parse_fragment(br#"#[Tag("\xFF")] class BinaryTag {}"#).unwrap();
+    assert_eq!(program.statements(), &[EvalStmt::ClassDecl(EvalClass::new("BinaryTag", Vec::new(), Vec::new())
+        .with_attributes(vec![EvalAttribute::new("Tag", Some(vec![EvalAttributeArg::Bytes(vec![0xff])]))]))]);
+}
+
 /// Verifies class-like declaration attributes attach to interfaces, traits, and enums.
 #[test]
 fn parse_fragment_accepts_class_like_attribute_metadata() {

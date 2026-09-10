@@ -25,6 +25,10 @@ use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan};
 
 use super::LinkError;
 
+use crate::bridge_sources as sources;
+#[cfg(test)]
+use sources::any_file_newer_than;
+
 /// A Rust `staticlib` bridge that can be linked into generated programs.
 pub(super) struct BridgeStaticlib {
     /// Linker library name without the `lib` prefix or archive extension.
@@ -111,6 +115,17 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extensions: &["bcmath"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_mbstring",
+        env_var: "ELEPHC_MBSTRING_LIB_DIR",
+        crate_name: "elephc-mbstring",
+        flag_name: "mbstring",
+        whole_archive: false,
+        apple_frameworks: &[],
+        needs_libdl: true,
+        php_extensions: &["mbstring"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {

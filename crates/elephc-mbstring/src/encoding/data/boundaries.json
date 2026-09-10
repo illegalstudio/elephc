@@ -1,0 +1,101 @@
+{
+    "php_version": "8.5.10",
+    "encodings": {
+        "EUC-TW": {
+            "file": "euc-tw-boundaries.bin",
+            "sha256": "c0636c9f58cfa591cea441438c09052fd771666b495f9395072d1ba17bd0d328"
+        },
+        "UTF-8": {
+            "file": "utf-8-boundaries.bin",
+            "sha256": "7c334cdceb8e0f0a08e953b0354061d3b3175e9cf45884c8591fcdadb094e931"
+        },
+        "UTF-8-Mobile#DOCOMO": {
+            "file": "utf-8-mobile-docomo-boundaries.bin",
+            "sha256": "7c334cdceb8e0f0a08e953b0354061d3b3175e9cf45884c8591fcdadb094e931"
+        },
+        "UTF-8-Mobile#KDDI-A": {
+            "file": "utf-8-mobile-kddi-a-boundaries.bin",
+            "sha256": "7c334cdceb8e0f0a08e953b0354061d3b3175e9cf45884c8591fcdadb094e931"
+        },
+        "UTF-8-Mobile#KDDI-B": {
+            "file": "utf-8-mobile-kddi-b-boundaries.bin",
+            "sha256": "7c334cdceb8e0f0a08e953b0354061d3b3175e9cf45884c8591fcdadb094e931"
+        },
+        "UTF-8-Mobile#SOFTBANK": {
+            "file": "utf-8-mobile-softbank-boundaries.bin",
+            "sha256": "7c334cdceb8e0f0a08e953b0354061d3b3175e9cf45884c8591fcdadb094e931"
+        },
+        "SJIS": {
+            "file": "sjis-boundaries.bin",
+            "sha256": "652f035b7fb10385cbbf24eec8aba8ec0fde203a1720ac111e8ef8035bfe993a"
+        },
+        "CP932": {
+            "file": "cp932-boundaries.bin",
+            "sha256": "5882c9ae08bb57b3c6f27a9f9c30def18ed9cb12a57192593523bbff8584e691"
+        },
+        "SJIS-win": {
+            "file": "sjis-win-boundaries.bin",
+            "sha256": "5882c9ae08bb57b3c6f27a9f9c30def18ed9cb12a57192593523bbff8584e691"
+        },
+        "SJIS-2004": {
+            "file": "sjis-2004-boundaries.bin",
+            "sha256": "cd5926f088bfa348f3d0e97963a27b9d5fefe065d997ac7d7d063b1253f05ef3"
+        },
+        "SJIS-mac": {
+            "file": "sjis-mac-boundaries.bin",
+            "sha256": "62fd7c8e5c90ffd45368af4cff486805836625c952b21be1aae5acd0e41fb65c"
+        },
+        "EUC-CN": {
+            "file": "euc-cn-boundaries.bin",
+            "sha256": "c0636c9f58cfa591cea441438c09052fd771666b495f9395072d1ba17bd0d328"
+        },
+        "CP936": {
+            "file": "cp936-boundaries.bin",
+            "sha256": "878983c42a69db2d91359c3eeeeda1b73d2ce3a6e00535034e8090555c52f161"
+        },
+        "BIG-5": {
+            "file": "big-5-boundaries.bin",
+            "sha256": "878983c42a69db2d91359c3eeeeda1b73d2ce3a6e00535034e8090555c52f161"
+        },
+        "CP950": {
+            "file": "cp950-boundaries.bin",
+            "sha256": "878983c42a69db2d91359c3eeeeda1b73d2ce3a6e00535034e8090555c52f161"
+        },
+        "EUC-KR": {
+            "file": "euc-kr-boundaries.bin",
+            "sha256": "c0636c9f58cfa591cea441438c09052fd771666b495f9395072d1ba17bd0d328"
+        },
+        "UHC": {
+            "file": "uhc-boundaries.bin",
+            "sha256": "878983c42a69db2d91359c3eeeeda1b73d2ce3a6e00535034e8090555c52f161"
+        },
+        "SJIS-Mobile#DOCOMO": {
+            "file": "sjis-mobile-docomo-boundaries.bin",
+            "sha256": "cd5926f088bfa348f3d0e97963a27b9d5fefe065d997ac7d7d063b1253f05ef3"
+        },
+        "SJIS-Mobile#KDDI": {
+            "file": "sjis-mobile-kddi-boundaries.bin",
+            "sha256": "cd5926f088bfa348f3d0e97963a27b9d5fefe065d997ac7d7d063b1253f05ef3"
+        },
+        "SJIS-Mobile#SOFTBANK": {
+            "file": "sjis-mobile-softbank-boundaries.bin",
+            "sha256": "cd5926f088bfa348f3d0e97963a27b9d5fefe065d997ac7d7d063b1253f05ef3"
+        },
+        "EUC-JP": {
+            "file": "euc-jp-boundaries.bin",
+            "sha256": "9ae6de89e2e806880ef02ce695135a1a0cb1c20c3d3819492ac34d79916dad9d"
+        },
+        "eucJP-win": {
+            "file": "eucjp-win-boundaries.bin",
+            "sha256": "9ae6de89e2e806880ef02ce695135a1a0cb1c20c3d3819492ac34d79916dad9d"
+        },
+        "EUC-JP-2004": {
+            "file": "euc-jp-2004-boundaries.bin",
+            "sha256": "9ae6de89e2e806880ef02ce695135a1a0cb1c20c3d3819492ac34d79916dad9d"
+        },
+        "CP51932": {
+            "file": "cp51932-boundaries.bin",
+            "sha256": "9ae6de89e2e806880ef02ce695135a1a0cb1c20c3d3819492ac34d79916dad9d"
+        }
+    }
+}

@@ -38,7 +38,7 @@ function cairo_curve_to(mixed $context, float $x1, float $y1, float $x2, float $
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

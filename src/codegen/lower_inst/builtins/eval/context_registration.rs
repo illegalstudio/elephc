@@ -290,6 +290,9 @@ pub(super) fn eval_native_global_constant_abi_value(
 
 /// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.
 pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
+    if ctx.module.required_runtime_features.mbregex {
+        abi::emit_call_label(ctx.emitter, "__rt_mbregex_init");
+    }
     if !ctx.module.required_runtime_features.regex {
         return;
     }

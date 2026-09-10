@@ -391,7 +391,9 @@ impl crate::builtins::semantics::BuiltinLoweringContext
             crate::ir::RuntimeCallTarget::Function(target) => {
                 crate::ir::RuntimeCallTarget::ProfiledFunction {
                     target,
+                    arguments: crate::ir::RuntimeArgumentLayout::Values,
                     strict_php: self.strict_php,
+                    strict_types: None,
                 }
             }
             target => target,

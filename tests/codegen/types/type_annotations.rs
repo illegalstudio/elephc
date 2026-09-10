@@ -256,6 +256,31 @@ fn test_typed_call_user_func_array_default_parameter() {
     assert_eq!(out, "20|15");
 }
 
+/// Keeps a descriptor callback's missing required argument catchable at invocation time.
+#[test]
+fn test_call_user_func_array_missing_required_parameter_is_catchable() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php
+        function needs_two(array $value, string $extra): string {
+            return $value[0] . $extra;
+        }
+        $arguments = [[\"unused\"]];
+        try {
+            call_user_func_array(needs_two(...), $arguments);
+        } catch (Throwable $error) {
+            echo get_class($error);
+        }
+        ",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ArgumentCountError");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies descriptor invokers unbox boxed array arguments before calling
 /// callbacks with declared `array` parameters.
 #[test]

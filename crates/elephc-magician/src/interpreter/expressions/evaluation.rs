@@ -432,6 +432,10 @@ fn eval_closure_capture(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalClosureCaptureBinding, EvalStatus> {
     if capture.by_ref() {
+        if let Some(reference) = eval_persistent_variable_reference(capture.name(), context, scope, values)? {
+            let reference = values.retain(reference)?;
+            return Ok(EvalClosureCaptureBinding::new(capture.name(), reference, Some(EvalReferenceTarget::Cell { cell: reference })));
+        }
         let expr = EvalExpr::LoadVar(capture.name().to_string());
         let (value, target) = eval_call_arg_value(&expr, context, scope, values)?;
         return Ok(EvalClosureCaptureBinding::new(
@@ -441,7 +445,7 @@ fn eval_closure_capture(
         ));
     }
     let value = if let Some(value) = visible_scope_cell(context, scope, capture.name()) {
-        values.retain(value)?
+        if values.is_reference(value)? { values.copy_value(value)? } else { values.retain(value)? }
     } else {
         values.null()?
     };
@@ -456,6 +460,7 @@ pub(in crate::interpreter) fn eval_match_expr(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+    own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_operands(&[subject], context, scope, values, |args, context, scope, values| {
         for arm in arms {

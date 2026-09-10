@@ -40,7 +40,7 @@ sidebar:
 function get_class_vars(mixed $class): array
 ```
 
-## What the type checker enforces
+## Signature constraints
 
 - **Arity**: takes exactly 1 argument.
 

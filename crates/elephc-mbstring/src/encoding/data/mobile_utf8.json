@@ -1,0 +1,93 @@
+{
+    "php_version": "8.5.10",
+    "encodings": {
+        "UTF-8-Mobile#DOCOMO": {
+            "decode": {
+                "file": "utf8-mobile-docomo-decode.bin",
+                "sha256": "e20c974e3f5b087e0a9c24cc084a92d67f35153954958f5deb428aa5db84708e"
+            },
+            "points": {
+                "file": "utf8-mobile-docomo-points.bin",
+                "sha256": "017342272223dd59d55ca9d09772eb1486cc0f1db9356dc49d9d83f7acb4e713"
+            },
+            "encode": {
+                "file": "utf8-mobile-docomo-encode.bin",
+                "sha256": "5c94ab506b272902c0a76da47915f8b04f8007580d3fe324334a3dbbf54c4167"
+            },
+            "bytes": {
+                "file": "utf8-mobile-docomo-bytes.bin",
+                "sha256": "133ab616d77ea20213143be425aa24edc66f20583dce2d0b766764c961a3bc6e"
+            },
+            "composites": {
+                "file": "utf8-mobile-docomo-composites.bin",
+                "sha256": "9cae53396f548209481f997155ff4b1e0e3f1fb4606a5d6c5cec968c6aac1dbe"
+            }
+        },
+        "UTF-8-Mobile#KDDI-A": {
+            "decode": {
+                "file": "utf8-mobile-kddi-a-decode.bin",
+                "sha256": "f23a531eafaf3076ab039e56ed2a4769b637beb7a66c895b07f3af183b96719d"
+            },
+            "points": {
+                "file": "utf8-mobile-kddi-a-points.bin",
+                "sha256": "21b00c0582ad0ff03e7e3733febf1418b7853c9db700cfe97d37e66425eb6ad5"
+            },
+            "encode": {
+                "file": "utf8-mobile-kddi-a-encode.bin",
+                "sha256": "5b0365db170fee7c2ffcc53bffd17f5b40fc35bc9a7f56a1f0e7d8ac19be1db7"
+            },
+            "bytes": {
+                "file": "utf8-mobile-kddi-a-bytes.bin",
+                "sha256": "37d413d6f017ec45016f34ae7c74393b0245bbfe5fe74dc58439553923c5f7b2"
+            },
+            "composites": {
+                "file": "utf8-mobile-kddi-a-composites.bin",
+                "sha256": "97e938842cad5fe8651d8f1202b100f14ca66e8a463f1f49c94229ab76cee8b0"
+            }
+        },
+        "UTF-8-Mobile#KDDI-B": {
+            "decode": {
+                "file": "utf8-mobile-kddi-b-decode.bin",
+                "sha256": "d1687c6d160c180779a38d58d97a0dcdfa0c65571fee3a7050bd3a23d7a35238"
+            },
+            "points": {
+                "file": "utf8-mobile-kddi-b-points.bin",
+                "sha256": "11916044b32d2125fb6d3458f821f00ea9015f4d03270594931d18b90dd2f34f"
+            },
+            "encode": {
+                "file": "utf8-mobile-kddi-b-encode.bin",
+                "sha256": "5b0365db170fee7c2ffcc53bffd17f5b40fc35bc9a7f56a1f0e7d8ac19be1db7"
+            },
+            "bytes": {
+                "file": "utf8-mobile-kddi-b-bytes.bin",
+                "sha256": "715f5e224f1413859c86595d10b866e05dbd2b261ee16e24cbe32ce48e01e760"
+            },
+            "composites": {
+                "file": "utf8-mobile-kddi-b-composites.bin",
+                "sha256": "0dad845d5d477ff49817447923859594fb12c23eb0ea405513a64735383697ee"
+            }
+        },
+        "UTF-8-Mobile#SOFTBANK": {
+            "decode": {
+                "file": "utf8-mobile-softbank-decode.bin",
+                "sha256": "09d0f3307c3dcc28be2eb76655414dbf070bda94270ec3348546083ae919fcc3"
+            },
+            "points": {
+                "file": "utf8-mobile-softbank-points.bin",
+                "sha256": "95854b5cb87160a48159e8d609c781aed1c6a07405278f46337aa274e68e58e4"
+            },
+            "encode": {
+                "file": "utf8-mobile-softbank-encode.bin",
+                "sha256": "81c75c6e6fbb9ad566e72176c2045cd2ddcfe0cc5da432d7b3c6dfee1cdf6365"
+            },
+            "bytes": {
+                "file": "utf8-mobile-softbank-bytes.bin",
+                "sha256": "b4eb0f69c50e62c56fa25b485e7dc05f00ba8722170c31548433482ed355a76d"
+            },
+            "composites": {
+                "file": "utf8-mobile-softbank-composites.bin",
+                "sha256": "fae00993821cf604e9d6f3d9a3f1615c1e39ffe2f389beee4c08bec5bf7e6dae"
+            }
+        }
+    }
+}

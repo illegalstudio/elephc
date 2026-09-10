@@ -162,9 +162,6 @@ pub(super) fn lower(
                     "__rt_ltrim_mask",
                 )
         }),
-        RuntimeFnId::MbEregMatch => Some({
-            crate::codegen::lower_inst::builtins::regex::lower_mb_ereg_match(ctx, inst)
-        }),
         _ => None,
     }
 }

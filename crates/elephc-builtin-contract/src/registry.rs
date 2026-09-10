@@ -36,12 +36,14 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let curl_capacity = 0;
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
+                    + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
                     + curl_capacity,
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
@@ -106,6 +108,12 @@ fn build_registry() -> Registry {
             "builtin contract ID does not match canonical name: {}",
             contract.name
         );
+        contract.returns.validate().unwrap_or_else(|error|
+            panic!("invalid return type for {}: {error}", contract.name));
+        for parameter in contract.params {
+            parameter.ty.validate().unwrap_or_else(|error|
+                panic!("invalid parameter type for {}::${}: {error}", contract.name, parameter.name));
+        }
         let mut callback_names = HashSet::new();
         for callback_name in contract.callback_parameter_names() {
             assert!(

@@ -5,10 +5,9 @@
 //! - `crate::interpreter::builtins::core` direct and by-value dispatch.
 //!
 //! Key details:
-//! - Shares the runtime output-buffer stack with statically compiled code via the
-//! -   `RuntimeValueOps` ob hooks, so eval'd and static output interleave correctly.
-//! - User output handlers are unsupported: a non-null `$callback` raises a warning
-//! -   and returns false without starting a buffer; `chunk_size`/`flags` are inert.
+//! - Shares the runtime output-buffer stack with statically compiled code through
+//!   `RuntimeValueOps`, including callable handlers, chunk size, and operation flags.
+//! - The buffer owns successful registrations; failed starts retire their copied callback immediately.
 
 use super::super::super::*;
 
@@ -46,7 +45,7 @@ pub(in crate::interpreter) fn eval_ob_start_result(
     if evaluated_args.len() > 3 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut handler_id = None;
+    let mut handler = None;
     let mut name = "default output handler".to_string();
     if let Some(callback) = evaluated_args.first().copied() {
         if !values.is_null(callback)? {
@@ -64,13 +63,7 @@ pub(in crate::interpreter) fn eval_ob_start_result(
             } else {
                 "Closure::__invoke".to_string()
             };
-            let retained = values.retain(callback)?;
-            let Some(id) =
-                crate::ffi::ob_handlers::register_ob_handler(context as *mut _, retained)
-            else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            handler_id = Some(id);
+            handler = Some(callback);
         }
     }
     let chunk_size = match evaluated_args.get(1).copied() {
@@ -81,7 +74,28 @@ pub(in crate::interpreter) fn eval_ob_start_result(
         Some(flags) => eval_int_value(flags, values)?,
         None => 112,
     };
-    let started = values.ob_start_ex(handler_id, &name, chunk_size, flags)?;
+    let handler_id = match handler {
+        Some(callback) => {
+            let retained = values.retain(callback)?;
+            match crate::ffi::ob_handlers::register_ob_handler(context as *mut _, retained) {
+                Some(id) => Some(id),
+                None => {
+                    eval_release_value(context, values, retained)?;
+                    return Err(EvalStatus::RuntimeFatal);
+                },
+            }
+        },
+        None => None,
+    };
+    let started = values.ob_start_ex(handler_id, &name, chunk_size, flags);
+    if !matches!(started, Ok(true)) {
+        if let Some(id) = handler_id {
+            if let Some(owner) = crate::ffi::ob_handlers::unregister_ob_handler(id, context as *mut _) {
+                eval_release_value(context, values, owner)?;
+            }
+        }
+    }
+    let started = started?;
     values.bool_value(started)
 }
 

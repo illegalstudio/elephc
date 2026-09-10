@@ -15,7 +15,7 @@ Unsets the given variables.
 
 **Parameters**:
 - `$var` (`mixed`)
-- `...$vars` — variadic: collects excess arguments into `$vars`.
+- `...$vars` - variadic: collects excess arguments into `$vars`.
 
 **Returns**: `void`
 

@@ -14,7 +14,7 @@ function array_merge_recursive(...$arrays): array
 Recursively merges two arrays, combining scalar collisions into lists.
 
 **Parameters**:
-- `...$arrays` — variadic: collects excess arguments into `$arrays`.
+- `...$arrays` - variadic: collects excess arguments into `$arrays`.
 
 **Returns**: `array`
 

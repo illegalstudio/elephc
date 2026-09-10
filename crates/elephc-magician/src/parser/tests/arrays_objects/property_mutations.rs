@@ -233,7 +233,7 @@ fn parse_fragment_accepts_dynamic_property_unset_source() {
         &[EvalStmt::UnsetDynamicProperty {
             object: EvalExpr::LoadVar("this".to_string()),
             property: EvalExpr::LoadVar("name".to_string()),
-        }]
+        }, EvalStmt::GcCollect]
     );
 }
 
@@ -259,6 +259,7 @@ fn parse_fragment_accepts_property_array_unset_source() {
                 },
                 index: EvalExpr::Const(EvalConst::Int(1)),
             },
+            EvalStmt::GcCollect,
         ]
     );
 }

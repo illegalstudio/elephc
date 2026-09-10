@@ -344,3 +344,19 @@ fn register_native_member_attribute_records_metadata() {
     );
     assert_eq!(invalid_registered, 0);
 }
+
+/// Preserves raw string bytes in native attribute arguments while retaining UTF-8 metadata names.
+#[test]
+fn string_literal_bytes_survive_native_attribute_registration() {
+    let mut ctx = ElephcEvalContext::new();
+    let args = [EvalAttributeArg::Bytes(vec![0xff, 0, b'A'])];
+    let record = native_member_attribute_record(3, "BinaryAttribute", "Tag", Some(&args));
+    let registered = unsafe {
+        __elephc_eval_register_native_member_attribute(
+            &mut ctx, record.as_ptr(), record.len() as u64,
+        )
+    };
+    assert_eq!(registered, 1);
+    let attributes = ctx.native_class_attributes("BinaryAttribute");
+    assert_eq!(attributes[0].args(), Some(args.as_slice()));
+}

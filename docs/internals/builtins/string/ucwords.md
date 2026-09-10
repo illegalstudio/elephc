@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function ucwords(string $string, string $separators = ' \t\r\n\x0c\x0b'): string
+function ucwords(string $string, string $separators = " \t\r\n\x0C\x0B"): string
 ```
 
 ## What the type checker enforces

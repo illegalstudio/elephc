@@ -801,6 +801,7 @@ fn dump_prelude_contract_seed_on_request() {
     };
     use crate::parser::ast::{Expr, Stmt, StmtKind, TypeExpr};
 
+    /// Serializes a parsed PHP type into the seed catalog spelling.
     fn type_text(ty: &TypeExpr) -> String {
         match ty {
             TypeExpr::Int => "int".to_string(),
@@ -822,9 +823,11 @@ fn dump_prelude_contract_seed_on_request() {
             }
         }
     }
+    /// Serializes one parsed default expression for the catalog seed.
     fn default_text(expr: &Expr) -> String {
         crate::synthetic_class::print::print_expr(expr)
     }
+    /// Collects function signatures recursively from the injected prelude statements.
     fn collect(stmts: &[Stmt], prelude: &str, out: &mut Vec<serde_json::Value>) {
         for stmt in stmts {
             match &stmt.kind {

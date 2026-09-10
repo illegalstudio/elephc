@@ -57,7 +57,54 @@ pub(super) fn lower_arg_with_signature(
         return lowered.value;
     }
     let lowered = lower_expr(ctx, arg);
-    coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+    if capture_values && !sig.ref_params.get(index).copied().unwrap_or(false) {
+        capture_call_argument_value(ctx, lowered, index, arg.span).value
+    } else {
+        coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+    }
+}
+
+/// Promotes a runtime-parser output local at its source-order argument evaluation point.
+/// The managed reference retains storage identity without capturing the previous PHP value.
+pub(super) fn promote_captured_reference_argument(ctx: &mut LoweringContext<'_, '_>, arg: &Expr) {
+    match &arg.kind {
+        ExprKind::Variable(name) => {
+            let was_ref_bound = ctx.is_ref_bound_local(name);
+            ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
+            if was_ref_bound {
+                // A previous branch can mark the local without promoting every incoming path.
+                ctx.promote_local_ref_cell(name, Some(arg.span));
+            }
+        },
+        ExprKind::NamedArg { value, .. } => promote_captured_reference_argument(ctx, value),
+        _ => {},
+    }
+}
+
+/// Detaches a mutable boxed cell or retains a heap payload until its by-value call consumes it.
+pub(super) fn capture_call_argument_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    parameter: usize,
+    span: Span,
+) -> LoweredValue {
+    let ty = ctx.builder.value_php_type(value.value);
+    let captured = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        let captured = ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, ty,
+            Op::MixedClone.default_effects(), Some(span));
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        captured
+    } else {
+        let captured = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span));
+        if captured.value != value.value && ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        captured
+    };
+    ctx.guard_call_argument(captured, parameter, span);
+    captured
 }
 
 /// Rechecks a declared object reference when an earlier call has changed its boxed payload.
@@ -625,7 +672,7 @@ pub(super) fn lower_args_with_signature(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
-    lower_args_with_signature_options(ctx, sig, args, false)
+    lower_args_with_signature_options(ctx, sig, args, false, false)
 }
 
 /// Lowers arguments while preserving omission of trailing default-only parameter slots.
@@ -634,15 +681,16 @@ pub(super) fn lower_args_with_signature_trimming_trailing_defaults(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
-    lower_args_with_signature_options(ctx, sig, args, true)
+    lower_args_with_signature_options(ctx, sig, args, true, false)
 }
 
 /// Applies shared argument planning with optional elision of trailing defaults.
-fn lower_args_with_signature_options(
+pub(super) fn lower_args_with_signature_options(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
     trim_trailing_defaults: bool,
+    capture_values: bool,
 ) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);
@@ -650,11 +698,9 @@ fn lower_args_with_signature_options(
     let literal_bound = rewrite_literal_param_bindings(sig, args);
     let args = literal_bound.as_deref().unwrap_or(args);
     if crate::types::call_args::has_named_args(args) {
-        let operands = if trim_trailing_defaults {
-            lower_named_args_with_signature_options(ctx, sig, args, true)
-        } else {
-            lower_named_args_with_signature(ctx, sig, args)
-        };
+        let operands = lower_named_args_with_signature_options(
+            ctx, sig, args, trim_trailing_defaults, capture_values,
+        );
         return coerce_operands_to_params(ctx, sig, operands);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args, None) {

@@ -8,6 +8,7 @@
 //! Key details:
 //! - GC helpers must honor cycle-collection suppression, mark bits, and parent/child references without double-releasing values.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::{
@@ -161,9 +162,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_gc_mark_reachable_return");                  // finish once all slots have been scanned
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the hash pointer
     emitter.instruction("mov x11, #64");                                        // each hash entry occupies 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x11, x9, x11");                                    // compute the byte offset for this entry
-    emitter.instruction("add x11, x10, x11");                                   // advance from the table base to the entry
-    emitter.instruction("add x11, x11, #40");                                   // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x11", "x10", "x9");
     emitter.instruction("ldr x12, [x11]");                                      // load the occupied flag for this slot
     emitter.instruction("cmp x12, #1");                                         // is this hash slot occupied?
     emitter.instruction("b.ne __rt_gc_mark_reachable_hash_next");               // skip empty or tombstone slots
@@ -398,10 +397,8 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // have we scanned every hash entry slot?
     emitter.instruction("jae __rt_gc_mark_reachable_return");                   // yes — finish once the hash child scan is exhausted
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the current hash pointer before computing the entry address
-    emitter.instruction("mov r8, rcx");                                         // preserve the logical slot index while scaling it into an entry byte offset
-    emitter.instruction("imul r8, 64");                                         // scale the slot index by 64 bytes per hash entry
-    emitter.instruction("add r8, 40");                                          // skip the 40-byte hash header to reach the selected entry
-    emitter.instruction("add rdx, r8");                                         // compute the address of the selected hash entry
+    hash_layout::emit_entry_address(emitter, "r8", "rdx", "rcx");
+    emitter.instruction("mov rdx, r8");                                         // retain the entry address across tag inspection
     emitter.instruction("cmp QWORD PTR [rdx], 1");                              // is this hash entry occupied?
     emitter.instruction("jne __rt_gc_mark_reachable_hash_next");                // skip empty or tombstone slots that carry no outgoing graph edge
     emitter.instruction("mov r8, QWORD PTR [rdx + 40]");                        // load the runtime value_tag stored for this hash entry

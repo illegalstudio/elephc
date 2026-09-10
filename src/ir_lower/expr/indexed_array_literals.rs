@@ -492,6 +492,7 @@ pub(super) fn lower_indexed_array_spread_into_array(
         Op::ArrayPush.default_effects(),
         Some(span),
     );
+    ctx.refresh_argument_array_guard(array, span);
     crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, container_elem_ty, value, span);
     let one = emit_i64_at_span(ctx, 1, span);
     let next = ctx.emit_value(
@@ -590,6 +591,10 @@ pub(super) fn array_literal_element_type_for_ir(
     }
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
+        ExprKind::Ternary { .. } => {
+            // Keep array element ownership consistent with the lowered branch result.
+            ir_array_storage_type(materialized_expr_type_for_merge(ctx, item))
+        }
         ExprKind::Spread(inner) => match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
             // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
             // bare-`array`-returning method) contributes no element constraint, so widen its

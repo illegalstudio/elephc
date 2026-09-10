@@ -57,60 +57,12 @@ pub trait RuntimeValueOps {
         id: RuntimeBuiltinId,
         args: &[RuntimeCellHandle],
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-        let result = match (id, args) {
-            (RuntimeBuiltinId::Boolval, [value]) => self.cast_bool(*value)?,
-            (RuntimeBuiltinId::Floatval, [value]) => self.cast_float(*value)?,
-            (RuntimeBuiltinId::Intval, [value]) => self.cast_int(*value)?,
-            (RuntimeBuiltinId::IsArray, [value]) => {
-                let is_array = matches!(self.type_tag(*value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
-                self.bool_value(is_array)?
-            }
-            (RuntimeBuiltinId::IsNull, [value]) => {
-                let is_null = self.is_null(*value)?;
-                self.bool_value(is_null)?
-            }
-            (RuntimeBuiltinId::Abs, [value]) => self.abs(*value)?,
-            (RuntimeBuiltinId::Ceil, [value]) => self.ceil(*value)?,
-            (RuntimeBuiltinId::Floor, [value]) => self.floor(*value)?,
-            (RuntimeBuiltinId::Sqrt, [value]) => self.sqrt(*value)?,
-            (RuntimeBuiltinId::Fdiv, [left, right]) => self.fdiv(*left, *right)?,
-            (RuntimeBuiltinId::Fmod, [left, right]) => self.fmod(*left, *right)?,
-            (RuntimeBuiltinId::Pow, [left, right]) => self.pow(*left, *right)?,
-            (RuntimeBuiltinId::Round, [value]) => self.round(*value, None)?,
-            (RuntimeBuiltinId::Round, [value, precision]) => {
-                self.round(*value, Some(*precision))?
-            }
-            (RuntimeBuiltinId::Strrev, [value]) => self.strrev(*value)?,
-            (RuntimeBuiltinId::ArrayKeyExists, [key, array]) => {
-                self.array_key_exists(*key, *array)?
-            }
-            (RuntimeBuiltinId::ObGetLevel, []) => {
-                let level = self.ob_level()?;
-                self.int(level)?
-            }
-            (RuntimeBuiltinId::ObGetLength, []) => match self.ob_length()? {
-                Some(length) => self.int(length)?,
-                None => self.bool_value(false)?,
-            },
-            (RuntimeBuiltinId::ObClean, []) => {
-                let cleaned = self.ob_clean()?;
-                self.bool_value(cleaned)?
-            }
-            (RuntimeBuiltinId::ObFlush, []) => {
-                let flushed = self.ob_flush()?;
-                self.bool_value(flushed)?
-            }
-            (RuntimeBuiltinId::ObEndClean, []) => {
-                let ended = self.ob_end(false)?;
-                self.bool_value(ended)?
-            }
-            (RuntimeBuiltinId::ObEndFlush, []) => {
-                let ended = self.ob_end(true)?;
-                self.bool_value(ended)?
-            }
-            _ => return Ok(None),
-        };
-        Ok(Some(result))
+        default_builtin_call(self, id, args)
+    }
+
+    /// Transfers a pending exception produced by the boxed builtin runtime to its eval caller.
+    fn take_pending_runtime_throwable(&mut self) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
     }
 
     /// Gets or replaces the process-wide error-reporting mask through the generated runtime.
@@ -208,6 +160,15 @@ pub trait RuntimeValueOps {
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns an owned argument read, preserving a stored PHP reference when supported.
+    fn array_get_preserving_references(
+        &mut self,
+        array: RuntimeCellHandle,
+        index: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.array_get(array, index)
+    }
+
     /// Checks whether a normalized PHP array key exists without conflating null values with misses.
     fn array_key_exists(
         &mut self,
@@ -231,6 +192,22 @@ pub trait RuntimeValueOps {
         index: RuntimeCellHandle,
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Reads one insertion-order element using the same ownership contract as array_get.
+    /// Providers with distinct numeric string keys must override the normalized-key fallback.
+    fn array_iter_value(&mut self, array: RuntimeCellHandle, position: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        let key = self.array_iter_key(array, position)?;
+        self.array_get(array, key)
+    }
+
+    /// Creates an independent PHP array value for a by-value variable assignment.
+    /// Native implementations may share the payload until an ordinary COW write.
+    fn copy_array_value(
+        &mut self,
+        array: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.array_clone_shallow(array)
+    }
 
     /// Creates a shallow array copy before writeback paths perform PHP COW writes.
     fn array_clone_shallow(
@@ -602,6 +579,12 @@ pub trait RuntimeValueOps {
     /// Returns the visible element count for an array-like runtime cell.
     fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus>;
 
+    /// Borrows the host's persistent next integer index; None reports an exhausted append.
+    fn array_next_index(&mut self, array: RuntimeCellHandle) -> Result<Option<i64>, EvalStatus>;
+
+    /// Copies exact append history into a freshly reconstructed associative array.
+    fn array_copy_index_history(&mut self, source: RuntimeCellHandle, destination: RuntimeCellHandle) -> Result<(), EvalStatus>;
+
     /// Returns whether a runtime cell can be indexed like an array by eval writes.
     fn is_array_like(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
 
@@ -780,6 +763,12 @@ pub trait RuntimeValueOps {
 
     /// Creates a runtime string cell.
     fn string(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Creates a PHP literal with interned logical identity when the runtime models string origins.
+    fn string_literal(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus> { self.string(value) }
+
+    /// Creates an interned PHP literal from raw bytes without assuming valid UTF-8.
+    fn string_literal_bytes(&mut self, value: &[u8]) -> Result<RuntimeCellHandle, EvalStatus> { self.string_bytes_value(value) }
 
     /// Creates a runtime byte-string cell from raw PHP string bytes.
     fn string_bytes_value(&mut self, value: &[u8]) -> Result<RuntimeCellHandle, EvalStatus>;

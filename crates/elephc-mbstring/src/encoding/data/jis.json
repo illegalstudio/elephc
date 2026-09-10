@@ -1,0 +1,63 @@
+{
+    "php_version": "8.5.10",
+    "encodings": {
+        "JIS": {
+            "encode": {
+                "file": "jis-encode.bin",
+                "sha256": "d35f4ece702c69e72c942728d70f9bd7a2895b7f44abefe935f875724f9c587e"
+            }
+        },
+        "ISO-2022-JP": {
+            "encode": {
+                "file": "iso-2022-jp-encode.bin",
+                "sha256": "8a67d372561a6b10a8aff0eb81db22bbfa232191f6460b3189ab29c9a583b8a6"
+            }
+        },
+        "ISO-2022-JP-MS": {
+            "encode": {
+                "file": "iso-2022-jp-ms-encode.bin",
+                "sha256": "a8bceaef93eb4ce55f8a68185e40f34e2ffdb1cb18de8beb3e31cb4f10741556"
+            }
+        },
+        "CP50220": {
+            "encode": {
+                "file": "cp50220-encode.bin",
+                "sha256": "4c2672f9caf5b7a3321221a2377e3736f1ae77abb85dc4a53b1cd69927350126"
+            }
+        },
+        "CP50221": {
+            "encode": {
+                "file": "cp50221-encode.bin",
+                "sha256": "29bd49a8f7d2e98cb94a5f5a205c5a52d1326a9923d540b8fd3b128513291f22"
+            }
+        },
+        "CP50222": {
+            "encode": {
+                "file": "cp50222-encode.bin",
+                "sha256": "29bd49a8f7d2e98cb94a5f5a205c5a52d1326a9923d540b8fd3b128513291f22"
+            }
+        },
+        "ISO-2022-JP-MOBILE#KDDI": {
+            "encode": {
+                "file": "iso-2022-jp-mobile#kddi-encode.bin",
+                "sha256": "7be793151844e933b769b32209958dc2e6862db9de4d789d711c1a6d761ec02e"
+            },
+            "supplementary": {
+                "file": "jis-kddi-supplementary.bin",
+                "sha256": "7b20e60ba22eda657cf74effcec8553378c7e2893973e30c6aec8e4ba093b8cb"
+            },
+            "composites": {
+                "file": "jis-kddi-composites.bin",
+                "sha256": "0dfd236e38f08cebec8ac1d1e54b9540a88f9e8c3466c32aaa47ff835af09a81"
+            },
+            "plane": {
+                "file": "jis-kddi-plane.bin",
+                "sha256": "16bf2abe6921e2e79584db0c5e38b6d877fd2ba19f3e541055078cf8df544f1d"
+            }
+        }
+    },
+    "cp5022x_plane": {
+        "file": "cp5022x-plane.bin",
+        "sha256": "ea345fb62ad9a5d25edd04fc1dedcca6774268286299bab5ce60c10a299afb0c"
+    }
+}

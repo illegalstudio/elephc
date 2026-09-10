@@ -22,7 +22,7 @@ use crate::codegen_support::try_handlers::{
 };
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::emit_box_current_value_as_mixed;
+use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, LocalKind, Module};
@@ -51,6 +51,7 @@ struct EvalMethodSlot {
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
+    return_is_owned: bool,
     is_hidden_shadow: bool,
     entry_symbol: String,
     runtime_helper: Option<&'static str>,
@@ -295,6 +296,8 @@ fn collect_class_method_slots(
             params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
             return_ty: sig.return_type.codegen_repr(),
+            return_is_owned: runtime_helper.is_none()
+                && native_method_returns_owned_value(module, impl_class, method, false),
             is_hidden_shadow: false,
             entry_symbol: entry_symbol.clone(),
             runtime_helper,
@@ -346,6 +349,7 @@ fn collect_hidden_private_ancestor_method_slots(
                 params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
                 return_ty: sig.return_type.codegen_repr(),
+                return_is_owned: native_method_returns_owned_value(module, impl_class, method, false),
                 is_hidden_shadow: true,
                 entry_symbol: entry_symbol.clone(),
                 runtime_helper: None,
@@ -1414,7 +1418,7 @@ fn emit_aarch64_method_bodies(
         abi::emit_call_label(emitter, callee);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty);
+        emit_box_method_result(module, emitter, &slot.return_ty, slot.return_is_owned);
         preserve_result_and_write_back_aarch64_ref_args(emitter, &ref_slots, &body_label);
         emit_aarch64_method_exception_boundary_pop(emitter, METHOD_HELPER_HANDLER_OFFSET - 48);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native method result
@@ -1471,7 +1475,7 @@ fn emit_x86_64_method_bodies(
         abi::emit_call_label(emitter, callee);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty);
+        emit_box_method_result(module, emitter, &slot.return_ty, slot.return_is_owned);
         preserve_result_and_write_back_x86_64_ref_args(emitter, &ref_slots, &body_label);
         emit_x86_64_method_exception_boundary_pop(emitter, METHOD_HELPER_FRAME_SIZE);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native method result
@@ -1525,7 +1529,7 @@ fn emit_aarch64_static_method_bodies(
         abi::emit_call_label(emitter, &slot.entry_symbol);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty);
+        emit_box_method_result(module, emitter, &slot.return_ty, slot.return_is_owned);
         preserve_result_and_write_back_aarch64_ref_args(emitter, &ref_slots, &body_label);
         emit_aarch64_method_exception_boundary_pop(
             emitter,
@@ -1585,7 +1589,7 @@ fn emit_x86_64_static_method_bodies(
         abi::emit_call_label(emitter, &slot.entry_symbol);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty);
+        emit_box_method_result(module, emitter, &slot.return_ty, slot.return_is_owned);
         preserve_result_and_write_back_x86_64_ref_args(emitter, &ref_slots, &body_label);
         emit_x86_64_method_exception_boundary_pop(emitter, STATIC_METHOD_HELPER_FRAME_SIZE);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native static method result
@@ -1919,7 +1923,9 @@ fn emit_aarch64_ref_arg_cells(
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
+            slot.raw_refcounted_owned = true;
             emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_call_label(emitter, "__rt_incref");
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -1932,6 +1938,9 @@ fn emit_aarch64_ref_arg_cells(
                 fail_label,
                 callable_support,
             );
+            if slot.param_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(emitter, "__rt_str_persist");
+            }
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
     }
@@ -1956,7 +1965,9 @@ fn emit_x86_64_ref_arg_cells(
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
+            slot.raw_refcounted_owned = true;
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_call_label(emitter, "__rt_incref");
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -1970,6 +1981,9 @@ fn emit_x86_64_ref_arg_cells(
                 callable_support,
                 context_frame_offset,
             );
+            if slot.param_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(emitter, "__rt_str_persist");
+            }
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
     }
@@ -2053,7 +2067,7 @@ fn emit_aarch64_cast_eval_arg(
         }
         PhpType::Str => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for string coercion
-            emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval argument to a PHP string pair in x1/x2
+            emit_borrowed_eval_string_argument(emitter, label_prefix);
         }
         PhpType::Callable => {
             super::eval_callable_helpers::emit_aarch64_cast_eval_callable_arg(
@@ -2224,7 +2238,7 @@ fn emit_x86_64_cast_eval_arg(
         }
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for string coercion
-            emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval argument to a PHP string pair
+            emit_borrowed_eval_string_argument(emitter, label_prefix);
         }
         PhpType::Callable => {
             super::eval_callable_helpers::emit_x86_64_cast_eval_callable_arg(
@@ -2366,10 +2380,12 @@ fn emit_x86_64_validate_iterable_object(
 }
 
 /// Boxes the current native method result as the Mixed cell expected by eval.
-fn emit_box_method_result(module: &Module, emitter: &mut Emitter, return_ty: &PhpType) {
+fn emit_box_method_result(module: &Module, emitter: &mut Emitter, return_ty: &PhpType, owned: bool) {
     if return_ty.codegen_repr() == PhpType::Void {
         let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
         abi::emit_call_label(emitter, &null_symbol);
+    } else if owned {
+        emit_box_current_owned_value_as_mixed(emitter, return_ty);
     } else {
         emit_box_current_value_as_mixed(emitter, return_ty);
     }

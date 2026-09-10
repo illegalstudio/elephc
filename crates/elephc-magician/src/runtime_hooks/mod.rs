@@ -33,6 +33,7 @@ use externs::{
     __elephc_eval_install_closure_bind_hook, __elephc_eval_install_dynamic_object_clone_hook,
     __elephc_eval_install_dynamic_object_destructor_hook, __elephc_eval_value_array_new,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
+    __elephc_eval_value_release,
 };
 
 /// Runtime hook adapter that produces and consumes boxed elephc Mixed cells.
@@ -91,7 +92,7 @@ impl ElephcRuntimeOps {
             self.release_cells([arg_array])?;
             return Err(status);
         }
-        Ok(arg_array)
+        result
     }
 
     /// Returns the active eval class-scope bytes in the generated helper ABI shape.
@@ -180,11 +181,12 @@ pub(crate) fn array_entry_is_shared_reference(
 /// Installs the eval output-buffering handler callback into the generated runtime.
 ///
 /// # Safety
-/// `callback` must be the address of a `fn(i64, *const u8, i64, i64) -> *mut RuntimeCell`
-/// with the eval ob-handler ABI; the runtime calls through it on buffer flushes.
+/// `callback` accepts a writable `OutputHandlerCallV1` pointer and returns a status.
+/// The runtime calls it on buffer flushes and consumes returned owners after Rust exits.
+/// `release` accepts a registry id and boxed-Throwable output pointer and returns a status.
 #[cfg(not(test))]
-pub(crate) unsafe fn install_ob_handler_hook(callback: usize) {
+pub(crate) unsafe fn install_ob_handler_hook(callback: usize, release: usize) {
     unsafe {
-        externs::install_ob_handler_hook_raw(callback);
+        externs::install_ob_handler_hook_raw(callback, release);
     }
 }

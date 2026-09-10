@@ -1,0 +1,81 @@
+{
+    "php_version": "8.5.10",
+    "tables": {
+        "KV": {
+            "file": "kana-kv.bin",
+            "sha256": "8a79eb51e3d0149211d730f1d0d875a6a9d0f70cb8bbc898ef0e08435ad76584"
+        },
+        "HV": {
+            "file": "kana-hv.bin",
+            "sha256": "bd1a15e8cdb63146391a1052f339f6774826755526579c85fabf5edc202121a1"
+        },
+        "A": {
+            "file": "kana-upper-a.bin",
+            "sha256": "93b57c2128a704917485ad11c49f6daf82d7eb0d8d1be0e7677f0c985d364831"
+        },
+        "R": {
+            "file": "kana-upper-r.bin",
+            "sha256": "985a7c1b17b477c819744c89e03d590320e6720ffc852c8a960673d6503b3c1a"
+        },
+        "N": {
+            "file": "kana-upper-n.bin",
+            "sha256": "1f535668f685511e77b7b27ec60daabc1869131bd37da2706fd5cc3afddbe663"
+        },
+        "S": {
+            "file": "kana-upper-s.bin",
+            "sha256": "a31a952dd4a5958a2fb9eaaf4a41fb92f7a0f7218b01033400450eafd947ef33"
+        },
+        "K": {
+            "file": "kana-upper-k.bin",
+            "sha256": "c2db0ad6f7f1a3cfd8efcf67be8f29f4c0f171e35fc1ab7bb9509fd284cf6b5d"
+        },
+        "H": {
+            "file": "kana-upper-h.bin",
+            "sha256": "821270a001c40560fb6175db7ce21fbd86b4383581a8bee97bdb74b5bf3235b5"
+        },
+        "M": {
+            "file": "kana-upper-m.bin",
+            "sha256": "643d76080d07ab4a2570f21695e6aaeb89c265d1f341ace618c3ecb0f3173d9a"
+        },
+        "C": {
+            "file": "kana-upper-c.bin",
+            "sha256": "5ea6c5603bd5322ae98b54f1a6cde74d151a3d428d52ef89f5393e1260ef5df6"
+        },
+        "a": {
+            "file": "kana-lower-a.bin",
+            "sha256": "eff8ac4565790383d203454a06755f40ee0c7938a3f2d32b06ea4ddcaf563236"
+        },
+        "r": {
+            "file": "kana-lower-r.bin",
+            "sha256": "a3592fa526f0e7f4c158b668d68ba7267cbb2a9d839a2bb387d5462be7d1caee"
+        },
+        "n": {
+            "file": "kana-lower-n.bin",
+            "sha256": "bdb756971a58c9f6a39088f81c9b953b5b5e255a48084345c6396776449495e3"
+        },
+        "s": {
+            "file": "kana-lower-s.bin",
+            "sha256": "6f37541c4aa71bdb4192e4c97d3b1ceb33690df73d995180d2a40a7a033d53d4"
+        },
+        "k": {
+            "file": "kana-lower-k.bin",
+            "sha256": "7cd734ef2be2e2267521adc2f0e26137902d21b81f909c6546a51019970d6645"
+        },
+        "h": {
+            "file": "kana-lower-h.bin",
+            "sha256": "fc1b98c15a1c9d97c66cb29ce36feef0dd28e55b899164eb65e0220c8780cd0e"
+        },
+        "m": {
+            "file": "kana-lower-m.bin",
+            "sha256": "446d7e841b8bbc54b715ffd3b1af10d49cbbd7c6a29a76050843919ccef897d2"
+        },
+        "c": {
+            "file": "kana-lower-c.bin",
+            "sha256": "3a61a1bc4a8d4ea8c205f3201685decad19968ce3abbe67043733635a5861d01"
+        },
+        "V": {
+            "file": "kana-upper-v.bin",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+    }
+}

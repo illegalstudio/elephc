@@ -54,6 +54,7 @@ pub(super) fn eval_assoc_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.assoc_new(elements.len())?;
+    context.clear_array_element_aliases(array);
     let mut next_key = None;
     let mut operands = Vec::new();
     let result = (|| {
@@ -179,8 +180,8 @@ fn eval_array_next_key_after_explicit_key(
     operands: &mut Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let key = match values.type_tag(key)? {
-        EVAL_TAG_INT => key,
+    let (numeric, owned) = match values.type_tag(key)? {
+        EVAL_TAG_INT => (key, false),
         EVAL_TAG_STRING => {
             let bytes = values.string_bytes(key)?;
             let Some(key) = eval_numeric_string_array_key(&bytes) else {
