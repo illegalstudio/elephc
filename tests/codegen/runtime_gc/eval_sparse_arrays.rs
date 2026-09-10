@@ -37,7 +37,7 @@ echo implode(",", array_keys($snapshot)), ":", implode(",", $snapshot);
 /// An owned computed key and the detached box are rooted while a removed element throws.
 #[test]
 fn test_core_native_php_array_unset_throw_preserves_reference_owner() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 class ThrowingPhpArrayElement {
     public function __destruct() { throw new RuntimeException("removed"); }
 }
@@ -53,7 +53,38 @@ unset($items);
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "removed|1:41:absent", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nuser assembly:\n{}", out.stderr, assembly);
+}
+
+/// Separates computed-key cleanup from caught Throwable string-result ownership.
+#[test]
+fn test_core_unset_throw_key_and_message_owner_isolation() {
+    let mut failures = Vec::new();
+    for (label, key, catch_body, expected) in [
+        ("literal key", "\"dddddddd\"", "echo \"caught|\";", "caught|1:41"),
+        ("computed key", "str_repeat(\"d\", 8)", "echo \"caught|\";", "caught|1:41"),
+        ("message result", "\"dddddddd\"", "echo $error->getMessage(), \"|\";", "removed|1:41"),
+    ] {
+        let source = format!(r#"<?php
+class IsolatedUnsetElement {{
+    public function __destruct() {{ throw new RuntimeException("removed"); }}
+}}
+function removeIsolatedElement(array &$items): void {{ unset($items[{key}]); }}
+$items = ["dddddddd" => new IsolatedUnsetElement(), "keep" => 41];
+try {{ removeIsolatedElement($items); }}
+catch (RuntimeException $error) {{ {catch_body} unset($error); }}
+echo count($items), ":", $items["keep"];
+unset($items);
+"#);
+        let out = compile_and_run_with_heap_debug(&source);
+        if !out.success || out.stdout != expected
+            || !out.stderr.contains("HEAP DEBUG: leak summary: clean")
+        {
+            failures.push(format!("{label}: stdout={:?}\nstderr={}\n", out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Boxed array reversal preserves source keys and string keys while obeying the runtime numeric-key policy.

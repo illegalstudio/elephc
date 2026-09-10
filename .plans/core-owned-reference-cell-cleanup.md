@@ -961,3 +961,14 @@ explicitly forbid passing the box to the raw indexed-array split helper. Keep
 the existing prohibition on overwriting the property reference-cell pointer.
 This is a test-expectation update, not a runtime ownership fix. The tests were
 compiled but not executed locally.
+
+### Unset exception leak isolation
+
+CI on c6136456f still reports one live string after declared-array unset throws
+from an element destructor. The hash helper already frees the key and commits
+removal before releasing the value, so changing that ordering is not justified.
+Add independent literal-key, computed-key and getMessage-result controls, and
+attach the original fixture's user assembly to its heap failure. These controls
+distinguish the temporary key from the getter's fresh string without suppressing
+the heap assertion. The leak remains open pending CI evidence; no local tests
+were executed.
