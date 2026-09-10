@@ -183,6 +183,11 @@ $unsorted = $report->rows;
 ksort($report->rows["scores"]);
 echo "Sorted names: " . implode(", ", array_keys($report->rows["scores"])) . "\n";
 echo "Original order: " . implode(", ", array_keys($unsorted["scores"])) . "\n";
+$selectedScore = array_find(
+    $report->rows["scores"],
+    static fn(int $score, string $name): bool => $score >= 12 && $name === "Linus",
+);
+echo "Selected score: " . $selectedScore . "\n";
 
 // String array
 $langs = ["PHP", "Rust", "ARM64"];

@@ -766,7 +766,7 @@ fn callback_builtin_allows_complex_descriptor_env(
     label: &str,
     callback: &Expr,
 ) -> bool {
-    matches!(
+    (is_keyed_array_predicate_callback(label) || matches!(
         label,
         "array_map() callback"
             | "array_filter() callback"
@@ -777,7 +777,7 @@ fn callback_builtin_allows_complex_descriptor_env(
             | "uksort() callback"
             | "uasort() callback"
             | "iterator_apply() callback"
-    )
+    ))
         && callback_supports_complex_descriptor_env(callback)
 }
 
@@ -940,7 +940,7 @@ fn check_callback_builtin_call_in_engine_frame(
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
-    if label == "array_map() callback"
+    if (label == "array_map() callback" || is_keyed_array_predicate_callback(label))
         && matches!(callback_ty.codegen_repr(), PhpType::Mixed | PhpType::Callable | PhpType::Void)
     {
         // Boxed array reads erase callable signatures. The map runtime resolves
@@ -977,7 +977,7 @@ fn check_callback_builtin_call_in_engine_frame(
 
 /// Returns true when a callback builtin can resolve string callbacks at runtime.
 fn callback_builtin_allows_runtime_string_descriptor(label: &str) -> bool {
-    matches!(
+    is_keyed_array_predicate_callback(label) || matches!(
         label,
         "array_map() callback"
             | "array_filter() callback"
@@ -992,7 +992,7 @@ fn callback_builtin_allows_runtime_string_descriptor(label: &str) -> bool {
 
 /// Returns true when a callback builtin has codegen support for runtime-selected callable arrays.
 fn callback_builtin_allows_runtime_callable_array(label: &str) -> bool {
-    matches!(
+    is_keyed_array_predicate_callback(label) || matches!(
         label,
         "array_map() callback"
             | "array_filter() callback"
@@ -1004,6 +1004,11 @@ fn callback_builtin_allows_runtime_callable_array(label: &str) -> bool {
             | "uasort() callback"
             | "iterator_apply() callback"
     )
+}
+
+/// Identifies callback sites backed by the keyed, boxed predicate invoker.
+fn is_keyed_array_predicate_callback(label: &str) -> bool {
+    matches!(label, "array_find() callback" | "array_any() callback" | "array_all() callback")
 }
 
 

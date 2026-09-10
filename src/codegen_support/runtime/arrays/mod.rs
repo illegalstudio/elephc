@@ -34,7 +34,7 @@ mod array_fill_refcounted;
 mod array_fill_str;
 mod array_filter;
 mod array_filter_refcounted;
-mod array_find_any_all;
+mod array_predicate_boxed;
 mod array_flip;
 mod array_flip_boxed;
 mod array_flip_string;
@@ -252,7 +252,7 @@ pub use array_filter::emit_array_filter;
 /// Emit array filter helper.
 pub use array_filter_refcounted::emit_array_filter_refcounted;
 /// Emit refcounted array filter helper.
-pub use array_find_any_all::emit_array_find_any_all;
+pub use array_predicate_boxed::emit_array_predicate_boxed;
 /// Emit array find/any/all predicate helper.
 pub use array_flip::emit_array_flip;
 pub use array_flip_boxed::emit_array_flip_boxed;

@@ -41,6 +41,7 @@ mod boxed_merge;
 mod boxed_membership;
 mod boxed_aggregate;
 mod boxed_reduce;
+mod boxed_predicates;
 mod boxed_reverse;
 mod boxed_mutation;
 mod boxed_unshift;
@@ -102,6 +103,7 @@ pub(crate) use reduce_sets::{
     lower_array_splice,
 };
 pub(crate) use boxed_reduce::lower_array_reduce;
+pub(crate) use boxed_predicates::{lower_array_find, lower_array_any, lower_array_all};
 pub(crate) use misc_dispatch::{
     lower_array_values, lower_array_keys, lower_array_rand, lower_range,
     lower_array_pop, lower_array_shift, lower_array_unshift, lower_sort,
@@ -112,7 +114,7 @@ pub(crate) use misc_dispatch::{
     lower_array_replace_recursive, lower_array_diff_assoc, lower_array_intersect_assoc, lower_array_merge_recursive,
 };
 pub(crate) use callback_builtins::{
-    lower_array_find, lower_array_any, lower_array_all, lower_array_walk_recursive,
+    lower_array_walk_recursive,
     lower_array_udiff, lower_array_uintersect, lower_array_multisort, lower_array_search,
     lower_in_array,
 };

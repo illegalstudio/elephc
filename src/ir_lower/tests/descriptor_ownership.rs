@@ -140,7 +140,7 @@ fn retained_callback_arrays_and_object_predicates_lower_on_all_targets() {
         );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         assert!(asm.contains("__rt_array_reduce"), "{target}");
-        assert!(asm.contains("__rt_array_find_any_all"), "{target}");
+        assert!(asm.contains("__rt_array_predicate_boxed"), "{target}");
         assert!(asm.contains("__rt_cleanup_call_operand_owner"), "{target}");
     }
 }

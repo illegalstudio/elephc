@@ -1485,3 +1485,29 @@ forced rendering, module/comparison generation and all audits pass without chang
 generated pages or catalog membership. Assembly-comment and diff checks pass. No
 tests are executed locally. The d0bdfb3b0 CI run is still in progress; executable
 confirmation of both constructor and nested-sort fixes remains pending.
+
+### Boxed keyed array predicates
+
+Replace the raw integer-only array_find/array_any/array_all emitter with a shared
+descriptor runtime that iterates packed and associative storage through complete
+value/key triples. Validate the source before acquiring callback ownership, retain
+an independent traversal snapshot, pass both value and logical key, and coerce
+callback results through PHP truthiness. Find returns an independent Mixed owner;
+any/all return non-heap booleans. Keep all helper-owned cells and the descriptor
+inside a resumable native exception boundary, including destructor cleanup. Mark
+predicate and reduction effects conservatively because releasing results or source
+snapshots can execute user destructors independently of the callback body.
+
+Add native heap/tagged fixtures for declared array parameters, heterogeneous
+results, integer/string keys, holes, early exits, empty arrays, named/FCC calls,
+runtime function names, source replacement, nested predicates, escaping object
+results and throwing callbacks. Add five-target EIR and emitter ownership gates,
+and extend the existing array example. The callback filter, recursive walk and
+multisort gaps remain separate work, not covered by this predicate change.
+
+Test compilation and builtin-doc audits pass. Generated ownership/effect metadata
+now agrees with the implementation. No tests are executed locally. Exact-head CI
+on 5ff1f9a2d confirms codegen shard 7 succeeds on both Linux targets, and the nested
+property key-sort regression passes on x86_64. It also confirms the new constructor
+escaping-closure fixture leaks a descriptor and its captured cell, while multisort,
+callback filtering and additional exception/metadata ownership failures remain.

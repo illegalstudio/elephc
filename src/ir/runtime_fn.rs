@@ -948,6 +948,9 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            // Callback results and snapshots can run destructors independently of the callback body.
+            RuntimeFnId::ArrayFind | RuntimeFnId::ArrayAny
+            | RuntimeFnId::ArrayAll | RuntimeFnId::ArrayReduce => crate::ir::Effects::all(),
             // Unsupported entries can invoke arbitrary warning handlers, including
             // mutation of globals and destruction of the replaced source array.
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => crate::ir::Effects::from_bits_retain(
@@ -1308,10 +1311,7 @@ impl RuntimeFnId {
     pub const fn intrinsic_effects(self) -> crate::ir::Effects {
         use crate::ir::Effects as E;
         match self {
-            RuntimeFnId::ArrayAll
-            | RuntimeFnId::ArrayAny
-            | RuntimeFnId::ArrayFilter
-            | RuntimeFnId::ArrayFind
+            RuntimeFnId::ArrayFilter
             | RuntimeFnId::ArrayMap
             | RuntimeFnId::ArrayWalk
             | RuntimeFnId::ArrayWalkRecursive
@@ -1319,9 +1319,10 @@ impl RuntimeFnId {
             | RuntimeFnId::ArrayUintersect => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
-            // Replacing an arbitrary carry can invoke a destructor independently of the
-            // selected callback's effect summary. Validation and cleanup may also throw.
-            RuntimeFnId::ArrayReduce => E::all(),
+            // Carry, predicate-result and snapshot cleanup can invoke destructors independently
+            // of the selected callback's effect summary. Validation may also throw.
+            RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
+            | RuntimeFnId::ArrayAny | RuntimeFnId::ArrayAll => E::all(),
             RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
             ),
@@ -1734,6 +1735,8 @@ impl RuntimeFnId {
         if matches!(
             self,
             RuntimeFnId::IntvalBase
+                | RuntimeFnId::ArrayAny
+                | RuntimeFnId::ArrayAll
                 | RuntimeFnId::BcComp
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
@@ -1852,6 +1855,7 @@ impl RuntimeFnId {
                 // `ArrayKeys` / `ArrayValues` were already listed here; this was the gap.
                 | RuntimeFnId::ArrayCountValues
                 | RuntimeFnId::ArrayFlip
+                | RuntimeFnId::ArrayFind
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap

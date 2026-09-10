@@ -12363,6 +12363,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -12370,10 +12371,13 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
-          "may_deopt"
+          "may_deopt",
+          "blocking_io",
+          "network_io"
         ]
       },
       "lowering": {
@@ -12382,7 +12386,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "non_heap"
       },
       "requirements": {
         "kind": "static",
@@ -12499,6 +12503,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -12506,10 +12511,13 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
-          "may_deopt"
+          "may_deopt",
+          "blocking_io",
+          "network_io"
         ]
       },
       "lowering": {
@@ -12518,7 +12526,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "non_heap"
       },
       "requirements": {
         "kind": "static",
@@ -14092,6 +14100,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -14099,10 +14108,13 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
-          "may_deopt"
+          "may_deopt",
+          "blocking_io",
+          "network_io"
         ]
       },
       "lowering": {
@@ -14111,7 +14123,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -16583,6 +16595,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -16590,10 +16603,13 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
-          "may_deopt"
+          "may_deopt",
+          "blocking_io",
+          "network_io"
         ]
       },
       "lowering": {

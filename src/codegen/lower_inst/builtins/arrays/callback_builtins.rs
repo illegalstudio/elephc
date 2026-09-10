@@ -10,9 +10,9 @@
 use super::*;
 use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
-/// Returns the single-word callback element type for indexed predicates and comparators.
+/// Returns the single-word callback element type for indexed comparators.
 ///
-/// The `__rt_array_find_any_all` / `__rt_array_udiff_uintersect` runtimes load each element as a
+/// The `__rt_array_udiff_uintersect` runtime loads each element as a
 /// single 8-byte word in an integer argument register. Integers, booleans, object pointers
 /// and Mixed-cell pointers share that ABI; strings and floats require different materialization.
 pub(super) fn predicate_callback_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
@@ -36,8 +36,7 @@ pub(super) fn predicate_callback_element_type(ty: PhpType, name: &str) -> Result
 }
 
 /// Loads the `(wrapper, array, env[, mode])` argument registers and calls a single-array callback
-/// runtime helper. Shared by `array_find`/`array_any`/`array_all` (mode 0/1/2) and
-/// `array_walk_recursive` (no mode). The callback wrapper goes in arg0, the array in arg1, the
+/// runtime helper. Recursive walking uses no mode. The callback wrapper goes in arg0, the array in arg1, the
 /// environment pointer in arg2, and the optional mode selector in arg3.
 pub(super) fn emit_single_array_callback_call(
     ctx: &mut FunctionContext<'_>,
@@ -147,50 +146,6 @@ pub(super) fn lower_single_array_callback_builtin(
             store_if_result(ctx, inst)
         }
     }
-}
-
-/// Lowers a predicate builtin (`array_find` mode 0 / `array_any` mode 1 / `array_all` mode 2)
-/// over an indexed scalar array, validating the element type and routing through the shared
-/// `__rt_array_find_any_all` runtime. The predicate callback always returns `bool`; the builtin's
-/// own result type (Mixed for `array_find`, bool for any/all) is taken from `inst.result_php_type`.
-pub(super) fn lower_array_predicate_builtin(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    mode: i64,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 2)?;
-    let array = expect_operand(inst, 0)?;
-    let callback = expect_operand(inst, 1)?;
-    let elem_ty = predicate_callback_element_type(ctx.value_php_type(array)?, name)?;
-    let source_arg_ty = PhpType::Array(Box::new(elem_ty.clone()));
-    lower_single_array_callback_builtin(
-        ctx,
-        inst,
-        name,
-        "__rt_array_find_any_all",
-        array,
-        callback,
-        &source_arg_ty,
-        vec![elem_ty],
-        PhpType::Bool,
-        Some(mode),
-    )
-}
-
-/// Lowers `array_find()`: returns the first element satisfying the predicate, boxed as Mixed (or null).
-pub(crate) fn lower_array_find(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_array_predicate_builtin(ctx, inst, "array_find", 0)
-}
-
-/// Lowers `array_any()`: returns true when some element satisfies the predicate.
-pub(crate) fn lower_array_any(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_array_predicate_builtin(ctx, inst, "array_any", 1)
-}
-
-/// Lowers `array_all()`: returns true when every element satisfies the predicate.
-pub(crate) fn lower_array_all(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_array_predicate_builtin(ctx, inst, "array_all", 2)
 }
 
 /// Lowers `array_walk_recursive()`: invokes the callback on each scalar leaf of a (possibly nested)
