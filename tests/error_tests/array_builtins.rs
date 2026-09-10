@@ -565,13 +565,12 @@ fn test_error_array_map_wrong_args() {
     );
 }
 
-/// Verifies that error array filter wrong args.
+/// Filtering accepts one to three arguments, including an omitted callback.
 #[test]
 fn test_error_array_filter_wrong_args() {
-    expect_error(
-        r#"<?php array_filter([]);"#,
-        "array_filter() takes 2 or 3 arguments",
-    );
+    for source in ["<?php array_filter();", "<?php array_filter([], null, 0, 1);"] {
+        expect_error(source, "array_filter() takes 1 to 3 arguments");
+    }
 }
 
 /// Reduction requires a callback but its initial value is optional.

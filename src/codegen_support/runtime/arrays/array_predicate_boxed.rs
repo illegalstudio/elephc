@@ -1,8 +1,8 @@
 //! Purpose:
-//! Searches boxed PHP arrays through value/key predicates with short-circuit evaluation.
+//! Searches and filters boxed PHP arrays through storage-neutral value/key predicates.
 //!
 //! Called from:
-//! - The ArrayFind, ArrayAny and ArrayAll backend paths.
+//! - The ArrayFind, ArrayAny, ArrayAll and ArrayFilter backend paths.
 //!
 //! Key details:
 //! - Consumes a descriptor and borrows a validated source triple.
@@ -35,7 +35,8 @@ const KEY_HI: usize = 136;
 const PREVIOUS: usize = 144;
 const PENDING: usize = 152;
 
-/// Borrows a source and consumes a descriptor, returning an owned Mixed answer for mode 0/1/2.
+/// Borrows a source and consumes a descriptor: modes 0/1/2 search, modes 3/4/5 filter value/both/key.
+/// A null descriptor selects callback-free filtering; every mode returns an owned Mixed cell.
 pub fn emit_array_predicate_boxed(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     emitter.blank();
@@ -76,6 +77,8 @@ pub fn emit_array_predicate_boxed(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, result, INPUT);
     box_key(emitter);
     abi::store_at_offset(emitter, result, KEY);
+    abi::load_at_offset(emitter, result, CALLBACK);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_array_predicate_boxed_no_callback");
     prepare_arguments(emitter);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CALLBACK);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENTS);
@@ -85,10 +88,17 @@ pub fn emit_array_predicate_boxed(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_mixed_cast_bool");
     abi::store_at_offset(emitter, result, TRUTH);
     release_slot(emitter, NEXT, "__rt_decref_mixed");
+    abi::emit_jump(emitter, "__rt_array_predicate_boxed_decide");
+    emitter.label("__rt_array_predicate_boxed_no_callback");
+    abi::load_at_offset(emitter, result, INPUT);
+    abi::emit_call_label(emitter, "__rt_mixed_cast_bool");
+    abi::store_at_offset(emitter, result, TRUTH);
+    emitter.label("__rt_array_predicate_boxed_decide");
     decide_match(emitter);
 
     emitter.label("__rt_array_predicate_boxed_next");
     release_slot(emitter, INPUT, "__rt_decref_mixed");
+    release_slot(emitter, KEY, "__rt_decref_mixed");
     abi::emit_jump(emitter, "__rt_array_predicate_boxed_loop");
 
     // -- clear owners before release, including when a destructor interrupts cleanup --
@@ -131,10 +141,12 @@ pub fn emit_array_predicate_boxed(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_array_predicate_boxed_cleanup");
 }
 
-/// Creates null for find, false for any and true for all before visiting the first entry.
+/// Creates null/false/true for searches, or an independent keyed result for filtering.
 fn initialize_answer(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     abi::load_at_offset(emitter, result, MODE);
+    ins(emitter, "cmp x0, #3", "cmp rax, 3");
+    ins(emitter, "b.ge __rt_array_predicate_boxed_filter_answer", "jge __rt_array_predicate_boxed_filter_answer");
     abi::emit_branch_if_int_result_zero(emitter, "__rt_array_predicate_boxed_null_answer");
     ins(emitter, "cmp x0, #2", "cmp rax, 2");
     ins(emitter, "cset x1, eq", "sete dil");
@@ -150,6 +162,15 @@ fn initialize_answer(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, value_high_reg(emitter), 0);
     abi::emit_call_label(emitter, "__rt_mixed_from_value");
     abi::store_at_offset(emitter, result, ANSWER);
+    abi::emit_jump(emitter, "__rt_array_predicate_boxed_answer_ready");
+    emitter.label("__rt_array_predicate_boxed_filter_answer");
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 4);
+    abi::emit_call_label(emitter, "__rt_hash_new");
+    value_boxing::emit_box_current_owned_value_as_mixed(emitter, &PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed),
+    });
+    abi::store_at_offset(emitter, result, ANSWER);
+    emitter.label("__rt_array_predicate_boxed_answer_ready");
 }
 
 /// Preserves integer keys and copies string keys into an independently owned callback argument.
@@ -167,7 +188,7 @@ fn box_key(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_mixed_from_value");
 }
 
-/// Retains the input for a possible find answer and transfers the key into a two-argument container.
+/// Builds owned callback arguments while retaining the original value/key for result publication.
 fn prepare_arguments(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let arg0 = abi::int_arg_reg_name(emitter.target, 0);
@@ -177,25 +198,37 @@ fn prepare_arguments(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_array_new");
     arrays::emit_array_value_type_stamp(emitter, result, &PhpType::Mixed);
     abi::store_at_offset(emitter, result, ARGUMENTS);
+    abi::load_at_offset(emitter, result, MODE);
+    ins(emitter, "cmp x0, #5", "cmp rax, 5");
+    ins(emitter, "b.eq __rt_array_predicate_boxed_push_key", "je __rt_array_predicate_boxed_push_key");
     abi::load_at_offset(emitter, result, INPUT);
     abi::emit_call_label(emitter, "__rt_incref");
     abi::load_at_offset(emitter, arg1, INPUT);
     abi::load_at_offset(emitter, arg0, ARGUMENTS);
     abi::emit_call_label(emitter, "__rt_array_push_int");
     abi::store_at_offset(emitter, result, ARGUMENTS);
+    abi::load_at_offset(emitter, result, MODE);
+    ins(emitter, "cmp x0, #3", "cmp rax, 3");
+    ins(emitter, "b.eq __rt_array_predicate_boxed_box_arguments", "je __rt_array_predicate_boxed_box_arguments");
+    emitter.label("__rt_array_predicate_boxed_push_key");
+    abi::load_at_offset(emitter, result, KEY);
+    abi::emit_call_label(emitter, "__rt_incref");
     abi::load_at_offset(emitter, arg1, KEY);
-    clear_slot(emitter, KEY);
-    abi::emit_reg_move(emitter, arg0, result);
+    abi::load_at_offset(emitter, arg0, ARGUMENTS);
     abi::emit_call_label(emitter, "__rt_array_push_int");
     abi::store_at_offset(emitter, result, ARGUMENTS);
+    emitter.label("__rt_array_predicate_boxed_box_arguments");
+    abi::load_at_offset(emitter, result, ARGUMENTS);
     value_boxing::emit_box_current_owned_value_as_mixed(emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
     abi::store_at_offset(emitter, result, ARGUMENTS);
 }
 
-/// Stops on the first true predicate for find/any, or on the first false predicate for all.
+/// Stops a search at its first decisive result, or preserves a kept filter entry's original key.
 fn decide_match(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     abi::load_at_offset(emitter, result, MODE);
+    ins(emitter, "cmp x0, #3", "cmp rax, 3");
+    ins(emitter, "b.ge __rt_array_predicate_boxed_filter_match", "jge __rt_array_predicate_boxed_filter_match");
     ins(emitter, "cmp x0, #2", "cmp rax, 2");
     ins(emitter, "b.eq __rt_array_predicate_boxed_all", "je __rt_array_predicate_boxed_all");
     abi::load_at_offset(emitter, result, TRUTH);
@@ -218,6 +251,15 @@ fn decide_match(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_mixed_from_value");
     abi::store_at_offset(emitter, result, ANSWER);
     abi::emit_jump(emitter, "__rt_array_predicate_boxed_cleanup");
+    emitter.label("__rt_array_predicate_boxed_filter_match");
+    abi::load_at_offset(emitter, result, TRUTH);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_array_predicate_boxed_next");
+    for (index, offset) in [ANSWER, KEY_LO, KEY_HI, INPUT].into_iter().enumerate() {
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+    }
+    clear_slot(emitter, INPUT);
+    abi::emit_call_label(emitter, "__rt_mixed_array_set");
+    abi::emit_jump(emitter, "__rt_array_predicate_boxed_next");
 }
 
 /// Adapts the unboxed high word to the retaining Mixed constructor's legacy x86_64 ABI.
@@ -309,6 +351,9 @@ mod tests {
             let callback = asm.find("__rt_callable_invoke_owned_args").unwrap();
             assert!(handler < snapshot && snapshot < iterator && iterator < callback, "{name}");
             assert!(asm.contains("__rt_mixed_cast_bool"), "{name}");
+            assert!(asm.contains("__rt_array_predicate_boxed_no_callback:"), "{name}");
+            assert!(asm.contains("__rt_array_predicate_boxed_filter_match:"), "{name}");
+            assert!(asm.contains("__rt_mixed_array_set"), "{name}: filters publish original keys and owned cells");
             assert!(asm.contains("__rt_array_predicate_boxed_caught:"), "{name}");
             assert!(asm.contains("__rt_callable_descriptor_release"), "{name}");
             assert!(asm.contains("__rt_exception_chain"), "{name}");

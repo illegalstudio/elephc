@@ -189,6 +189,12 @@ $selectedScore = array_find(
 );
 echo "Selected score: " . $selectedScore . "\n";
 
+// Filtering keeps names as keys, and the callback can be omitted to remove empty values.
+$highScores = array_filter($report->rows["scores"], static fn(int $score): bool => $score >= 12);
+echo "High scorers: " . implode(", ", array_keys($highScores)) . "\n";
+$details = array_filter(["name" => "Ada", "nickname" => "", "language" => "PHP"]);
+echo "Available details: " . implode(", ", array_keys($details)) . "\n";
+
 // String array
 $langs = ["PHP", "Rust", "ARM64"];
 echo "Compiled " . $langs[0] . " to " . $langs[2] . " with " . $langs[1] . "\n";

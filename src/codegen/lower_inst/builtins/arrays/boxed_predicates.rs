@@ -37,13 +37,36 @@ fn lower_predicate(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &str
     abi::emit_reserve_temporary_stack(ctx.emitter, BORROWED_BYTES);
     super::boxed_membership::store_borrowed_cell(ctx, source, 0)?;
     super::boxed_membership::store_borrowed_cell(ctx, callback, 32)?;
-    validate_source(ctx, name);
+    validate_source(ctx, name, BORROWED_BYTES);
     let result = abi::int_result_reg(ctx.emitter);
     let callback_error = match mode {
         0 => "array_find(): Argument #2 ($callback) must be a valid callback",
         1 => "array_any(): Argument #2 ($callback) must be a valid callback",
         _ => "array_all(): Argument #2 ($callback) must be a valid callback",
     };
+    acquire_callback_descriptor(ctx, inst, callback, name, callback_error)?;
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
+    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), mode);
+    abi::emit_call_label(ctx.emitter, "__rt_array_predicate_boxed");
+    if mode != 0 {
+        abi::emit_store_to_sp(ctx.emitter, result, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+        abi::emit_store_to_sp(ctx.emitter, result, 32);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 32);
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, BORROWED_BYTES);
+    store_if_result(ctx, inst)
+}
+
+/// Acquires the descriptor consumed by a keyed array scan; callback triples reside at sp+32.
+pub(super) fn acquire_callback_descriptor(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, callback: ValueId,
+    name: &str, callback_error: &'static str,
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {
             ctx.load_value_to_result(callback)?;
@@ -67,24 +90,11 @@ fn lower_predicate(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &str
             abi::emit_call_label(ctx.emitter, callable_argument_normalizer::CALLABLE_ARGUMENT_NORMALIZER);
         }
     }
-    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
-    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), mode);
-    abi::emit_call_label(ctx.emitter, "__rt_array_predicate_boxed");
-    if mode != 0 {
-        abi::emit_store_to_sp(ctx.emitter, result, 0);
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
-        abi::emit_store_to_sp(ctx.emitter, result, 32);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
-        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 32);
-    }
-    abi::emit_release_temporary_stack(ctx.emitter, BORROWED_BYTES);
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Rejects scalar or sentinel array operands before descriptor ownership is acquired.
-fn validate_source(ctx: &mut FunctionContext<'_>, name: &str) {
+pub(super) fn validate_source(ctx: &mut FunctionContext<'_>, name: &str, stack_bytes: usize) {
     let invalid = ctx.next_label("array_predicate_invalid_source");
     let valid = ctx.next_label("array_predicate_valid_source");
     abi::emit_temporary_stack_address(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -105,7 +115,7 @@ fn validate_source(ctx: &mut FunctionContext<'_>, name: &str) {
     }
     abi::emit_jump(ctx.emitter, &valid);
     ctx.emitter.label(&invalid);
-    abi::emit_release_temporary_stack(ctx.emitter, BORROWED_BYTES);
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     crate::codegen::lower_inst::exceptions::emit_type_error(
         ctx, &format!("{name}(): Argument #1 ($array) must be of type array"),
     );

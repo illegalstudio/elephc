@@ -25,8 +25,8 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
+- **Result ownership**: `fresh`
+- **Effects**: `static (20 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_filter(array $array, callable $callback = null, int $mode = 0): array
+function array_filter(array $array, ?callable $callback = null, int $mode = 0): array
 ```
 
 ## What the type checker enforces

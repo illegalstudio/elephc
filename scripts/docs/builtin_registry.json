@@ -13870,7 +13870,7 @@
           "default": 0,
           "name": "mode",
           "optional": true,
-          "type": "mixed"
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -13911,7 +13911,7 @@
           "default": "0",
           "name": "mode",
           "optional": true,
-          "type": "mixed"
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -13944,7 +13944,7 @@
     "module": "standard",
     "name": "array_filter",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "materialize_defaults",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -13957,6 +13957,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -13964,10 +13965,13 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
-          "may_deopt"
+          "may_deopt",
+          "blocking_io",
+          "network_io"
         ]
       },
       "lowering": {
@@ -13976,7 +13980,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -13997,7 +14001,7 @@
       "target_support_kind": "all",
       "validation": {
         "kind": "checker_hook",
-        "lazy": false
+        "lazy": true
       }
     },
     "sig": {
@@ -14014,7 +14018,7 @@
           "default": "null",
           "name": "callback",
           "optional": true,
-          "type": "callable"
+          "type": "?callable"
         },
         {
           "by_ref": false,

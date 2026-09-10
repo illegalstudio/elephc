@@ -330,7 +330,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'array_diff_key': ['array'],
     'array_fill': ['int', 'int', 'mixed'],
     'array_fill_keys': ['array', 'mixed'],
-    'array_filter': ['array', 'callable', 'int'],
+    'array_filter': ['array', '?callable', 'int'],
     'array_flip': ['array'],
     'array_intersect': ['array'],
     'array_intersect_assoc': ['array'],

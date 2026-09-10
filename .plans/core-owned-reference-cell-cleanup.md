@@ -1552,3 +1552,35 @@ The predicate and callable-property commits were pushed as e7d7e318a and 46ffde6
 CI run 34457105141 is running on the latter; runtime validation remains pending.
 A fresh fetch confirms origin/main c91beb343468 is already an ancestor, so there
 is no outstanding main rebase and no history rewrite or merge was performed.
+
+### Boxed filtering, nullable callbacks and profile-aware modes
+
+Route array_filter through the shared boxed predicate iterator instead of the two
+scalar/refcounted filter emitters. Preserve logical integer/string keys, holes and
+heterogeneous PHP values, return a fresh boxed hash and retain the source snapshot.
+Keep partial results, callback values, keys and arguments inside the resumable
+exception boundary. Remove the superseded emitters and their SysV alignment
+allowlist entries. The filter callback may be null or omitted; materialize both
+optional operands through the shared argument planner, including positional calls.
+
+The PHP 8.5 source treats other integer modes as value-only, while PHP 8.6 rejects
+them. Make AOT and Magician follow that profile distinction, using a catchable eval
+ValueError rather than RuntimeFatal. Preserve existing invalid-mode assertions by
+running those fixtures explicitly under PHP 8.6. Add heap/tagged tests for null
+callbacks, preserved keys/types, runtime modes, callable surfaces, nested calls,
+escaping objects and partial-result cleanup. Add explicit AOT/eval profile fixtures
+and five-target EIR/emitter gates. These tests have not been executed locally.
+
+Cargo build, test compilation and the generated-builtin exporter build pass. The
+first new EIR test edit was inserted inside a PHP fixture; it is moved to module
+scope and test compilation passes. Builtin rendering, module/comparison generation,
+docs audits, target-boundary audit and assembly-comment checks pass. Update the
+array example and user/runtime docs without changing catalog membership or Core
+coverage counts.
+
+Exact-head CI on 51eabd626 is still running. Completed ARM shards confirm the
+remaining typed-array callback rejection and aggregate/spread exception leaks.
+The new predicate snapshot regression also reveals two leaked Mixed cells (88
+bytes), despite correct output. Track that ownership failure separately; this
+filter change does not claim to resolve it or the remaining udiff/uintersect,
+multisort and eval metadata failures. The PR remains draft and must not be merged.

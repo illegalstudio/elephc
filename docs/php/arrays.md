@@ -306,7 +306,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort `$arr1` ascending (stable) and reorder `$arr2` in tandem; both are sorted in place (by reference). **Two indexed arrays of scalar elements**; sort flags, descending order, and >2 arrays are follow-ups. |
 | `array_rand()` | `array_rand($arr): int` | Pick one random key |
 | `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |
-| `array_filter()` | `array_filter($arr, $callback, $mode = ARRAY_FILTER_USE_VALUE): array` | Filter where callback is truthy; mode selects value, key, or both callback args |
+| `array_filter()` | `array_filter($arr, $callback = null, $mode = 0): array` | Preserve keys and values accepted by the callback; omitted/null callbacks remove empty values |
 | `array_reduce()` | `array_reduce($arr, $callback, $init): int` | Reduce to single value |
 | `array_walk()` | `array_walk($arr, $callback): void` | Call callback on each element |
 | `array_walk_recursive()` | `array_walk_recursive($arr, $callback): void` | Apply `$callback` to each non-array leaf value, recursing into nested indexed/associative arrays. Leaf values must share a scalar type (consistent with `array_walk`: leaf passed by value, no key argument). |
@@ -321,7 +321,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `function_exists()` | `function_exists(string $name): bool` | Check if a global or fully-qualified function name is defined. A literal name const-folds; any other string expression is matched case-insensitively at run time against the functions this binary declares |
 | `isset()` | `isset($var, ...$vars): int` | Check that every variable or offset is defined and not null. Like PHP, the probed variable does not have to exist: `isset($neverDefined)` is `false`, `empty($neverDefined)` is `true`, `$neverDefined ?? "d"` is `"d"`, and `unset($neverDefined)` is a no-op. A name that is *also* assigned elsewhere in the same scope must still be defined before it is probed |
 
-`array_filter()` accepts `ARRAY_FILTER_USE_VALUE` (`0`), `ARRAY_FILTER_USE_BOTH` (`1`), and `ARRAY_FILTER_USE_KEY` (`2`). Invalid mode values throw `ValueError`.
+`array_filter()` preserves integer and string keys, including holes, and supports declared PHP arrays with heterogeneous values. Its callback can receive values (`0`), both value and key (`ARRAY_FILTER_USE_BOTH`, `1`), or keys (`ARRAY_FILTER_USE_KEY`, `2`). PHP profiles through 8.5 treat other integer modes as value-only; PHP 8.6 rejects them with a catchable `ValueError`, including for empty arrays and null callbacks. The `ARRAY_FILTER_USE_VALUE` name is available in PHP 8.6. Callback results use PHP truthiness rather than requiring a boolean return.
 
 `array_map()` also resolves boxed callbacks extracted from PHP arrays, including
 captured closures, function names, packed `[object, method]` pairs, and invokable

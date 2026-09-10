@@ -2,7 +2,7 @@
 //! Validates array predicate inputs and contextual callback parameters.
 //!
 //! Called from:
-//! - The array_find, array_any and array_all builtin bindings.
+//! - The array_find, array_any, array_all and array_filter builtin bindings.
 //!
 //! Key details:
 //! - Runtime iteration always supplies value and key, including for one-parameter callbacks.
@@ -21,25 +21,31 @@ pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<(), CompileError> {
     {
         return Err(CompileError::new(cx.span, &format!("{}() first argument must be array", cx.name)));
     }
-    let callback = &cx.args[1];
-    let visible = match &callback.kind {
-        ExprKind::Closure { params, variadic, .. } =>
-            if variadic.is_some() { 2 } else { params.len().min(2) },
-        ExprKind::StringLiteral(name) => {
-            if let Some(sig) = cx.checker.functions.get(name.as_str()) {
-                if sig.variadic.is_some() { 2 } else { sig.params.len().min(2) }
-            } else if let Some(decl) = cx.checker.fn_decls.get(name.as_str()) {
-                if decl.variadic.is_some() { 2 } else { decl.params.len().min(2) }
-            } else { 2 }
-        }
-        _ => cx.checker.resolve_expr_callable_sig(callback, cx.env)?.map_or(2, |sig| {
-            if sig.variadic.is_some() { 2 } else { sig.params.len().min(2) }
-        }),
-    };
     let types = [
         crate::types::checker::builtins::array_element_type(&array),
         crate::types::checker::builtins::array_key_type(&array),
     ];
+    check_callback(cx, &types)
+}
+
+/// Checks declared callback parameters without rejecting user callbacks that ignore extra inputs.
+pub(super) fn check_callback(cx: &mut BuiltinCheckCtx, types: &[PhpType]) -> Result<(), CompileError> {
+    let callback = &cx.args[1];
+    let count = types.len();
+    let visible = match &callback.kind {
+        ExprKind::Closure { params, variadic, .. } =>
+            if variadic.is_some() { count } else { params.len().min(count) },
+        ExprKind::StringLiteral(name) => {
+            if let Some(sig) = cx.checker.functions.get(name.as_str()) {
+                if sig.variadic.is_some() { count } else { sig.params.len().min(count) }
+            } else if let Some(decl) = cx.checker.fn_decls.get(name.as_str()) {
+                if decl.variadic.is_some() { count } else { decl.params.len().min(count) }
+            } else { count }
+        }
+        _ => cx.checker.resolve_expr_callable_sig(callback, cx.env)?.map_or(count, |sig| {
+            if sig.variadic.is_some() { count } else { sig.params.len().min(count) }
+        }),
+    };
     crate::types::checker::builtins::check_array_callback_builtin_call(
         cx.checker, callback, &types[..visible], cx.span, cx.env,
         &format!("{}() callback", cx.name),

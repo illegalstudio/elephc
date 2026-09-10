@@ -180,10 +180,10 @@ foreach ($filtered as $value) { echo $value; }
     assert_eq!(out, "22040");
 }
 
-/// Verifies invalid literal modes throw a catchable `ValueError` before callback invocation.
+/// PHP 8.6 invalid literal modes throw a catchable ValueError before callback invocation.
 #[test]
 fn test_array_filter_invalid_literal_mode_throws_value_error() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         r#"<?php
 function keep_value($value) { echo "callback"; return true; }
 try {
@@ -193,14 +193,15 @@ try {
     echo "ValueError";
 }
 "#,
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "ValueError");
 }
 
-/// Verifies invalid runtime mode variables throw a catchable `ValueError`.
+/// PHP 8.6 invalid runtime modes throw a catchable ValueError.
 #[test]
 fn test_array_filter_invalid_runtime_mode_throws_value_error() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         r#"<?php
 function keep_value_runtime($value) { echo "callback"; return true; }
 $mode = 9;
@@ -211,6 +212,7 @@ try {
     echo "ValueError";
 }
 "#,
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "ValueError");
 }
@@ -274,7 +276,7 @@ echo array_reduce([1, 2, 3], $reduce, 0);
     let (user_asm, _runtime_asm, _required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
     assert!(
-        user_asm.contains("__rt_array_filter")
+        user_asm.contains("__rt_array_predicate_boxed")
             && user_asm.contains("__rt_array_walk")
             && user_asm.contains("__rt_array_reduce")
             && user_asm.contains("callable_invoker"),

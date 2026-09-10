@@ -949,7 +949,7 @@ impl RuntimeFnId {
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
             // Callback results and snapshots can run destructors independently of the callback body.
-            RuntimeFnId::ArrayFind | RuntimeFnId::ArrayAny
+            RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayFind | RuntimeFnId::ArrayAny
             | RuntimeFnId::ArrayAll | RuntimeFnId::ArrayReduce => crate::ir::Effects::all(),
             // Unsupported entries can invoke arbitrary warning handlers, including
             // mutation of globals and destruction of the replaced source array.
@@ -1311,8 +1311,7 @@ impl RuntimeFnId {
     pub const fn intrinsic_effects(self) -> crate::ir::Effects {
         use crate::ir::Effects as E;
         match self {
-            RuntimeFnId::ArrayFilter
-            | RuntimeFnId::ArrayMap
+            RuntimeFnId::ArrayMap
             | RuntimeFnId::ArrayWalk
             | RuntimeFnId::ArrayWalkRecursive
             | RuntimeFnId::ArrayUdiff
@@ -1321,7 +1320,7 @@ impl RuntimeFnId {
             }
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
             // of the selected callback's effect summary. Validation may also throw.
-            RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
+            RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
             | RuntimeFnId::ArrayAny | RuntimeFnId::ArrayAll => E::all(),
             RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
@@ -1856,6 +1855,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayCountValues
                 | RuntimeFnId::ArrayFlip
                 | RuntimeFnId::ArrayFind
+                | RuntimeFnId::ArrayFilter
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap

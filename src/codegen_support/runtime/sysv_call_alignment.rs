@@ -104,16 +104,6 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
         "multi-push frame off by 8: calls __rt_concat_reserve / __rt_wordwrap_cpy_x86_64, \
          integer-only assembly",
     ),
-    (
-        "__rt_array_filter",
-        "multi-push frame off by 8: calls __rt_heap_alloc / __rt_object_handle_acquire, \
-         integer-only assembly",
-    ),
-    (
-        "__rt_array_filter_refcounted",
-        "multi-push frame off by 8: calls __rt_heap_alloc / __rt_object_handle_acquire, \
-         integer-only assembly",
-    ),
     // -- The three that reach code this runtime did not write. FIX THESE FIRST.
     (
         "__rt_usort",

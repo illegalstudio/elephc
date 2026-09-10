@@ -21,6 +21,7 @@ function targetArrayPredicates(array $values): void {
     echo gettype($found), array_any($values, static fn(mixed $value): bool => true);
     echo array_all($values, static fn(mixed $value, mixed $key): bool => true);
 }
+
 targetArrayPredicates(["item" => false]);
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -43,5 +44,40 @@ targetArrayPredicates(["item" => false]);
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert_eq!(asm.matches("__rt_array_predicate_boxed").count(), 3, "{name}");
         assert!(!asm.contains("__rt_array_find_any_all"), "{name}: no scalar-only predicate path");
+    }
+}
+
+/// Every ABI materializes filter defaults and returns an owned boxed array for preserved keys.
+#[test]
+fn boxed_array_filter_defaults_and_callback_modes_lower_on_every_target() {
+    let source = r#"<?php
+function targetArrayFilter(array $values, int $mode): void {
+    $plain = array_filter($values);
+    $null = array_filter($values, null);
+    $callback = array_filter($values, static fn(mixed $value, mixed $key = null): bool => true, $mode);
+    echo count($plain), count($null), count($callback);
+}
+targetArrayFilter(["item" => false], 1);
+"#;
+    assert_eq!(RuntimeFnId::ArrayFilter.result_ownership(),
+        crate::builtins::semantics::BuiltinResultOwnership::Fresh);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let calls: Vec<_> = module.functions.iter().flat_map(|function| &function.instructions)
+            .filter(|inst| matches!(inst.immediate,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayFilter)))))
+            .collect();
+        assert_eq!(calls.len(), 3, "{name}");
+        for inst in calls {
+            assert_eq!(inst.operands.len(), 3, "{name}: callback and mode defaults must be materialized");
+            assert_eq!(inst.result_php_type.codegen_repr(), PhpType::Mixed, "{name}");
+            assert!(inst.effects.contains(Effects::MAY_THROW | Effects::REFCOUNT_OP), "{name}");
+        }
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(asm.matches("__rt_array_predicate_boxed").count(), 3, "{name}");
+        assert!(!asm.contains("__rt_array_filter"), "{name}: no scalar-only filter runtime");
     }
 }

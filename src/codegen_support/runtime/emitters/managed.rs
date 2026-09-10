@@ -157,8 +157,6 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_map_mixed(emitter);
     arrays::emit_array_map_str(emitter);
     arrays::emit_array_map_str_owned(emitter);
-    arrays::emit_array_filter(emitter);
-    arrays::emit_array_filter_refcounted(emitter);
     arrays::emit_array_predicate_boxed(emitter);
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_reduce_str(emitter);

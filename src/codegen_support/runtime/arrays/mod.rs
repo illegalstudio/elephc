@@ -32,8 +32,6 @@ mod array_fill_keys;
 mod array_fill_keys_refcounted;
 mod array_fill_refcounted;
 mod array_fill_str;
-mod array_filter;
-mod array_filter_refcounted;
 mod array_predicate_boxed;
 mod array_flip;
 mod array_flip_boxed;
@@ -247,11 +245,7 @@ pub use array_fill_keys_refcounted::emit_array_fill_keys_refcounted;
 pub use array_fill_refcounted::emit_array_fill_refcounted;
 /// Emit refcounted array fill helper.
 pub use array_fill_str::emit_array_fill_str;
-/// Emit string array fill helper.
-pub use array_filter::emit_array_filter;
-/// Emit array filter helper.
-pub use array_filter_refcounted::emit_array_filter_refcounted;
-/// Emit refcounted array filter helper.
+/// Emit storage-neutral array search and filter predicates.
 pub use array_predicate_boxed::emit_array_predicate_boxed;
 /// Emit array find/any/all predicate helper.
 pub use array_flip::emit_array_flip;

@@ -8,14 +8,14 @@ sidebar:
 ## array_filter()
 
 ```php
-function array_filter(array $array, callable $callback = null, int $mode = 0): array
+function array_filter(array $array, ?callable $callback = null, int $mode = 0): array
 ```
 
 Filters elements of an array using a callback function.
 
 **Parameters**:
 - `$array` (`array`)
-- `$callback` (`callable`), default `null`, optional
+- `$callback` (`?callable`), default `null`, optional
 - `$mode` (`int`), default `0`, optional
 
 **Returns**: `array`

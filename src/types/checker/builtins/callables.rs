@@ -940,7 +940,7 @@ fn check_callback_builtin_call_in_engine_frame(
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
-    if (label == "array_map() callback" || is_keyed_array_predicate_callback(label))
+    if (matches!(label, "array_map() callback" | "array_filter() callback") || is_keyed_array_predicate_callback(label))
         && matches!(callback_ty.codegen_repr(), PhpType::Mixed | PhpType::Callable | PhpType::Void)
     {
         // Boxed array reads erase callable signatures. The map runtime resolves
@@ -1439,8 +1439,8 @@ pub(crate) fn check_function_exists(
 
 /// Returns contextual callback argument types for `array_filter()` based on a static mode.
 ///
-/// Unknown or invalid runtime modes use the default value-only shape for type checking;
-/// runtime validation still throws before invoking the callback when the mode is invalid.
+/// Dynamic modes keep both contextual slots opaque; runtime binding decides the actual arity.
+/// Other literal integers use value-only context, with validation delegated to the PHP profile.
 pub(crate) fn array_filter_callback_arg_types(
     arr_ty: &PhpType,
     mode_arg: Option<&Expr>,
@@ -1449,6 +1449,7 @@ pub(crate) fn array_filter_callback_arg_types(
     match mode_arg.and_then(static_array_filter_mode_value) {
         Some(1) => vec![elem_ty, array_key_type(arr_ty)],
         Some(2) => vec![array_key_type(arr_ty)],
+        None if mode_arg.is_some() => vec![PhpType::Mixed, PhpType::Mixed],
         _ => vec![elem_ty],
     }
 }
