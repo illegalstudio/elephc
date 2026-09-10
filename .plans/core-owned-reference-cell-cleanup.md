@@ -2092,3 +2092,16 @@ Native Sol implemented the bounded ABI fix. Add producer and consumer emitter
 assertions and strengthen the existing captured-reference array-return fixture
 with an exact heap-clean check. Cargo check --tests, assembly-comment alignment
 and diff hygiene pass. No local tests execute; CI must confirm runtime behavior.
+
+### Accept runtime-validated Mixed multisort receivers
+
+The post-eval multisort regression establishes its locals before eval, so the
+checker correctly sees Mixed storage. Accept exactly that dynamic type alongside
+indexed and declared PHP arrays; keep known scalar and hash receivers rejected.
+The existing runtime validation remains responsible for rejecting unsupported
+Mixed payloads. Grok supplied the bounded checker diagnosis.
+
+Add negative cases for concrete unsupported storage and retain the widened
+receiver runtime and five-target EIR regressions. Cargo check --tests, exporter
+build, generated documentation refresh, builtin/site/target-boundary audits and
+diff hygiene pass. Generated files are unchanged. No local tests execute.

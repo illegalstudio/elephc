@@ -917,6 +917,17 @@ fn test_error_array_multisort_non_array() {
     );
 }
 
+/// Dynamic cells defer layout validation, but known hashes and scalar locals still fail checking.
+#[test]
+fn test_error_array_multisort_known_non_indexed_storage() {
+    for source in [
+        "<?php $a = ['k' => 1]; $b = ['j' => 2]; array_multisort($a, $b);",
+        "<?php $a = [1, 2]; $b = 5; array_multisort($a, $b);",
+    ] {
+        expect_error(source, "array_multisort() arguments must be indexed arrays");
+    }
+}
+
 /// Verifies that an untyped closure/arrow-function parameter passed as an array builtin's
 /// callback inherits the array's ELEMENT type instead of staying `Mixed`, so a string-only
 /// builtin call in the body type-checks. Covers every builtin that types its callback
