@@ -91,8 +91,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction(if arm { "stp x29, x30, [sp, #-16]!" } else { "sub rsp, 8" }); // preserve linkage and align the shared probe
     abi::emit_call_label(emitter, "__rt_hash_try_next_index");
     emitter.instruction(if arm { "ldp x29, x30, [sp], #16" } else { "add rsp, 8" }); // restore the caller before any exception unwinding
-    emitter.instruction(if arm { "cbz x1, __rt_hash_append_error" } else { "test edx, edx" }); // inspect availability for ordinary PHP append
-    if !arm { emitter.instruction("jz __rt_hash_append_error"); }               // saturated occupied keys raise PHP's catchable Error
+    if arm {
+        emitter.instruction("cbnz x1, __rt_hash_next_index_available");         // keep the successful conditional transfer inside the current Mach-O atom
+        emitter.instruction("b __rt_hash_append_error");                        // raise PHP's catchable Error through the shared global helper
+        emitter.label("__rt_hash_next_index_available");
+    } else {
+        emitter.instruction("test edx, edx");                                   // inspect availability for ordinary PHP append
+        emitter.instruction("jz __rt_hash_append_error");                       // saturated occupied keys raise PHP's catchable Error
+    }
     emitter.instruction("ret");                                                 // return the available index to EIR before value ownership transfer
     super::hash_append_error::emit(emitter);
 }

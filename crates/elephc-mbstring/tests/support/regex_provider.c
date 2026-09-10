@@ -10,10 +10,18 @@ int elephc_test_guarded_subjects(void) {
     const elephc_onig_provider_v1 *provider = elephc_oniguruma_v1_provider();
     long page_size = sysconf(_SC_PAGESIZE);
     if (page_size < 32) return 1;
+#if defined(__APPLE__)
+    int descriptor = -1;
+    int mapping_flags = MAP_PRIVATE | MAP_ANON;
+#else
     int descriptor = open("/dev/zero", O_RDWR);
     if (descriptor < 0) return 2;
-    uint8_t *pages = mmap(NULL, (size_t)page_size * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE, descriptor, 0);
+    int mapping_flags = MAP_PRIVATE;
+#endif
+    uint8_t *pages = mmap(NULL, (size_t)page_size * 2, PROT_READ | PROT_WRITE, mapping_flags, descriptor, 0);
+#if !defined(__APPLE__)
     close(descriptor);
+#endif
     if (pages == MAP_FAILED) return 3;
     if (mprotect(pages + page_size, (size_t)page_size, PROT_NONE)) {
         munmap(pages, (size_t)page_size * 2);

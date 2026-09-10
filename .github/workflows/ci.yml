@@ -255,6 +255,15 @@ jobs:
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
 
+      - name: Ensure Python for Oniguruma bundle preparation
+        shell: bash
+        run: |
+          if ! command -v python3 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3
+          fi
+          python3 --version
+
       - name: Prepare offline Oniguruma test bundle
         run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-x86_64
 
@@ -385,6 +394,15 @@ jobs:
             --target-dir target/elephc-magician-curl-test-build
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
+
+      - name: Ensure Python for Oniguruma bundle preparation
+        shell: bash
+        run: |
+          if ! command -v python3 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3
+          fi
+          python3 --version
 
       - name: Prepare offline Oniguruma test bundle
         run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-aarch64
