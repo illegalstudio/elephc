@@ -1174,3 +1174,16 @@ cover this path. Build/test compilation and regenerated builtin-doc audits
 pass locally, without executing tests. The refreshed origin/main remains
 c91beb3434681294e0a1dd29ef92f42f3365923a and is already an ancestor of this
 branch, so no history rewrite is necessary at this checkpoint.
+
+### Synthetic match traversal and round-trip support
+
+CI on 48d244166 confirms both XML iOS compile/link jobs pass, but the builtin
+prelude contract gates panic while auditing or printing the new diagnostic
+match expression. Extend the synthetic AST call audit, parameter-read scan,
+PHP printer and Rust transcriber consistently. Keep grouped labels, nested
+matches and optional defaults intact; unsupported nodes still fail closed.
+
+Added focused scan and round-trip regressions, plus transcription coverage.
+Build and test compilation pass, and the builtin-doc skill regeneration and
+audits pass without generated-file changes. No tests ran locally. The remote
+parity gates and the remaining ownership failures still need CI validation.
