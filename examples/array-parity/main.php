@@ -47,6 +47,13 @@ function sortedEventNames(array $events): array {
 }
 echo 'sorted: ', implode(', ', sortedEventNames($queue)), "\n";
 
+// Build a reverse lookup through a declared PHP array boundary.
+function eventIdsByName(array $events): array {
+    return array_flip($events);
+}
+$eventIds = eventIdsByName([10 => 'opened', 20 => 'reviewed', 30 => 'closed']);
+echo 'reviewed event: ', $eventIds['reviewed'], "\n";
+
 // --- callbacks preserve keys through the same PHP array boundary ---
 function labelEvents(array $events): array {
     return array_map(fn(mixed $event): string => "event:" . $event, $events);

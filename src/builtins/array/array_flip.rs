@@ -11,6 +11,7 @@
 //!   `AssocArray<key-from-elem, Int>`; an associative array flips to
 //!   `AssocArray<key-from-value, old-key>`. A check hook is required because the
 //!   return type depends on the inferred argument type.
+//! - Declared PHP arrays keep their boxed shape and dispatch on runtime value tags.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 
@@ -34,6 +35,9 @@ builtin! {
 /// and arity is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if ty.is_php_array() {
+        return Ok(ty);
+    }
     match ty {
         PhpType::Array(elem_ty) => Ok(PhpType::AssocArray {
             key: Box::new(array_key_type_from_value_type(*elem_ty)),

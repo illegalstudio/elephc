@@ -14178,7 +14178,7 @@
     },
     "area": "Array",
     "canonical_name": "array_flip",
-    "description": "Exchanges all keys with their associated values in an array.",
+    "description": "Exchanges keys and values. Declared PHP arrays use runtime value tags, warn and skip values other than integers or strings, and keep the last key for duplicate values. Concrete AOT storage remains restricted to integer or string elements.",
     "eval": {
       "adapter_reason": "interpreter-specific-value-semantics",
       "area": "array",
@@ -14235,7 +14235,26 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",

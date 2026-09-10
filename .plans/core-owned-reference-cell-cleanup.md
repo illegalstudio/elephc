@@ -569,3 +569,21 @@ now parenthesizes its array expression so the statement parser does not select
 the destructuring path before the optimizer runs. Its catch/finally and
 observable-spread assertions are unchanged. Test compilation and static
 hygiene pass; no local test execution was performed.
+
+### Boxed array flip
+
+Declared PHP array inputs now reach a logical runtime flip instead of failing
+the checker. The helper retains the source payload before warning callbacks,
+normalizes string keys, replaces duplicate values in order and guards its
+partial result and source snapshot against throws. Invalid element tags warn
+and skip, following the PHP manual. The concrete integer/string paths retain
+their existing support boundary. Callback effects prevent discarded calls from
+losing their warnings or global mutations.
+
+Added all-target emitter coverage and executable fixtures for mixed keys,
+growth, warnings, reentrant handlers, source replacement and throw cleanup.
+Former declared-array compile-refusal fixtures now assert successful values,
+exact warning counts and clean heaps. Build, test compilation, assembly-comment
+checks and the complete builtin-document workflow pass; no tests ran locally.
+CI on 558d98274 still reports unrelated checker and ownership failures and a
+standalone spread parsing failure. The PR remains draft and unmerged.

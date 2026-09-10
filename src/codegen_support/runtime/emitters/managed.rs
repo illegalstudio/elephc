@@ -111,6 +111,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_intersect(emitter);
     arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_flip(emitter);
+    arrays::emit_array_flip_boxed(emitter);
     arrays::emit_array_count_values(emitter);
     arrays::emit_array_flip_string(emitter);
     arrays::emit_hash_flip(emitter);

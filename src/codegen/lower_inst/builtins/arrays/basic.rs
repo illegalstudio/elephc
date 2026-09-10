@@ -209,6 +209,23 @@ pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
 pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        if inst.result_php_type.codegen_repr() != PhpType::Mixed {
+            return Err(CodegenIrError::unsupported(
+                "boxed array_flip requires a boxed array result".to_string(),
+            ));
+        }
+        ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+        abi::emit_call_label(ctx.emitter, "__rt_array_flip_boxed");
+        let valid = ctx.next_label("array_flip_boxed_valid");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
+        crate::codegen::lower_inst::exceptions::emit_type_error(
+            ctx, "array_flip(): Argument #1 ($array) must be of type array",
+        );
+        ctx.emitter.label(&valid);
+        box_hash_result_for_mixed_builtin(ctx, inst, &PhpType::Mixed);
+        return store_if_result(ctx, inst);
+    }
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::AssocArray { .. }

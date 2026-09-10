@@ -4023,7 +4023,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Exchanges all keys with their associated values in an array.",
+        summary: "Exchanges keys and values. Declared PHP arrays use runtime value tags, warn and skip values other than integers or strings, and keep the last key for duplicate values. Concrete AOT storage remains restricted to integer or string elements.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-flip.php"),

@@ -172,3 +172,12 @@ fn printf_family_effects_cover_userland_string_conversion() {
         assert!(effects.contains(Effects::OUTPUT), "{target:?}");
     }
 }
+
+/// Flip warnings may call handlers that throw, write globals or release objects.
+#[test]
+fn array_flip_effects_preserve_warning_handlers() {
+    let effects = RuntimeFnId::ArrayFlip.effects();
+    for required in [Effects::MAY_THROW, Effects::WRITES_GLOBAL, Effects::REFCOUNT_OP, Effects::OUTPUT] {
+        assert!(effects.contains(required));
+    }
+}

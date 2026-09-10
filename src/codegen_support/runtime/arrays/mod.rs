@@ -35,6 +35,7 @@ mod array_filter;
 mod array_filter_refcounted;
 mod array_find_any_all;
 mod array_flip;
+mod array_flip_boxed;
 mod array_flip_string;
 mod array_free_deep;
 mod array_get_mixed_key;
@@ -250,6 +251,7 @@ pub use array_filter_refcounted::emit_array_filter_refcounted;
 pub use array_find_any_all::emit_array_find_any_all;
 /// Emit array find/any/all predicate helper.
 pub use array_flip::emit_array_flip;
+pub use array_flip_boxed::emit_array_flip_boxed;
 /// Emit array flip helper.
 pub use array_flip_string::emit_array_flip_string;
 /// Emit string-only array flip helper.
