@@ -194,7 +194,9 @@ pub(super) fn lower_acquire_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instr
     let pointer = expect_operand(inst, 0)?;
     let owner = expect_local_slot(inst)?;
     let owner_offset = ctx.local_offset(owner)?;
-    ctx.load_value_to_reg(pointer, abi::int_result_reg(ctx.emitter))?;
+    if !materialize_returned_local_ref_cell(ctx, pointer)? {
+        ctx.load_value_to_reg(pointer, abi::int_result_reg(ctx.emitter))?;
+    }
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     let previous = abi::secondary_scratch_reg(ctx.emitter);
@@ -204,6 +206,40 @@ pub(super) fn lower_acquire_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instr
     abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), previous);
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
     Ok(())
+}
+
+/// Materializes the ref-cell pointer represented by a `LoadRefCell` value.
+pub(in crate::codegen) fn materialize_returned_local_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    mut value: ValueId,
+) -> Result<bool> {
+    loop {
+        let Some(inst) = instruction_for_value(ctx, value)? else {
+            return Ok(false);
+        };
+        if matches!(inst.op, Op::Acquire | Op::Move | Op::Borrow) {
+            let Some(source) = inst.operands.first().copied() else {
+                return Ok(false);
+            };
+            value = source;
+            continue;
+        }
+        if inst.op != Op::LoadRefCell {
+            return Ok(false);
+        }
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+            return Err(CodegenIrError::invalid_module(
+                "reference return load has no local slot",
+            ));
+        };
+        if !ctx.local_ref_cell_representation_is_definite(slot) {
+            return Err(CodegenIrError::unsupported(
+                "by-reference return from a path-dependent local reference",
+            ));
+        }
+        ctx.materialize_local_storage_address(slot, abi::int_result_reg(ctx.emitter))?;
+        return Ok(true);
+    }
 }
 
 /// Releases an owned local ref-cell tracked by a hidden owner slot.

@@ -38,6 +38,27 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     // it. Metadata retains the property's declared type for caller dereferencing;
     // the reference-return ABI always transports the raw cell in the integer result register.
     if ctx.by_ref_return {
+        if let Some(Expr { kind: ExprKind::Variable(name), .. }) = value_expr {
+            if ctx.is_ref_bound_local(name) {
+                let value = ctx.load_local(name, Some(span));
+                if ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell) {
+                    let owner = ctx.declare_local_with_kind(
+                        "__eir_reference_return_owner",
+                        PhpType::Pointer(None),
+                        crate::ir::LocalKind::ReturnRefCell,
+                    );
+                    ctx.emit_void(
+                        Op::AcquireRefCell,
+                        vec![value.value],
+                        Some(Immediate::LocalSlot(owner)),
+                        Op::AcquireRefCell.default_effects(),
+                        Some(span),
+                    );
+                    terminate_return(ctx, Some(value.value));
+                    return;
+                }
+            }
+        }
         if let Some(Expr { kind: ExprKind::PropertyAccess { object, property }, .. }) = value_expr {
             let object = lower_expr(ctx, object);
             let data = ctx.intern_string(property);

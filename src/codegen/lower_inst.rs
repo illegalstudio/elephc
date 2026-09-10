@@ -80,7 +80,7 @@ mod generator_instructions;
 mod globals_constants;
 mod instruction_helpers;
 mod local_loads;
-mod local_stores;
+pub(in crate::codegen) mod local_stores;
 mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;

@@ -256,11 +256,17 @@ function &createReturnedReference(): string {
     $object = new ReturningReferenceOwner();
     return $object->text;
 }
+function &relayReturnedReference(mixed &$value): mixed {
+    $value = 'relayed';
+    return $value;
+}
 function consumeReturnedReference(): void {
     $alias = &createReturnedReference();
     $copy = createReturnedReference();
     $method = &(new ReturningReferenceOwner())->reference();
-    echo $alias, $copy, $method;
+    $managed = 'start';
+    $relayed = &relayReturnedReference($managed);
+    echo $alias, $copy, $method, $relayed;
 }
 consumeReturnedReference();
 "#;
@@ -277,6 +283,15 @@ consumeReturnedReference();
         assert!(acquisition.effects.contains(Effects::REFCOUNT_OP | Effects::WRITES_LOCAL), "{name}");
         assert!(acquisition.effects.contains(Effects::MAY_THROW),
             "{name}: replacing a pending reference return can run a payload destructor");
+        let relay = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("relayReturnedReference")).unwrap();
+        let relay_load = relay.instructions.iter().find(|inst| inst.op == Op::LoadRefCell)
+            .expect("local by-reference return retains its source place");
+        let relay_acquire = relay.instructions.iter().find(|inst| {
+            inst.op == Op::AcquireRefCell && inst.operands.first() == relay_load.result.as_ref()
+        }).expect("local by-reference return retains the managed cell owner");
+        let Some(Immediate::LocalSlot(relay_owner)) = relay_acquire.immediate else { unreachable!(); };
+        assert_eq!(relay.locals[relay_owner.as_raw() as usize].kind, LocalKind::ReturnRefCell, "{name}");
         let caller = module.functions.iter()
             .find(|function| function.name.eq_ignore_ascii_case("consumeReturnedReference")).unwrap();
         assert!(caller.instructions.iter().filter(|inst| inst.op == Op::AdoptRefCellPtr).count() >= 3,

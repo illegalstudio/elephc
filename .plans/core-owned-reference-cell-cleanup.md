@@ -2137,3 +2137,18 @@ when that diagnostic is caught. Native Sol confirmed and implemented these cause
 Five-target emitter assertions and existing exact output, tagged, COW and heap
 regressions cover the changed paths. Cargo check --tests, assembly-comment audit
 and diff hygiene pass. No tests execute locally.
+
+### Preserve managed local reference identity through returns
+
+By-reference local returns must preserve an addressable AST place and transport
+the actual managed cell address, not its loaded payload. Prevent constant
+substitution of reference-return expressions in functions, methods and closures.
+Acquire the managed return owner before epilogue cleanup and materialize the cell
+pointer through the target-aware storage-address helper at both acquisition and
+return. Ordinary value returns keep their existing path.
+
+Native Sol implemented the optimizer and ABI repair. Add propagation assertions,
+five-target managed-cell ownership coverage and a heap/tagged regression that
+unsets the original name before reading the returned alias. Existing boxed walk
+reference-return coverage remains intact. Cargo check --tests, assembly-comment
+alignment and diff hygiene pass. No local tests execute.

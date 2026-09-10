@@ -95,6 +95,30 @@ echo "done";
     assert_eq!(compile_and_run_tagged(source), expected);
 }
 
+/// A local by-reference return transfers a managed cell owner beyond callee cleanup.
+#[test]
+fn test_core_local_reference_return_keeps_managed_cell_alive() {
+    let source = r#"<?php
+function &managedReferenceRelay(mixed &$value): mixed {
+    $value = "relayed";
+    return $value;
+}
+
+$source = "start";
+$alias = &managedReferenceRelay($source);
+unset($source);
+echo $alias, "|";
+unset($alias);
+echo "done";
+"#;
+    let expected = "relayed|done";
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{assembly}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}\n{assembly}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
 /// Managed caller-owned references retain ordinary escaping closure behavior.
 #[test]
 fn test_core_boxed_array_walk_escape_guard_accepts_managed_reference_cells() {
