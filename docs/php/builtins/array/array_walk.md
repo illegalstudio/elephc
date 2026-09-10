@@ -1,6 +1,6 @@
 ---
 title: "array_walk()"
-description: "Applies a user function to every member of an array."
+description: "Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported."
 sidebar:
   order: 46
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_walk(array $array, callable $callback): void
 ```
 
-Applies a user function to every member of an array.
+Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

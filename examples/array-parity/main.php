@@ -159,3 +159,24 @@ foreach ($keys as $v) { echo $v; }
 echo "\nmultisort vals: ";
 foreach ($vals as $v) { echo $v; }
 echo "\n";
+
+// Declared PHP arrays let a reusable sorter combine numeric priorities and names.
+function sortWorkQueue(array &$priorities, array &$names): void {
+    array_multisort($priorities, $names);
+}
+$priorities = [2, 1, 2];
+$names = ["review", "build", "docs"];
+$originalNames = $names;
+sortWorkQueue($priorities, $names);
+echo "work queue: ", implode(", ", $names), "\n";
+echo "original:   ", implode(", ", $originalNames), "\n";
+
+// A boxed associative array keeps its keys while the callback updates each value.
+function applyPriceDiscount(array &$prices): void {
+    array_walk($prices, function(mixed &$price): void { $price = $price - 5; });
+}
+$prices = ["book" => 20, "lamp" => 35];
+$originalPrices = $prices;
+applyPriceDiscount($prices);
+echo "discounted: ", implode(", ", $prices), "\n";
+echo "original:   ", implode(", ", $originalPrices), "\n";

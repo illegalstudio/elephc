@@ -1974,3 +1974,12 @@ exact retirement counts rather than relying on the first push or pop. Native Sol
 implemented and reviewed the bounded owner ledger; the coordinator reviewed its
 handoff and coercion integration. Compile-only validation covers the changed tests;
 runtime behavior still requires CI. No tests execute locally.
+
+### Synchronize boxed array contracts, examples and generated documentation
+
+Regenerate builtin pages and registry from the shared contract. Correct the
+multisort second-parameter display type to array, describe its restricted tuple
+sorting contract and document boxed-walk callback/reference limits. Extend the
+array-parity example with declared-array sorting and COW-preserving value updates.
+The exporter build, builtin audit, site compatibility audit, target-boundary audit,
+assembly-comment alignment and diff hygiene pass. No local tests execute.

@@ -36,7 +36,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`array_map()`](./builtins/array/array_map.md) | `(?callable $callback, array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_merge()`](./builtins/array/array_merge.md) | `(...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_merge_recursive()`](./builtins/array/array_merge_recursive.md) | `(...$arrays): array` | `array` | ✓ | — |
-| [`array_multisort()`](./builtins/array/array_multisort.md) | `(array $array1, int $array2): bool` | `bool` | ✓ | — |
+| [`array_multisort()`](./builtins/array/array_multisort.md) | `(array $array1, array $array2): bool` | `bool` | ✓ | — |
 | [`array_pad()`](./builtins/array/array_pad.md) | `(array $array, int $length, mixed $value): array` | `array` | ✓ | ✓ |
 | [`array_pop()`](./builtins/array/array_pop.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`array_product()`](./builtins/array/array_product.md) | `(array $array): int|float` | `int|float` | ✓ | ✓ |

@@ -15634,7 +15634,7 @@
     },
     "area": "Array",
     "canonical_name": "array_multisort",
-    "description": "Sorts multiple arrays or multi-dimensional arrays.",
+    "description": "Sorts exactly two equal-length indexed arrays in ascending tuple order. AOT accepts either two concrete integer arrays or two boxed scalar arrays, not a mixed pair. Concrete string/float arrays, sort flags, associative arrays, and eval are unsupported.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -15672,22 +15672,12 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
           "reads_heap",
           "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
           "alloc_heap",
-          "alloc_concat",
+          "refcount_op",
           "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "may_fatal"
         ]
       },
       "lowering": {
@@ -15734,7 +15724,7 @@
           "default": null,
           "name": "array2",
           "optional": false,
-          "type": "int"
+          "type": "array"
         }
       ],
       "return_type": "bool",
@@ -18628,7 +18618,7 @@
     },
     "area": "Array",
     "canonical_name": "array_walk",
-    "description": "Applies a user function to every member of an array.",
+    "description": "Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "array",
@@ -18697,6 +18687,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -18704,6 +18695,7 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
@@ -18790,7 +18782,7 @@
     },
     "area": "Array",
     "canonical_name": "array_walk_recursive",
-    "description": "Applies a user function recursively to every member of an array.",
+    "description": "Applies a user function recursively to array leaf values. AOT boxed arrays pass a writable leaf reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -18833,6 +18825,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -18840,6 +18833,7 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",

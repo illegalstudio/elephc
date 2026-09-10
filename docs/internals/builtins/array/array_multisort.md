@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
+- **Effects**: `static (6 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_multisort(array $array1, int $array2): bool
+function array_multisort(array $array1, array $array2): bool
 ```
 
 ## What the type checker enforces
