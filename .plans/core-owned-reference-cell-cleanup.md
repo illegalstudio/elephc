@@ -805,3 +805,13 @@ targets, alongside existing executable nested-context and destructor-throw tests
 Build, test compilation, assembly-comment alignment and diff hygiene pass, with
 no local execution. This does not fix the separate missing array back-reference
 registry entries in the decoder.
+
+### Checker assertions for declared array storage
+
+Updated four stale diagnostic/signature tests that still equated a PHP array
+declaration with indexed Array(Mixed), or expected its ABI to specialize to one
+string/object element layout. The assertions now require the exact packed-or-hash
+union and add an associative call site to the parameter test. Mixed returns and
+false-bearing array unions remain rejected; these are expectation updates, not
+relaxed negative tests. Test compilation and diff hygiene pass without execution.
+Incorrect executable outputs and ownership failures remain separate open issues.

@@ -9,6 +9,14 @@
 
 use super::*;
 
+/// Builds the non-null PHP array contract without assuming indexed or associative storage.
+fn declared_array_contract() -> PhpType {
+    PhpType::Union(vec![
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
+    ])
+}
+
 /// Verifies that `??=` with no right-hand side expression produces an "Unexpected token" error.
 /// Input: `$x ??=;` — the semicolon terminates the expression with no RHS.
 #[test]
@@ -130,7 +138,7 @@ fn test_error_mixed_rejected_at_object_parameter_boundary() {
 fn test_error_mixed_rejected_at_array_return_boundary() {
     expect_error(
         "<?php function relay(mixed $value): array { return $value; }",
-        "Function 'relay' return type expects Array(Mixed), got Mixed",
+        "Function 'relay' return type expects Union([Array(Mixed), AssocArray { key: Mixed, value: Mixed }]), got Mixed",
     );
 }
 
@@ -497,9 +505,9 @@ fn test_null_coalesce_merges_mismatched_arms_to_mixed_in_checker() {
 
 }
 
-/// Verifies generic array return hint keeps specific method and property types.
+/// Declared array method returns and inferred properties retain the boxed PHP array contract.
 #[test]
-fn test_generic_array_return_hint_keeps_specific_method_and_property_types() {
+fn test_declared_array_return_hint_preserves_method_and_property_contracts() {
     let result = check_source_full(
         r#"<?php
 class Entry {
@@ -537,24 +545,18 @@ class Wad {
         .find(|(name, _)| name == "entries")
         .map(|(_, ty)| ty.clone())
         .expect("missing entries property");
-    assert_eq!(
-        entries_ty,
-        PhpType::Array(Box::new(PhpType::Object("Entry".to_string())))
-    );
+    assert_eq!(entries_ty, declared_array_contract());
 
     let load_entries = wad
         .methods
         .get(&elephc::names::php_symbol_key("loadEntries"))
         .expect("missing loadEntries");
-    assert_eq!(
-        load_entries.return_type,
-        PhpType::Array(Box::new(PhpType::Object("Entry".to_string())))
-    );
+    assert_eq!(load_entries.return_type, declared_array_contract());
 }
 
-/// Verifies generic array param and return hints keep specific string array types.
+/// Array declarations do not specialize their ABI to the layout of one string-array call site.
 #[test]
-fn test_generic_array_param_and_return_hints_keep_specific_string_array_types() {
+fn test_declared_array_param_and_return_hints_preserve_layout_independent_contracts() {
     let result = check_source_full(
         r#"<?php
 function paint(string $name): string {
@@ -570,6 +572,7 @@ function loadNames(): array {
 }
 
 echo pickSecond(loadNames());
+echo pickSecond(["first" => "foo", 1 => "bar"]);
 "#,
     )
     .expect("expected source to type-check");
@@ -578,16 +581,13 @@ echo pickSecond(loadNames());
         .functions
         .get("pickSecond")
         .expect("missing pickSecond signature");
-    assert_eq!(
-        pick_second.params[0].1,
-        PhpType::Array(Box::new(PhpType::Str))
-    );
+    assert_eq!(pick_second.params[0].1, declared_array_contract());
 
     let load_names = result
         .functions
         .get("loadNames")
         .expect("missing loadNames signature");
-    assert_eq!(load_names.return_type, PhpType::Array(Box::new(PhpType::Str)));
+    assert_eq!(load_names.return_type, declared_array_contract());
 }
 
 // --- Include/Require errors ---

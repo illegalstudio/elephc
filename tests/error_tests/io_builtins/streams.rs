@@ -54,7 +54,7 @@ while (($row = fgetcsv($h)) !== false) {
 }
 echo takesArray($row);
 "#,
-        "expects Array(Mixed), got Union([Array(Str), False])",
+        "expects Union([Array(Mixed), AssocArray { key: Mixed, value: Mixed }]), got Union([Array(Str), False])",
     );
 }
 
