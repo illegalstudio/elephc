@@ -607,3 +607,20 @@ three fragments. Added an exact handler-message regression and all-target
 emitter assertions; existing throwing-handler tests remain in place. Build,
 test compilation, assembly-comment alignment and diff hygiene pass. Runtime
 confirmation is delegated to CI; no local tests ran.
+
+### Splice COW and removed-slot ownership
+
+Boxed splice now separates and publishes its outer cell before converting or
+mutating the packed payload. The refcounted runtime transfers removed pointer
+slots directly into a preallocated result, instead of retaining owners that
+the shortened source no longer contains. Copy loops make no nested calls, so
+ARM64 cursor registers remain live, and the result inherits only the source
+element tag, not its persistent COW flag.
+
+Added regressions for alias preservation, replacement growth, multiple object
+destructors, nested arrays, empty/full removals and all-target lowering/emission.
+Build, test compilation, assembly-comment checks, generated-document audits and
+diff hygiene pass. No tests were executed locally. CI on the previous head
+still reports other boxed-array checker/callback issues, native/eval Throwable
+leaks, nullable property reads and unserialize ownership failures; this is not
+a review-ready or green-CI claim.

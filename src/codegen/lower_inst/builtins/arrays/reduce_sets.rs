@@ -331,6 +331,7 @@ pub(super) fn lower_mixed_array_splice(ctx: &mut FunctionContext<'_>, inst: &Ins
     let length = inst.operands.get(2).copied();
     let replacement =
         SpliceReplacement::resolve(ctx, inst.operands.get(3).copied(), &PhpType::Mixed)?;
+    super::boxed_mutation::prepare_boxed_array_receiver(ctx, array, "array_splice")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             lower_mixed_array_splice_aarch64(ctx, array, offset, length, &replacement)?

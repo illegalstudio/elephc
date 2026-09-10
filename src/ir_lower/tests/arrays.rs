@@ -10,6 +10,27 @@
 
 use crate::ir::print_module;
 
+/// Splice separates the outer cell before consuming and mutating its packed payload owner.
+#[test]
+fn boxed_array_splice_separates_receiver_before_payload_on_every_target() {
+    let source = r#"<?php
+function spliceBoxed(array &$values): array { return array_splice($values, 1, 2, ["x"]); }
+$values = [1, 2, 3, 4];
+echo count(spliceBoxed($values));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let cell = asm.find("__rt_array_cell_ensure_unique").unwrap();
+        let payload = asm[cell..].find("__rt_array_to_mixed").unwrap();
+        let splice = asm[cell..].find("__rt_array_splice_refcounted").unwrap();
+        assert!(payload < splice, "{target}");
+    }
+}
+
 /// Declared PHP array sorts normalize both layouts and retain scalar guards on every target.
 #[test]
 fn boxed_array_sorts_emit_normalization_and_comparison_on_every_target() {
