@@ -10,6 +10,34 @@
 
 use crate::ir::print_module;
 
+/// Concrete string pop/shift transfer the removed slot instead of retaining it through borrowed boxing.
+#[test]
+fn concrete_array_take_transfers_removed_strings_on_every_target() {
+    let source = r#"<?php
+function popConcreteString(int $length): mixed {
+    $items = [str_repeat('x', $length)];
+    return array_pop($items);
+}
+function shiftConcreteString(int $length): mixed {
+    $items = [str_repeat('y', $length)];
+    return array_shift($items);
+}
+echo popConcreteString($argc), shiftConcreteString($argc);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        for empty_branch in ["array_pop_empty", "array_shift_empty"] {
+            let removed_slot = asm.split(empty_branch).nth(1).unwrap_or_else(|| panic!("{target}: {asm}"));
+            assert!(removed_slot.contains("__rt_heap_alloc"), "{target}: {removed_slot}");
+            assert!(!removed_slot.contains("__rt_mixed_from_value"), "{target}: {removed_slot}");
+        }
+    }
+}
+
 /// Nullable integer keys use their inline tag for hash reads and probes on every ABI.
 #[test]
 fn nullable_integer_hash_keys_lower_on_every_target() {

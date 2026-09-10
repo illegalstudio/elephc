@@ -464,3 +464,20 @@ No tests were executed locally. A fresh origin fetch still finds main at
 b068c2b7d, already included in the branch. Linux x86_64 shard 15 additionally
 confirms that the hydration cleanup-throw failure remains on that platform;
 the earlier ARM64 shard result does not establish cross-target recovery.
+
+### Concrete pop and shift result ownership
+
+The remaining returned-array usort fixture empties a concrete string array
+with a discarded pop inside its factory. The concrete pop/shift emitters
+removed the slot from the live array but then used borrowed boxing, acquiring
+another payload reference without retiring the removed owner. Both target
+paths now use the existing owned-value boxer. String payloads transfer directly;
+refcounted containers, objects and descriptors balance the old owner after
+boxing. Empty/null and already-boxed element paths remain unchanged.
+
+New regressions cover discarded and retained string results, COW aliases,
+object destructor order and clean heaps. All-target structural tests require
+the removed string path to allocate its box without borrowed payload boxing.
+Build, test compilation, assembly-comment alignment, generated-document audits
+and diff hygiene pass. Generated docs are unchanged. No local tests were run;
+the existing usort regression remains an executable CI gate.

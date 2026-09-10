@@ -10,6 +10,7 @@
 //!   pointer through `ReceiverPlace` so a by-reference parameter observes it as well.
 //! - Returns PHP `mixed`, including boxed null for empty arrays.
 //! - Supports pointer-sized, float, string, Mixed, and refcounted indexed payloads.
+//! - Slot compaction transfers the removed owner into the returned Mixed cell.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -112,7 +113,7 @@ fn lower_array_shift_aarch64(
     ctx.emitter.instruction("sub x9, x9, #1");                                  // decrement the indexed-array length after removing the first element
     ctx.emitter.instruction("str x9, [x0]");                                    // persist the shortened indexed-array length in the header
     emit_array_shift_restore_first_aarch64(ctx, elem_ty)?;
-    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, elem_ty);
+    crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, elem_ty);
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array boxed-null path after loading the removed value
     ctx.emitter.label(&empty_label);
     emit_array_shift_null(ctx);
@@ -137,7 +138,7 @@ fn lower_array_shift_x86_64(
     ctx.emitter.instruction("sub r10, 1");                                      // decrement the indexed-array length after removing the first element
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // persist the shortened indexed-array length in the header
     emit_array_shift_restore_first_x86_64(ctx, elem_ty)?;
-    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, elem_ty);
+    crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, elem_ty);
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array boxed-null path after loading the removed value
     ctx.emitter.label(&empty_label);
     emit_array_shift_null(ctx);

@@ -5,10 +5,63 @@
 //! - The runtime GC codegen integration suite on executable targets.
 //!
 //! Key details:
-//! - Inputs cross declared array boundaries so concrete literal specialization cannot hide bugs.
+//! - Declared and concrete array inputs exercise both runtime storage paths.
 //! - Empty results, sparse numeric keys, named keys and retained removed values are covered.
 
 use crate::support::*;
+
+/// Concrete string slots transfer their owners on both discarded and retained pop/shift results.
+#[test]
+fn test_core_concrete_array_pop_shift_transfer_string_owners() {
+    let source = r#"<?php
+function discardConcreteEnds(int $length): array {
+    $items = [str_repeat('a', $length), str_repeat('b', $length)];
+    array_pop($items);
+    array_shift($items);
+    return $items;
+}
+for ($i = 0; $i < 6; $i++) {
+    $items = [str_repeat('a', 12), str_repeat('b', 12)];
+    $copy = $items;
+    $first = array_shift($items);
+    $last = array_pop($items);
+    unset($items);
+    echo strlen($first), ':', strlen($last), ':', strlen($copy[0]), ':', strlen($copy[1]), '|';
+    unset($first, $last, $copy);
+    $empty = discardConcreteEnds(12);
+    echo count($empty), '|';
+    unset($empty);
+}
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "12:12:12:12|0|".repeat(6));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Concrete object arrays keep COW aliases alive but release each removed owner exactly once.
+#[test]
+fn test_core_concrete_array_pop_shift_transfer_object_owners() {
+    let source = r#"<?php
+class ConcreteRemovedObject {
+    public int $id;
+    public function __construct(int $id) { $this->id = $id; }
+    public function __destruct() { echo 'd', $this->id, '|'; }
+}
+$items = [new ConcreteRemovedObject(1), new ConcreteRemovedObject(2)];
+$copy = $items;
+$first = array_shift($items);
+$last = array_pop($items);
+unset($items, $copy);
+echo $first->id, ':', $last->id, '|';
+unset($first, $last);
+echo 'done';
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:2|d1|d2|done");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
 
 /// Pop keeps numeric holes while shift renumbers only integer keys and leaves value copies unchanged.
 #[test]
