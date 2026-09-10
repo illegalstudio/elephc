@@ -8,6 +8,41 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
+/// Statically resolved CUF, FCC and closure calls protect temporary arguments on every ABI.
+#[test]
+fn static_callable_arguments_have_unwind_roots_on_all_targets() {
+    use crate::ir::Op;
+    let source = r#"<?php
+function consumeStaticArray(array $items): int { return count($items); }
+function staticCufOwner(int $seed): int {
+    return call_user_func("consumeStaticArray", [$seed]);
+}
+function staticFccOwner(int $seed): int {
+    $callback = consumeStaticArray(...);
+    return $callback([$seed]);
+}
+function staticClosureOwner(int $seed): int {
+    $callback = function(array $items): int { return count($items); };
+    return $callback([$seed]);
+}
+echo staticCufOwner($argc), staticFccOwner($argc), staticClosureOwner($argc);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["staticCufOwner", "staticFccOwner", "staticClosureOwner"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            let push = function.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner).unwrap();
+            let call = function.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+            let pop = function.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner).unwrap();
+            assert!(push < call && call < pop, "{target}: {name} must protect its temporary array");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Eval-backed class names detach their strings and retire both temporary owners on every target.
 #[test]
 fn eval_class_name_results_release_bridge_cells_and_strings_on_all_targets() {

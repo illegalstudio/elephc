@@ -10,6 +10,36 @@
 
 use crate::support::*;
 
+/// Static CUF, FCC and closure calls retire temporary arrays before a same-frame catch.
+#[test]
+fn test_core_static_callable_argument_owners_retire_on_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StaticCallableArgumentOwner { public function __destruct() { echo "drop|"; } }
+function rejectStaticCallableArray(array $items): void {
+    echo count($items), ":";
+    throw new RuntimeException("stop");
+}
+$function = rejectStaticCallableArray(...);
+$closure = function(array $items): void {
+    echo count($items), ":";
+    throw new RuntimeException("stop");
+};
+for ($i = 0; $i < 3; $i++) {
+    try { call_user_func("rejectStaticCallableArray", [new StaticCallableArgumentOwner()]); }
+    catch (RuntimeException $error) { echo "caught|"; unset($error); }
+    try { $function([new StaticCallableArgumentOwner()]); }
+    catch (RuntimeException $error) { echo "caught|"; unset($error); }
+    try { $closure([new StaticCallableArgumentOwner()]); }
+    catch (RuntimeException $error) { echo "caught|"; unset($error); }
+}
+unset($function, $closure);
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("{}done", "1:drop|caught|".repeat(9)), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Returned array and Mixed shadows survive caller-root retirement, including exceptional calls.
 #[test]
 fn test_core_user_call_shadow_arguments_retire_on_return_and_throw() {

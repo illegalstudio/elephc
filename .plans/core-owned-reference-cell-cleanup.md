@@ -1052,3 +1052,17 @@ an explicit direct-reference control. Both require the closure's writes to use
 one mutable array cell, with unchanged value and heap assertions. These separate
 default-cell staging from reference capture and mutation after return. This is
 diagnostic coverage for the still-open 1:1 versus 2:3 regression, not its fix.
+
+### Static callable argument unwind roots
+
+The static callable resolver bypassed the scoped argument roots used by ordinary
+user calls. Its CUF, FCC and direct closure paths only released temporary
+arguments after the call returned, leaving those owners behind on exceptions.
+Apply the shared user-call rooting and retirement helpers to visible arguments,
+keeping hidden captures outside the argument ownership ledger. User-function
+targets consume the same return-alias summary as direct calls; closure targets
+remain conservative and preserve reference-return exclusions.
+
+Added all-target EIR ordering coverage and repeated CUF/FCC/closure heap checks
+requiring temporary object arrays to retire before a same-frame catch. Local
+verification is build and test compilation only, not executable test runs.
