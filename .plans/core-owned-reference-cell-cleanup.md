@@ -638,3 +638,17 @@ and diff hygiene pass without local test execution.
 
 The latest fetch adds only main's c91beb343 traffic-statistics commit. Rebase
 the clean thematic history onto that main tip before the next protected push.
+
+### Boxed indexed slice snapshots
+
+Read-only boxed indexed slices now acquire an independent payload owner before
+the consuming Mixed conversion. They release that private snapshot after the
+result retains its selected elements, without rewriting the borrowed source
+cell. Both architectures use the same snapshot cleanup sequence. This change
+does not extend the existing boxed hash or invalid-input behavior.
+
+Added source-alias, discarded/empty slice, string and object lifetime regressions
+plus structural coverage for all five targets. Build, test compilation,
+assembly-comment checks and generated-document audits pass. No tests ran
+locally. CI on fa8a7ee5c remains red, including eval by-reference array writeback
+and previously recorded checker/ownership failures. The PR stays draft.

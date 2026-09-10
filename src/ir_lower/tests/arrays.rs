@@ -43,6 +43,34 @@ echo count(nullsafeListProbe(null)), count(nullsafeMapProbe(null));
     }
 }
 
+/// Boxed slices retain before conversion and retire their private payload without source writeback.
+#[test]
+fn boxed_array_slice_owns_normalization_without_mutating_sources_on_every_target() {
+    let source = r#"<?php
+function sliceBoxedSnapshot(mixed $values): array { return array_slice($values, 1, 2); }
+echo count(sliceBoxedSnapshot([1, 2, 3, 4]));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let converted = asm.find("__rt_array_to_mixed").unwrap();
+        let unboxed = asm[..converted].rfind("__rt_mixed_unbox").unwrap();
+        assert!(asm[unboxed..converted].contains("__rt_incref"), "{target}");
+        let sliced = converted + asm[converted..].find("__rt_array_slice_refcounted").unwrap();
+        let retired = sliced + asm[sliced..].find("__rt_decref_array").unwrap();
+        assert!(converted < sliced && sliced < retired, "{target}");
+        let old_writeback = if target == "linux-x86_64" {
+            "mov QWORD PTR [r10 + 8], rax"
+        } else {
+            "str x0, [x10, #8]"
+        };
+        assert!(!asm[converted..sliced].contains(old_writeback), "{target}");
+    }
+}
+
 /// Splice separates the outer cell before consuming and mutating its packed payload owner.
 #[test]
 fn boxed_array_splice_separates_receiver_before_payload_on_every_target() {

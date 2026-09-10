@@ -55,6 +55,7 @@ mod boxed_array_take;
 mod boxed_array_unshift;
 mod boxed_array_sort;
 mod boxed_array_splice;
+mod boxed_array_slice;
 mod boxed_array_key_sort;
 mod boxed_array_usort;
 mod reference_cell_owners;

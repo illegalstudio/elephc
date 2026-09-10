@@ -151,7 +151,7 @@ pub(super) fn materialize_mixed_slice_args(
     Ok(())
 }
 
-/// Materializes a boxed-Mixed indexed array for `array_slice()` on AArch64.
+/// Slices a private normalized payload without rewriting the borrowed ARM64 source box.
 pub(super) fn lower_mixed_array_slice_aarch64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
@@ -161,30 +161,25 @@ pub(super) fn lower_mixed_array_slice_aarch64(
     let empty_label = ctx.next_label("mixed_array_slice_empty");
     let done_label = ctx.next_label("mixed_array_slice_done");
     ctx.load_value_to_reg(array, "x0")?;
-    abi::emit_push_reg(ctx.emitter, "x0");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before slicing the Mixed cell
     ctx.emitter.instruction(&format!("b.ne {}", empty_label));                  // return an empty slice for non-array Mixed payloads
     ctx.emitter.instruction(&format!("cbz x1, {}", empty_label));               // return an empty slice for null array payloads
     ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
     ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
     ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
     ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-    abi::emit_pop_reg(ctx.emitter, "x10");
-    ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted unique array back into the Mixed cell
-    abi::emit_push_reg(ctx.emitter, "x0");
-    materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
-    abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
+    slice_owned_mixed_payload(ctx, offset, length)?;
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after slicing the boxed payload
     ctx.emitter.label(&empty_label);
-    abi::emit_pop_reg(ctx.emitter, "x9");
     allocate_empty_mixed_array_result(ctx);
     ctx.emitter.label(&done_label);
     Ok(())
 }
 
-/// Materializes a boxed-Mixed indexed array for `array_slice()` on x86_64.
+/// Slices a private normalized payload without rewriting the borrowed x86_64 source box.
 pub(super) fn lower_mixed_array_slice_x86_64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
@@ -194,26 +189,42 @@ pub(super) fn lower_mixed_array_slice_x86_64(
     let empty_label = ctx.next_label("mixed_array_slice_empty");
     let done_label = ctx.next_label("mixed_array_slice_done");
     ctx.load_value_to_reg(array, "rax")?;
-    abi::emit_push_reg(ctx.emitter, "rax");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before slicing the Mixed cell
     ctx.emitter.instruction(&format!("jne {}", empty_label));                   // return an empty slice for non-array Mixed payloads
     ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
     ctx.emitter.instruction(&format!("je {}", empty_label));                    // return an empty slice for null array payloads
+    ctx.emitter.instruction("mov rax, rdi");                                    // retain an independent source owner before consuming conversion
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the retained array to the consuming conversion helper
     ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
     ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
     ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-    abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted unique array back into the Mixed cell
-    abi::emit_push_reg(ctx.emitter, "rax");
-    materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
-    abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
+    slice_owned_mixed_payload(ctx, offset, length)?;
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after slicing the boxed payload
     ctx.emitter.label(&empty_label);
-    abi::emit_pop_reg(ctx.emitter, "r11");
     allocate_empty_mixed_array_result(ctx);
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Retires the private source after the result has retained every selected child owner.
+fn slice_owned_mixed_payload(
+    ctx: &mut FunctionContext<'_>,
+    offset: ValueId,
+    length: Option<ValueId>,
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_push_reg(ctx.emitter, result);
+    materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
 }
 
