@@ -141,3 +141,12 @@ echo "\n";
 echo "call: ";
 echo $read->call($second);   // 20 — bound to $second for this call only
 echo "\n";
+
+// Callbacks returned inside a PHP array remain directly invokable after extraction.
+function greetingCallbacks(string $prefix): array {
+    return [function(string $name) use ($prefix): string { return $prefix . $name; }];
+}
+$greetings = greetingCallbacks("Hello, ");
+$greet = $greetings[0];
+unset($greetings);
+echo $greet("Elephc"), "\n";

@@ -9,6 +9,32 @@
 
 use crate::ir::Op;
 
+/// Both forms of direct boxed calls use the existing tag-checked descriptor ABI on every target.
+#[test]
+fn boxed_array_read_direct_calls_lower_through_descriptors_on_all_targets() {
+    let source = r#"<?php
+        function boxed_targets(): array { return [fn(int $value): int => $value + 1]; }
+        $callbacks = boxed_targets();
+        $callback = $callbacks[0];
+        echo $callback(10), $callbacks[0](20);
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let calls = module.functions.iter().flat_map(|function| {
+            function.instructions.iter().filter(|inst| {
+                inst.op == Op::CallableDescriptorInvoke
+                    && function.value(inst.operands[0]).unwrap().php_type == crate::types::PhpType::Mixed
+            })
+        }).count();
+        assert_eq!(calls, 2, "{target}");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("mixed_callable_closure"), "{target}");
+    }
+}
+
 /// Named containers retire copied string operands before the callback can unwind past them.
 #[test]
 fn named_descriptor_arguments_release_persisted_strings_before_invocation_on_all_targets() {

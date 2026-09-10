@@ -561,8 +561,9 @@ impl Checker {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
         if var_ty != PhpType::Callable {
-            if matches!(var_ty.codegen_repr(), PhpType::Str) {
-                // The callee name is only known at runtime, but PHP rejects
+            if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
+                // A boxed array read can carry any runtime callable shape.
+                // The callee is only known at runtime, but PHP rejects
                 // unpacking after named arguments while compiling the call.
                 self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
                 self.record_unresolved_callee_argument_aliases(args);
@@ -683,8 +684,8 @@ impl Checker {
             return Ok(ret_ty);
         }
         let callee_ty = self.infer_type(callee, env)?;
-        if matches!(callee_ty.codegen_repr(), PhpType::Str) {
-            // String callables resolve at runtime; PHP still rejects unpacking
+        if matches!(callee_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
+            // String and boxed callables resolve at runtime; PHP still rejects unpacking
             // after named arguments while compiling the call expression.
             let callee_desc = match &callee.kind {
                 ExprKind::Variable(var_name) => format!("callable ${}", var_name),

@@ -258,6 +258,17 @@ fn test_error_call_non_callable_variable() {
     expect_error(r#"<?php $x = 5; $x(1);"#, "not a callable");
 }
 
+/// Boxed runtime dispatch still rejects unpacking after an explicit named argument.
+#[test]
+fn test_error_boxed_direct_callable_spread_after_named_argument() {
+    for call in ["$callback(value: 1, ...[2]);", "$callbacks[0](value: 1, ...[2]);"] {
+        expect_error(
+            &format!("<?php function targets(): array {{ return [fn(int $value): int => $value]; }} $callbacks = targets(); $callback = $callbacks[0]; {call}"),
+            "cannot use argument unpacking after named arguments",
+        );
+    }
+}
+
 /// Verifies that error call user func ref param requires variable.
 #[test]
 fn test_error_call_user_func_ref_param_requires_variable() {

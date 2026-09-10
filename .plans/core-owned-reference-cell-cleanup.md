@@ -481,3 +481,20 @@ the removed string path to allocate its box without borrowed payload boxing.
 Build, test compilation, assembly-comment alignment, generated-document audits
 and diff hygiene pass. Generated docs are unchanged. No local tests were run;
 the existing usort regression remains an executable CI gate.
+
+### Direct calls through boxed array reads
+
+The checker rejected Mixed variable and expression callees even though the
+descriptor backend already dispatches their runtime string, closure, method
+array and invokable-object tags. Both checker paths now defer these values to
+that existing dispatcher, retaining unknown-signature alias tracking and the
+syntactic prohibition on unpacking after named arguments. Statically known
+non-callable scalar types are still rejected.
+
+New fixtures cover every callable shape after releasing its source array,
+named and spread binding, reference arguments, clean heaps and descriptor
+emission on every supported target. The closures example demonstrates an
+extracted callback. Build, test compilation and diff hygiene pass; no tests
+were executed locally. Invalid dynamic-call diagnostics and ownership during
+argument-evaluation throws remain separate audit concerns, not newly claimed
+parity. Current CI still reports boxed unshift/sort checker failures.
