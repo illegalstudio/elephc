@@ -10,6 +10,30 @@
 
 use crate::support::*;
 
+/// AOT class-name reads retire eval bridge cells and preserve names after their objects die.
+#[test]
+fn test_core_eval_class_name_bridge_results_have_independent_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class EvalNameBase {}
+class EvalNameChild extends EvalNameBase {}
+$source = 'return new EvalNameChild();' . ' // ' . $argc;
+for ($iteration = 0; $iteration < 3; $iteration++) {
+    $object = eval($source);
+    echo GET_CLASS($object), ":", \get_parent_class($object), "|";
+    $name = get_class($object);
+    $parent = get_parent_class($object);
+    unset($object);
+    echo $name, ":", $parent, "|";
+    unset($name, $parent);
+}
+echo "done";
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("{}done", "EvalNameChild:EvalNameBase|".repeat(6)),
+        "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Boxed reads retire after metadata lookup while the retained source still owns its object.
 #[test]
 fn test_core_class_name_reads_do_not_retain_inspected_objects() {

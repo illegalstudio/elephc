@@ -184,22 +184,19 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     if inst.op == Op::RuntimeCall {
-        let result_is_fresh = match inst.immediate {
+        let result_is_releasable = match inst.immediate {
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
             )) => false,
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::Function(target),
-            )) => matches!(
-                target.result_ownership(),
-                crate::builtins::semantics::BuiltinResultOwnership::Fresh
-            ),
+            )) |
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
             )) => matches!(
                 target.result_ownership(),
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh
-            ),
+            ) || matches!(target, crate::ir::RuntimeFnId::GetClass | crate::ir::RuntimeFnId::GetParentClass),
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::UnaryString(_),
             )) => true,
@@ -211,7 +208,9 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             ),
             _ => false,
         };
-        return Ok(!result_is_fresh);
+        // Class-name lookups return static metadata or an owned eval string, never
+        // concat scratch. Validated release ignores metadata and retires detached copies.
+        return Ok(!result_is_releasable);
     }
     // MixedCastString detaches an owned buffer for string-tagged inputs. Its
     // other tags return scratch or literals, both ignored by validated release.

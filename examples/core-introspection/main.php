@@ -41,6 +41,7 @@ echo 'Theme via callable: ', $readDefaults(...settings_introspection_args())['th
 // Introspection also accepts an object returned through the boxed eval boundary.
 $source = 'return new DisplaySettings();' . ' // ' . $argc;
 $settings = eval($source);
+echo 'Runtime object class: ', get_class($settings), "\n";
 echo 'Runtime object methods: ', implode(', ', get_class_methods($settings)), "\n";
 echo 'Default accent: ', $settings->palette['accent'][0], "\n";
 

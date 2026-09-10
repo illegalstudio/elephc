@@ -989,3 +989,19 @@ all-target EIR assertions, heap regressions for array/Mixed shadow returns and
 throws, and a later-callable passthrough control. The existing boxed merge
 descriptor fixture remains the end-to-end arity/error gate. No tests were
 executed locally; executable verification remains assigned to CI.
+
+### Eval class-name result owners
+
+The eval class-name ABI returns an owned Mixed cell. Native string lowering
+previously borrowed its payload indefinitely without retiring the cell. Detach
+the string before releasing that cell, and allow validated string release for
+class-name lookups: the native path returns static metadata, while the eval
+path can return an owned copy. Neither path returns concat scratch. Boxed EIR
+results now keep the bridge cell instead of incorrectly boxing its pointer as
+a boolean; the non-object fallback boxes its existing empty-string result.
+
+Added an all-target lowering gate and repeated heap checks for immediate reads
+and names retained after the inspected object is unset. Extended the Core
+introspection example with a post-eval class-name read. Test compilation, the
+builtin documentation workflow and assembly-comment checks pass; no executable
+tests were run locally. CI must confirm the runtime ownership behavior.
