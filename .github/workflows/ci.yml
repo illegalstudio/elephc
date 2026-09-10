@@ -1725,6 +1725,7 @@ jobs:
         shell: bash
         run: |
           for target in ios-arm64 ios-sim-arm64; do
+            source scripts/ci/configure_ios_native_toolchain.sh "$target"
             mkdir -p "$RUNNER_TEMP/oniguruma-$target"
             ./target/debug/elephc native add oniguruma \
               --target "$target" \
