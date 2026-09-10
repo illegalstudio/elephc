@@ -104,14 +104,7 @@ pub(super) fn emit_named_spread_bounds_guard(
     if check.min_len == 0 && check.max_len.is_none() {
         return;
     }
-    let len = ctx.emit_value(
-        Op::ArrayLen,
-        vec![spread],
-        None,
-        PhpType::Int,
-        Op::ArrayLen.default_effects(),
-        Some(span),
-    );
+    let len = lower_spread_length(ctx, spread, span);
     emit_named_spread_min_len_guard(ctx, len.value, check.min_len, span);
     emit_named_spread_max_len_guard(
         ctx,

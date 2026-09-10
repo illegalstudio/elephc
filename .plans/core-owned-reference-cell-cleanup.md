@@ -1208,3 +1208,22 @@ exceptions. Added repeated native heap coverage through opaque eval. Build and
 test compilation and builtin-doc regeneration/audits pass without generated
 changes. No tests ran locally; the original parameter-shadow fixture remains
 unchanged and its clean-heap result is still pending CI.
+
+### Boxed unpack bounds at XML named-call boundaries
+
+The XML named-handler regression now reaches EIR validation on 48d244166 and
+fails because ArrayLen receives Heap(Mixed) from a declared PHP array return.
+The handler parameter guard is not the failing operation. Share a storage-aware
+length lowerer across named and positional unpack guards: native indexed arrays
+keep ArrayLen, while boxed arrays use the existing typed Count runtime target.
+Do not relax the ArrayLen validator or reinterpret a Mixed cell as an array header.
+
+Extend the all-target XML lowering regression to require a boxed Count operand
+and forbid boxed operands on ArrayLen. Add executable coverage for a declared
+array-producing call followed by a side-effecting named handler, preserving
+single evaluation and source order. Existing unpack fixtures remain unchanged.
+
+Build and test compilation pass. The builtin-doc workflow passes without
+generated changes, and diff hygiene is clean. No tests ran locally. A fresh
+fetch confirms origin/main is still c91beb3434681294e0a1dd29ef92f42f3365923a
+and is already an ancestor, so this checkpoint needs no rebase or force push.

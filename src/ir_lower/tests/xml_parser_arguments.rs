@@ -36,6 +36,22 @@ installXmlHandlers(xml_parser_create());
         let setters: Vec<_> = module.functions.iter().filter(|function| {
             function.name.starts_with("__elephc_xml_set_") && function.name.ends_with("_handler")
         }).collect();
+        let installer = module.functions.iter().find(|function| function.name == "installXmlHandlers")
+            .expect("the XML installer must be emitted");
+        assert!(installer.instructions.iter().any(|inst| {
+            matches!(inst.immediate, Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Count),
+            ))) && installer.value(inst.operands[0]).is_some_and(|value| {
+                value.php_type.codegen_repr() == PhpType::Mixed
+            })
+        }), "{target}: boxed unpack bounds must use the typed count runtime");
+        for inst in &installer.instructions {
+            if inst.op == Op::ArrayLen {
+                assert!(installer.value(inst.operands[0]).is_some_and(|value| {
+                    matches!(value.php_type.codegen_repr(), PhpType::Array(_))
+                }), "{target}: native array lengths must not read boxed cells");
+            }
+        }
         assert_eq!(setters.len(), 9, "{target}");
         for setter in setters {
             assert_eq!(setter.params[0].php_type, PhpType::Mixed, "{target}: {}", setter.name);

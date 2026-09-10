@@ -136,6 +136,29 @@ pub(super) fn lower_positional_spread_args_with_signature(
     Some(operands)
 }
 
+/// Counts a staged unpack using its actual storage representation, not its PHP array hint.
+pub(super) fn lower_spread_length(
+    ctx: &mut LoweringContext<'_, '_>,
+    spread: ValueId,
+    span: Span,
+) -> LoweredValue {
+    if matches!(ctx.builder.value_php_type(spread).codegen_repr(), PhpType::Array(_)) {
+        return ctx.emit_value(
+            Op::ArrayLen, vec![spread], None, PhpType::Int,
+            Op::ArrayLen.default_effects(), Some(span),
+        );
+    }
+    let target = crate::ir::RuntimeFnId::Count;
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![spread],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
+        PhpType::Int,
+        target.effects(),
+        Some(span),
+    )
+}
+
 /// Rejects runtime builtin arity violations without discarding surplus unpacked values.
 fn emit_builtin_spread_arity_guard(
     ctx: &mut LoweringContext<'_, '_>,
@@ -145,10 +168,7 @@ fn emit_builtin_spread_arity_guard(
     name: &str,
     span: Span,
 ) {
-    let len = ctx.emit_value(
-        Op::ArrayLen, vec![spread], None, PhpType::Int,
-        Op::ArrayLen.default_effects(), Some(span),
-    );
+    let len = lower_spread_length(ctx, spread, span);
     for (bound, predicate, direction) in [
         (Some(min), CmpPredicate::Sge, "few"),
         (max, CmpPredicate::Sle, "many"),
@@ -338,14 +358,7 @@ pub(super) fn emit_positional_spread_min_len_guard(
     if min_len == 0 {
         return;
     }
-    let len = ctx.emit_value(
-        Op::ArrayLen,
-        vec![spread],
-        None,
-        PhpType::Int,
-        Op::ArrayLen.default_effects(),
-        Some(span),
-    );
+    let len = lower_spread_length(ctx, spread, span);
     let min = emit_i64_at_span(ctx, min_len as i64, span);
     let has_required_args = ctx.emit_value(
         Op::ICmp,

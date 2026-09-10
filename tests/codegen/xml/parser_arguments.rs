@@ -10,6 +10,23 @@
 
 use crate::support::*;
 
+/// A declared-array unpack is evaluated once and retains the parser across named-handler effects.
+#[test]
+fn test_xml_declared_array_unpack_keeps_named_argument_order() {
+    if skip_without_xml_native("test_xml_declared_array_unpack_keeps_named_argument_order") {
+        return;
+    }
+    let out = compile_and_run(r#"<?php
+function stagedParser(XMLParser $parser): array { echo "prefix|"; return [$parser]; }
+function stagedNullHandler(): mixed { echo "handler|"; return null; }
+$parser = xml_parser_create();
+echo xml_set_element_handler(...stagedParser($parser),
+    end_handler: stagedNullHandler(), start_handler: null), "|";
+echo xml_parse($parser, "<root/>", true);
+"#);
+    assert_eq!(out, "prefix|handler|1|1");
+}
+
 /// All setters accept a parser read from a declared array without losing the original object.
 #[test]
 fn test_xml_boxed_parser_arguments_preserve_handler_dispatch() {
