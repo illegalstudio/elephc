@@ -1718,3 +1718,27 @@ comparators, multisort, static callable-property storage, retained string captur
 values, merge descriptor cleanup and eval metadata cleanup. Grok classified the
 completed job logs; separate Cursor agents own the property fix and string-value
 diagnosis. No local tests execute and the PR remains draft, without a merge.
+
+### Support inferred static callable properties with balanced descriptor owners
+
+Cursor Opus 4.8 diagnosed and implemented the static-property codegen failure.
+The supported-type gate now accepts inferred Callable storage, without adding
+PHP callable-typed property syntax. The symbol writer handles Callable through
+an aligned publish-before-retire path: existing EIR move/acquire semantics supply
+the new owner, the property receives it before the old descriptor is released,
+and a destructor's reentrant replacement is not overwritten after cleanup.
+Other symbol storage paths retain their behavior. Existing program and request
+cleanup already release callable static slots through descriptor ownership.
+
+Keep the original failing property fixture unchanged. Add borrowed and copied
+aliases, overwrite, self-assignment, captured-object destruction and reentrant
+destructor cases with heap-clean/tagged expectations, plus five-target emitter
+checks for publication order and 16-byte call alignment. The agent's build and
+test-compilation checks pass, and assembly-comment and diff audits are clean.
+No tests execute locally; exact runtime/destructor behavior awaits CI.
+
+The independent Sol review of retained string captures did not establish a root
+cause. It narrowed the missing evidence to dynamic promotion of the string pair
+and the Acquire(LoadRefCell) return/invoker boundary. Do not implement the proposed
+fallback based on conjecture: repersisting an owned return could introduce a leak.
+The unchanged original regression now reports its generated assembly in CI.

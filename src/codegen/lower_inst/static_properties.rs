@@ -1,14 +1,13 @@
 //! Purpose:
-//! Lowers simple static property loads and stores for the Phase 04 EIR backend.
-//! Handles direct named receivers backed by runtime user-data symbols.
+//! Lowers typed static property loads and stores for the EIR backend.
+//! Handles symbol-backed storage, late-static dispatch and eval fallback.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - This slice supports public scalar/string/array/object static properties with
-//!   named, lexical `self`, and lexical `parent` receivers, but not late static
-//!   references or non-indexed array mutation.
+//! - Scalar, string, array, object and inferred callable slots share typed storage helpers.
+//! - Named, lexical `self` and lexical `parent` receivers resolve declaring-class symbols.
 //! - `static::` receivers use native class-id branches for generated classes and
 //!   the eval native-frame override when late static scope points at an eval class.
 //! - Typed static properties use the same high-word uninitialized sentinel as
@@ -691,6 +690,11 @@ fn static_property_is_visible(
 }
 
 /// Verifies that this slice knows how to represent the static property type.
+///
+/// `PhpType::Callable` is accepted for inferred untyped static properties (a property with no
+/// declared type whose method-body writes settle on a closure/first-class callable). This does
+/// not introduce a PHP callable-typed static property syntax; it only lets a settled Callable
+/// slot lower its symbol-backed load/store through the descriptor-aware paths.
 fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Result<()> {
     match php_type {
         PhpType::Bool
@@ -703,6 +707,7 @@ fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction)
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
+        | PhpType::Callable
         | PhpType::Object(_) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
             "{} for static property PHP type {:?}",

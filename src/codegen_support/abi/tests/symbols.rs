@@ -155,3 +155,97 @@ fn test_non_pic_store_x9_uses_distinct_aarch64_scratch() {
         )
     );
 }
+
+/// Gates the callable-descriptor static store on every AArch64 supported target
+/// (macos-aarch64, ios-arm64, ios-sim-arm64, linux-aarch64): the replacement descriptor must be
+/// published into the slot before the previous descriptor is released, the previous descriptor
+/// must be captured before the publish overwrites it, and the descriptor result must be preserved
+/// across a single 16-byte aligned push/pop bracketing the release call so the nested call stays
+/// aligned even when a captured-object destructor throws or reenters the slot.
+#[test]
+fn test_callable_static_store_publishes_before_release_aarch64() {
+    use crate::codegen_support::platform::AppleVariant;
+    let targets = [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+        Target::new(Platform::Linux, Arch::AArch64),
+    ];
+    for target in targets {
+        let mut emitter = Emitter::new(target);
+        emit_store_result_to_symbol(&mut emitter, "_demo_symbol", &PhpType::Callable, true);
+        let out = emitter.output();
+
+        let load_prev = out
+            .find("    ldr x10, [x9]\n")
+            .unwrap_or_else(|| panic!("previous descriptor load missing on {}", target));
+        let publish = out
+            .find("    str x0, [x9]\n")
+            .unwrap_or_else(|| panic!("published descriptor store missing on {}", target));
+        let push = out
+            .find("    str x0, [sp, #-16]!\n")
+            .unwrap_or_else(|| panic!("aligned descriptor preserve missing on {}", target));
+        let release = out
+            .find("    bl __rt_callable_descriptor_release\n")
+            .unwrap_or_else(|| panic!("descriptor release call missing on {}", target));
+        let pop = out
+            .find("    ldr x0, [sp], #16\n")
+            .unwrap_or_else(|| panic!("aligned descriptor restore missing on {}", target));
+
+        assert!(load_prev < publish, "previous descriptor must be captured before publish on {}", target);
+        assert!(publish < push, "descriptor must be published before it is preserved on {}", target);
+        assert!(push < release, "descriptor result must be preserved before the release call on {}", target);
+        assert!(release < pop, "descriptor result must be restored after the release call on {}", target);
+        assert!(out.contains("    mov x0, x10\n"), "release argument move missing on {}", target);
+    }
+}
+
+/// Gates the callable-descriptor static store on linux-x86_64: same publish-before-retire ordering
+/// and a single 16-byte aligned `sub rsp, 16` / `add rsp, 16` bracket around the SysV release call.
+#[test]
+fn test_callable_static_store_publishes_before_release_x86_64() {
+    let mut emitter = test_emitter_x86();
+    emit_store_result_to_symbol(&mut emitter, "_demo_symbol", &PhpType::Callable, true);
+    let out = emitter.output();
+
+    let load_prev = out
+        .find("    mov r10, QWORD PTR [rip + _demo_symbol]\n")
+        .expect("previous descriptor load missing on linux-x86_64");
+    let publish = out
+        .find("    mov QWORD PTR [rip + _demo_symbol], rax\n")
+        .expect("published descriptor store missing on linux-x86_64");
+    let push = out
+        .find("    sub rsp, 16\n")
+        .expect("aligned descriptor preserve missing on linux-x86_64");
+    let release = out
+        .find("    call __rt_callable_descriptor_release\n")
+        .expect("descriptor release call missing on linux-x86_64");
+    let pop = out
+        .find("    add rsp, 16\n")
+        .expect("aligned descriptor restore missing on linux-x86_64");
+
+    assert!(load_prev < publish, "previous descriptor must be captured before publish");
+    assert!(publish < push, "descriptor must be published before it is preserved");
+    assert!(push < release, "descriptor result must be preserved before the release call");
+    assert!(release < pop, "descriptor result must be restored after the release call");
+    assert!(out.contains("    mov rax, r10\n"), "release argument move missing on linux-x86_64");
+}
+
+/// Verifies the first callable-descriptor static store (no previous owner) publishes the
+/// descriptor without emitting any release call or stack bracket.
+#[test]
+fn test_callable_static_store_without_previous_owner_only_publishes() {
+    let mut emitter = test_emitter();
+    emit_store_result_to_symbol(&mut emitter, "_demo_symbol", &PhpType::Callable, false);
+    let out = emitter.output();
+
+    assert!(out.contains("    str x0, [x9]\n"), "descriptor must be published into the slot");
+    assert!(
+        !out.contains("__rt_callable_descriptor_release"),
+        "no descriptor release may run when there is no previous owner"
+    );
+    assert!(
+        !out.contains("[sp, #-16]!"),
+        "no stack bracket is needed when there is no release call"
+    );
+}
