@@ -50,6 +50,7 @@ mod boxed_array_membership;
 mod boxed_array_spread;
 mod boxed_array_map;
 mod boxed_array_write_owners;
+mod static_callable_string_owners;
 mod boxed_array_implode;
 mod boxed_array_reference_outputs;
 mod boxed_array_column;

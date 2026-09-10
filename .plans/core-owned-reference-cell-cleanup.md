@@ -1259,3 +1259,25 @@ claim that the whole map fixture or CI is green. Build, test compilation,
 EIR boundary audit and diff hygiene pass. A fresh fetch finds origin/main
 still at c91beb3434681294e0a1dd29ef92f42f3365923a, already an ancestor.
 Executable checks remain delegated to CI, with no local test execution.
+
+### Late-bound static descriptor string results
+
+The remaining map string-copy path is visible in descriptor construction:
+static::method(...) used the default copying invoker even when the selected
+method already returned an owned string. Normalize the result in the late-bound
+entry wrapper, then advertise that owned result to the invoker. With vtable
+dispatch, use the saved called-class id and each implementation's EIR ownership
+proof; do not assume the lexical implementation proves an overriding method.
+Borrowed parameter and literal overrides still persist once. Reference returns
+keep their existing cell ABI and bypass this string normalization.
+
+Add all-target selector/register assertions and a native heap fixture covering
+owned, borrowed and literal overrides through boxed callback extraction. Keep
+the original COW map regression unchanged apart from its diagnostic assembly.
+Build, test compilation, EIR boundary audit, assembly-comment checks and diff
+hygiene pass without executing tests.
+
+CI on bc9041f15 now passes the Magician unit suite with 1306 tests, including
+the corrected operand-replacement fixture (job 102768827396). Builtins docs
+also pass there. Its executable matrix is still running, so these results do
+not certify the new write-owner or static-string fixes.

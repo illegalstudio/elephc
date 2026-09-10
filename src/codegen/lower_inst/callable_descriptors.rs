@@ -109,7 +109,13 @@ pub(super) fn emit_static_late_bound_first_class_callable(
         &wrapper_sig,
         dynamic_slot,
     )?;
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &wrapper_sig, &captures);
+    // The late-bound entry wrapper normalizes each selected implementation's
+    // string ownership before returning, including borrowed-result overrides.
+    let owns_string_return = wrapper_sig.return_type.codegen_repr() == PhpType::Str
+        && !wrapper_sig.by_ref_return;
+    let invoker_label = emit_runtime_callable_invoker_with_string_owner(
+        ctx, &wrapper_sig, &captures, owns_string_return,
+    );
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,
