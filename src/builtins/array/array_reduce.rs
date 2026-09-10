@@ -17,8 +17,9 @@ builtin! {
     contract: "array_reduce",
     check: check,
     lazy_check: true,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayReduce,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayReduce),
+        crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults,
     ),
 }
 

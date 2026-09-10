@@ -155,6 +155,8 @@ pub enum BuiltinRuntimeFunctions {
 pub enum BuiltinArgumentLowering {
     /// Use shared signature planning and ordinary source-order evaluation.
     Standard,
+    /// Materialize every regular default through shared planning, including positional calls.
+    MaterializeDefaults,
     /// Drop the unsupported statically-default count mode after shared planning.
     Count,
     /// Preserve date's literal-format specialization inputs.

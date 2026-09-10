@@ -1316,3 +1316,21 @@ Shard 2 still rejects the declared PHP array passed to array_sum. Other callback
 sorting and ownership failures remain open; this is not a green-CI claim. A fresh
 fetch finds origin/main unchanged at c91beb3434681294e0a1dd29ef92f42f3365923a,
 already an ancestor of this branch, so no further rebase is needed here.
+
+### Explicit default materialization for reduction
+
+CI on f44e4e5f1 rejects two-argument reductions before execution with
+`array_reduce expected 3 args, got 2` (x86_64 jobs 102777759033,
+102777758678 and 102777758721). Ordinary positional builtin preparation
+intentionally preserves omitted arguments; it does not synthesize every catalog
+default. Add an explicit semantic preparation policy that selects the shared
+signature planner for these calls. Reduction now requests that policy, while
+other builtins retain their omission-sensitive ABI. Boxed and positional spread
+planning remains shared. Extend the all-target lowering fixture with omitted
+initials through positional, named, CUF and spread calls, and retain the existing
+native empty/invalid/destructor regressions unchanged.
+
+Build and test compilation pass without local test execution. Generated metadata
+and its mechanically shifted source links are refreshed with the builtin-doc
+workflow and committed separately from the implementation. The CI failures above
+remain the pending executable verification for this fix, not proof of its result.

@@ -19,6 +19,9 @@ fn array_reduce_uses_mixed_carries_and_shared_defaults_on_all_targets() {
 function reduceValues(): array { return ["x" => 1, "y" => 2]; }
 function reduceCarry(mixed $carry, mixed $item): mixed { return $carry + $item; }
 echo array_reduce(reduceValues(), "reduceCarry");
+echo array_reduce(array: reduceValues(), callback: "reduceCarry");
+echo call_user_func("array_reduce", reduceValues(), "reduceCarry");
+echo array_reduce(...[reduceValues(), "reduceCarry"]);
 echo array_reduce(array: reduceValues(), initial: "prefix", callback: fn($carry, $item) => $carry . $item);
 $reduce = array_reduce(...);
 echo $reduce(reduceValues(), reduceCarry(...));

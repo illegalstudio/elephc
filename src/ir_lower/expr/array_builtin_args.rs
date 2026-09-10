@@ -78,7 +78,10 @@ pub(super) fn lower_builtin_call_args(
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
     let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
-    if argument_lowering == crate::builtins::semantics::BuiltinArgumentLowering::Standard {
+    if matches!(argument_lowering,
+        crate::builtins::semantics::BuiltinArgumentLowering::Standard
+        | crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
+    ) {
         if let Some(sig) = sig {
             if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, name) {
                 return coerce_operands_to_params(ctx, sig, operands);
@@ -101,6 +104,9 @@ pub(super) fn lower_builtin_call_args(
         }
     }
     let lowered = match argument_lowering {
+        crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults => {
+            lower_args_with_signature(ctx, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::Count => {
             lower_count_args(ctx, sig, args)
         }
