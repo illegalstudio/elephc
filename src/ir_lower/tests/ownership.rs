@@ -320,7 +320,7 @@ fn nested_mixed_write_roots_preserve_storage_ownership_on_all_targets() {
     }
 }
 
-/// Physical defaults use the property's hash representation, including empty Reflection defaults.
+/// Declared array defaults use the property's boxed contract before later hash-key writes.
 #[test]
 fn property_initializers_contextualize_array_defaults_on_all_targets() {
     let source = r#"<?php
@@ -346,7 +346,8 @@ fn property_initializers_contextualize_array_defaults_on_all_targets() {
             function.name == format!("_class_propinit_{}", class.class_id)
         }).unwrap();
         for (index, (_, ty)) in class.properties.iter().enumerate() {
-            assert!(matches!(ty.codegen_repr(), crate::types::PhpType::AssocArray { .. }), "{target}");
+            assert!(ty.is_php_array(), "{target}: later key writes must not specialize the declaration");
+            assert_eq!(ty.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
             let store = init.instructions.iter().find(|inst| {
                 inst.op == Op::PropSet && inst.immediate == Some(crate::ir::Immediate::PropertyRef {
                     class: class.class_id as u32, property: index as u32,

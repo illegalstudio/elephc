@@ -815,3 +815,17 @@ union and add an associative call site to the parameter test. Mixed returns and
 false-bearing array unions remain rejected; these are expectation updates, not
 relaxed negative tests. Test compilation and diff hygiene pass without execution.
 Incorrect executable outputs and ownership failures remain separate open issues.
+
+### Sparse property-array expectations
+
+Reclassified two previously listed CLI output failures after inspecting their
+fixtures: PHP counts present keys, not the highest index plus one. The manual's
+count example uses keys 0, 5 and 10 and returns 3:
+https://www.php.net/manual/en/function.count.php
+Updated instance/static/late-bound property expectations to sparse counts and
+added explicit missing-key and present-null checks. The property initializer
+structural test now requires the declared boxed array contract, while retaining
+the check that each stored default has the property's actual representation.
+
+Test compilation and diff hygiene pass; no test or PHP fixture ran locally.
+These expectation updates do not resolve unrelated runtime ownership failures.
