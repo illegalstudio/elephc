@@ -178,6 +178,15 @@ and mutate the same `Mixed` cells used by native code. Array writes still pass
 through the normal copy-on-write helpers, and object/class operations reuse
 generated metadata when the bridge shape is supported.
 
+`RuntimeCellHandle` also carries Rust-only provenance. A handle returned from
+durable context, scope, constant, property, or class storage is borrowed; a
+handle created by a constructor, copy, retain, or ownership-transferring result
+API is owned. This marker never crosses the C ABI. Raw argument and mutable
+reference slots contain contiguous `RuntimeCell *` values, and FFI entrypoints
+reconstruct raw pointers with owned provenance by default. APIs that transfer
+one owner to Magician keep that default; FFI entrypoints receiving caller-owned
+inputs explicitly convert the reconstructed handle to borrowed provenance.
+
 Runtime string contexts that encounter an eval-declared object use
 `__elephc_eval_string_context`. The bridge returns the same `ElephcEvalResult`
 value-or-throwable shape as method calls: successful strings are persisted while
@@ -185,8 +194,11 @@ the formatter copies them, and escaped `__toString()` exceptions enter the nativ
 `__rt_throw_current` path so surrounding compiled `try`/`catch` blocks remain
 authoritative.
 
-Scope setters retain the value stored in the context; getters return values
-with the ownership expected by their EIR result. Normal returns, runtime
+Scope setters retain the value stored in the context; getters expose borrowed
+handles. An expression consumer that requires an owned PHP value copies that
+borrowed cell through the shared scope-copy helper. Arrays retain their cursor
+and alias side metadata while receiving an independent copy-on-write cell;
+objects and resources preserve their PHP identity. Normal returns, runtime
 fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.

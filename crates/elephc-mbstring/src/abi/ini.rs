@@ -196,7 +196,7 @@ unsafe fn string_arg(slot: &MbArgV1) -> Result<&[u8], i32> {
     unsafe { super::bytes(slot) }.ok_or(1)
 }
 
-/// Converts only native syntax errors into PHP warnings, keeping unavailable/broken providers fatal.
+/// Converts syntax and unavailable-provider errors into PHP warnings, keeping malformed providers fatal.
 fn validation(pattern: &[u8], status: &Cell<i32>) -> Result<(), MimeRegexError> {
     match provider::validate(pattern) {
         Ok(()) => Ok(()),

@@ -122,9 +122,16 @@ pub(super) fn filter_eval_sync_globals_by_name(
         .collect()
 }
 
-/// Adds a process superglobal to eval global sync unless normal globals already include it.
-pub(super) fn push_eval_process_superglobal(globals: &mut Vec<EvalSyncGlobal>, name: &str, ty: PhpType) {
-    if globals.iter().any(|global| global.name == name) {
+/// Adds a process superglobal unless the effective main scope already synchronizes it.
+pub(super) fn push_eval_process_superglobal(
+    globals: &mut Vec<EvalSyncGlobal>,
+    main_scope_locals: &[EvalSyncLocal],
+    name: &str,
+    ty: PhpType,
+) {
+    if globals.iter().any(|global| global.name == name)
+        || main_scope_locals.iter().any(|local| local.name == name)
+    {
         return;
     }
     globals.push(EvalSyncGlobal {

@@ -314,8 +314,8 @@ fn owned_string_then_mixed_prologue_asm(target: Target) -> String {
     let mut module = Module::new(target);
     let mut function = Function::new(
         "prologue_parameter_fixture".to_string(),
-        IrType::Void,
-        PhpType::Void,
+        IrType::Heap(crate::ir::IrHeapKind::Mixed),
+        PhpType::Mixed,
     );
     function.params.push(FunctionParam {
         name: "label".to_string(),
@@ -337,7 +337,7 @@ fn owned_string_then_mixed_prologue_asm(target: Target) -> String {
         PhpType::Str,
         LocalKind::PhpLocal,
     );
-    function.add_local(
+    let value_slot = function.add_local(
         Some("value".to_string()),
         IrType::Heap(crate::ir::IrHeapKind::Mixed),
         PhpType::Mixed,
@@ -350,7 +350,12 @@ fn owned_string_then_mixed_prologue_asm(target: Target) -> String {
         builder.position_at_end(entry);
         let label = builder.emit_load_local(label_slot, IrType::Str, PhpType::Str);
         builder.emit_store_local(label_slot, label);
-        builder.terminate(Terminator::Return { value: None });
+        let value = builder.emit_load_local(
+            value_slot,
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        builder.terminate(Terminator::Return { value: Some(value) });
     }
     module.add_function(function);
 

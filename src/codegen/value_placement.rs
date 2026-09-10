@@ -17,6 +17,7 @@ use crate::ir::{Function, IrType, ValueId};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValuePlacement {
     pub slot_of: HashMap<ValueId, usize>,
+    pub runtime_return_ownership_slot_of: HashMap<ValueId, usize>,
     pub total_slot_bytes: usize,
 }
 
@@ -25,11 +26,17 @@ impl ValuePlacement {
     pub fn slot(&self, value: ValueId) -> Option<usize> {
         self.slot_of.get(&value).copied()
     }
+
+    /// Returns the spill slot for a dynamic PHP-call return ownership marker.
+    pub fn runtime_return_ownership_slot(&self, value: ValueId) -> Option<usize> {
+        self.runtime_return_ownership_slot_of.get(&value).copied()
+    }
 }
 
 /// Allocates a frame slot for every non-void SSA value in a function.
 pub fn allocate(func: &Function) -> ValuePlacement {
     let mut slot_of = HashMap::new();
+    let mut runtime_return_ownership_slot_of = HashMap::new();
     let mut offset = 0usize;
     for (index, value) in func.values.iter().enumerate() {
         let value_id = ValueId::from_raw(index as u32);
@@ -39,9 +46,14 @@ pub fn allocate(func: &Function) -> ValuePlacement {
         }
         offset += bytes;
         slot_of.insert(value_id, offset);
+        if value.ownership == Ownership::MaybeOwned && is_direct_php_call_result(func, value_id) {
+            offset += 8;
+            runtime_return_ownership_slot_of.insert(value_id, offset);
+        }
     }
     ValuePlacement {
         slot_of,
+        runtime_return_ownership_slot_of,
         total_slot_bytes: align_to_16(offset),
     }
 }
@@ -155,6 +167,36 @@ mod tests {
 
         assert_eq!(placement.slot(array), Some(8));
         assert_eq!(placement.slot(iterator), Some(16));
+        assert_eq!(placement.total_slot_bytes, 16);
+    }
+
+    /// Verifies only ambiguous direct PHP-call results reserve a marker spill slot.
+    #[test]
+    fn allocates_runtime_ownership_slot_for_maybe_owned_call_result() {
+        let mut function = Function::new(
+            "test".to_string(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let result = builder
+            .emit(
+                Op::Call,
+                Vec::new(),
+                Some(crate::ir::Immediate::Data(DataId::from_raw(0))),
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::MaybeOwned,
+            )
+            .expect("call produces a value");
+
+        let placement = allocate(&function);
+
+        assert_eq!(placement.slot(result), Some(8));
+        assert_eq!(placement.runtime_return_ownership_slot(result), Some(16));
         assert_eq!(placement.total_slot_bytes, 16);
     }
 }

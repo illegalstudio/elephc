@@ -652,6 +652,68 @@ pub(crate) fn local_load_coercion_owns_result(storage_type: &PhpType, result_typ
     )
 }
 
+/// Returns true when one SSA value has exactly one use and that use is a `Release` operand.
+fn value_is_used_only_by_release(function: &Function, value: ValueId) -> bool {
+    let mut release_uses = 0usize;
+    for instruction in &function.instructions {
+        for operand in &instruction.operands {
+            if *operand != value {
+                continue;
+            }
+            if instruction.op != Op::Release {
+                return false;
+            }
+            release_uses += 1;
+            if release_uses > 1 {
+                return false;
+            }
+        }
+    }
+    if function.blocks.iter().any(|block| {
+        block
+            .terminator
+            .as_ref()
+            .is_some_and(|terminator| terminator_uses_value(terminator, value))
+    }) {
+        return false;
+    }
+    release_uses == 1
+}
+
+/// Checks every SSA use carried by one control-flow terminator, including phi-like edge args.
+fn terminator_uses_value(terminator: &Terminator, value: ValueId) -> bool {
+    match terminator {
+        Terminator::Br { args, .. } => args.contains(&value),
+        Terminator::CondBr {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => *cond == value || then_args.contains(&value) || else_args.contains(&value),
+        Terminator::Switch {
+            scrutinee,
+            cases,
+            default_args,
+            ..
+        } => {
+            *scrutinee == value
+                || cases.iter().any(|case| case.args.contains(&value))
+                || default_args.contains(&value)
+        }
+        Terminator::Return { value: returned } => returned == &Some(value),
+        Terminator::Throw { value: thrown } => *thrown == value,
+        Terminator::GeneratorSuspend {
+            key,
+            value: yielded,
+            resume_args,
+            ..
+        } => {
+            *key == Some(value) || *yielded == Some(value) || resume_args.contains(&value)
+        }
+        Terminator::Fatal { .. } | Terminator::Unreachable => false,
+    }
+}
+
 /// Returns true when a local storage shape can represent PHP null as a zero pointer.
 fn local_storage_can_hold_null(php_type: &PhpType) -> bool {
     matches!(

@@ -248,6 +248,28 @@ return function_exists("max");"#,
     assert_eq!(values.output, "1:3:1.5:2.5:4:8:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies min/max consume every temporary comparison result while retaining the selected input.
+#[test]
+fn execute_program_min_max_release_comparison_cells() {
+    let program = parse_fragment(br#"return min(3, 1, 2);"#)
+        .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(1));
+    let comparisons = values.values.iter().filter_map(|(id, value)| {
+        matches!(value, FakeValue::Bool(_)).then_some(*id)
+    }).collect::<Vec<_>>();
+    assert_eq!(comparisons.len(), 2);
+    for comparison in comparisons {
+        assert_eq!(values.cell_owners.get(&comparison), Some(&0));
+        assert_eq!(values.releases.iter().filter(|value| {
+            value.as_ptr() as usize == comparison
+        }).count(), 1);
+    }
+}
 /// Verifies eval `clamp()` selects numeric values through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_clamp_builtin() {
@@ -282,6 +304,14 @@ fn execute_program_rejects_clamp_invalid_bounds() {
         .expect_err("invalid clamp bounds should fail");
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
+    let comparisons = values.values.iter().filter_map(|(id, value)| {
+        (value == &FakeValue::Bool(true)).then_some(*id)
+    }).collect::<Vec<_>>();
+    assert_eq!(comparisons.len(), 1);
+    assert_eq!(values.cell_owners.get(&comparisons[0]), Some(&0));
+    assert_eq!(values.releases.iter().filter(|value| {
+        value.as_ptr() as usize == comparisons[0]
+    }).count(), 1);
 }
 /// Verifies eval `pi()` returns a double constant directly and through callable paths.
 #[test]

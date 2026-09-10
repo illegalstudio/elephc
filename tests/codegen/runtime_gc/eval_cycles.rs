@@ -149,15 +149,46 @@ eval($source);
     assert_eq!(output, "drop:A:caught:A:drop:B:caught:B:after");
 }
 
-/// Releasing the last argument-array snapshot runs native or eval destructors behind a PHP boundary.
+/// Releasing the last argument-array snapshot runs a non-throwing native destructor.
 #[test]
-fn test_eval_call_array_last_owner_destructor_boundary() {
-    for native in [false, true] {
-        for throwing in [false, true] {
-            let throw = if throwing { "throw new Exception(\"cleanup\");" } else { "" };
-            let class = format!("class CallArrayLastOwner {{ public function __destruct() {{ echo \"drop:\"; {throw} }} }}");
-            let (native_class, eval_class) = if native { (class.as_str(), "") } else { ("", class.as_str()) };
-            let source = format!(r#"<?php
+fn test_eval_call_array_last_owner_native_non_throwing_destructor_boundary() {
+    assert_eval_call_array_last_owner_destructor_boundary(true, false);
+}
+
+/// Releasing the last argument-array snapshot catches a throwing native destructor.
+#[test]
+fn test_eval_call_array_last_owner_native_throwing_destructor_boundary() {
+    assert_eval_call_array_last_owner_destructor_boundary(true, true);
+}
+
+/// Releasing the last argument-array snapshot runs a non-throwing eval destructor.
+#[test]
+fn test_eval_call_array_last_owner_eval_non_throwing_destructor_boundary() {
+    assert_eval_call_array_last_owner_destructor_boundary(false, false);
+}
+
+/// Releasing the last argument-array snapshot catches a throwing eval destructor.
+#[test]
+fn test_eval_call_array_last_owner_eval_throwing_destructor_boundary() {
+    assert_eval_call_array_last_owner_destructor_boundary(false, true);
+}
+
+/// Runs one native/eval and throwing/non-throwing destructor boundary case.
+fn assert_eval_call_array_last_owner_destructor_boundary(native: bool, throwing: bool) {
+    let throw = if throwing {
+        "throw new Exception(\"cleanup\");"
+    } else {
+        ""
+    };
+    let class = format!(
+        "class CallArrayLastOwner {{ public function __destruct() {{ echo \"drop:\"; {throw} }} }}"
+    );
+    let (native_class, eval_class) = if native {
+        (class.as_str(), "")
+    } else {
+        ("", class.as_str())
+    };
+    let source = format!(r#"<?php
 {native_class}
 $source = $argc > 0 ? '
 {eval_class}
@@ -169,9 +200,11 @@ echo "after";
 ' : '';
 eval($source);
 "#);
-            let output = compile_and_run(&source);
-            let expected = if throwing { "body:drop:caught:cleanup:after" } else { "body:drop:after" };
-            assert_eq!(output, expected, "native={native}, throwing={throwing}");
-        }
-    }
+    let output = compile_and_run(&source);
+    let expected = if throwing {
+        "body:drop:caught:cleanup:after"
+    } else {
+        "body:drop:after"
+    };
+    assert_eq!(output, expected, "native={native}, throwing={throwing}");
 }

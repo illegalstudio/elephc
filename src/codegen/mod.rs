@@ -39,6 +39,7 @@ mod runtime_callable_invoker;
 #[cfg(test)]
 pub(crate) use runtime_callable_invoker::function_returns_owned_string;
 mod runtime_metadata;
+mod return_ownership;
 mod shared_count_guard;
 mod shared_helper;
 mod shared_mixed_string;

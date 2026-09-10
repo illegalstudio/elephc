@@ -12,6 +12,85 @@ use super::*;
 use crate::codegen_support::platform::Target;
 use std::process::Command;
 
+/// Selects borrowed promotion or owned transfer from the per-return ABI status on every target.
+#[test]
+fn mixed_invoker_returns_follow_runtime_ownership_on_all_targets() {
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let mut emitter = Emitter::new(Target::parse(name).unwrap());
+        let mut ctx = InvokerEmitContext::new("mixed_owner_invoker");
+        emit_boxed_invoker_return(&mut emitter, &PhpType::Mixed, false, &mut ctx);
+        let arch = emitter.target.arch;
+        let output = emitter.output();
+        let retain = output.find("__rt_incref").expect("borrowed path must retain");
+        let owned = output
+            .find("mixed_owner_invoker_return_owned_0:")
+            .expect("owned path label must be emitted");
+        assert!(retain < owned, "{name}: borrowed promotion must precede owned transfer");
+        match arch {
+            Arch::AArch64 => assert!(output.contains("cbnz x15,"), "{name}"),
+            Arch::X86_64 => {
+                assert!(output.contains("test r11, r11"), "{name}");
+                assert!(output.contains("jne "), "{name}");
+            }
+        }
+    }
+}
+
+/// Publishes both ownership states in the target-specific internal return register.
+#[test]
+fn eir_return_ownership_status_is_target_aware() {
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let mut emitter = Emitter::new(Target::parse(name).unwrap());
+        super::super::return_ownership::emit_status(&mut emitter, false);
+        super::super::return_ownership::emit_status(&mut emitter, true);
+        let arch = emitter.target.arch;
+        let output = emitter.output();
+        match arch {
+            Arch::AArch64 => {
+                assert!(output.contains("mov x15, xzr"), "{name}");
+                assert!(output.contains("mov x15, #1"), "{name}");
+            }
+            Arch::X86_64 => {
+                assert!(output.contains("xor r11d, r11d"), "{name}");
+                assert!(output.contains("mov r11d, 1"), "{name}");
+            }
+        }
+    }
+}
+
+/// Keeps by-reference returns on the existing storage-pointer path.
+#[test]
+fn by_ref_invoker_returns_ignore_the_internal_ownership_status() {
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let mut emitter = Emitter::new(Target::parse(name).unwrap());
+        let mut ctx = InvokerEmitContext::new("by_ref_invoker");
+        emit_boxed_invoker_return(&mut emitter, &PhpType::Mixed, true, &mut ctx);
+        let output = emitter.output();
+        assert!(!output.contains("return_owned"), "{name}: {output}");
+        assert!(!output.contains("__rt_incref"), "{name}: {output}");
+        assert!(!output.contains("x15"), "{name}: {output}");
+        assert!(!output.contains("r11"), "{name}: {output}");
+    }
+}
+
 /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
 #[test]
 fn arm64_invoker_boundary_uses_large_offset_frame_helpers() {

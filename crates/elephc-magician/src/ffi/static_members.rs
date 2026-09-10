@@ -294,7 +294,7 @@ unsafe fn eval_static_property_set_inner(
         context,
         class_name,
         property_name,
-        RuntimeCellHandle::from_raw(value),
+        RuntimeCellHandle::from_raw(value).borrowed(),
         &mut values,
     ) {
         Ok(Some(outcome)) => write_outcome(outcome, out).code(),
@@ -342,7 +342,7 @@ unsafe fn eval_native_frame_static_property_set_inner(
         context,
         &called_class,
         &property_name,
-        RuntimeCellHandle::from_raw(value),
+        RuntimeCellHandle::from_raw(value).borrowed(),
         &mut values,
     ) {
         Ok(Some(outcome)) => write_outcome(outcome, out).code(),

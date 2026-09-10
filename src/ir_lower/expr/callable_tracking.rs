@@ -136,7 +136,14 @@ pub(crate) fn lower_callable_array_for_assignment(
     let receiver = lower_expr(ctx, object);
     let receiver_ty = ctx.builder.value_php_type(receiver.value);
     let hidden_name = ctx.declare_hidden_temp(receiver_ty.clone());
-    let receiver = ctx.store_local(&hidden_name, receiver, receiver_ty, Some(object.span));
+    store_value_into_temp(
+        ctx,
+        &hidden_name,
+        receiver_ty,
+        receiver,
+        object.span,
+    );
+    let receiver = ctx.load_local(&hidden_name, Some(object.span));
     let array = lower_callable_array_literal_with_receiver(ctx, items, value, receiver);
     let hidden_object = Expr::new(ExprKind::Variable(hidden_name), object.span);
     let target = StaticCallableBinding::InstanceMethod {

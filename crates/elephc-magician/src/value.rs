@@ -3,7 +3,7 @@
 //! Prevents the eval bridge from introducing a second PHP value system.
 //!
 //! Called from:
-//! - Future `crate::scope` and `crate::interpreter` implementations.
+//! - `crate::scope`, `crate::interpreter`, and the eval FFI adapters.
 //!
 //! Key details:
 //! - Handles carry Rust-only result provenance; native ABI slots contain raw pointers only.
@@ -22,7 +22,9 @@ pub struct RuntimeCellHandle {
 }
 
 impl RuntimeCellHandle {
-    /// Creates a runtime-cell handle from a raw pointer supplied by elephc.
+    /// Accepts ownership transferred through a raw runtime-cell pointer.
+    ///
+    /// Storage lookup paths must explicitly mark their returned view as borrowed.
     pub const fn from_raw(ptr: *mut RuntimeCell) -> Self {
         Self { ptr, borrowed: false }
     }

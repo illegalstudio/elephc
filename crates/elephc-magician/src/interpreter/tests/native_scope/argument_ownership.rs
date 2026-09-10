@@ -9,6 +9,7 @@
 //! - Native executable tests separately validate actual heap reference counts.
 
 use super::*;
+use crate::value::RuntimeCell;
 
 /// Releases each literal on success, later expression failure, and duplicate or unknown named binding.
 #[test]
@@ -63,7 +64,7 @@ fn native_argument_ownership_defaults() {
             assert_eq!(result.is_ok(), failure == 0);
             assert_released_once(&values, &FakeValue::Int(731));
             assert_released_once(&values, &FakeValue::String("732".to_string()));
-            assert!(!values.releases.contains(&borrowed));
+            assert_borrowed_lease_balanced(&values, borrowed);
         }
     }
 }
@@ -86,7 +87,7 @@ fn native_argument_ownership_coercions() {
         let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
         assert_eq!(result.is_ok(), !fail);
         assert_released_once(&values, &FakeValue::Int(731));
-        assert!(!values.releases.contains(&borrowed));
+        assert_borrowed_lease_balanced(&values, borrowed);
     }
 }
 
@@ -113,7 +114,14 @@ fn native_argument_ownership_reference_markers() {
         let markers: Vec<_> = values.values.values().filter(|value| matches!(value, FakeValue::InvokerRefCell(_))).collect();
         assert_eq!(markers.len(), 2);
         for marker in markers { assert_released_once(&values, marker); }
-        for name in ["left", "right"] { assert_released_once(&values, &FakeValue::String(name.to_string())); }
+        for name in ["left", "right"] {
+            let cells = values.values.iter().filter_map(|(id, value)| {
+                (value == &FakeValue::String(name.to_string())).then_some(*id)
+            }).collect::<Vec<_>>();
+            assert_eq!(cells.len(), 1, "{name}");
+            let value = RuntimeCellHandle::from_raw(cells[0] as *mut RuntimeCell);
+            assert_borrowed_lease_balanced(&values, value);
+        }
     }
 }
 
@@ -122,4 +130,18 @@ fn assert_released_once(values: &FakeOps, expected: &FakeValue) {
     let cells: Vec<_> = values.values.iter().filter_map(|(id, value)| (value == expected).then_some(*id)).collect();
     assert_eq!(cells.len(), 1, "{expected:?}");
     assert_eq!(values.releases.iter().filter(|value| value.as_ptr() as usize == cells[0]).count(), 1, "{expected:?}");
+}
+
+/// Confirms temporary retains are balanced without consuming the caller's durable owner.
+fn assert_borrowed_lease_balanced(values: &FakeOps, value: RuntimeCellHandle) {
+    let identity = value.as_ptr() as usize;
+    let retains = values.retains.iter().filter(|retained| {
+        retained.as_ptr() as usize == identity
+    }).count();
+    let releases = values.releases.iter().filter(|released| {
+        released.as_ptr() as usize == identity
+    }).count();
+    assert!(retains > 0, "borrowed cell was not retained");
+    assert_eq!(releases, retains, "borrowed lease retain/release imbalance");
+    assert_eq!(values.cell_owners.get(&identity), Some(&1));
 }

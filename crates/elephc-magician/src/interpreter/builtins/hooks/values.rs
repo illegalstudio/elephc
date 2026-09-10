@@ -12,7 +12,7 @@
 
 use super::super::*;
 use super::super::super::{
-    ElephcEvalContext, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
+    ElephcEvalContext, ElephcEvalScope, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::arity::{one_arg, three_args, two_args};
 
@@ -330,6 +330,7 @@ impl EvalValuesHook {
         self,
         name: &str,
         evaluated_args: &[RuntimeCellHandle],
+        lexical_scope: Option<&ElephcEvalScope>,
         context: &mut ElephcEvalContext,
         values: &mut impl RuntimeValueOps,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -349,7 +350,13 @@ impl EvalValuesHook {
             | Self::ArrayValues
             | Self::Count
             | Self::Range => {
-                eval_array_declared_values_result(name, evaluated_args, context, values)
+                eval_array_declared_values_result(
+                    name,
+                    evaluated_args,
+                    lexical_scope,
+                    context,
+                    values,
+                )
             }
             Self::Asin => one_arg(evaluated_args, values, eval_asin_result),
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
@@ -378,7 +385,9 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
-            Self::Core => eval_core_values_result(name, evaluated_args, context, values),
+            Self::Core => {
+                eval_core_values_result(name, evaluated_args, lexical_scope, context, values)
+            }
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
             Self::Cosh => one_arg(evaluated_args, values, eval_cosh_result),
             Self::CountChars => match evaluated_args {
@@ -543,7 +552,12 @@ impl EvalValuesHook {
             Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, values),
             Self::PregReplace => eval_preg_replace_values_result(evaluated_args, values),
             Self::PregReplaceCallback => {
-                eval_preg_replace_callback_values_result(evaluated_args, context, values)
+                eval_preg_replace_callback_values_result(
+                    evaluated_args,
+                    lexical_scope,
+                    context,
+                    values,
+                )
             }
             Self::PregSplit => eval_preg_split_values_result(evaluated_args, values),
             Self::BufferFree => eval_buffer_free_values_result(evaluated_args, values),

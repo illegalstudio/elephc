@@ -3210,53 +3210,53 @@ fn emit_call_user_func_array_missing_arg_error(emitter: &mut Emitter, data: &mut
         data.add_string(b"call_user_func_array(): missing required argument");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #56");                                // request the compact Throwable payload
-            emitter.instruction("bl __rt_heap_alloc");                         // allocate the ArgumentCountError object
-            emitter.instruction("mov x9, #6");                                 // heap kind 6 identifies a throwable object
-            emitter.instruction("str x9, [x0, #-8]");                          // stamp the allocation before acquiring its PHP handle
-            emitter.instruction("bl __rt_object_handle_acquire");              // assign the object its runtime handle
+            emitter.instruction("mov x0, #56");                                 // request the compact Throwable payload
+            emitter.instruction("bl __rt_heap_alloc");                          // allocate the ArgumentCountError object
+            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its PHP handle
+            emitter.instruction("bl __rt_object_handle_acquire");               // assign the object its runtime handle
             abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_argument_count_error_class_id", 0);
-            emitter.instruction("str x9, [x0]");                               // identify the catchable ArgumentCountError class
+            emitter.instruction("str x9, [x0]");                                // identify the catchable ArgumentCountError class
             abi::emit_symbol_address(emitter, "x9", &message_label);
-            emitter.instruction("str x9, [x0, #8]");                           // store the immutable diagnostic bytes
+            emitter.instruction("str x9, [x0, #8]");                            // store the immutable diagnostic bytes
             abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
-            emitter.instruction("str x9, [x0, #16]");                          // store the diagnostic byte length
-            emitter.instruction("str xzr, [x0, #24]");                         // exception code defaults to zero
+            emitter.instruction("str x9, [x0, #16]");                           // store the diagnostic byte length
+            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
                 emitter, "x0",
             );
-            emitter.instruction("str xzr, [x0, #40]");                         // previous exception defaults to null
+            emitter.instruction("str xzr, [x0, #40]");                          // previous exception defaults to null
             abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
-            emitter.instruction("b __rt_throw_current");                       // release argument guards and enter PHP exception handling
+            emitter.instruction("b __rt_throw_current");                        // release argument guards and enter PHP exception handling
         }
         Arch::X86_64 => {
-            emitter.instruction("mov eax, 56");                                // request the compact Throwable payload
-            emitter.instruction("call __rt_heap_alloc");                       // allocate the ArgumentCountError object
+            emitter.instruction("mov eax, 56");                                 // request the compact Throwable payload
+            emitter.instruction("call __rt_heap_alloc");                        // allocate the ArgumentCountError object
             abi::emit_load_int_immediate(
                 emitter,
                 "r10",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,
             );
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");               // stamp the canonical throwable heap kind
-            emitter.instruction("call __rt_object_handle_acquire");            // assign the object its runtime handle
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the canonical throwable heap kind
+            emitter.instruction("call __rt_object_handle_acquire");             // assign the object its runtime handle
             abi::emit_load_symbol_to_reg(
                 emitter,
                 "r10",
                 "_spl_argument_count_error_class_id",
                 0,
             );
-            emitter.instruction("mov QWORD PTR [rax], r10");                   // identify the catchable ArgumentCountError class
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the catchable ArgumentCountError class
             abi::emit_symbol_address(emitter, "r10", &message_label);
-            emitter.instruction("mov QWORD PTR [rax + 8], r10");               // store the immutable diagnostic bytes
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the immutable diagnostic bytes
             abi::emit_load_int_immediate(emitter, "r10", message_len as i64);
-            emitter.instruction("mov QWORD PTR [rax + 16], r10");              // store the diagnostic byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                // exception code defaults to zero
+            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the diagnostic byte length
+            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
                 emitter, "rax",
             );
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                // previous exception defaults to null
+            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous exception defaults to null
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
-            emitter.instruction("jmp __rt_throw_current");                     // release argument guards and enter PHP exception handling
+            emitter.instruction("jmp __rt_throw_current");                      // release argument guards and enter PHP exception handling
         }
     }
 }

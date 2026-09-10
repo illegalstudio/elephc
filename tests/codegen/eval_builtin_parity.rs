@@ -12,7 +12,36 @@ use std::fmt::Write;
 
 use crate::support::{
     compile_and_run, compile_and_run_capture_with_regex, compile_and_run_with_regex,
+    elephc_cli_command_with_mbstring_native, fs, make_cli_test_dir, run_binary,
 };
+
+/// Compiles and runs an eval fixture with both native regex providers explicitly enabled.
+fn compile_and_run_with_mbstring_and_regex(source: &str) -> String {
+    let dir = make_cli_test_dir("elephc_eval_builtin_catalog");
+    let php = dir.join("main.php");
+    fs::write(&php, source).expect("write eval builtin catalog fixture");
+
+    let compiled = elephc_cli_command_with_mbstring_native(&dir)
+        .args(["--with-mbstring", "--with-regex"])
+        .arg(&php)
+        .output()
+        .expect("compile eval builtin catalog fixture");
+    assert!(
+        compiled.status.success(),
+        "eval builtin catalog fixture failed to compile:\n{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+
+    let executed = run_binary(&php.with_extension(""), &dir);
+    assert!(
+        executed.status.success(),
+        "eval builtin catalog fixture failed to run:\n{}",
+        String::from_utf8_lossy(&executed.stderr)
+    );
+    let stdout = String::from_utf8(executed.stdout).expect("eval builtin output must be UTF-8");
+    fs::remove_dir_all(&dir).expect("remove eval builtin catalog fixture");
+    stdout
+}
 
 /// Verifies AOT builtin lookup stays case-insensitive without eval being present.
 #[test]
@@ -100,7 +129,7 @@ fn test_eval_function_exists_covers_static_builtin_catalog() {
     fragment.push_str("return \"ok\";");
 
     let source = format!("<?php\necho eval({});\n", php_single_quoted_literal(&fragment));
-    let out = compile_and_run_with_regex(&source);
+    let out = compile_and_run_with_mbstring_and_regex(&source);
 
     assert_eq!(out, "ok");
 }

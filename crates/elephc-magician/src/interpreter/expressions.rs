@@ -43,7 +43,12 @@ pub(in crate::interpreter) fn eval_owned_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_expr_with_result_ownership(expr, context, scope, values, true)
+    let value = eval_expr_with_result_ownership(expr, context, scope, values, true)?;
+    if value.is_borrowed() {
+        copy_scope_value(value, context, values)
+    } else {
+        Ok(value)
+    }
 }
 
 /// Preserves expression evaluation order while optionally owning the selected result.
@@ -147,41 +152,42 @@ fn eval_expr_with_result_ownership(
         EvalExpr::DynamicStaticPropertyGet {
             class_name,
             property,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, _, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
             eval_static_property_get_with_result_ownership(&class_name, property, context, values, own_result)
-        }
+        }),
         EvalExpr::DynamicStaticPropertyNameGet {
             class_name,
             property,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, scope, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
             let property = eval_dynamic_member_name(property, context, scope, values)?;
             eval_static_property_get_with_result_ownership(&class_name, &property, context, values, own_result)
-        }
+        }),
         EvalExpr::DynamicClassConstantFetch {
             class_name,
             constant,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, _, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
             eval_class_constant_fetch_result(&class_name, constant, context, values)
-        }
+        }),
         EvalExpr::DynamicClassConstantNameFetch {
             class_name,
             constant,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, scope, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
             let constant = eval_dynamic_member_name(constant, context, scope, values)?;
             eval_class_constant_fetch_result(&class_name, &constant, context, values)
-        }
-        EvalExpr::DynamicClassNameFetch { class_name } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            eval_dynamic_class_name_fetch_result(class_name, context, values)
-        }
+        }),
+        EvalExpr::DynamicClassNameFetch { class_name } => with_eval_operands(
+            &[class_name],
+            context,
+            scope,
+            values,
+            |classes, context, _, values| {
+                eval_dynamic_class_name_fetch_result(classes[0], context, values)
+            },
+        ),
         EvalExpr::Include {
             path,
             required,

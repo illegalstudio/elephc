@@ -208,6 +208,8 @@ pub(super) fn store_missing_scope_entry_to_local(
 ) -> Result<()> {
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
+            ensure_eval_local_writeback_owns_value(ctx, local)?;
+            ctx.release_local_before_refcounted_writeback(local.slot)?;
             let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol);
             replace_owned_eval_local(ctx, local, pending_throw)?;
@@ -238,6 +240,45 @@ pub(super) fn store_missing_scope_entry_to_local(
                 "eval scope missing reload for PHP type {:?}",
                 other
             )))
+        }
+    }
+    Ok(())
+}
+
+/// Rejects a reload whose destination has no owner for its stored Mixed value.
+fn ensure_eval_local_writeback_owns_value(
+    ctx: &FunctionContext<'_>,
+    local: &EvalSyncLocal,
+) -> Result<()> {
+    if ctx.owns_eval_local_writeback_target(local.slot) {
+        return Ok(());
+    }
+    Err(CodegenIrError::invalid_module(format!(
+        "eval scope reload target ${} has no local owner",
+        local.name
+    )))
+}
+
+/// Branches when the scope cell is already the exact value held by the local storage.
+fn emit_branch_if_scope_cell_matches_local(
+    ctx: &mut FunctionContext<'_>,
+    local: &EvalSyncLocal,
+    label: &str,
+) -> Result<()> {
+    ctx.load_local_to_result(local.slot)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scope_cell_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, scope_cell_reg, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, scope_cell_reg)); // compare the current local owner with the fetched scope cell
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // preserve an unchanged owner without another retain
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, scope_cell_reg)); // compare the current local owner with the fetched scope cell
+            ctx.emitter.instruction(&format!("je {}", label));                  // preserve an unchanged owner without another retain
         }
     }
     Ok(())
