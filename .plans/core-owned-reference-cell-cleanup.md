@@ -726,3 +726,17 @@ regression. The named middle-default leak remains on both Linux architectures:
 its raw cell comes from constructor MayOutliveCall staging, not the descriptor
 invoker. Constructor-promoted reference properties still borrow those fallback
 cells, so deleting the heap fallback or using caller-stack storage is not a safe fix.
+
+### Descriptor callable argument leases
+
+Invoker argument staging now records raw Callable owners, which are intentionally
+not classified as ordinary refcounted PHP types. A per-slot release discipline
+uses descriptor cleanup for those values on normal and exceptional exits. Managed
+reference cells still use the heap-kind dispatcher, even when their payload is
+callable, and the boxed return slot keeps its existing Mixed ownership contract.
+
+Added positional/named native call regressions with captured objects, a throwing
+consumer and caller reuse, plus all-target release-entry assertions. Build and
+test compilation pass; executable checks remain delegated to CI. This addresses
+one confirmed source of the opaque usort leak without claiming its entire failure
+or the remaining array/checker issues are resolved.
