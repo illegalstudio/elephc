@@ -1143,7 +1143,7 @@ fn push_loaded_invoker_ref_cell_value_arg(
     push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data)
 }
 
-/// Boxes the value referenced by an invoker marker into an owned Mixed cell.
+/// Materializes the value referenced by a boxed invoker marker as one owned Mixed cell.
 fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -1151,26 +1151,45 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     let result_reg = abi::int_result_reg(emitter);
     let ref_cell_reg = abi::symbol_scratch_reg(emitter);
     let tag_reg = abi::secondary_scratch_reg(emitter);
+
+    // -- unpack the marker and materialize its referenced value --
+    abi::emit_load_from_address(emitter, ref_cell_reg, result_reg, 8);
+    abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+    emit_materialize_invoker_ref_cell_value_as_mixed(ref_cell_reg, tag_reg, emitter, ctx);
+}
+
+/// Retains an already boxed Mixed source or boxes one raw ref-cell payload.
+fn emit_materialize_invoker_ref_cell_value_as_mixed(
+    ref_cell_reg: &str,
+    source_tag_reg: &str,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+) {
+    let result_reg = abi::int_result_reg(emitter);
     let lo_reg = abi::tertiary_scratch_reg(emitter);
     let hi_reg = match emitter.target.arch {
         Arch::AArch64 => "x12",
         Arch::X86_64 => "rdx",
     };
+    let mixed_label = ctx.next_label("invoker_ref_mixed");
     let string_hi_label = ctx.next_label("invoker_ref_string_hi");
     let box_label = ctx.next_label("invoker_ref_box");
+    let done_label = ctx.next_label("invoker_ref_materialized");
 
-    // -- unpack the marker: ref-cell pointer, source value tag, and payload --
-    abi::emit_load_from_address(emitter, ref_cell_reg, result_reg, 8);
-    abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
     abi::emit_load_from_address(emitter, lo_reg, ref_cell_reg, 0);
-    abi::emit_load_int_immediate(emitter, hi_reg, 0);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #1", tag_reg));               // is the referenced value a string (runtime tag 1)?
+            emitter.instruction(&format!("cmp {}, #7", source_tag_reg));        // detect an already-boxed Mixed value in the reference cell
+            emitter.instruction(&format!("b.eq {}", mixed_label));              // retain the existing Mixed cell instead of nesting it
+            abi::emit_load_int_immediate(emitter, hi_reg, 0);
+            emitter.instruction(&format!("cmp {}, #1", source_tag_reg));        // is the referenced value a string (runtime tag 1)?
             emitter.instruction(&format!("b.eq {}", string_hi_label));          // strings also need the high length word loaded
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, 1", tag_reg));                // is the referenced value a string (runtime tag 1)?
+            emitter.instruction(&format!("cmp {}, 7", source_tag_reg));         // detect an already-boxed Mixed value in the reference cell
+            emitter.instruction(&format!("je {}", mixed_label));                // retain the existing Mixed cell instead of nesting it
+            abi::emit_load_int_immediate(emitter, hi_reg, 0);
+            emitter.instruction(&format!("cmp {}, 1", source_tag_reg));         // is the referenced value a string (runtime tag 1)?
             emitter.instruction(&format!("je {}", string_hi_label));            // strings also need the high length word loaded
         }
     }
@@ -1178,7 +1197,13 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     emitter.label(&string_hi_label);
     abi::emit_load_from_address(emitter, hi_reg, ref_cell_reg, 8);
     emitter.label(&box_label);
-    emit_box_runtime_payload_as_mixed(emitter, tag_reg, lo_reg, hi_reg);
+    emit_box_runtime_payload_as_mixed(emitter, source_tag_reg, lo_reg, hi_reg);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&mixed_label);
+    emitter.instruction(&format!("mov {}, {}", result_reg, lo_reg));            // reuse the referenced Mixed cell without adding a wrapper layer
+    abi::emit_incref_if_refcounted(emitter, &PhpType::Mixed);
+    emitter.label(&done_label);
 }
 
 /// Branches when a boxed Mixed argument is an invoker ref-cell marker.
@@ -1621,37 +1646,19 @@ fn push_raw_invoker_ref_cell_value_arg(
     push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data)
 }
 
-/// Boxes a raw reference-cell value as Mixed.
+/// Materializes a raw reference-cell value as one owned Mixed cell.
 fn emit_box_raw_invoker_ref_cell_value_as_mixed(
     ref_cell_reg: &str,
     source_tag_reg: &str,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
 ) {
-    let lo_reg = abi::tertiary_scratch_reg(emitter);
-    let hi_reg = match emitter.target.arch {
-        Arch::AArch64 => "x12",
-        Arch::X86_64 => "rdx",
-    };
-    let string_hi_label = ctx.next_label("hash_invoker_ref_string_hi");
-    let box_label = ctx.next_label("hash_invoker_ref_box");
-    abi::emit_load_from_address(emitter, lo_reg, ref_cell_reg, 0);
-    abi::emit_load_int_immediate(emitter, hi_reg, 0);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #1", source_tag_reg));        // is the referenced value a string (runtime tag 1)?
-            emitter.instruction(&format!("b.eq {}", string_hi_label));          // strings also need the high length word loaded
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, 1", source_tag_reg));         // is the referenced value a string (runtime tag 1)?
-            emitter.instruction(&format!("je {}", string_hi_label));            // strings also need the high length word loaded
-        }
-    }
-    abi::emit_jump(emitter, &box_label);
-    emitter.label(&string_hi_label);
-    abi::emit_load_from_address(emitter, hi_reg, ref_cell_reg, 8);
-    emitter.label(&box_label);
-    emit_box_runtime_payload_as_mixed(emitter, source_tag_reg, lo_reg, hi_reg);
+    emit_materialize_invoker_ref_cell_value_as_mixed(
+        ref_cell_reg,
+        source_tag_reg,
+        emitter,
+        ctx,
+    );
 }
 
 /// Returns raw registers produced by `__rt_hash_get`.
@@ -2648,5 +2655,37 @@ mod tests {
         assert!(output.contains("    ldr x10, [x9]\n"));
         assert!(!output.contains("stur x10, [x29, #-3"));
         assert!(!output.contains("ldur x10, [x29, #-3"));
+    }
+
+    /// Ref-cell markers retain source tag 7 directly instead of creating nested Mixed boxes.
+    #[test]
+    fn invoker_mixed_ref_cell_values_bypass_reboxing_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false);
+            let (ref_cell_reg, source_tag_reg, branch) = match target.arch {
+                Arch::AArch64 => ("x19", "x20", "b.eq mixed_ref_cell_invoker_ref_mixed_0"),
+                Arch::X86_64 => ("r12", "r13", "je mixed_ref_cell_invoker_ref_mixed_0"),
+            };
+
+            emit_materialize_invoker_ref_cell_value_as_mixed(
+                ref_cell_reg,
+                source_tag_reg,
+                &mut emitter,
+                &mut ctx,
+            );
+
+            let asm = emitter.output();
+            let boxed = asm.find("__rt_mixed_from_value").unwrap();
+            let mixed = asm.find("mixed_ref_cell_invoker_ref_mixed_0:").unwrap();
+            let retained = asm[mixed..].find("__rt_incref").unwrap() + mixed;
+            let done = asm.find("mixed_ref_cell_invoker_ref_materialized_3:").unwrap();
+            assert!(asm.contains(branch), "{name}: {asm}");
+            assert!(boxed < mixed && mixed < retained && retained < done, "{name}: {asm}");
+            assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}: {asm}");
+            assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+        }
     }
 }

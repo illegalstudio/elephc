@@ -1813,3 +1813,21 @@ the implementation now numbers either invalid array operand, while the fixture
 still expected the old first-argument wording. Update that expectation without
 changing acceptance or runtime behavior, and add both operand positions for
 udiff and uintersect. Cargo check --tests and diff hygiene pass; tests are CI-only.
+
+### Materialize already-boxed invoker reference arguments without nesting
+
+Cursor GPT 5.6 Sol traced the runtime-selected comparator failure through the
+exact CI assembly. The descriptor remains intact: the first incorrect value is
+a tag-11 argument marker whose source storage tag is 7. Its source already holds
+a Mixed cell, but the invoker boxed that pointer again. Array validation then
+encountered another Mixed tag instead of the array payload. The suspected
+callee-saved descriptor-register corruption is not the cause of this fixture.
+
+Both indexed and associative marker paths now share materialization: source
+tag 7 retains the existing Mixed cell, while raw source tags keep their existing
+boxing behavior. Invoker argument cleanup owns and retires that retained lease.
+Preserve the original failing callable-surface fixture unchanged and add a
+five-target emitter test that proves the Mixed branch bypasses reboxing.
+Coordinator review checked the production register assignments and shared
+retain/coercion cleanup. Build, test compilation, assembly-comment and diff
+audits pass. No local tests execute; the unchanged runtime fixture awaits CI.
