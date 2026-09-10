@@ -150,7 +150,7 @@ unset($source, $value, $text);
 /// Literal and opaque eval share the active array parameter shadow without exposing its internal name.
 #[test]
 fn test_core_eval_array_parameter_shadow_is_the_visible_php_binding() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 function inspectArrayShadowOwners(array $items, string $source): void {
     $items[0] = "native";
     eval($source);
@@ -170,7 +170,8 @@ unset($items, $source);
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "native|hidden|dynamic|literal|caller", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}\nuser assembly:\n{}", out.stderr, assembly);
 }
 
 /// Independent scope snapshots protect aliased native reference cells during sequential reload.

@@ -1087,3 +1087,12 @@ Added all-target assembly/EIR coverage, interleaved escaping captures with two
 defaults, and repeated same-frame exception cleanup with payload destructors.
 Updated the old stack-only documentation. Build, test compilation and assembly
 comment checks are the local validation; no tests were executed locally.
+
+### Remaining eval-owner diagnostics
+
+The previous CI head still reports six string owners in the eval class-name
+fixture, and one Mixed cell plus one string in the array-parameter shadow
+fixture. Include only user assembly in their failure diagnostics so the next
+remote run identifies the remaining allocation and retirement paths. Preserve
+all existing output and clean-heap assertions; this is instrumentation, not a
+claim that either remaining leak is fixed.
