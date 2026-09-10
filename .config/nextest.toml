@@ -106,6 +106,49 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_mangled_inventory_releases_metadata_temporaries)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# These sibling GC fixtures also compile and link Magician twice. On deb330029
+# both retries exceeded 60s on macOS while Linux passed. Keep their exact names
+# scoped to the same bounded budget as the mangled-inventory fixture above.
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_class_method_results_release_temporary_cells)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_class_method_results_release_temporary_cells)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_native_argument_packing_releases_indexes)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_native_argument_packing_releases_indexes)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_spl_intrinsic_transfers_release_consumed_cells)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_spl_intrinsic_transfers_release_consumed_cells)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_str_repeat_releases_operand_cells)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_str_repeat_releases_operand_cells)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_class_constant_defaults_release_inventory_leases)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_class_constant_defaults_release_inventory_leases)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # This fixture compiles the web prelude together with native closures and opaque
 # eval handlers. Keep HTTP requests bounded in the fixture while allowing a cold
 # compiler/linker run to finish on shared macOS runners.

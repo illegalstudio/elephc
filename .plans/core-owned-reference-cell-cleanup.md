@@ -2281,3 +2281,15 @@ assertions, with coordinator corrections to fixture typing and Option patterns.
 Cargo check --tests, exporter build, documentation and target-boundary audits,
 assembly-comment alignment and diff hygiene pass. Generated docs are unchanged.
 No local tests or compiler repros execute; new and existing regressions await CI.
+
+### Bound the remaining double-compile eval fixtures with the measured budget
+
+Five sibling metadata/collection fixtures exceed the 60-second macOS termination
+limit on both retries of deb330029, while both Linux targets pass. Each uses the
+same two-compile Magician helper as the previously scoped mangled-inventory test.
+Assign those exact five names the existing three-period budget in default and CI
+profiles. No blanket timeout increase and no change to heap or output assertions.
+
+Validate TOML syntax and diff hygiene. No local tests execute. CI must demonstrate
+these fixtures finish within the bounded budget; the timeout adjustment alone
+does not establish runtime correctness or exclude a macOS-specific stall.
