@@ -949,3 +949,15 @@ exercises runtime validation without changing static argument compatibility or
 accepting an invalid callback into the native callee. The emitter gate also
 asserts the target retains its Mixed ABI. Local validation compiles the tests
 only; runtime results still require CI.
+
+### Reference property assembly expectation
+
+The issue-642 reference-slot assertion still expected a raw indexed array, while
+the declared PHP array now owns a Mixed box through its managed reference cell.
+The emitted assembly attached to the failing CI assertion confirms the correct
+sequence: dereference the cell, clone the box, release its old owner and publish
+back through the cell. Update the ordered assertions for both architectures and
+explicitly forbid passing the box to the raw indexed-array split helper. Keep
+the existing prohibition on overwriting the property reference-cell pointer.
+This is a test-expectation update, not a runtime ownership fix. The tests were
+compiled but not executed locally.

@@ -1914,10 +1914,9 @@ echo implode(',', C::$x);",
     }
 }
 
-/// Regression for issue #642: the reference-slot split must go THROUGH the ref cell on every
-/// supported target — dereference the cell to reach the container, then publish the separated
-/// container back at the cell's payload rather than into the property slot, which holds the cell
-/// pointer itself. Writing the container over the slot would destroy the reference binding.
+/// Reference-slot writes dereference the managed cell to reach the declared array's Mixed box,
+/// clone that box, release its previous owner and publish the new box through the same cell.
+/// Overwriting the property slot instead would destroy the reference binding (issue #642).
 ///
 /// The assertion is structural so it can be run for a non-host architecture through
 /// `ELEPHC_TEST_TARGET` without an assembler for that target.
@@ -1947,20 +1946,22 @@ foreach ($o->x as &$v) { $v = $v * 2; }
         .expect("missing iter_start after prop_get_for_write");
     let body = &body[..end];
 
-    // Cell pointer out of the slot, container out of the cell, split, container back into the
-    // cell. The slot offset is 8 for the single property; the cell payload sits at offset 0.
-    let steps: [&str; 5] = match target().arch {
+    // The property holds a managed cell, whose payload owns the declared array's Mixed box.
+    // Retiring that old box must precede publication without replacing the cell pointer.
+    let steps: [&str; 6] = match target().arch {
         Arch::AArch64 => [
             "ldr x0, [x9, #8]",
             "ldr x0, [x0]",
-            "bl __rt_array_ensure_unique",
+            "bl __rt_mixed_clone",
+            "bl __rt_decref_mixed",
             "ldr x10, [x9, #8]",
             "str x0, [x10]",
         ],
         Arch::X86_64 => [
-            "mov rdi, QWORD PTR [r11 + 8]",
-            "mov rdi, QWORD PTR [rdi]",
-            "call __rt_array_ensure_unique",
+            "mov rax, QWORD PTR [r11 + 8]",
+            "mov rax, QWORD PTR [rax]",
+            "call __rt_mixed_clone",
+            "call __rt_decref_mixed",
             "mov r10, QWORD PTR [r11 + 8]",
             "mov QWORD PTR [r10], rax",
         ],
@@ -1972,6 +1973,8 @@ foreach ($o->x as &$v) { $v = $v * 2; }
             .unwrap_or_else(|| panic!("missing `{step}` after offset {cursor} in:\n{body}"));
         cursor += found + step.len();
     }
+    assert!(!body.contains("__rt_array_ensure_unique"),
+        "a declared PHP array's Mixed box must not be passed as a raw indexed container:\n{body}");
     assert!(
         !body.contains("str x0, [x9, #8]") && !body.contains("mov QWORD PTR [r11 + 8], rax"),
         "the separated container must never overwrite the ref-cell pointer in the slot:\n{body}"
