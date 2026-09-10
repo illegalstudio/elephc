@@ -538,3 +538,14 @@ implode monitoring metadata, reference-cell clone alignment analysis, stale
 sleep-result owner assertions, malformed standalone-spread optimizer coverage,
 array-flip declared-array handling and several ownership/type fixtures. These
 need individual inspection; this progress does not establish a green PR.
+
+### Join monitoring boundary
+
+Implode keeps every conservative callback/destructor effect except the two
+flags that identify a directly monitored blocking/network operation. Nested
+PHP I/O is monitored by its own runtime target; the join is not itself a
+network driver. The effect regression still requires global writes, throws,
+reference counting and observable execution. This addresses the registry
+monitoring gate without suppressing string conversions or inventing I/O events.
+Build, test compilation and all generated-document audits pass. The docs skill
+updated implode/join effect counts and the registry; no tests ran locally.

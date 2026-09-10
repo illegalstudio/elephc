@@ -12,9 +12,13 @@ use crate::ir::{Effects, Op, RuntimeFnId};
 /// Joins may invoke string conversions and destructors even when their string result is discarded.
 #[test]
 fn implode_effects_preserve_string_conversion_callbacks() {
-    assert_eq!(RuntimeFnId::Implode.effects(), Effects::all());
-    assert!(RuntimeFnId::Implode.effects().is_observable());
-    assert_eq!(RuntimeFnId::Implode.intrinsic_effects(), Effects::all());
+    let effects = RuntimeFnId::Implode.effects();
+    let io_boundary = Effects::BLOCKING_IO | Effects::NETWORK_IO;
+    assert_eq!(effects, Effects::all() & !io_boundary);
+    assert!(effects.is_observable());
+    assert!(effects.contains(Effects::WRITES_GLOBAL | Effects::MAY_THROW | Effects::REFCOUNT_OP));
+    assert!(!effects.intersects(io_boundary));
+    assert_eq!(RuntimeFnId::Implode.intrinsic_effects(), effects);
 }
 
 /// Both explicit collection and automatic safe points can execute arbitrary throwing destructors.

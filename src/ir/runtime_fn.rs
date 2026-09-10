@@ -1006,7 +1006,13 @@ impl RuntimeFnId {
             ),
             // Object string conversions and cleanup destructors may execute arbitrary
             // PHP. Unused joins must still run, and their callbacks can mutate globals.
-            RuntimeFnId::Implode => crate::ir::Effects::all(),
+            // I/O inside those callbacks is monitored at its own runtime boundary;
+            // the join itself does not perform a network or blocking operation.
+            RuntimeFnId::Implode => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
