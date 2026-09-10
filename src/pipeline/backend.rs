@@ -98,6 +98,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if with_crates.contains("mbstring") {
         ir_module.required_runtime_features.mbstring = true;
         ir_module.required_runtime_features.mbregex = true;
+        ir_module.required_runtime_features.mbstring_mime = true;
     }
     let probe = with_crates.contains("probe");
     if probe {
@@ -119,10 +120,16 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         eprintln!("probe build fingerprint: {}", crate::probe_key::fingerprint(&key));
         ir_module.probe_key = Some(key);
     }
-    let mut runtime_features = ir_module.required_runtime_features;
-    if runtime_features.mbstring || runtime_features.mbregex || runtime_features.eval_bridge {
+    let configures_mbstring = ir_module.required_runtime_features.mbstring
+        || ir_module.required_runtime_features.mbregex
+        || ir_module.required_runtime_features.eval_bridge;
+    if configures_mbstring {
+        ir_module.required_runtime_features.mbstring_mime |= ini_overrides.iter().any(|(name, _)| {
+            name == "mbstring.http_output_conv_mimetypes"
+        });
         ir_module.mbstring_startup = Some(super::mbstring_configuration::arguments(ini_overrides));
     }
+    let mut runtime_features = ir_module.required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
     // sole driver of the web runtime feature: it is CLI-driven, not derived from the
     // program, so the runtime cache (keyed on the generated assembly hash) keeps the
@@ -313,10 +320,6 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         .any(|library| library == "elephc_curl")
     {
         native_requirements.push(NativeRequirement::package("curl"));
-    }
-    // Default and configured MIME selection use PCRE2 without enabling preg_* in opaque eval.
-    if ir_module.mbstring_startup.is_some() {
-        native_requirements.push(NativeRequirement::package("pcre2"));
     }
     // The xml bridge is the same shape as curl: `elephc_xml` is a Rust `staticlib`
     // whose parser is libxml2 itself, reached through the Elephc-owned C shim the

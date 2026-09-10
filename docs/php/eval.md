@@ -84,9 +84,11 @@ The implementation boundary is documented in
 ## Optional regex capability
 
 Dynamic eval source is opaque to compile-time feature detection. Its shared
-mbstring output support requires the managed PCRE2 MIME-pattern provider. That
-dependency does not expose `preg_*` inside evaluated code. With the provider
-installed, a program without the regex capability still compiles;
+mbstring output support handles the contract-owned default MIME expression
+without PCRE2. A custom `mbstring.http_output_conv_mimetypes` expression inside
+opaque eval requires the complete `--with-mbstring` capability and its managed
+PCRE2 package. That dependency does not expose `preg_*` inside evaluated code.
+Without the regex capability,
 `function_exists("preg_match")` returns `false` inside dynamic eval and a call
 fails at runtime.
 

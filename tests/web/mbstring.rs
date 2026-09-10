@@ -14,8 +14,6 @@ use super::*;
 #[test]
 fn web_mbstring_startup_configuration_reset() {
     let dir = make_test_dir("web_mbstring_startup");
-    let native = managed_pcre2::prepare_managed_pcre2_cli_project(&dir,
-        elephc::codegen::platform::Target::detect_host());
     let php = dir.join("app.php");
     fs::write(&php, r#"<?php
 echo mb_internal_encoding(), ":", mb_http_input("L"), ":", mb_http_output(), ":";
@@ -31,7 +29,7 @@ ini_restore("mbstring.language");
 echo ini_get("mbstring.language");
 "#).unwrap();
     let compiled = Command::new(elephc_bin()).current_dir(&dir)
-        .env("XDG_CACHE_HOME", dir.join("cache-root")).env("ELEPHC_NATIVE_CACHE", native)
+        .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .args(["--web", "--ini", "default_charset=8bit", "--ini", "mbstring.strict_detection=1"])
         .arg(&php).output().unwrap();
     assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));

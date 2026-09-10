@@ -77,3 +77,23 @@ pub(crate) fn elephc_cli_command_with_oniguruma(dir: &Path) -> Command {
     command.env("ELEPHC_NATIVE_CACHE", &fixture.cache);
     command
 }
+
+/// Seeds the complete forced-mbstring project without broadening Oniguruma-only fixtures.
+pub(crate) fn elephc_cli_command_with_mbstring_native(dir: &Path) -> Command {
+    let fixture = fixture();
+    static PCRE2_READY: OnceLock<()> = OnceLock::new();
+    PCRE2_READY.get_or_init(|| {
+        crate::managed_pcre2_support::populate_managed_pcre2_cache(&fixture.cache, target());
+    });
+    for (name, contents) in [
+        ("elephc.toml", include_bytes!("../../../examples/date-json-regex/elephc.toml").as_slice()),
+        ("elephc.lock", include_bytes!("../../../examples/date-json-regex/elephc.lock").as_slice()),
+    ] {
+        let destination = dir.join(name);
+        assert!(!destination.exists(), "mbstring CLI fixture requires a new owned project");
+        fs::write(destination, contents).expect("write complete mbstring native project metadata");
+    }
+    let mut command = elephc_cli_command(dir);
+    command.env("ELEPHC_NATIVE_CACHE", &fixture.cache);
+    command
+}

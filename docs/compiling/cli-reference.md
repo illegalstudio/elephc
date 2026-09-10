@@ -734,9 +734,9 @@ elephc native add pcre2
 elephc --ini default_charset=8bit --ini mbstring.strict_detection=1 app.php
 ```
 
-Mbstring and opaque eval require the managed PCRE2 package for MIME-pattern
-validation and output selection, including with default startup settings.
-This dependency does not enable `preg_*` in opaque eval.
+The contract-owned default mbstring MIME expression needs no native package.
+Custom MIME expressions inside opaque eval require `--with-mbstring` and the
+managed PCRE2 package. This dependency does not enable `preg_*` in opaque eval.
 Programs without mbstring or eval do not acquire this dependency from an unused
 override. Startup diagnostics currently use the runtime stderr path.
 

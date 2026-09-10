@@ -226,8 +226,9 @@ installed or versioned by `elephc native`. A bridge or runtime-capability flag
 may require a separately declared managed package: `--with-regex` requires
 `pcre2`, `--with-curl` requires `curl` (which in turn declares `openssl` and
 `zlib`), `--with-mbstring` requires `oniguruma` and `pcre2`, and `--with-xml`
-requires `libxml2`. Programs using mbstring or opaque eval need `pcre2` for
-response MIME selection even with default INI settings. These flags do not
+requires `libxml2`. Ordinary mbstring and opaque eval use the contract-owned
+default MIME matcher without PCRE2. Custom MIME expressions in opaque eval need
+the complete `--with-mbstring` capability. These flags do not
 install the packages. Composer dependencies are
 PHP source handled by the compile-time autoload pipeline and remain separate.
 

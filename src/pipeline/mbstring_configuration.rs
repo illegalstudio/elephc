@@ -7,7 +7,7 @@
 //! Key details:
 //! - Effective core encodings follow php_get_*_encoding inheritance and C-string boundaries.
 //! - The bridge owns directive validation, registration order, and duplicate-key handling.
-//! - Default-only programs still initialize the MIME provider needed by public output conversion.
+//! - Default-only programs initialize shared state without selecting the optional MIME provider.
 
 /// Selects relevant startup overrides and resolves the three core encoding fallback chains.
 pub(super) fn arguments(overrides: &[(String, String)]) -> Vec<Vec<u8>> {

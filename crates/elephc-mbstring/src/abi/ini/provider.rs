@@ -9,13 +9,13 @@
 //! - Every published handle is released, including malformed provider responses.
 
 use std::{ffi::c_void, sync::OnceLock};
-use elephc_builtin_contract::mbstring_abi::ini::MbMimeRegexV1;
+use elephc_builtin_contract::mbstring_abi::ini::{catalog::{self, Key}, MbMimeRegexV1};
 use crate::state::MimeRegexError;
 
 static PROVIDER: OnceLock<MbMimeRegexV1> = OnceLock::new();
 
 /// Separates normal PCRE2 compile diagnostics from missing or malformed native providers.
-pub(super) enum Failure { Compile(MimeRegexError), Fatal }
+pub(super) enum Failure { Compile(MimeRegexError), Unavailable, Fatal }
 
 /// Pins a complete provider, accepting idempotent registration but rejecting a different allocator/function set.
 pub(super) fn install(provider: MbMimeRegexV1) -> bool {
@@ -30,15 +30,25 @@ pub(super) fn install(provider: MbMimeRegexV1) -> bool {
 
 /// Validates one trimmed C-string pattern through the installed native PCRE2 functions.
 pub(super) fn validate(pattern: &[u8]) -> Result<(), Failure> {
+    if PROVIDER.get().is_none() && is_default_pattern(pattern) { return Ok(()); }
     compile(pattern).map(drop)
 }
 
 /// Matches one accepted MIME expression, treating native match errors as PHP's nonmatch.
 pub(in crate::abi) fn matches(pattern: &[u8], subject: &[u8]) -> Result<bool, ()> {
+    if PROVIDER.get().is_none() && is_default_pattern(pattern) {
+        return Ok(subject.starts_with(b"text/") || subject.starts_with(b"application/xhtml+xml"));
+    }
     let compiled = compile(pattern).map_err(|_| ())?;
     let status = unsafe { compiled.provider.matches.unwrap()(compiled.handle, subject.as_ptr(), subject.len() as u64) };
     if status > 1 { return Err(()); }
     Ok(status == 1)
+}
+
+/// Recognizes the contract-owned default expression without duplicating its byte spelling.
+fn is_default_pattern(pattern: &[u8]) -> bool {
+    catalog::DIRECTIVES[Key::Mimetypes as usize].default
+        .is_some_and(|default| pattern == default.as_bytes())
 }
 
 /// Keeps a native compiled pattern under its provider's allocator without any PHP destructor.
@@ -51,7 +61,7 @@ impl Drop for Compiled {
 
 /// Validates provider result framing and transfers only a successful nonnull compiled handle.
 fn compile(pattern: &[u8]) -> Result<Compiled, Failure> {
-    let provider = PROVIDER.get().ok_or(Failure::Fatal)?;
+    let provider = PROVIDER.get().ok_or(Failure::Unavailable)?;
     let mut handle: *mut c_void = std::ptr::null_mut();
     let mut offset = 0;
     let status = unsafe { provider.compile.unwrap()(&mut handle, pattern.as_ptr(), pattern.len() as u64, &mut offset) };
@@ -64,4 +74,30 @@ fn compile(pattern: &[u8]) -> Result<Compiled, Failure> {
     let length = unsafe { provider.error.unwrap()(status, message.as_mut_ptr(), message.len() as u64) };
     if length < 0 || length as usize >= message.len() || message[length as usize] != 0 { return Err(Failure::Fatal); }
     Err(Failure::Compile(MimeRegexError { offset, message: message[..length as usize].to_vec() }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Preserves the exact case-sensitive prefix semantics of the shared default without PCRE2.
+    #[test]
+    fn default_pattern_matches_without_native_provider() {
+        let pattern = catalog::DIRECTIVES[Key::Mimetypes as usize].default.unwrap().as_bytes();
+        assert!(validate(pattern).is_ok());
+        for subject in [b"text/plain".as_slice(), b"text/", b"application/xhtml+xml",
+            b"application/xhtml+xml; charset=UTF-8"] {
+            assert_eq!(matches(pattern, subject), Ok(true), "{}", String::from_utf8_lossy(subject));
+        }
+        for subject in [b"Text/plain".as_slice(), b"application/xhtml-xml", b"application/json"] {
+            assert_eq!(matches(pattern, subject), Ok(false), "{}", String::from_utf8_lossy(subject));
+        }
+    }
+
+    /// Keeps arbitrary MIME expressions behind the installed native provider capability.
+    #[test]
+    fn custom_pattern_reports_missing_native_provider() {
+        assert!(matches!(validate(b"^application/json"), Err(Failure::Unavailable)));
+        assert_eq!(matches(b"^application/json", b"application/json"), Err(()));
+    }
 }

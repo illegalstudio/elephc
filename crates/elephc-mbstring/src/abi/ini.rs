@@ -201,6 +201,8 @@ fn validation(pattern: &[u8], status: &Cell<i32>) -> Result<(), MimeRegexError> 
     match provider::validate(pattern) {
         Ok(()) => Ok(()),
         Err(provider::Failure::Compile(error)) => Err(error),
+        Err(provider::Failure::Unavailable) => Err(MimeRegexError { offset: 0,
+            message: b"managed PCRE2 MIME provider is unavailable; run elephc native add pcre2 and use --with-mbstring for opaque custom MIME configuration".to_vec() }),
         Err(provider::Failure::Fatal) => {
             if status.get() != 2 { status.set(1); }
             Err(MimeRegexError { offset: 0, message: Vec::new() })

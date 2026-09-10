@@ -83,6 +83,7 @@ fn compile_lfc_eval_project_and_run(
         regex: true,
         mbstring: false,
         mbregex: false,
+        mbstring_mime: false,
         phar_archive: false,
         descriptor_invoker: true,
         eval_bridge: true,

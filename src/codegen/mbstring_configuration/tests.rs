@@ -23,6 +23,7 @@ fn mbstring_startup_assembles_on_all_supported_targets() {
         ("ios-arm64", "arm64-apple-ios13"), ("ios-sim-arm64", "arm64-apple-ios13-simulator")] {
         let target = Target::parse(name).unwrap();
         let mut module = Module::new(target);
+        module.required_runtime_features.mbstring_mime = true;
         module.mbstring_startup = Some(["UTF-8", "SJIS", "ASCII", "mbstring.language", "Japanese"]
             .map(|value| value.as_bytes().to_vec()).into());
         let mut emitter = Emitter::new(target);
@@ -39,4 +40,25 @@ fn mbstring_startup_assembles_on_all_supported_targets() {
         assert!(built.status.success(), "{name}: {}", String::from_utf8_lossy(&built.stderr));
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+/// Emits PCRE2 MIME imports only when output matching or MIME validation selected the provider.
+#[test]
+fn mbstring_startup_mime_symbols_follow_runtime_capability() {
+    let target = Target::detect_host();
+    for (enabled, expected) in [(false, false), (true, true)] {
+        let mut module = Module::new(target);
+        module.required_runtime_features.mbstring_mime = enabled;
+        module.mbstring_startup = Some(vec![b"UTF-8".to_vec(); 3]);
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        emit(&module, &mut emitter, &mut data);
+        let assembly = emitter.output() + &data.emit(target);
+        for symbol in ["elephc_pcre2_v1_mime_compile", "elephc_pcre2_v1_mime_match",
+            "elephc_pcre2_v1_mime_free", "elephc_pcre2_v1_error_message"] {
+            assert_eq!(assembly.contains(symbol), expected, "{symbol} capability={enabled}");
+        }
+        assert_eq!(assembly.contains("elephc_mbstring_mime_provider_v1"), expected);
+        assert!(assembly.contains("elephc_mbstring_configure_v1"));
+    }
 }

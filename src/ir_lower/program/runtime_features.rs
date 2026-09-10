@@ -16,6 +16,7 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.regex |= features.regex;
     module.required_runtime_features.mbstring |= features.mbstring;
     module.required_runtime_features.mbregex |= features.mbregex;
+    module.required_runtime_features.mbstring_mime |= features.mbstring_mime;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
     module.required_runtime_features.pdo_udf |= features.pdo_udf;
@@ -37,6 +38,11 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
     for function in all_lowered_functions(module) {
         features.mbstring |= function_references_callable_runtime(module, function, is_mbstring_callable_name);
         features.mbregex |= function_references_callable_runtime(module, function, is_mbregex_callable_name);
+        features.mbstring_mime |= function_references_callable_runtime(
+            module,
+            function,
+            is_mbstring_mime_callable_name,
+        );
         if function_contains_eval_scope_state(function) {
             features.eval_scope = true;
         }
@@ -50,6 +56,7 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                         features.regex |= target.uses_regex_runtime();
                         features.mbstring |= target.uses_mbstring_runtime();
                         features.mbregex |= target.uses_mbregex_runtime();
+                        features.mbstring_mime |= target.uses_mbstring_mime_runtime();
                         features.phar_archive |= target.publishes_phar_symbols()
                             && function_belongs_to_phar_archive_helper_class(function);
                         features.descriptor_invoker |=
@@ -445,5 +452,14 @@ fn is_mbregex_callable_name(name: &str) -> bool {
         matches!(def.spec.semantics.runtime_functions,
             crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
                 if target.uses_mbregex_runtime())
+    })
+}
+
+/// Resolves output-handler callables through the typed MIME-provider operation.
+fn is_mbstring_mime_callable_name(name: &str) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        matches!(def.spec.semantics.runtime_functions,
+            crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                if target.uses_mbstring_mime_runtime())
     })
 }

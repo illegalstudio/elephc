@@ -48,6 +48,8 @@ pub struct RuntimeFeatures {
     pub mbstring: bool,
     /// True when matching operations require the managed Oniguruma provider.
     pub mbregex: bool,
+    /// True when output conversion or startup validation requires the managed PCRE2 MIME provider.
+    pub mbstring_mime: bool,
     pub phar_archive: bool,
     /// True when codegen can emit the runtime callable dispatcher (descriptor
     /// invoker) that builds per-builtin wrappers referencing `elephc_crypto`.
@@ -132,6 +134,7 @@ impl RuntimeFeatures {
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
             | ((self.mbregex as u64) << 12)
+            | ((self.mbstring_mime as u64) << 13)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -140,6 +143,7 @@ impl RuntimeFeatures {
             regex: false,
             mbstring: false,
             mbregex: false,
+            mbstring_mime: false,
             phar_archive: false,
             descriptor_invoker: false,
             eval_bridge: false,
@@ -160,6 +164,7 @@ impl RuntimeFeatures {
             regex: true,
             mbstring: true,
             mbregex: true,
+            mbstring_mime: true,
             phar_archive: true,
             descriptor_invoker: true,
             eval_bridge: true,
@@ -191,7 +196,7 @@ pub fn runtime_features_for_program_and_classes(
 /// Returns typed final-link requirements for the selected optional runtime features.
 pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<LinkRequirement> {
     let mut requirements = Vec::new();
-    if features.regex || features.mbstring || features.mbregex || features.eval_bridge {
+    if features.regex || features.mbstring_mime {
         requirements.push(LinkRequirement::NativePackage("pcre2"));
     }
     if features.mbregex { requirements.push(LinkRequirement::NativePackage("oniguruma")); }
@@ -1087,7 +1092,7 @@ mod tests {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
-    /// Verifies eval requests Magician, shared scalar bridges, and PCRE2 for mbstring MIME selection.
+    /// Verifies eval requests Magician and shared scalar bridges without an unused MIME provider.
     #[test]
     fn test_eval_runtime_features_require_magician_and_bcmath_bridges() {
         assert_eq!(
@@ -1096,7 +1101,6 @@ mod tests {
                 ..RuntimeFeatures::none()
             }),
             vec![
-                LinkRequirement::NativePackage("pcre2"),
                 LinkRequirement::Bridge("elephc_magician"),
                 LinkRequirement::Bridge("elephc_bcmath"),
                 LinkRequirement::Bridge("elephc_mbstring")
@@ -1290,6 +1294,7 @@ mod tests {
             generator: false,
             popen_resource: false,
             directory_resource: false,
+            mbstring_mime: false,
         })
         .iter()
         .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));
@@ -1308,7 +1313,6 @@ mod tests {
                 ..RuntimeFeatures::none()
             }),
             vec![
-                LinkRequirement::NativePackage("pcre2"),
                 LinkRequirement::Bridge("elephc_magician"),
                 LinkRequirement::Bridge("elephc_bcmath"),
                 LinkRequirement::Bridge("elephc_mbstring")
@@ -1316,13 +1320,20 @@ mod tests {
         );
     }
 
-    /// Includes the managed MIME provider for default mbstring without exposing eval preg_* support.
+    /// Keeps ordinary mbstring independent while MIME output requests its dedicated provider.
     #[test]
     fn test_mbstring_runtime_features_require_mime_provider() {
         let features = RuntimeFeatures { mbstring: true, ..RuntimeFeatures::none() };
         assert_eq!(link_requirements_for_runtime_features(features), vec![
-            LinkRequirement::NativePackage("pcre2"), LinkRequirement::Bridge("elephc_mbstring"),
+            LinkRequirement::Bridge("elephc_mbstring"),
         ]);
         assert!(!features.regex);
+        assert_eq!(link_requirements_for_runtime_features(RuntimeFeatures {
+            mbstring: true,
+            mbstring_mime: true,
+            ..RuntimeFeatures::none()
+        }), vec![
+            LinkRequirement::NativePackage("pcre2"), LinkRequirement::Bridge("elephc_mbstring"),
+        ]);
     }
 }

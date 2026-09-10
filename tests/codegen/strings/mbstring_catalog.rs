@@ -90,7 +90,7 @@ fn test_mbstring_catalog_forced_runtime_callable() {
     let php = dir.join("main.php");
     std::fs::write(&php,
         "<?php $name = (string)getenv('ELEPHC_MBSTRING_CALLBACK'); echo count(call_user_func($name));").unwrap();
-    let compiled = elephc_cli_command_with_oniguruma(&dir).arg("--with-mbstring").arg(&php).output().unwrap();
+    let compiled = elephc_cli_command_with_mbstring_native(&dir).arg("--with-mbstring").arg(&php).output().unwrap();
     assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
     let executed = std::process::Command::new(php.with_extension(""))
         .env("ELEPHC_MBSTRING_CALLBACK", "mb_list_encodings").output().unwrap();

@@ -1911,6 +1911,11 @@ impl RuntimeFnId {
         match self.mbstring_operation() { Some(operation) => operation.is_mbregex(), None => false }
     }
 
+    /// Selects the managed PCRE2 MIME provider only for output MIME matching.
+    pub const fn uses_mbstring_mime_runtime(self) -> bool {
+        matches!(self, RuntimeFnId::MbOutputHandler)
+    }
+
     /// Returns the scope-cleanup kind stamped into the resource this operation boxes.
     ///
     /// Read twice, and that is the point: the lowering stamps `Some(kind).stamp()` into the
