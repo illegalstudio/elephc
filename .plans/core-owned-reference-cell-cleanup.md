@@ -2247,3 +2247,18 @@ parameter. Establish actual Mixed storage with a declared Mixed seed function,
 without weakening type checks. Native Sol implemented both bounded corrections.
 Cargo check --tests, assembly-comment alignment and diff hygiene pass. No local
 tests execute; CI must run the constructor and reference-return regressions.
+
+### Avoid retiring multisort payload leases after backend consumption
+
+CI crashes for post-eval multisort and its structural regression finds an extra
+Release for detached array reads. The typed ArrayMultisort backend consumes those
+by-reference receiver leases during COW/storeback, including the second lease
+when both arguments name one place. Exclude exactly these contract-declared
+reference operands from generic post-call temporary cleanup. Other builtins and
+non-reference operands retain their cleanup rules.
+
+Native Sol traced the double consumption. Extend the five-target assertion to
+both same-place and distinct widened receivers. Existing heap and output coverage
+remains the executable gate. Cargo check --tests, exporter build, generated docs
+and target-boundary audits, assembly-comment alignment and diff hygiene pass.
+Generated documentation is unchanged. No local tests execute.

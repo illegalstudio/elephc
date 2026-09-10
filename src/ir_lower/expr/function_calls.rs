@@ -279,6 +279,7 @@ pub(super) fn emit_builtin_call_value(
             }
             let unrooted = operands.iter().enumerate()
                 .filter(|(index, _)| !roots.iter().any(|(root, _)| root == index))
+                .filter(|(index, _)| !builtin_consumes_mutating_ref_operand(def, *index))
                 .map(|(_, value)| *value).collect::<Vec<_>>();
             release_owned_call_arg_temporaries(
                 ctx,
@@ -358,6 +359,33 @@ pub(super) fn emit_builtin_call_value(
         }
     }
     call
+}
+
+/// Returns whether a typed builtin backend consumes one by-reference operand owner.
+///
+/// `array_multisort()` is unusual among the mutating builtins: its backend separates and
+/// republishes two receivers, and a concrete array read from widened Mixed local storage owns a
+/// detached payload lease. The backend consumes that lease during COW/storeback, including the
+/// explicit duplicate lease retirement when both arguments name the same place. Ordinary
+/// post-call cleanup must therefore leave those two owners to the backend while retaining the
+/// normal cleanup contract for every other builtin operand.
+fn builtin_consumes_mutating_ref_operand(
+    def: &crate::builtins::registry::BuiltinDef,
+    parameter_index: usize,
+) -> bool {
+    if !def.ref_params.get(parameter_index).copied().unwrap_or(false) {
+        return false;
+    }
+    matches!(
+        def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayMultisort)
+                | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                    target: crate::ir::RuntimeFnId::ArrayMultisort,
+                    ..
+                },
+        )
+    )
 }
 
 /// Resolves a migrated registry builtin's result type from the same descriptor as the checker.

@@ -47,9 +47,12 @@ fn multisort_same_widened_local_retires_the_second_detached_payload_on_every_tar
     let source = r#"<?php
 function sortWidenedTwice(string $source): void {
     $values = [];
+    $other = [];
     eval($source);
     $values = [3, 1, 2];
+    $other = [2, 3, 1];
     array_multisort($values, $values);
+    array_multisort($values, $other);
     echo implode(",", $values);
 }
 sortWidenedTwice('return null; // ' . $argc);
@@ -60,10 +63,12 @@ sortWidenedTwice('return null; // ' . $argc);
             crate::codegen::platform::Target::parse(name).unwrap(),
         );
         let function = module.functions.iter().find(|function| function.name == "sortWidenedTwice").unwrap();
-        let call = function.instructions.iter().find(|inst| matches!(inst.immediate,
+        let calls = function.instructions.iter().filter(|inst| matches!(inst.immediate,
             Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayMultisort)))
             | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::ArrayMultisort, .. }))
-        )).unwrap();
+        )).collect::<Vec<_>>();
+        assert_eq!(calls.len(), 2, "{name}: same-place and distinct-place calls");
+        let call = calls[0];
         assert_ne!(call.operands[0], call.operands[1], "{name}: two independent local reads");
         let mut slots = Vec::new();
         for value in &call.operands {
@@ -78,6 +83,19 @@ sortWidenedTwice('return null; // ' . $argc);
             }), "{name}: mutation transfers the detached lease instead of post-call releasing it");
         }
         assert_eq!(slots[0], slots[1], "{name}: both reads name the same widened local");
+        let distinct = calls[1];
+        assert_ne!(distinct.operands[0], distinct.operands[1], "{name}: distinct local reads");
+        let distinct_slots = distinct.operands.iter().map(|value| {
+            let load = function.instructions.iter().find(|inst| inst.result == Some(*value)).unwrap();
+            assert_eq!(load.op, crate::ir::Op::LoadLocal, "{name}");
+            let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("receiver slot"); };
+            assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), crate::types::PhpType::Mixed);
+            assert!(!function.instructions.iter().any(|inst| {
+                inst.op == crate::ir::Op::Release && inst.operands == [*value]
+            }), "{name}: each distinct mutation transfers its detached lease");
+            slot
+        }).collect::<Vec<_>>();
+        assert_ne!(distinct_slots[0], distinct_slots[1], "{name}: distinct reads name separate widened locals");
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         let same_place = assembly.split("array_multisort_distinct_receivers").nth(1).unwrap();
