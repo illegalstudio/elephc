@@ -40,6 +40,13 @@ function prependQueueEvent(array &$queue, string $event): int {
 }
 echo 'queued: ', prependQueueEvent($queue, 'reopened'), ': ', implode(', ', $queue), "\n";
 
+// Sorting a declared array parameter leaves the caller's original order intact.
+function sortedEventNames(array $events): array {
+    sort($events);
+    return $events;
+}
+echo 'sorted: ', implode(', ', sortedEventNames($queue)), "\n";
+
 // --- callbacks preserve keys through the same PHP array boundary ---
 function labelEvents(array $events): array {
     return array_map(fn(mixed $event): string => "event:" . $event, $events);

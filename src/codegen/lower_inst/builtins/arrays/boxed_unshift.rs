@@ -40,7 +40,7 @@ pub(super) fn lower_boxed_array_unshift(
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 4);
     abi::emit_call_label(ctx.emitter, "__rt_array_merge_boxed");
     abi::emit_push_reg(ctx.emitter, result);
-    install_hash_payload(ctx, array)?;
+    super::boxed_mutation::install_boxed_array_payload(ctx, array, 5)?;
     // The merged hash now owns every copied value, so neither release below
     // can run a destructor for a value still present in the receiver.
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
@@ -104,30 +104,5 @@ fn emit_prefix(ctx: &mut FunctionContext<'_>, values: &[ValueId]) -> Result<()> 
         abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     }
     abi::emit_pop_reg(ctx.emitter, result);
-    Ok(())
-}
-
-/// Transfers the merged hash into the receiver before retiring its old array payload.
-fn install_hash_payload(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(array, "x9")?;
-            ctx.emitter.instruction("ldr x0, [x9, #8]");                        // take the unique cell's previous payload owner
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 0);
-            ctx.emitter.instruction("str x10, [x9, #8]");                       // transfer the fresh hash into the published cell
-            ctx.emitter.instruction("mov x10, #5");                             // mark associative Mixed storage
-            ctx.emitter.instruction("str x10, [x9]");                           // install the hash tag before retiring old storage
-            ctx.emitter.instruction("str xzr, [x9, #16]");                      // array payloads have no high word
-        }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(array, "r10")?;
-            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 8]");            // take the unique cell's previous payload owner
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 0);
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");            // transfer the fresh hash into the published cell
-            ctx.emitter.instruction("mov QWORD PTR [r10], 5");                  // publish the associative Mixed tag
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 16], 0");             // array payloads have no high word
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     Ok(())
 }

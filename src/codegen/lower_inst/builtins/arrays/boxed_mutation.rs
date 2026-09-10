@@ -2,7 +2,7 @@
 //! Separates boxed PHP array receivers before edge mutations and key-ordering operations.
 //!
 //! Called from:
-//! - The typed ArrayPush, ArrayPop, ArrayShift, Ksort and Krsort backend paths.
+//! - Boxed array mutation and sorting backend paths.
 //!
 //! Key details:
 //! - The outer cell is separated and published before its packed/hash payload is mutated.
@@ -39,6 +39,64 @@ pub(super) fn prepare_boxed_array_receiver(
     require_valid_array_result(ctx, name);
     ctx.store_result_value(array)?;
     receiver.store_back_value(ctx, array)
+}
+
+/// Transfers the owned payload at the stack top into a unique cell, then retires its old payload.
+/// The new container must already retain every old value needed after publication.
+pub(super) fn install_boxed_array_payload(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    tag: u8,
+) -> Result<()> {
+    debug_assert!(matches!(tag, 4 | 5));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("ldr x0, [x9, #8]");                        // take the unique cell's previous payload owner
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 0);
+            ctx.emitter.instruction("str x10, [x9, #8]");                       // transfer the new container into the published cell
+            abi::emit_load_int_immediate(ctx.emitter, "x10", i64::from(tag));
+            ctx.emitter.instruction("str x10, [x9]");                           // install the layout tag before retiring old storage
+            ctx.emitter.instruction("str xzr, [x9, #16]");                      // array payloads have no high word
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "r10")?;
+            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 8]");            // take the unique cell's previous payload owner
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 0);
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");            // transfer the new container into the published cell
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {tag}"));    // publish the new packed or associative layout
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 16], 0");             // array payloads have no high word
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    Ok(())
+}
+
+/// Reindexes and separates a boxed array before the shared scalar comparator mutates it.
+pub(super) fn lower_boxed_array_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    name: &str,
+) -> Result<()> {
+    prepare_boxed_array_receiver(ctx, array, name)?;
+    ctx.load_value_to_result(array)?;
+    super::values::emit_loaded_boxed_array_values(
+        ctx, &format!("{name}(): Argument #1 ($array) must be of type array"),
+    )?;
+    let result = abi::int_result_reg(ctx.emitter);
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    // Normalization can retain an already dense Mixed array. Consume that
+    // independent owner in COW before sorting, leaving value aliases intact.
+    abi::emit_reg_move(ctx.emitter, arg0, result);
+    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+    abi::emit_push_reg(ctx.emitter, result);
+    install_boxed_array_payload(ctx, array, 4)?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, 0);
+    super::sort_dispatch::emit_mixed_slot_sort(ctx, name)?;
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0x7fff_ffff_ffff_fffe);
+    store_if_result(ctx, inst)
 }
 
 /// Promotes the published unique cell to hash storage and relinks keys without moving values.

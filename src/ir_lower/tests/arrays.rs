@@ -10,6 +10,29 @@
 
 use crate::ir::print_module;
 
+/// Declared PHP array sorts normalize both layouts and retain scalar guards on every target.
+#[test]
+fn boxed_array_sorts_emit_normalization_and_comparison_on_every_target() {
+    let source = r#"<?php
+function sortBoxed(array &$values): void { sort($values); rsort($values); }
+$values = ["last" => 3, 7 => 1, "middle" => 2];
+sortBoxed($values);
+echo implode(",", $values);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        for helper in ["__rt_array_cell_ensure_unique", "__rt_array_to_mixed", "__rt_array_ensure_unique",
+            "__rt_mixed_sort_require_scalars", "__rt_php_compare_slots", "__rt_php_compare_slots_desc"]
+        {
+            assert!(asm.contains(helper), "{target}: {helper}");
+        }
+    }
+}
+
 /// Boxed prepends retain a prefix before COW and publish a merged payload on every target.
 #[test]
 fn boxed_array_unshift_emits_owned_prefix_and_merge_on_every_target() {

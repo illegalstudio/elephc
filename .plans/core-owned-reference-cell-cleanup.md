@@ -516,3 +516,25 @@ hygiene pass; generated docs are unchanged and no local tests were run.
 CI on 4f4be08d9 now reports only the known hydration cleanup-throw failure in
 Linux x86_64 shard 15, with the earlier returned-array usort leak absent.
 All six web shards are green, including the previously timed-out macOS job.
+
+### Boxed scalar sorting
+
+Sort and rsort now accept declared PHP array storage. Their boxed path extracts
+an independently owned dense Mixed array, separates any retained packed alias,
+publishes that owner and uses the existing scalar comparator in the selected
+direction. Payload replacement is shared with boxed unshift. The existing
+explicit non-scalar restriction remains enforced and documented.
+
+Added list/map key reindexing, caller-alias preservation, by-value array copies,
+empty arrays, heap strings, floats, mixed scalar values and unsupported-element
+regressions. All-target structural tests pin normalization and guarded comparator
+emission. Build, test compilation, assembly-comment alignment, generated-document
+audits and diff hygiene pass, without executing local tests. The docs skill
+updated both builtin pages and the registry from the shared catalog.
+
+A fresh fetch still finds origin/main at b068c2b7d, already an ancestor. The
+completed Linux x86_64 non-codegen shard now exposes additional open gates:
+implode monitoring metadata, reference-cell clone alignment analysis, stale
+sleep-result owner assertions, malformed standalone-spread optimizer coverage,
+array-flip declared-array handling and several ownership/type fixtures. These
+need individual inspection; this progress does not establish a green PR.

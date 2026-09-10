@@ -221,6 +221,11 @@ pub(super) fn lower_indexed_array_sort(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
+    if matches!(name, "sort" | "rsort")
+        && ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed
+    {
+        return super::boxed_mutation::lower_boxed_array_sort(ctx, inst, array, name);
+    }
     let elem_ty =
         indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
@@ -564,7 +569,7 @@ pub(super) fn lower_array_key_sort(
 /// capture environment is passed and `__rt_usort` keeps its two-argument path.
 /// A runtime guard first rejects container, object, resource, and callable tags,
 /// whose PHP ordering is not implemented by the shared comparator.
-fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
+pub(super) fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
     let comparator = match name {
         "sort" => "__rt_php_compare_slots",
         "rsort" => "__rt_php_compare_slots_desc",
