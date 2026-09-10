@@ -1227,3 +1227,14 @@ Build and test compilation pass. The builtin-doc workflow passes without
 generated changes, and diff hygiene is clean. No tests ran locally. A fresh
 fetch confirms origin/main is still c91beb3434681294e0a1dd29ef92f42f3365923a
 and is already an ancestor, so this checkpoint needs no rebase or force push.
+
+### Shared-runtime fixture syntax correction
+
+The Magician CI unit run on a777301c0 passes 1305 tests but rejects the new
+overwrite fixture before execution: assignment expressions are outside its
+parser subset. Perform the same caller-local replacement from a nested eval,
+which preserves the argument-lifetime requirement without adding unrelated
+parser syntax. Apply the correction to the native heap fixture too and include
+the source fragment in unit parse diagnostics. Keep all owner-count and clean
+heap assertions unchanged. Validation here is test compilation and diff hygiene;
+no local tests are executed.

@@ -21,7 +21,7 @@ echo array_key_exists("missing", $items) ? "bad:" : "missing:";
 echo array_key_exists($key, $items), ":";
 echo strrev(strrev("owned")), ":";
 echo intval("17"), ":", round(2.6), ":";
-echo array_key_exists($key, ($key = [])) ? "bad|" : "stable|";
+echo array_key_exists($key, eval("\$key = []; return [];")) ? "bad|" : "stable|";
 unset($key, $items); // ' . $argc;
 for ($i = 0; $i < 3; $i++) { sharedRuntimeOperandOwners($source); }
 unset($source);

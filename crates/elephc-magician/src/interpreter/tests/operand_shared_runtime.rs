@@ -18,7 +18,7 @@ fn shared_runtime_calls_balance_operand_owners() {
         ("return array_key_exists('missing', []);", FakeValue::Bool(false)),
         ("return strrev(strrev('owned'));", FakeValue::String("owned".into())),
         ("$key = 'borrowed'; return array_key_exists($key, []);", FakeValue::Bool(false)),
-        ("$key = 'borrowed'; return array_key_exists($key, ($key = []));", FakeValue::Bool(false)),
+        ("$key = 'borrowed'; return array_key_exists($key, eval('$key = []; return [];'));", FakeValue::Bool(false)),
         ("return intval('17');", FakeValue::Int(17)),
         ("return intval('21', 16);", FakeValue::Int(33)),
         ("return round(2.6, 0);", FakeValue::Float(3.0)),
@@ -26,7 +26,8 @@ fn shared_runtime_calls_balance_operand_owners() {
         let mut values = FakeOps::default();
         let mut context = ElephcEvalContext::new();
         let mut scope = ElephcEvalScope::new();
-        let program = parse_fragment(source.as_bytes()).unwrap();
+        let program = parse_fragment(source.as_bytes())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
         let returned = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
         assert_eq!(values.get(returned), expected, "{source}");
         if let Some(key) = scope.visible_cell("key") {
@@ -51,7 +52,8 @@ fn shared_runtime_call_failures_release_evaluated_operands() {
         let mut values = FakeOps::default();
         let mut context = ElephcEvalContext::new();
         let mut scope = ElephcEvalScope::new();
-        let program = parse_fragment(source.as_bytes()).unwrap();
+        let program = parse_fragment(source.as_bytes())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
         assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values),
             Err(EvalStatus::UnsupportedConstruct), "{source}");
         for (id, count) in &values.cell_owners {
@@ -70,7 +72,8 @@ fn shared_runtime_operand_cleanup_preserves_primary_errors() {
         let mut values = FakeOps { fail_release_call: Some(0), ..FakeOps::default() };
         let mut context = ElephcEvalContext::new();
         let mut scope = ElephcEvalScope::new();
-        let program = parse_fragment(source.as_bytes()).unwrap();
+        let program = parse_fragment(source.as_bytes())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
         assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values),
             Err(expected), "{source}");
         for (id, count) in &values.cell_owners {
