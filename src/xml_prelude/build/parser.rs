@@ -1381,14 +1381,24 @@ fn handler_setter(event: &str, handlers: &[&str]) -> Stmt {
         value: Box::new(e_var("parser")),
         target: InstanceOfTarget::Name(Name::unqualified("XMLParser")),
     }, crate::span::Span::dummy());
+    let mut type_arms = [("integer", "int"), ("double", "float"), ("boolean", "bool"), ("NULL", "null")]
+        .into_iter().map(|(source, target)| (vec![e_str(source)], e_str(target)))
+        .collect::<Vec<_>>();
+    type_arms.push((vec![e_str("object")], e_call("get_class", vec![e_var("parser")])));
+    let runtime_type = Expr::new(ExprKind::Match {
+        subject: Box::new(e_call("gettype", vec![e_var("parser")])),
+        arms: type_arms,
+        default: Some(Box::new(e_call("gettype", vec![e_var("parser")]))),
+    }, crate::span::Span::dummy());
     declaration.returns(TypeExpr::Bool).body(vec![
         s_if(is_parser, vec![s_return(e_method_call(
             e_var("parser"), &format!("__elephc_set_{event}_handler"),
             handlers.iter().map(|handler| e_var(handler)).collect(),
         ))], vec![], None),
+        s_assign("__parser_type", runtime_type),
         s_throw(e_new("TypeError", vec![e_binop(
             e_binop(e_str(&format!("{php_name}(): Argument #1 ($parser) must be of type XMLParser, ")),
-                BinOp::Concat, e_call("get_debug_type", vec![e_var("parser")])),
+                BinOp::Concat, e_var("__parser_type")),
             BinOp::Concat, e_str(" given"),
         )])),
     ]).build()

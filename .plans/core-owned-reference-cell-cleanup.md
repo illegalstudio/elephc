@@ -1160,3 +1160,17 @@ heap coverage with a borrowed string callee between two reads. The original
 eval class-name fixture remains unchanged. Build, test compilation and diff
 hygiene pass; executable results remain pending CI and no local tests ran.
 The separate eval parameter-shadow leak still needs its own diagnosis.
+
+### XML diagnostic dependency correction
+
+The first XML CI run fails while checking the injected prelude: get_debug_type
+has no AOT binding. Compose the diagnostic type spelling from the existing
+gettype and get_class builtins instead, without adding a new builtin or a
+bridge dependency. The guarded method-dispatch boundary remains unchanged.
+Also keep the literal parameter name non-interpolating in the PHP parse oracle.
+
+The all-target and invalid-parser regressions from the preceding XML commit
+cover this path. Build/test compilation and regenerated builtin-doc audits
+pass locally, without executing tests. The refreshed origin/main remains
+c91beb3434681294e0a1dd29ef92f42f3365923a and is already an ancestor of this
+branch, so no history rewrite is necessary at this checkpoint.
