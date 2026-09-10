@@ -2079,3 +2079,16 @@ Native Sol independently confirmed the double-consumption path. Add a structural
 regression distinguishing slot retirement from transfer. Existing callback iterator
 regressions remain the executable gate. Cargo check --tests, assembly-comment
 alignment and diff hygiene pass. No local tests execute.
+
+### Transfer Mixed-element array results across descriptor invocations
+
+The detached-capture descriptor route exposes a missing concrete Array(Mixed)
+result conversion. Detach and retain its container before retiring the returned
+Mixed box, and move the native return owner into the invoker's result box instead
+of retaining it without balancing the original owner. Preserve indexed and
+promoted hash storage through the shared runtime helpers on all five targets.
+
+Native Sol implemented the bounded ABI fix. Add producer and consumer emitter
+assertions and strengthen the existing captured-reference array-return fixture
+with an exact heap-clean check. Cargo check --tests, assembly-comment alignment
+and diff hygiene pass. No local tests execute; CI must confirm runtime behavior.

@@ -143,7 +143,7 @@ var_dump($f(1));
 /// write through the reference is observed by a second call.
 #[test]
 fn test_closure_returns_array_literal_with_by_reference_capture() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_heap_debug(
         r#"<?php
 $tag = "byref";
 $f = function (mixed $a) use (&$tag) { return [$a, $tag]; };
@@ -152,10 +152,18 @@ $tag = "changed";
 var_dump($f(2));
 "#,
     );
+    assert!(out.success, "{}", out.stderr);
     assert_eq!(
-        out,
+        out.stdout,
         "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  string(5) \"byref\"\n}\n\
-         array(2) {\n  [0]=>\n  int(2)\n  [1]=>\n  string(7) \"changed\"\n}\n"
+         array(2) {\n  [0]=>\n  int(2)\n  [1]=>\n  string(7) \"changed\"\n}\n",
+        "{}",
+        out.stderr,
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr,
     );
 }
 

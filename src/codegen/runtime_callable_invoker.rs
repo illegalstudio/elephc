@@ -248,16 +248,20 @@ fn emit_runtime_callable_invoker_impl(
 
 /// Boxes the target result into the invoker's uniform Mixed return cell.
 /// String results have one independent owner: either transferred by a proven
-/// owning callee or copied before the concat offset is restored. The cell takes
-/// that owner without persisting a second copy. Other result shapes retain the
-/// existing borrowed boxing contract.
+/// owning callee or copied before the concat offset is restored. Mixed-element
+/// arrays likewise transfer their returned container owner into the box. Other
+/// result shapes retain the existing borrowed boxing contract.
 fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
     let repr = ret_ty.codegen_repr();
-    if repr == PhpType::Str {
-        emit_box_current_owned_value_as_mixed(emitter, &PhpType::Str);
-        return;
+    match &repr {
+        PhpType::Str => {
+            emit_box_current_owned_value_as_mixed(emitter, &repr);
+        }
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
+            emit_box_current_owned_value_as_mixed(emitter, &repr);
+        }
+        _ => emit_box_current_value_as_mixed(emitter, &repr),
     }
-    emit_box_current_value_as_mixed(emitter, &repr);
 }
 
 /// Loads the saved descriptor entry slot into `call_reg` after a `setjmp` boundary.
@@ -2597,6 +2601,24 @@ mod tests {
                 assert_eq!(asm.contains("__rt_str_persist"), !owned, "{name}: {owned}");
                 assert!(asm.contains("_concat_off"), "{name}: {owned}");
             }
+        }
+    }
+
+    /// Mixed-element array invokers transfer the raw return owner into the result box.
+    #[test]
+    fn invoker_mixed_array_results_transfer_the_raw_owner_on_all_targets() {
+        let ty = PhpType::Array(Box::new(PhpType::Mixed));
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_boxed_invoker_return(&mut emitter, &ty);
+            let asm = emitter.output();
+            assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}");
+            assert_eq!(asm.matches("__rt_decref_array").count(), 1, "{name}");
+            assert!(
+                asm.find("__rt_mixed_from_value").unwrap()
+                    < asm.find("__rt_decref_array").unwrap(),
+                "{name}",
+            );
         }
     }
 
