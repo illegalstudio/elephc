@@ -62,9 +62,9 @@ echo $value;
     }
 }
 
-/// Static properties acquire their own object owner even before final local storage is known.
+/// Static properties retain their own object owner before a caller binding is retyped or retired.
 #[test]
-fn static_property_stores_preserve_concrete_and_widened_local_owners_on_all_targets() {
+fn static_property_stores_preserve_concrete_and_retyped_local_owners_on_all_targets() {
     let source = r#"<?php
         class StaticPublishedValue { public int $number = 17; }
         class StaticPublishedHolder { public static StaticPublishedValue $value; }
@@ -86,7 +86,7 @@ fn static_property_stores_preserve_concrete_and_widened_local_owners_on_all_targ
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
-        for (name, widened) in [("publish_concrete_owner", false), ("publish_widened_owner", true)] {
+        for (name, retyped) in [("publish_concrete_owner", false), ("publish_widened_owner", true)] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
             let store = function.instructions.iter().find(|inst| inst.op == Op::StoreStaticProperty).unwrap();
             let ValueDef::Instruction { inst, .. } = function.value(store.operands[0]).unwrap().def else {
@@ -94,9 +94,23 @@ fn static_property_stores_preserve_concrete_and_widened_local_owners_on_all_targ
             };
             let acquired = function.instruction(inst).unwrap();
             assert_eq!(acquired.op, Op::Acquire, "{target}: {name}");
-            assert_eq!(function.instructions.iter().any(|inst| {
+            assert!(!function.instructions.iter().any(|inst| {
                 inst.op == Op::Release && inst.operands == acquired.operands
-            }), widened, "{target}: {name} must retire only the detached unbox owner");
+            }), "{target}: {name} must not release the borrowed publication source");
+            let ValueDef::Instruction { inst, .. } = function.value(acquired.operands[0]).unwrap().def else {
+                panic!("{target}: publication must load the caller's object binding");
+            };
+            let source = function.instruction(inst).unwrap();
+            let Some(crate::ir::Immediate::LocalSlot(slot)) = source.immediate else {
+                panic!("{target}: publication source must identify its local slot");
+            };
+            assert_eq!(source.op, Op::LoadLocal, "{target}: {name}");
+            assert!(matches!(function.locals[slot.as_raw() as usize].php_type,
+                crate::types::PhpType::Object(_)), "{target}: keep the original object slot concrete");
+            assert_eq!(function.instructions.iter().any(|inst| {
+                inst.op == Op::ZeroLocalSlot
+                    && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))
+            }), retyped, "{target}: a retyped binding retires its old owner slot");
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
@@ -538,9 +552,9 @@ fn nested_array_literal_releases_pushed_hash_temporary() {
     assert!(release > 0, "expected release after array_push in {text}");
 }
 
-/// Verifies property array rewrites acquire the container before in-place mutation.
+/// Boxed property mutation borrows the cell already separated and published by PropGetForWrite.
 #[test]
-fn property_array_push_acquires_container_before_rewrite_release() {
+fn property_array_push_borrows_the_published_write_cell() {
     let module = super::lower_source(
         r#"<?php
 class C { public array $a; }
@@ -549,15 +563,23 @@ $x->a = [];
 $x->a[] = 1;
 "#,
     );
-    let text = print_module(&module);
-    let prop_get = text.find("prop_get").expect("expected property load in lowered IR");
-    let tail = &text[prop_get..];
-    let acquire = tail.find("acquire").expect("expected property container acquire");
-    let push = tail.find("array_push").expect("expected property array push");
-    assert!(
-        acquire < push,
-        "expected property container acquire before array_push in {text}"
-    );
+    let mut writes = 0;
+    for function in &module.functions {
+        for (index, inst) in function.instructions.iter().enumerate() {
+            if inst.op != Op::PropGetForWrite { continue; }
+            writes += 1;
+            let value = inst.result.unwrap();
+            assert_eq!(function.value(value).unwrap().ownership, Ownership::Borrowed);
+            assert!(inst.result_php_type.is_php_array());
+            assert!(function.instructions[index + 1..].iter().any(|next| {
+                next.op == Op::MixedArrayAppend && next.operands[0] == value
+            }), "append must mutate the published property cell");
+            assert!(!function.instructions.iter().any(|next| {
+                next.op == Op::Release && next.operands == [value]
+            }), "a borrowed property cell must not be retired by the append");
+        }
+    }
+    assert_eq!(writes, 1);
 }
 
 /// Verifies overwriting a refcounted array local releases the previous value.

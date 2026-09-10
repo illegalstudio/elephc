@@ -54,9 +54,9 @@ echo preg_replace_callback('/[A-Z]/', 'literalRegexArray', 'AB');
     }
 }
 
-/// Cleanup follows the final local representation without making borrowed string loads transferable.
+/// Retyping a binding retires its old slot without turning earlier string reads into boxed detaches.
 #[test]
-fn widened_string_consumers_release_only_detached_loads_on_all_targets() {
+fn retyped_string_consumers_preserve_concrete_slot_owners_on_all_targets() {
     use crate::ir::{Immediate, Op, ValueDef};
     use crate::types::PhpType;
     let source = r#"<?php
@@ -78,17 +78,20 @@ echo widenedStringReaders($argc), borrowedStringReader("x");
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let function = module.functions.iter().find(|f| f.name == "widenedStringReaders").unwrap();
-        let mut detached_loads = 0;
+        let mut concrete_loads = 0;
         for instruction in &function.instructions {
             if instruction.op != Op::LoadLocal || instruction.result_php_type != PhpType::Str { continue; }
             let Some(Immediate::LocalSlot(slot)) = instruction.immediate else { continue; };
-            if function.locals[slot.as_raw() as usize].php_type.codegen_repr() != PhpType::Mixed { continue; }
-            detached_loads += 1;
-            assert!(function.instructions.iter().any(|release| {
-                release.op == Op::Release && release.operands == [instruction.result.unwrap()]
-            }), "{target}: string copy from {slot:?} must be retired");
+            assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), PhpType::Str,
+                "{target}: earlier reads must keep their concrete string storage");
+            concrete_loads += 1;
         }
-        assert!(detached_loads >= 2, "{target}: fixture must exercise widened string reads");
+        assert!(concrete_loads >= 2, "{target}: fixture must exercise concrete string reads");
+        assert!(function.instructions.iter().any(|instruction| {
+            instruction.op == Op::ZeroLocalSlot && matches!(instruction.immediate,
+                Some(Immediate::LocalSlot(slot))
+                    if function.locals[slot.as_raw() as usize].php_type.codegen_repr() == PhpType::Str)
+        }), "{target}: retiring a string binding must clear its original owner slot");
         let borrowed = module.functions.iter().find(|f| f.name == "borrowedStringReader").unwrap();
         for instruction in &borrowed.instructions {
             if instruction.op != Op::Release { continue; }

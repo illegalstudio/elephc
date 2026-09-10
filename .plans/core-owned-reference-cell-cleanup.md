@@ -829,3 +829,14 @@ the check that each stored default has the property's actual representation.
 
 Test compilation and diff hygiene pass; no test or PHP fixture ran locally.
 These expectation updates do not resolve unrelated runtime ownership failures.
+
+### Ownership assertions after local rebinding
+
+Updated three structural expectations superseded by the current lowering design.
+Straight-line incompatible reassignments retire and clear the old binding, then
+allocate a new typed slot; they no longer force earlier object/string reads to
+use widened Mixed storage. The tests now pin concrete old slots, publication
+retains and explicit retirement. Declared array property append instead borrows
+the cell already separated and published by PropGetForWrite, so its test checks
+that address is passed to MixedArrayAppend and is never released as an owned
+temporary. Test compilation and diff hygiene pass without local execution.
