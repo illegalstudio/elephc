@@ -12,6 +12,32 @@ use crate::codegen::generate_user_asm_from_ir;
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{Builder, FunctionParam, IrType, Module, Terminator};
 
+/// Both dynamic constructor opcodes reserve the hand-used receiver register on every target.
+#[test]
+fn dynamic_constructor_frames_preserve_the_nested_receiver_register() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        for op in [Op::DynamicObjectNew, Op::DynamicObjectNewMixed] {
+            let mut function = Function::new("dynamic_constructor_frame".into(), IrType::Void, PhpType::Void);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                // Frame analysis needs only the opcode, not candidate metadata or emission.
+                builder.emit(op, Vec::new(), None, IrType::Void, PhpType::Void, crate::ir::Ownership::NonHeap);
+                builder.terminate(Terminator::Return { value: None });
+            }
+            for regalloc in [false, true] {
+                let layout = layout_for_function(&function, target, regalloc, false, false);
+                let register = nested_call_reg_name(target.arch);
+                assert_eq!(layout.callee_saved_offsets.iter().filter(|(saved, _)| *saved == register).count(),
+                    1, "{name}: {op:?}, register allocation {regalloc}");
+            }
+        }
+    }
+}
+
 /// Verifies AArch64 saves a later Mixed argument before retaining an earlier string.
 #[test]
 fn aarch64_prologue_saves_all_parameters_before_runtime_calls() {

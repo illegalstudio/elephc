@@ -24,7 +24,7 @@
 //!   CONTENT is a separate step from releasing the cell.
 //! - Every expected stdout value is real `php` 8.5 output for the same source.
 
-use crate::support::{compile_and_run_with_gc_stats, compile_and_run_with_heap_debug, parse_gc_stats};
+use crate::support::{compile_and_run_tagged, compile_and_run_with_gc_stats, compile_and_run_with_heap_debug, parse_gc_stats};
 
 /// Asserts a program prints `expected` and allocates exactly as many heap blocks as it frees.
 fn assert_balanced(source: &str, expected: &str) {
@@ -207,6 +207,93 @@ unset($actual, $callback, $object);
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "2|2|2|2|2|2:7", "{}", output.stderr);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Ordinary, inherited and explicit parent constructors retire omitted array reference cells.
+#[test]
+fn test_core_non_promoting_constructors_retire_optional_reference_cells() {
+    let source = r#"<?php
+class OrdinaryConstructorLease {
+    public function __construct(array &$out = [10], int $value = 0) {
+        $out[] = $value;
+        echo implode(",", $out), "|";
+    }
+}
+class InheritedConstructorLease extends OrdinaryConstructorLease {}
+class ParentConstructorLease extends OrdinaryConstructorLease {
+    public function __construct(int $value) { parent::__construct(value: $value); }
+}
+for ($i = 0; $i < 3; $i++) {
+    $direct = new OrdinaryConstructorLease(value: 1);
+    $inherited = new InheritedConstructorLease(value: 2);
+    $parent = new ParentConstructorLease(3);
+    $actual = [70];
+    $explicit = new OrdinaryConstructorLease(value: 4, out: $actual);
+    echo $actual[1], "|";
+    unset($direct, $inherited, $parent, $explicit, $actual);
+}
+"#;
+    let expected = "10,1|10,2|10,3|70,4|4|".repeat(3);
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected, "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
+/// Dynamic ordinary constructors preserve their receiver while staging and retiring a temporary cell.
+#[test]
+fn test_core_dynamic_non_promoting_constructor_retires_reference_argument_cell() {
+    let source = r#"<?php
+final class DynamicLeaseInput { public int $value = 42; }
+class DynamicOrdinaryConstructorLease {
+    public function __construct(int &$value) { echo $value, "|"; }
+}
+function makeDynamicOrdinaryLease(string $name, DynamicLeaseInput $input): void {
+    $object = new $name($input->value);
+    echo get_class($object), "|", $input->value, "|";
+    unset($object);
+}
+for ($i = 0; $i < 3; $i++) {
+    $input = new DynamicLeaseInput();
+    makeDynamicOrdinaryLease("DynamicOrdinaryConstructorLease", $input);
+    unset($input);
+}
+"#;
+    let expected = "42|DynamicOrdinaryConstructorLease|42|".repeat(3);
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected, "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
+/// Closures retain a constructor's managed default cell independently after its object is released.
+#[test]
+fn test_core_constructor_reference_default_survives_in_an_escaping_closure() {
+    let source = r#"<?php
+class CapturedConstructorLease {
+    public $later;
+    public function __construct(array &$items = [9]) {
+        $this->later = function() use (&$items): int {
+            $items[] = 1;
+            return count($items);
+        };
+    }
+}
+for ($i = 0; $i < 3; $i++) {
+    $object = new CapturedConstructorLease();
+    $later = $object->later;
+    unset($object);
+    echo $later(), ":", $later(), "|";
+    unset($later);
+}
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "2:3|".repeat(3), "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert_eq!(compile_and_run_tagged(source), "2:3|".repeat(3));
 }
 
 /// BEHAVIOUR, not just balance: the callee really does see the declared default through the

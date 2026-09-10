@@ -242,20 +242,16 @@ fn nested_call_reg_name(arch: Arch) -> &'static str {
     }
 }
 
-/// Returns true when the function contains a method call whose receiver is
-/// dispatched through the reserved nested-call register: a union receiver or a
-/// receiver whose codegen representation is `Mixed`. `lower_mixed_method_call`
-/// and `lower_nullable_receiver_method_call` hand-use `nested_call_reg` to hold
-/// the unboxed object payload across argument-lowering calls, but that register
-/// is callee-saved and outside the allocator's tracking — without a reserved
-/// save slot the function silently clobbers the caller's value (issue #511: a
-/// `--web` handler calling a method on a `PDOStatement|bool` receiver corrupted
-/// the hyper worker's `x19`, freeing a garbage pointer during response flush).
-/// A plain single non-nullable object receiver uses direct dispatch and is
-/// excluded. Over-detection is harmless — an unused save/restore pair costs one
-/// store and one load — so the receiver test errs toward inclusion.
+/// Detects dispatch paths that preserve a receiver in the reserved nested-call register.
+/// Mixed/union method calls, dynamic construction and Mixed string coercion use this
+/// callee-saved register outside the allocator's tracking. Each function must therefore
+/// save and restore it explicitly, including when all SSA values are stack allocated.
 fn function_uses_nested_call_reg(function: &Function) -> bool {
     function.instructions.iter().any(|inst| {
+        // Dynamic constructors preserve their receiver across managed reference-cell staging.
+        if matches!(inst.op, Op::DynamicObjectNew | Op::DynamicObjectNewMixed) {
+            return true;
+        }
         // A boxed-Mixed STRING context holds its `__toString` receiver in the same register
         // and is neither of the method-call opcodes below, so it used to slip through: a
         // function whose only use was `echo $mixed` wrote `mov x19, x1` under a prologue that

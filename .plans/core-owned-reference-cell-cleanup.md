@@ -1435,3 +1435,29 @@ fixture still leaks five blocks: constructor call sites conservatively select th
 persistent reference-cell fallback even for ordinary non-promoting constructors.
 That lifetime distinction needs a separate fix and must not be confused with the
 metadata adapters corrected here. CI confirmation of the new commits is pending.
+
+### Managed reference leases for ordinary constructors
+
+Distinguish ordinary constructors from hierarchies with borrowed promoted
+reference properties. Fixed, inherited, explicit parent and dynamic construction
+now select managed call leases when no property borrows the cell after return.
+Closures can retain these cells independently, just as with ordinary function
+parameters. Keep the conservative persistent allocation for borrowed promoted
+properties, including ancestor properties hidden by a child, and fail conservatively
+for missing metadata or a cyclic hierarchy. That promoted-property ownership gap
+remains open; this change does not claim to fix it.
+
+Dynamic construction preserves its receiver in the reserved callee-saved register
+while managed cells are staged. Frame analysis now reserves that register for both
+DynamicObjectNew and DynamicObjectNewMixed, including all-spilled allocation.
+Add five-target frame and constructor-emission gates, plus native heap/tagged
+regressions for ordinary, inherited, parent, dynamic and closure-escaping cases.
+Keep the original named middle-reference-default regression and existing promoted
+property controls unchanged.
+
+Cargo build and test compilation pass, along with assembly-comment and diff checks.
+The first test-compilation attempt exposed a missing tagged-test helper import;
+the import is corrected and compilation passes. No tests are executed locally.
+CI on bddaf19c6 is still running, with no failed jobs in the latest poll. Runtime
+validation of this constructor change and the outstanding callback, sorting and
+ownership failures remains assigned to CI after push.

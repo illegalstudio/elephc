@@ -589,7 +589,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     constructor_args: &[ValueId],
     dummy_receiver_operand: ValueId,
 ) -> Result<()> {
-    let object_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::nested_call_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     let mut operands = Vec::with_capacity(constructor_args.len() + 1);
     operands.push(dummy_receiver_operand);
@@ -601,12 +601,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     let mut ref_params = Vec::with_capacity(constructor.ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend_from_slice(&constructor.ref_params);
-    // `MayOutliveCall`: this IS a constructor call — `new $cls(...)` with a runtime class
-    // string lands here — and a constructor may promote a by-reference parameter into a
-    // property that borrows the argument's cell for the object's whole life. It therefore
-    // keeps the heap cell, exactly like the statically resolved `new X()` path
-    // (`objects::property_defaults::emit_constructor_call`). A caller-stack cell would be
-    // released the moment this call returns, leaving the promoted property dangling.
+    let lifetime = super::super::constructor_ref_cell_lifetime(ctx, &candidate.class_name);
     let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
         ctx,
         object_reg,
@@ -614,7 +609,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
         &operands,
         &param_types,
         &ref_params,
-        crate::codegen::lower_inst::RefArgCellLifetime::MayOutliveCall,
+        lifetime,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);

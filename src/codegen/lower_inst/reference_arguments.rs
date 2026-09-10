@@ -124,12 +124,8 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
             "receiver-register method call with scalar-to-mixed by-reference writebacks",
         ));
     }
-    // `lifetime` IS NOT ALWAYS `CallOnly` HERE. `new $cls(...)` with a runtime class string
-    // reaches a CONSTRUCTOR through this materializer
-    // (`objects::dynamic_mixed_candidates::emit_dynamic_new_mixed_constructor_call`), and a
-    // constructor may promote a by-reference parameter into a property that borrows the
-    // cell for the object's whole life — so that caller passes `MayOutliveCall` and gets the
-    // heap cell, exactly like the non-dynamic `new X()` path.
+    // Dynamic constructors use the same reference lifetime selection as fixed construction.
+    // Only classes with borrowed reference properties keep the persistent fallback.
     let mut ref_temp_cells =
         plan_ref_arg_temp_cells(ctx, operands, param_types, ref_params, &ref_writebacks, lifetime)?;
     // THE RECEIVER IS ALREADY IN A REGISTER, AND THE CELL BLOCK IS ALLOWED TO DESTROY
@@ -316,6 +312,30 @@ pub(super) fn plan_ref_arg_temp_cells(
     Ok(cells)
 }
 
+/// Keeps the persistent fallback only when the constructed hierarchy can borrow a property cell.
+/// Ordinary constructors use managed call leases, which escaping closures can retain themselves.
+pub(super) fn constructor_ref_cell_lifetime(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> RefArgCellLifetime {
+    let mut current = Some(class_name);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(name) = current {
+        if !seen.insert(name) { return RefArgCellLifetime::MayOutliveCall; }
+        let Some(info) = ctx.module.class_infos.get(name) else {
+            return RefArgCellLifetime::MayOutliveCall;
+        };
+        if info.reference_properties.iter().any(|property| {
+            !info.owned_reference_properties.contains(property)
+        }) {
+            return RefArgCellLifetime::MayOutliveCall;
+        }
+        // Inspect ancestors as well, since private reference properties may be shadowed.
+        current = info.parent.as_deref();
+    }
+    RefArgCellLifetime::CallOnly
+}
+
 /// Reserves writeback slots and publishes a scoped managed owner for each default cell.
 /// Each managed owner has an adjacent unwind record, linked in argument order.
 pub(super) fn emit_ref_arg_cell_block(
@@ -411,20 +431,10 @@ pub(super) fn materialize_ref_arg_address(
     materialize_temporary_ref_arg_cell(ctx, value, param_ty)
 }
 
-/// Allocates a heap ref-cell for a by-reference argument that is not a local variable.
-///
-/// LOAD-BEARING, NOT DEAD. Two kinds of caller reach it, and only one of them is a leftover:
-///
-/// - A call whose cells were planned as [`RefArgCellLifetime::MayOutliveCall`] — every
-///   CONSTRUCTOR call, static or dynamic. A constructor that promotes a by-reference
-///   parameter binds a property that BORROWS this cell for the whole life of the object, so
-///   it has to be heap storage that outlives the frame. Nothing frees it, which is a
-///   narrower pre-existing defect (one cell per constructed object) that only the object
-///   model can fix — but replacing this allocation with a stack cell is a use-after-free,
-///   and that is exactly what a "clean up the dead fallback" edit would do.
-/// - A call path that plans no cells at all. Those would leak one 16-byte block per call, so
-///   every path that stages by-reference arguments today plans them
-///   ([`plan_ref_arg_temp_cells`]).
+/// Allocates the persistent fallback cell required by borrowed constructor properties.
+/// Ordinary calls and non-promoting constructors use managed temporary cells instead.
+/// This legacy allocation must remain live until promoted properties retain their own cell
+/// owners; replacing it with stack storage or releasing it on return would dangle properties.
 pub(super) fn materialize_temporary_ref_arg_cell(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,

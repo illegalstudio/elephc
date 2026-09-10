@@ -12,6 +12,40 @@ use crate::codegen::platform::Target;
 use crate::ir::{Effects, Immediate, LocalKind, Op};
 use std::path::Path;
 
+/// Non-promoting constructors and explicit parent calls use managed defaults on every target.
+#[test]
+fn ordinary_constructor_defaults_use_managed_reference_leases_on_every_target() {
+    let source = r#"<?php
+class OrdinaryLeaseConstructor {
+    public function __construct(array &$items = [7], int $value = 0) { $items[] = $value; }
+}
+class OrdinaryLeaseChild extends OrdinaryLeaseConstructor {
+    public function __construct(int $value) { parent::__construct(value: $value); }
+}
+function constructOrdinaryLease(int $value): OrdinaryLeaseConstructor {
+    return new OrdinaryLeaseConstructor(value: $value);
+}
+$first = constructOrdinaryLease($argc);
+$second = new OrdinaryLeaseChild($argc);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let caller = asm.split_once("constructOrdinaryLease:\n").unwrap().1;
+        let call = caller.lines().find(|line| {
+            let line = line.trim_start();
+            (line.starts_with("call ") || line.starts_with("bl "))
+                && line.contains("OrdinaryLeaseConstructor") && line.contains("__construct")
+        }).expect("ordinary constructor call");
+        let offset = caller.find(call).unwrap();
+        assert!(caller[..offset].contains("__rt_reference_cell_new"), "{name}");
+        assert!(caller[offset..].contains("__rt_reference_cell_release"), "{name}");
+        assert!(asm.matches("__rt_reference_cell_new").count() >= 2, "{name}: direct and parent calls");
+    }
+}
+
 /// Native omitted references use managed cells and scoped owners on every supported ABI.
 #[test]
 fn omitted_reference_defaults_have_managed_unwind_leases_on_every_target() {

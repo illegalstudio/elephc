@@ -170,12 +170,9 @@ pub(super) fn lower_lexical_instance_static_method_call(
     let mut ref_params = Vec::with_capacity(target.ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend(target.ref_params.iter().copied());
-    // `parent::__construct(...)` reaches this lowering, and a parent constructor may PROMOTE
-    // a by-reference parameter into a property that borrows the argument's cell for the whole
-    // life of the object — so a constructor target keeps its heap cell while every other
-    // method takes the caller-stack one (see `RefArgCellLifetime`).
+    // Parent constructors share the same managed default-cell policy as fixed construction.
     let ref_cell_lifetime = if method_name.eq_ignore_ascii_case("__construct") {
-        RefArgCellLifetime::MayOutliveCall
+        constructor_ref_cell_lifetime(ctx, receiver)
     } else {
         RefArgCellLifetime::CallOnly
     };
