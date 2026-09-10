@@ -1,6 +1,6 @@
 //! Purpose:
 //! Emits runtime release support for heap-backed callable descriptors.
-//! Frees runtime descriptor copies and the by-value captures appended after their static header.
+//! Frees runtime descriptor copies, by-value captures and managed reference capture leases.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::callables`
@@ -19,7 +19,8 @@ use crate::codegen_support::platform::Arch;
 /// Input: `x0`/`rax` = callable descriptor pointer. Static and null pointers are no-ops.
 /// Dynamic descriptors are refcounted with the uniform heap header. On the final release,
 /// by-value string captures are freed, heap-backed captures are decref'd through
-/// `__rt_decref_any`, nested callable captures recurse, and the descriptor block is freed.
+/// `__rt_decref_any`, nested callable captures recurse, and managed reference captures retire
+/// their cell lease. Borrowed addresses stay untouched before the descriptor block is freed.
 pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_callable_descriptor_release_linux_x86_64(emitter);
@@ -64,7 +65,7 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("str x11, [sp, #16]");                                  // save capture table pointer for the cleanup loop
     emitter.instruction("cbz x11, __rt_callable_descriptor_release_free");      // missing metadata means there are no typed owned captures to release
 
-    // -- walk capture metadata and release owned by-value slots --
+    // -- walk capture metadata and release owned slots --
     emitter.label("__rt_callable_descriptor_release_loop");
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload current capture index
     emitter.instruction("ldr x13, [sp, #8]");                                   // reload total capture count
@@ -74,14 +75,14 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("mov x15, #32");                                        // each capture binding entry is four 8-byte words
     emitter.instruction("mul x15, x12, x15");                                   // compute byte offset for this capture metadata entry
     emitter.instruction("add x14, x14, x15");                                   // x14 = capture metadata entry pointer
-    emitter.instruction("ldr x15, [x14, #24]");                                 // load by-ref flag for this capture
-    emitter.instruction("cbnz x15, __rt_callable_descriptor_release_next");     // by-ref captures borrow an external cell and are not owned here
+    emitter.instruction("ldr x16, [x14, #24]");                                 // preserve the reference flag while loading the capture payload
     emitter.instruction("ldr x15, [x14, #16]");                                 // load descriptor type tag for the by-value capture
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload descriptor pointer before reading the capture slot
     emitter.instruction("mov x10, #16");                                        // each runtime capture slot is 16 bytes
     emitter.instruction("mul x10, x12, x10");                                   // compute capture slot offset after the descriptor header
     emitter.instruction("add x10, x10, #64");                                   // skip the 64-byte static descriptor header
     emitter.instruction("ldr x0, [x9, x10]");                                   // x0 = capture slot low word, usually a heap pointer
+    emitter.instruction("cbnz x16, __rt_callable_descriptor_release_reference"); // managed reference captures own their cell instead of its payload
     emitter.instruction("cmp x15, #1");                                         // is this a string capture?
     emitter.instruction("b.eq __rt_callable_descriptor_release_string");        // strings release their owned copied payload directly
     emitter.instruction("cmp x15, #4");                                         // is this an indexed-array capture?
@@ -97,6 +98,11 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, #12");                                        // is this an iterable capture?
     emitter.instruction("b.eq __rt_callable_descriptor_release_any");           // erased iterables release by inspecting their runtime heap kind
     emitter.instruction("b __rt_callable_descriptor_release_next");             // scalar captures have no heap ownership to release
+
+    emitter.label("__rt_callable_descriptor_release_reference");
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_reference_cell_owner");
+    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_reference_cell_release", "x0");
+    emitter.instruction("b __rt_callable_descriptor_release_next");             // continue after releasing only an independently owned reference cell
 
     emitter.label("__rt_callable_descriptor_release_string");
     emitter.instruction("bl __rt_heap_free_safe");                              // release the descriptor-owned string capture copy
@@ -177,14 +183,14 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r10");                                        // copy index before scaling metadata offset
     emitter.instruction("shl rcx, 5");                                          // each capture binding entry is 32 bytes
     emitter.instruction("add r11, rcx");                                        // r11 = capture metadata entry pointer
-    emitter.instruction("mov rcx, QWORD PTR [r11 + 24]");                       // load by-ref flag for this capture
-    emitter.instruction("test rcx, rcx");                                       // does this slot borrow an external reference cell?
-    emitter.instruction("jnz __rt_callable_descriptor_release_next");           // by-ref captures are not owned by the descriptor
+    emitter.instruction("mov r8, QWORD PTR [r11 + 24]");                        // preserve the reference flag while loading the capture payload
     emitter.instruction("mov rdx, QWORD PTR [r11 + 16]");                       // load descriptor type tag for the by-value capture
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload descriptor pointer before reading the capture slot
     emitter.instruction("mov rcx, r10");                                        // copy index before scaling capture slot offset
     emitter.instruction("shl rcx, 4");                                          // each runtime capture slot is 16 bytes
     emitter.instruction("mov rax, QWORD PTR [rax + rcx + 64]");                 // rax = capture slot low word, usually a heap pointer
+    emitter.instruction("test r8, r8");                                         // distinguish a cell address from an ordinary captured value
+    emitter.instruction("jnz __rt_callable_descriptor_release_reference");      // managed reference captures own their cell instead of its payload
     emitter.instruction("cmp rdx, 1");                                          // is this a string capture?
     emitter.instruction("je __rt_callable_descriptor_release_string");          // strings release their owned copied payload directly
     emitter.instruction("cmp rdx, 4");                                          // is this an indexed-array capture?
@@ -200,6 +206,11 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, 12");                                         // is this an iterable capture?
     emitter.instruction("je __rt_callable_descriptor_release_any");             // erased iterables release by inspecting their runtime heap kind
     emitter.instruction("jmp __rt_callable_descriptor_release_next");           // scalar captures have no heap ownership to release
+
+    emitter.label("__rt_callable_descriptor_release_reference");
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_reference_cell_owner");
+    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_reference_cell_release", "rax");
+    emitter.instruction("jmp __rt_callable_descriptor_release_next");           // continue after releasing only an independently owned reference cell
 
     emitter.label("__rt_callable_descriptor_release_string");
     emitter.instruction("call __rt_heap_free_safe");                            // release the descriptor-owned string capture copy
@@ -223,4 +234,26 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_callable_descriptor_release_done");
     emitter.instruction("ret");                                                 // return after releasing or ignoring the descriptor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Reference captures release only validated cell owners through guarded cleanup on every ABI.
+    #[test]
+    fn descriptor_reference_capture_retirement_is_guarded_on_every_target() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_callable_descriptor_release(&mut emitter);
+            let asm = emitter.output();
+            let branch = asm.split_once("__rt_callable_descriptor_release_reference:\n").unwrap().1;
+            let branch = branch.split("__rt_callable_descriptor_release_next").next().unwrap();
+            let lookup = branch.find("__rt_reference_cell_owner").unwrap();
+            let release = branch.find("__rt_reference_cell_release").unwrap();
+            let guard = branch.find("__rt_cleanup_invoke").unwrap();
+            assert!(lookup < release && release < guard, "{target}: {branch}");
+        }
+    }
 }

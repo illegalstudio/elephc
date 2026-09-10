@@ -664,3 +664,23 @@ covering direct/named/dynamic replacements, layout changes, unchanged references
 and surviving aliases. The existing CI regression checks the exact missing A/B
 values. Compiler build and compiler/Magician test compilation pass; execution
 remains delegated to CI.
+
+### Descriptor temporary reference owners
+
+Descriptor invokers now allocate temporary/default reference arguments as managed
+typed cells and register their cell lease in the existing normal/exception cleanup
+ledger. Coercions retain the resulting representation, not the original source
+type, and string staging owns a persisted buffer. Newly boxed hash sources are
+rooted through conversion and retired after cell publication. Borrowed reference
+markers remain caller-owned.
+
+Closures capturing a managed reference cell acquire their own lease, and descriptor
+retirement releases only validated managed cell addresses through guarded cleanup.
+Legacy raw or borrowed capture addresses keep their previous behavior. This is
+necessary so retiring a temporary invocation cell cannot invalidate an escaping
+capture. Added executable regressions for layout replacement, named/default calls,
+native throws and escaping captures, plus all-target structural coverage.
+
+Build, test compilation, assembly-comment checks and builtin-document regeneration
+and audits pass. No local tests ran. CI on 83cb548a1 is still running; this does
+not close the other known callable, eval Throwable, checker and unserialize issues.

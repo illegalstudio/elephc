@@ -17,6 +17,7 @@
 
 mod argument_owners;
 mod owned_value_args;
+mod reference_args;
 mod reference_return;
 mod string_return;
 
@@ -557,15 +558,15 @@ fn emit_loaded_indexed_array_callback_call(
                 let load_label = ctx.next_label("invoker_ref_load_arg");
                 let done_label = ctx.next_label("invoker_ref_arg_done");
                 emit_compare_len_ge(emitter, len_reg, index + 1, &load_label);
-                push_default_ref_arg(default_expr, target_ty, emitter, ctx, data);
+                push_default_ref_arg(default_expr, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done_label);
                 emitter.label(&load_label);
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
-                push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
+                push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 emitter.label(&done_label);
             } else {
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
-                push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
+                push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
             }
             arg_types.push(PhpType::Int);
             continue;
@@ -663,7 +664,7 @@ fn emit_loaded_indexed_array_callback_call(
         emitter.label(&done_label);
         let variadic_ty = PhpType::Array(Box::new(variadic_elem_ty));
         if variadic_param_is_by_ref(sig) {
-            wrap_pushed_value_in_ref_cell(emitter, &variadic_ty);
+            reference_args::push_owned_cell(emitter, ctx, regular_param_count, &variadic_ty);
             arg_types.push(PhpType::Int);
         } else {
             ctx.argument_owners.record_pushed(regular_param_count, &variadic_ty, emitter);
@@ -720,16 +721,16 @@ fn emit_loaded_assoc_array_callback_call(
                 let use_default = ctx.next_label("invoker_assoc_ref_default");
                 let done = ctx.next_label("invoker_assoc_ref_done");
                 abi::emit_branch_if_int_result_zero(emitter, &use_default);
-                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
+                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done);
                 emitter.label(&use_default);
-                push_default_ref_arg(default_expr, target_ty, emitter, ctx, data);
+                push_default_ref_arg(default_expr, target_ty, index, emitter, ctx, data);
                 emitter.label(&done);
             } else {
                 let missing = ctx.next_label("invoker_assoc_ref_missing");
                 let done = ctx.next_label("invoker_assoc_ref_done");
                 abi::emit_branch_if_int_result_zero(emitter, &missing);
-                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
+                push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done);
                 emitter.label(&missing);
                 emit_call_user_func_array_missing_arg_abort(emitter, data);
@@ -777,7 +778,7 @@ fn emit_loaded_assoc_array_callback_call(
             data,
         );
         if variadic_param_is_by_ref(sig) {
-            wrap_pushed_value_in_ref_cell(emitter, &variadic_ty);
+            reference_args::push_owned_cell(emitter, ctx, regular_param_count, &variadic_ty);
             arg_types.push(PhpType::Int);
         } else {
             ctx.argument_owners.record_pushed(regular_param_count, &variadic_ty, emitter);
@@ -1055,6 +1056,7 @@ fn load_array_element_to_result(
 fn push_loaded_indexed_array_ref_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
+    owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -1063,7 +1065,7 @@ fn push_loaded_indexed_array_ref_arg(
         source_elem_ty.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return push_current_result_ref_arg_address(source_elem_ty, target_ty, emitter, ctx, data);
+        return push_current_result_ref_arg_address(source_elem_ty, target_ty, owner_index, emitter, ctx, data);
     }
     let special_label = ctx.next_label("invoker_ref_cell");
     let temp_label = ctx.next_label("invoker_ref_temp");
@@ -1081,7 +1083,7 @@ fn push_loaded_indexed_array_ref_arg(
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&temp_label);
-    push_current_result_ref_arg_address(source_elem_ty, target_ty, emitter, ctx, data);
+    push_current_result_ref_arg_address(source_elem_ty, target_ty, owner_index, emitter, ctx, data);
 
     emitter.label(&done_label);
     PhpType::Int
@@ -1273,44 +1275,19 @@ fn push_loaded_array_element_arg(
 fn push_current_result_ref_arg_address(
     source_ty: &PhpType,
     target_ty: Option<&PhpType>,
+    owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    let source_repr = source_ty.codegen_repr();
     let (pushed_ty, boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, source_ty, target_ty);
-    if !boxed_to_mixed {
-        abi::emit_incref_if_refcounted(emitter, &source_repr);
+        owned_value_args::coerce(emitter, ctx, data, source_ty, target_ty);
+    if !boxed_to_mixed && pushed_ty != PhpType::Str {
+        abi::emit_incref_if_refcounted(emitter, &pushed_ty);
     }
     abi::emit_push_result_value(emitter, &pushed_ty);
-    // -- allocate a 16-byte heap ref cell and move the pushed value into it --
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    let cell_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!(                                               // keep the freshly allocated ref-cell address in a stable scratch
-        "mov {}, {}",
-        cell_reg,
-        abi::int_result_reg(emitter)
-    ));
-    store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
-    abi::emit_push_reg(emitter, cell_reg);
+    reference_args::push_owned_cell(emitter, ctx, owner_index, &pushed_ty);
     PhpType::Int
-}
-
-/// Wraps the value currently on top of the invoker stack in a heap reference cell.
-fn wrap_pushed_value_in_ref_cell(emitter: &mut Emitter, val_ty: &PhpType) {
-    // -- allocate a 16-byte heap ref cell and move the pushed value into it --
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    let cell_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!(                                               // keep the freshly allocated ref-cell address in a stable scratch
-        "mov {}, {}",
-        cell_reg,
-        abi::int_result_reg(emitter)
-    ));
-    store_pushed_value_to_ref_cell(emitter, cell_reg, val_ty);
-    abi::emit_push_reg(emitter, cell_reg);
 }
 
 /// Stores a just-pushed value into a heap reference cell.
@@ -1460,6 +1437,7 @@ fn push_loaded_hash_value_arg(
 fn push_loaded_hash_value_ref_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
+    owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -1468,10 +1446,10 @@ fn push_loaded_hash_value_ref_arg(
         source_elem_ty.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return push_loaded_mixed_hash_value_ref_arg(target_ty, emitter, ctx, data);
+        return push_loaded_mixed_hash_value_ref_arg(target_ty, owner_index, emitter, ctx, data);
     }
     materialize_hash_value_to_result(emitter, source_elem_ty);
-    push_current_result_ref_arg_address(source_elem_ty, target_ty, emitter, ctx, data)
+    push_current_result_ref_arg_address(source_elem_ty, target_ty, owner_index, emitter, ctx, data)
 }
 
 /// Pushes a Mixed hash value as a by-value argument, honoring invoker ref markers.
@@ -1533,6 +1511,7 @@ fn push_loaded_mixed_hash_value_arg(
 /// Pushes a Mixed hash value as a by-reference argument, honoring invoker ref markers.
 fn push_loaded_mixed_hash_value_ref_arg(
     target_ty: Option<&PhpType>,
+    owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -1572,12 +1551,12 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     emitter.label(&ordinary_boxed_label);
     materialize_hash_value_to_result(emitter, &PhpType::Mixed);
-    push_current_result_ref_arg_address(&PhpType::Mixed, target_ty, emitter, ctx, data);
+    push_current_result_ref_arg_address(&PhpType::Mixed, target_ty, owner_index, emitter, ctx, data);
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&ordinary_raw_label);
     box_raw_hash_value_to_mixed_result(emitter);
-    push_current_result_ref_arg_address(&PhpType::Mixed, target_ty, emitter, ctx, data);
+    reference_args::push_owned_boxed_value(emitter, ctx, data, owner_index, target_ty);
 
     emitter.label(&done_label);
     PhpType::Int
@@ -1735,22 +1714,13 @@ fn push_default_value_arg(
 fn push_default_ref_arg(
     default: &Expr,
     target_ty: Option<&PhpType>,
+    owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
     let pushed_ty = push_default_value_arg(default, target_ty, emitter, ctx, data);
-    // -- allocate a 16-byte heap ref cell and move the pushed default into it --
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    let cell_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!(                                               // keep the freshly allocated ref-cell address in a stable scratch
-        "mov {}, {}",
-        cell_reg,
-        abi::int_result_reg(emitter)
-    ));
-    store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
-    abi::emit_push_reg(emitter, cell_reg);
+    reference_args::push_owned_cell(emitter, ctx, owner_index, &pushed_ty);
     PhpType::Int
 }
 

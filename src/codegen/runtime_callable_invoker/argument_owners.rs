@@ -9,7 +9,7 @@
 //! - Object and iterable argument leases also remain caller-owned, even when the callee borrows them.
 //! - By-value strings have detached buffers owned here, including defaults and scalar coercions.
 //! - Frame slots start empty and are cleared before release, including partial preparation failures.
-//! - Hidden captures and by-reference marker slots are not by-value invocation owners.
+//! - Temporary reference cells are managed owners; borrowed markers and hidden captures are not.
 
 use super::{abi, Emitter, PhpType};
 
@@ -55,6 +55,11 @@ impl InvokerArgumentOwners {
         if repr != PhpType::Str && !repr.is_refcounted() {
             return;
         }
+        self.record_pushed_reference(index, emitter);
+    }
+
+    /// Adopts a managed reference cell or heap value whose pointer is the top pushed word.
+    pub(super) fn record_pushed_reference(&self, index: usize, emitter: &mut Emitter) {
         assert!(index < self.count, "invoker argument owner exceeds its frame layout");
         let scratch = abi::secondary_scratch_reg(emitter);
         abi::emit_load_temporary_stack_slot(emitter, scratch, 0);

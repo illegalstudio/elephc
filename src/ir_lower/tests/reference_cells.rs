@@ -12,6 +12,33 @@ use crate::codegen::platform::Target;
 use crate::ir::{Effects, Immediate, LocalKind, Op};
 use std::path::Path;
 
+/// Closure construction retains any managed cell behind a captured native reference argument.
+#[test]
+fn closures_retain_managed_reference_arguments_on_every_target() {
+    let source = r#"<?php
+function captureManagedArgument(array &$items): callable {
+    return function() use (&$items): int { return count($items); };
+}
+$items = [1];
+$callback = captureManagedArgument($items);
+echo $callback();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let asm = asm.split_once("captureManagedArgument:\n").unwrap().1;
+        let owner = asm.find("__rt_reference_cell_owner").expect("capture checks for an owned cell");
+        let next_call = if name == "linux-x86_64" {
+            asm[owner..].lines().skip(1).find(|line| line.trim_start().starts_with("call "))
+        } else {
+            asm[owner..].lines().skip(1).find(|line| line.trim_start().starts_with("bl "))
+        }.expect("managed capture retention");
+        assert!(next_call.contains("__rt_incref"), "{name}: {next_call}");
+    }
+}
+
 /// A binding first encountered inside a loop retires the owner retained by earlier iterations.
 #[test]
 fn repeated_reference_aliases_retire_the_previous_owner_on_every_target() {

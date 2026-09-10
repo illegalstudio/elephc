@@ -59,6 +59,7 @@ mod boxed_array_slice;
 mod boxed_array_key_sort;
 mod boxed_array_usort;
 mod reference_cell_owners;
+mod descriptor_reference_args;
 mod boxed_array_call_results;
 mod mixed_parameters;
 mod native_string_arguments;
