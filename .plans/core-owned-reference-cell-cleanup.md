@@ -2024,3 +2024,29 @@ Native Sol traced the failure and implemented the guard. Extend the five-target
 detach/rebind EIR regression to require descriptor calls; retain existing exact
 output and heap-clean controls. Cargo check --tests and diff hygiene pass. No
 local test or compiler repro executes; runtime confirmation remains on CI.
+
+### Preserve argument provenance while publishing one unwind-visible owner
+
+The c189c0908 matrix reports widespread regressions after argument staging made
+values opaque local loads, including optional output destinations, reference
+defaults and callback environments. Lend Borrow(Acquire(source)) instead, retain
+the producer chain, and transfer the stored SSA owner without loading it back
+through an unrelated local slot. Release the original source after publication;
+keep exactly one registered owner through later argument evaluation. Republish
+intermediate roots until the enclosing call retires them.
+
+Exclude by-reference destinations and default operands from by-value staging.
+Do not stage the final source operand when no later source evaluation requires
+it. Before parameter coercions, publish still-owned operands and retain conversion
+results through subsequent conversions. Apply the same rules to XML and named or
+spread argument helpers. Give MixedUnbox an exact payload-dependent effect
+contract matching its runtime retain, shared by lowering and validation.
+
+Native Sol implemented the ledger and an independent review checked string lease
+accounting on normal and throwing evaluation paths. Strengthen slot-correlated
+retirement assertions, preserve single-argument and alias controls, and cover a
+by-reference prefix before a spread on all five targets. Establish actual Mixed
+storage in the callable coercion fixtures. Cargo check --tests, exporter build,
+documentation audits, assembly-comment alignment and diff hygiene pass. No local
+tests execute. Existing CI heap and callback regressions remain the runtime gate;
+this change does not claim to add evaluation scopes to unrelated legacy surfaces.

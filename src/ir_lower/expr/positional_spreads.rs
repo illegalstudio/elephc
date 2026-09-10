@@ -41,7 +41,13 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
-        operands.push(lower_arg_with_signature(ctx, sig, index, arg));
+        let value = lower_arg_with_signature(ctx, sig, index, arg);
+        if sig.ref_params.get(index).copied().unwrap_or(false) {
+            operands.push(value);
+        } else {
+            let lowered = lowered_value_from_id(ctx, value);
+            operands.push(root_evaluated_call_argument(ctx, lowered, arg.span).value);
+        }
     }
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
@@ -94,8 +100,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
                 args[spread_idx].span,
             )
         };
-        let value = lower_expr(ctx, &expr);
-        operands.push(root_evaluated_call_argument(ctx, value, expr.span).value);
+        operands.push(lower_arg_with_signature(ctx, sig, param_idx, &expr));
     }
 
     if sig.variadic.is_some() {
@@ -132,9 +137,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
             )
         };
         let tail = coerce_spread_variadic_array(ctx, sig, tail, args[spread_idx].span);
-        operands.push(
-            root_evaluated_call_argument(ctx, tail, args[spread_idx].span).value,
-        );
+        operands.push(tail.value);
     }
 
     Some(operands)

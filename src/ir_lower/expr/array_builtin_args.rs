@@ -132,7 +132,21 @@ pub(super) fn lower_builtin_call_args(
             if !crate::types::call_args::has_named_args(args)
                 && !args.iter().any(is_spread_arg) =>
         {
-            lower_args(ctx, args)
+            args.iter()
+                .enumerate()
+                .map(|(index, arg)| {
+                    let value = lower_expr(ctx, arg);
+                    if index + 1 < args.len()
+                        && !sig.is_some_and(|sig| {
+                            sig.ref_params.get(index).copied().unwrap_or(false)
+                        })
+                    {
+                        root_evaluated_call_argument(ctx, value, arg.span).value
+                    } else {
+                        value.value
+                    }
+                })
+                .collect()
         }
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
             if !crate::types::call_args::has_named_args(args)
@@ -299,10 +313,18 @@ pub(super) fn lower_positional_builtin_args_with_signature(
     args.iter()
         .enumerate()
         .map(|(index, arg)| {
-            if index < regular_param_count {
+            let value = if index < regular_param_count {
                 lower_arg_with_signature(ctx, sig, index, arg)
             } else {
                 lower_expr(ctx, arg).value
+            };
+            if index + 1 < args.len()
+                && !sig.ref_params.get(index).copied().unwrap_or(false)
+            {
+                let lowered = lowered_value_from_id(ctx, value);
+                root_evaluated_call_argument(ctx, lowered, arg.span).value
+            } else {
+                value
             }
         })
         .collect()

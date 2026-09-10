@@ -1075,6 +1075,18 @@ impl Op {
         }
     }
 
+    /// Returns the exact effects of extracting a concrete payload from a Mixed cell.
+    /// Heap payloads and callable descriptors acquire an independent runtime reference.
+    pub fn mixed_unbox_effects(result_type: &PhpType) -> Effects {
+        let result_type = result_type.codegen_repr();
+        let effects = Self::MixedUnbox.default_effects();
+        if result_type.is_refcounted() || result_type == PhpType::Callable {
+            effects | Effects::REFCOUNT_OP | Effects::WRITES_HEAP
+        } else {
+            effects
+        }
+    }
+
     /// Returns true when the builder may replace the conservative default effects.
     ///
     /// The arithmetic opcodes below default to `MAY_THROW` because PHP raises a catchable

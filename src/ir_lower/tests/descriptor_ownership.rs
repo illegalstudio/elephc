@@ -226,13 +226,29 @@ fn callback_builtin_operands_have_unwind_scopes_on_all_targets() {
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let function = module.functions.iter().find(|function| function.name == "invoke_callback_root").unwrap();
-        let push = function.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner).unwrap();
-        let pop = function.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner).unwrap();
-        assert!(push < pop, "{target}");
-        assert!(function.instructions[push + 1..pop].iter().any(|inst| inst.op == Op::RuntimeCall), "{target}");
-        assert!(function.instructions[pop + 1..].iter().any(|inst| {
-            inst.op == Op::ReleaseLocalSlot && inst.immediate == function.instructions[push].immediate
-        }), "{target}");
+        let call = function.instructions.iter().position(|inst| {
+            inst.op == Op::RuntimeCall
+                && inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayAll),
+                ))
+        }).expect("missing array_all callback invocation");
+        let roots = function.instructions[..call].iter().enumerate().filter(|(_, inst)| {
+            inst.op == Op::PushCallOperandOwner
+        }).filter(|(push, inst)| {
+            !function.instructions[push + 1..call].iter().any(|candidate| {
+                candidate.op == Op::PopCallOperandOwner && candidate.immediate == inst.immediate
+            })
+        }).map(|(_, inst)| inst.immediate.clone()).collect::<Vec<_>>();
+        assert!(!roots.is_empty(), "{target}: callback operands must stay rooted during invocation");
+        for slot in roots {
+            let tail = &function.instructions[call + 1..];
+            let pop = tail.iter().position(|inst| {
+                inst.op == Op::PopCallOperandOwner && inst.immediate == slot
+            }).expect("callback root must be popped after invocation");
+            assert_eq!(tail[pop + 1..].iter().filter(|inst| {
+                inst.op == Op::ReleaseLocalSlot && inst.immediate == slot
+            }).count(), 1, "{target}: each callback root must retire exactly once");
+        }
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         assert!(asm.contains("__rt_cleanup_call_operand_owner"), "{target}");
     }

@@ -279,7 +279,9 @@ fn validate_instruction_effects(
     inst_id: InstId,
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
-    let expected = if matches!(inst.op, Op::PropSet | Op::PropUnset)
+    let expected = if inst.op == Op::MixedUnbox {
+        Op::mixed_unbox_effects(&inst.result_php_type)
+    } else if matches!(inst.op, Op::PropSet | Op::PropUnset)
         && matches!(inst.immediate, Some(Immediate::PropertyRef { .. }))
     {
         inst.op.default_effects() | Effects::ALLOC_HEAP
@@ -301,9 +303,30 @@ fn validate_instruction_effects(
 }
 
 #[cfg(test)]
-mod property_effect_tests {
+mod instruction_effect_tests {
     use super::*;
     use crate::ir::Ownership;
+
+    /// Unboxing a descriptor or object must retain its payload, unlike scalar extraction.
+    #[test]
+    fn mixed_unbox_effects_require_exact_payload_ownership_barriers() {
+        for ty in [PhpType::Callable, PhpType::Object("Owner".to_owned()), PhpType::Int] {
+            let effects = Op::mixed_unbox_effects(&ty);
+            let tracked = ty != PhpType::Int;
+            assert_eq!(effects.contains(Effects::REFCOUNT_OP | Effects::WRITES_HEAP), tracked);
+            let mut instruction = Instruction::new(
+                Op::MixedUnbox, Vec::new(), None, None, IrType::I64, ty,
+                if tracked { Ownership::Owned } else { Ownership::NonHeap }, effects, None,
+            );
+            let id = InstId::from_raw(0);
+            assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+            instruction.effects ^= Effects::REFCOUNT_OP;
+            assert!(matches!(validate_instruction_effects(id, &instruction),
+                Err(ValidationError::EffectMismatch { .. })));
+            instruction.effects = effects | Effects::OUTPUT;
+            assert!(validate_instruction_effects(id, &instruction).is_err());
+        }
+    }
 
     /// Physical initializer writes require allocation effects without weakening ordinary writes.
     #[test]

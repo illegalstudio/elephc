@@ -63,14 +63,13 @@ pub(super) fn lower_named_args_with_signature_options(
     }
 
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
-    for arg in &plan.regular_args {
+    for (param_index, arg) in plan.regular_args.iter().enumerate() {
         match arg {
             crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => {
                 operands.push(source_values[*source_index]);
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
-                let value = lower_expr(ctx, default);
-                operands.push(root_evaluated_call_argument(ctx, value, default.span).value);
+                operands.push(lower_arg_with_signature(ctx, sig, param_index, default));
             }
             crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => {
                 return lower_args(ctx, args);
@@ -103,7 +102,13 @@ fn lower_planned_source_arg(
             }
         }
     }
-    lower_call_source_arg(ctx, &plan.source_args[source_index])
+    let value = lower_call_source_arg(ctx, &plan.source_args[source_index]);
+    if source_index + 1 < plan.source_args.len() {
+        let lowered = lowered_value_from_id(ctx, value);
+        root_evaluated_call_argument(ctx, lowered, plan.source_args[source_index].span).value
+    } else {
+        value
+    }
 }
 
 /// Lowers dynamic associative prefix spreads for variadic calls far enough to preserve duplicate fatals.
@@ -142,14 +147,13 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
     emit_dynamic_named_prefix_duplicate_guards(ctx, sig, plan, &prefix_temp, first_named_pos);
 
     let mut operands = Vec::with_capacity(plan.regular_args.len() + 1);
-    for arg in &plan.regular_args {
+    for (param_index, arg) in plan.regular_args.iter().enumerate() {
         match arg {
             crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => {
                 operands.push(source_values.get(*source_index).copied().flatten()?);
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
-                let value = lower_expr(ctx, default);
-                operands.push(root_evaluated_call_argument(ctx, value, default.span).value);
+                operands.push(lower_arg_with_signature(ctx, sig, param_index, default));
             }
             crate::types::call_args::PlannedRegularArg::SpreadElement {
                 prefix_element_idx,
@@ -188,8 +192,7 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
                         *spread_span,
                     )
                 };
-                let value = lower_expr(ctx, &expr);
-                operands.push(root_evaluated_call_argument(ctx, value, expr.span).value);
+                operands.push(lower_arg_with_signature(ctx, sig, param_index, &expr));
             }
         }
     }
@@ -322,6 +325,16 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
             .and_then(|source| Some((source.param_idx()?, source.expr())));
         let value = match planned {
             Some((param_idx, expr)) => hinted(ctx, param_idx, expr)
+                .map(|value| {
+                    if source_index + 1 < plan.source_args.len()
+                        && !sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                    {
+                        let lowered = lowered_value_from_id(ctx, value);
+                        root_evaluated_call_argument(ctx, lowered, expr.span).value
+                    } else {
+                        value
+                    }
+                })
                 .unwrap_or_else(|| lower_planned_source_arg(ctx, sig, plan, source_index)),
             None => lower_planned_source_arg(ctx, sig, plan, source_index),
         };
@@ -346,15 +359,13 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
                         false,
                         plan.source_args.get(*source_index).map(|arg| arg.span).unwrap_or(call_span),
                     );
-                    let value = lower_expr(ctx, &expr);
-                    operands.push(root_evaluated_call_argument(ctx, value, expr.span).value);
+                    operands.push(lower_arg_with_signature(ctx, sig, param_idx, &expr));
                 } else {
                     operands.push(source_values.get(*source_index).copied().flatten()?);
                 }
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
-                let value = lower_expr(ctx, default);
-                operands.push(root_evaluated_call_argument(ctx, value, default.span).value);
+                operands.push(lower_arg_with_signature(ctx, sig, param_idx, default));
             }
             crate::types::call_args::PlannedRegularArg::SpreadElement {
                 element_idx: _,
@@ -395,8 +406,7 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
                         *spread_span,
                     )
                 };
-                let value = lower_expr(ctx, &expr);
-                operands.push(root_evaluated_call_argument(ctx, value, expr.span).value);
+                operands.push(lower_arg_with_signature(ctx, sig, param_idx, &expr));
             }
         }
     }

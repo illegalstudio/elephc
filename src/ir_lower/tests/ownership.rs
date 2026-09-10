@@ -533,14 +533,25 @@ $users = [["name" => "Ada"], ["name" => "Linus"]];
 $names = array_column($users, "name");
 "#,
     );
-    let text = print_module(&module);
-    let builtin = text
-        .find("runtime.array_column")
-        .expect("expected typed array_column runtime call in lowered IR");
-    let tail = &text[builtin..];
-    let store = tail.find("store_local").expect("expected local store after array_column");
-    let release = tail.find("release").expect("expected release after array_column store");
-    assert!(store < release, "expected release after store in {text}");
+    let function = module.functions.iter().find(|function| function.name == "main").unwrap();
+    let call = function.instructions.iter().position(|inst| {
+        inst.op == Op::RuntimeCall
+            && inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayColumn),
+            ))
+    }).expect("expected typed array_column runtime call in lowered IR");
+    let result = function.instructions[call].result.unwrap();
+    let acquired = function.instructions[call + 1..].iter().find(|inst| {
+        inst.op == Op::Acquire && inst.operands == [result]
+    }).expect("local assignment must acquire the array_column result").result.unwrap();
+    let store = function.instructions.iter().position(|inst| {
+        inst.op == Op::StoreLocal && inst.operands == [acquired]
+    }).expect("expected local store of the acquired array_column result");
+    let releases = function.instructions.iter().enumerate().filter(|(_, inst)| {
+        inst.op == Op::Release && inst.operands == [result]
+    }).map(|(index, _)| index).collect::<Vec<_>>();
+    assert_eq!(releases.len(), 1, "the result producer must retire exactly once");
+    assert!(store < releases[0], "expected result release after its local store");
 }
 
 /// Verifies nested array literals release refcounted row temporaries after insertion.

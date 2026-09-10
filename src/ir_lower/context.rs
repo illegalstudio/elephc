@@ -98,6 +98,7 @@ pub(crate) struct ClosureCapture {
 #[derive(Debug, Clone)]
 pub(crate) struct CallArgumentEvaluationOwner {
     pub value: ValueId,
+    pub borrow: ValueId,
     pub temp_name: String,
     pub slot: LocalSlotId,
     pub span: Span,

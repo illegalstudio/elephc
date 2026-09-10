@@ -18,8 +18,8 @@ fn lower_for(source: &str, target: &str) -> crate::ir::Module {
     )
 }
 
-/// Verifies one evaluation slot lends a borrow, then transfers and retires its lease once.
-fn assert_evaluation_owner_transfers_once(
+/// Verifies one evaluation borrow is backed by one stored lease with one retirement path.
+fn assert_evaluation_owner_retires_once(
     function: &crate::ir::Function,
     borrowed: crate::ir::ValueId,
     slot: crate::ir::LocalSlotId,
@@ -27,48 +27,50 @@ fn assert_evaluation_owner_transfers_once(
 ) {
     use crate::ir::{Immediate, Op, Ownership};
 
+    assert_eq!(function.value(borrowed).unwrap().ownership, Ownership::Borrowed, "{target}");
+    let borrow = function.instructions.iter().find(|inst| {
+        inst.op == Op::Borrow && inst.result == Some(borrowed)
+    }).expect("evaluation borrow instruction");
+    let stored = borrow.operands[0];
     let stores = function
         .instructions
         .iter()
         .filter(|inst| {
             inst.op == Op::StoreLocal
+                && inst.operands == [stored]
                 && inst.immediate == Some(Immediate::LocalSlot(slot))
         })
         .collect::<Vec<_>>();
     assert_eq!(stores.len(), 1, "{target}: evaluation owner slot must be stored once");
-    let stored = stores[0].operands[0];
     assert!(function.instructions.iter().any(|inst| {
         inst.op == Op::Acquire && inst.result == Some(stored)
     }), "{target}: evaluation owner slot must store an acquired lease");
 
-    for op in [Op::PushCallOperandOwner, Op::PopCallOperandOwner, Op::UnsetLocal] {
-        assert_eq!(function.instructions.iter().filter(|inst| {
-            inst.op == op && inst.immediate == Some(Immediate::LocalSlot(slot))
-        }).count(), 1, "{target}: evaluation owner slot must contain one {op:?}");
-    }
-    assert!(!function.instructions.iter().any(|inst| {
+    let pushes = function.instructions.iter().filter(|inst| {
+        inst.op == Op::PushCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))
+    }).count();
+    let pops = function.instructions.iter().filter(|inst| {
+        inst.op == Op::PopCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))
+    }).count();
+    assert_eq!(pushes, pops, "{target}: evaluation owner publication must balance");
+    let unsets = function.instructions.iter().filter(|inst| {
+        inst.op == Op::UnsetLocal
+            && inst.immediate == Some(Immediate::LocalSlot(slot))
+    }).count();
+    let slot_releases = function.instructions.iter().filter(|inst| {
         inst.op == Op::ReleaseLocalSlot
             && inst.immediate == Some(Immediate::LocalSlot(slot))
-    }), "{target}: taking the evaluation owner must not release its cleared slot");
-
-    let transferred = function
-        .instructions
-        .iter()
-        .filter_map(|inst| {
-            let value = inst.result?;
-            (inst.op == Op::LoadLocal
-                && inst.immediate == Some(Immediate::LocalSlot(slot))
-                && value != borrowed
-                && function
-                    .value(value)
-                    .is_some_and(|value| value.ownership != Ownership::Borrowed))
-            .then_some(value)
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(transferred.len(), 1, "{target}: evaluation owner must be taken once");
-    assert_eq!(function.instructions.iter().filter(|inst| {
-        inst.op == Op::Release && inst.operands == [transferred[0]]
-    }).count(), 1, "{target}: transferred evaluation lease must retire once");
+    }).count();
+    let value_releases = function.instructions.iter().filter(|inst| {
+        inst.op == Op::Release && inst.operands == [stored]
+    }).count();
+    assert_eq!(unsets + slot_releases, 1, "{target}: evaluation owner must transfer or retire once");
+    assert_eq!(slot_releases + value_releases, 1, "{target}: stored lease must have one retirement");
+    assert!(!function.instructions.iter().any(|inst| {
+        inst.op == Op::Release && inst.operands == [borrowed]
+    }), "{target}: borrowed evaluation view must not be released");
 }
 
 /// Direct, static and instance calls publish an owned first argument before a later call runs.
@@ -164,6 +166,46 @@ function exerciseByRef(string &$text): void {
     }
 }
 
+/// A by-reference prefix before a positional spread remains the caller's storage place.
+#[test]
+fn by_reference_prefix_before_spread_is_not_detached_on_all_targets() {
+    use crate::ir::{Op, ValueDef};
+
+    let source = r#"<?php
+function byRefSpreadTarget(string &$text, int $later): void {}
+function spreadAfterRef(): array { return [1]; }
+function exerciseByRefSpread(string &$text): void {
+    byRefSpreadTarget($text, ...spreadAfterRef());
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = lower_for(source, target);
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "exerciseByRefSpread")
+            .unwrap();
+        let call = function
+            .instructions
+            .iter()
+            .filter(|inst| inst.op == Op::Call)
+            .last()
+            .expect("spread target call");
+        let ValueDef::Instruction { inst, .. } = function.value(call.operands[0]).unwrap().def else {
+            panic!("{target}: by-reference prefix must remain instruction-defined");
+        };
+        assert_ne!(function.instruction(inst).unwrap().op, Op::Borrow,
+            "{target}: by-reference prefix must not become an evaluation borrow");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// A dynamic spread result stays published while a later named argument is evaluated.
 #[test]
 fn spread_source_owner_precedes_later_named_argument_call() {
@@ -226,8 +268,9 @@ class MixedArgumentSource {
 }
 function takeNamedString(int $later, string $text): void {}
 function takeNamedCallable(int $later, callable $callback): void {}
-function exerciseMixedNamed(MixedArgumentSource $source, int $choice): void {
+function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $code): void {
     $callback = $choice > 0 ? evaluationCallback(...) : evaluationCallback(...);
+    eval($code);
     takeNamedString(text: $source->text, later: 1);
     takeNamedCallable(callback: $callback, later: 2);
 }
@@ -245,26 +288,32 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice): void {
             .iter()
             .find(|function| function.name == "exerciseMixedNamed")
             .unwrap();
-        let borrowed_evaluation_loads = function
+        let borrowed_evaluation_values = function
             .instructions
             .iter()
             .filter_map(|inst| {
                 let value = inst.result?;
-                let Immediate::LocalSlot(slot) = inst.immediate.as_ref()? else {
+                if inst.op != Op::Borrow {
                     return None;
-                };
-                (inst.op == Op::LoadLocal
-                    && function.locals[(*slot).as_raw() as usize].kind == LocalKind::OwnedTemp
-                    && function.value(value).is_some_and(|value| value.ownership == Ownership::Borrowed))
-                .then_some((value, *slot))
+                }
+                let stored = *inst.operands.first()?;
+                let slot = function.instructions.iter().find_map(|store| {
+                    let Immediate::LocalSlot(slot) = store.immediate.as_ref()? else {
+                        return None;
+                    };
+                    (store.op == Op::StoreLocal
+                        && store.operands == [stored]
+                        && function.locals[(*slot).as_raw() as usize].kind == LocalKind::OwnedTemp)
+                    .then_some(*slot)
+                })?;
+                function.value(value)
+                    .is_some_and(|value| value.ownership == Ownership::Borrowed)
+                    .then_some((value, slot))
             })
             .collect::<Vec<_>>();
-        assert!(borrowed_evaluation_loads.len() >= 2, "{target}");
-        for (borrowed, slot) in borrowed_evaluation_loads {
-            assert!(!function.instructions.iter().any(|inst| {
-                inst.op == Op::Release && inst.operands == [borrowed]
-            }), "{target}: a borrowed evaluation-slot load must not be released");
-            assert_evaluation_owner_transfers_once(function, borrowed, slot, target);
+        assert!(borrowed_evaluation_values.len() >= 2, "{target}");
+        for (borrowed, slot) in borrowed_evaluation_values {
+            assert_evaluation_owner_retires_once(function, borrowed, slot, target);
         }
         assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedUnbox), "{target}");
         assert!(function.instructions.iter().any(|inst| {
@@ -301,21 +350,29 @@ function exerciseOwnedSpread(string $text): void {
             .unwrap();
         let borrowed_spread = function.instructions.iter().find_map(|inst| {
             let value = inst.result?;
-            let Immediate::LocalSlot(slot) = inst.immediate.as_ref()? else {
+            if inst.op != Op::Borrow {
                 return None;
-            };
-            (inst.op == Op::LoadLocal
-                && function.locals[(*slot).as_raw() as usize].kind == LocalKind::OwnedTemp
-                && function.value(value).is_some_and(|value| {
+            }
+            let stored = *inst.operands.first()?;
+            let slot = function.instructions.iter().find_map(|store| {
+                let Immediate::LocalSlot(slot) = store.immediate.as_ref()? else {
+                    return None;
+                };
+                (store.op == Op::StoreLocal
+                    && store.operands == [stored]
+                    && function.locals[(*slot).as_raw() as usize].kind == LocalKind::OwnedTemp)
+                .then_some(*slot)
+            })?;
+            function.value(value).is_some_and(|value| {
                     value.ownership == Ownership::Borrowed
                         && value.php_type.codegen_repr().is_php_array()
-                }))
-            .then_some((value, *slot))
-        }).expect("spread evaluation must expose a borrowed owner-slot load");
+                })
+            .then_some((value, slot))
+        }).expect("spread evaluation must expose a borrowed owner view");
         assert!(!function.instructions.iter().any(|inst| {
             inst.op == Op::Release && inst.operands == [borrowed_spread.0]
         }), "{target}: spread staging must not release the borrowed ledger value");
-        assert_evaluation_owner_transfers_once(
+        assert_evaluation_owner_retires_once(
             function,
             borrowed_spread.0,
             borrowed_spread.1,

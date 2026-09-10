@@ -221,8 +221,7 @@ pub(super) fn lower_assoc_spread_only_args(
     for (idx, (param_name, _)) in sig.params.iter().enumerate() {
         let default = sig.defaults.get(idx).and_then(|default| default.as_ref());
         let param_expr = assoc_spread_param_expr(&spread_expr, param_name, default, arg.span);
-        let value = lower_expr(ctx, &param_expr);
-        operands.push(root_evaluated_call_argument(ctx, value, param_expr.span).value);
+        operands.push(lower_arg_with_signature(ctx, sig, idx, &param_expr));
     }
     Some(operands)
 }

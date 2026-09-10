@@ -20,7 +20,11 @@ pub(super) fn begin_call_argument_evaluation(ctx: &mut LoweringContext<'_, '_>) 
     );
 }
 
-/// Publishes an independently owned by-value argument before the next source argument runs.
+/// Transfers an owned by-value argument into an unwind-visible slot before later evaluation.
+///
+/// The exposed `Borrow` preserves the producer chain specialized consumers inspect without
+/// duplicating the slot's lease. Successful lowering later hands the stored Acquire SSA to the
+/// final operand or keeps the slot published until an intermediate can retire safely.
 pub(super) fn root_evaluated_call_argument(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -48,22 +52,23 @@ pub(super) fn root_evaluated_call_argument(
     let borrowed = ctx
         .builder
         .emit_with_effects(
-            Op::LoadLocal,
-            Vec::new(),
-            Some(Immediate::LocalSlot(slot)),
+            Op::Borrow,
+            vec![rooted.value],
+            None,
             rooted.ir_type,
             borrowed_ty,
             Ownership::Borrowed,
-            Op::LoadLocal.default_effects(),
+            Op::Borrow.default_effects(),
             Some(span),
         )
-        .expect("call argument evaluation owner load produces a value");
+        .expect("call argument evaluation borrow produces a value");
     ctx.call_argument_evaluation_scopes
         .last_mut()
         .expect("call argument evaluation scope")
         .owners
         .push(crate::ir_lower::context::CallArgumentEvaluationOwner {
-            value: borrowed,
+            value: rooted.value,
+            borrow: borrowed,
             temp_name,
             slot,
             span,
@@ -74,8 +79,7 @@ pub(super) fn root_evaluated_call_argument(
     }
 }
 
-/// Pops evaluation records in LIFO order and transfers final operands to ordinary call cleanup.
-/// Intermediate owners are republished until the enclosing call finishes or unwinds.
+/// Hands final operands their stored owner and republishes intermediate roots through the call.
 pub(super) fn finish_call_argument_evaluation(
     ctx: &mut LoweringContext<'_, '_>,
     operands: &mut [crate::ir::ValueId],
@@ -88,29 +92,29 @@ pub(super) fn finish_call_argument_evaluation(
     let mut intermediates = Vec::new();
     for owner in scope.owners.into_iter().rev() {
         unregister_owned_call_operand(ctx, owner.slot, owner.span);
-        let transferred = take_owned_temp(ctx, &owner.temp_name, owner.span);
         let mut retained_by_call = false;
         for operand in operands.iter_mut() {
-            if *operand == owner.value {
-                *operand = transferred.value;
+            if *operand == owner.borrow {
+                *operand = owner.value;
+                retained_by_call = true;
+            } else if *operand == owner.value {
                 retained_by_call = true;
             }
         }
-        if !retained_by_call {
-            intermediates.push((transferred, owner.span));
+        if retained_by_call {
+            ctx.clear_owned_hidden_temp(&owner.temp_name, Some(owner.span));
+        } else {
+            intermediates.push((owner.slot, owner.span));
         }
     }
     intermediates.reverse();
+    for (slot, span) in &intermediates {
+        register_owned_call_operand(ctx, *slot, *span);
+    }
     intermediates
-        .into_iter()
-        .filter_map(|(value, span)| {
-            let (_, slot) = root_owned_call_operand(ctx, value, span);
-            slot.map(|slot| (slot, span))
-        })
-        .collect()
 }
 
-/// Retires non-operand evaluation owners after the enclosing call's ordinary cleanup.
+/// Retires source-evaluation leases after the enclosing call's ordinary cleanup.
 pub(super) fn retire_call_argument_intermediates(
     ctx: &mut LoweringContext<'_, '_>,
     roots: &[(crate::ir::LocalSlotId, Span)],
