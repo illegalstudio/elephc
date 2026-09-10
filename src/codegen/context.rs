@@ -34,6 +34,8 @@ use super::shared_state::SharedCodegenState;
 use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
+mod operand_owners;
+
 /// Runtime representation known for one local slot at the current EIR instruction.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LocalSlotRepresentation {
@@ -1104,6 +1106,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns true when Mixed boxing can consume the value's owned source reference.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
+        if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst) {
+            return Ok(false);
+        }
         let value_ty = self.value_php_type(value)?.codegen_repr();
         if value_ty == PhpType::Str {
             return self.value_is_heap_owned_string_for_mixed_box(value);
@@ -1150,6 +1155,9 @@ impl<'a> FunctionContext<'a> {
         value: ValueId,
     ) -> Result<bool> {
         if self.value_ownership(value)? != Ownership::Owned {
+            return Ok(false);
+        }
+        if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst) {
             return Ok(false);
         }
         Ok(!self.function.instructions.iter().any(|inst| {

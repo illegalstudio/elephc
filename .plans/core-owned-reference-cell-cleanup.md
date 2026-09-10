@@ -2065,3 +2065,17 @@ Add structural producer regressions and a named-order stream notification fixtur
 whose params hash is evaluated before its context expression. Cargo check --tests,
 assembly-comment alignment and diff hygiene pass. No local tests or PHP programs
 execute; executable confirmation remains assigned to the new CI run.
+
+### Respect published operand cleanup when boxing callback inputs
+
+CI on 1553df6f4 shows CallbackFilterIterator and RecursiveCallbackFilterIterator
+losing their inner iterator after the first callback. Its acquired argument is
+stored in a published cleanup slot, but the backend only searched for an SSA
+Release before allowing consuming Mixed boxing. Recognize StoreLocal, Push and
+ReleaseLocalSlot as a separate ownership obligation. Exclude the publishing store
+itself and evaluation slots whose owner is transferred through UnsetLocal.
+
+Native Sol independently confirmed the double-consumption path. Add a structural
+regression distinguishing slot retirement from transfer. Existing callback iterator
+regressions remain the executable gate. Cargo check --tests, assembly-comment
+alignment and diff hygiene pass. No local tests execute.
