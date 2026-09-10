@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Nullable previous-exception results acquire their object owner exactly once during boxing.
 
 use super::*;
 
@@ -246,7 +247,7 @@ pub(super) fn lower_throwable_empty_trace_array(ctx: &mut FunctionContext<'_>) -
     Ok(PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
-/// Loads `Throwable::getPrevious()` from payload offset 40, retaining a non-null previous.
+/// Reads previous-exception storage and transfers one object owner, either directly or through boxing.
 ///
 /// When the EIR result is `Mixed` (`?Throwable`), both the object and null arms box here and
 /// return `Mixed` so the shared intrinsic post-box path does not retag a live object as null
@@ -261,23 +262,16 @@ pub(super) fn lower_throwable_get_previous(
     let done_label = ctx.next_label("throwable_previous_done");
     let result_is_mixed = matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed);
     let object_ty = PhpType::Object("Throwable".to_string());
-    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, 40);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cbz {}, {}", result_reg, null_label)); // missing previous → null
-            // `__rt_incref` expects the object in x0.
-            if result_reg != "x0" {
-                ctx.emitter
-                    .instruction(&format!("mov x0, {}", result_reg)); // move previous into incref arg
-            }
-            abi::emit_call_label(ctx.emitter, "__rt_incref"); // caller owns the returned previous
-            if result_reg != "x0" {
-                ctx.emitter
-                    .instruction(&format!("mov {}, x0", result_reg)); // restore result register
-            }
             if result_is_mixed {
                 emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+            } else {
+                abi::emit_incref_if_refcounted(ctx.emitter, &object_ty);
             }
             ctx.emitter
                 .instruction(&format!("b {}", done_label)); // skip null materialization
@@ -291,22 +285,13 @@ pub(super) fn lower_throwable_get_previous(
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
-                &format!("test {}, {}", result_reg, result_reg)
-            );                                                                  // missing previous → null
+            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // detect an absent previous object
             ctx.emitter
                 .instruction(&format!("jz {}", null_label));
-            if result_reg != "rax" {
-                ctx.emitter
-                    .instruction(&format!("mov rax, {}", result_reg)); // move previous into incref arg
-            }
-            abi::emit_call_label(ctx.emitter, "__rt_incref"); // caller owns the returned previous
-            if result_reg != "rax" {
-                ctx.emitter
-                    .instruction(&format!("mov {}, rax", result_reg)); // restore result register
-            }
             if result_is_mixed {
                 emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+            } else {
+                abi::emit_incref_if_refcounted(ctx.emitter, &object_ty);
             }
             ctx.emitter
                 .instruction(&format!("jmp {}", done_label)); // skip null materialization

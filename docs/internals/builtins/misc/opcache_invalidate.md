@@ -1,11 +1,11 @@
 ---
-title: "opcache_invalidate() — internals"
+title: "opcache_invalidate() - internals"
 description: "Compiler internals for opcache_invalidate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 615
 ---
 
-## `opcache_invalidate()` — internals
+## `opcache_invalidate()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function opcache_invalidate(mixed $filename, mixed $force = false): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

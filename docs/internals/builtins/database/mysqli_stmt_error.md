@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_error() — internals"
+title: "mysqli_stmt_error() - internals"
 description: "Compiler internals for mysqli_stmt_error(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 163
 ---
 
-## `mysqli_stmt_error()` — internals
+## `mysqli_stmt_error()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_stmt_error(mixed $statement): string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "imagechar() — internals"
+title: "imagechar() - internals"
 description: "Compiler internals for imagechar(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 461
 ---
 
-## `imagechar()` — internals
+## `imagechar()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagechar(mixed $image, int $font, int $x, int $y, string $char, int $c
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

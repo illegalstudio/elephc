@@ -11,6 +11,7 @@
 //!   runtime receiver context. Conversions and edge cases (i64::MIN abs, non-ASCII
 //!   string transforms) are rejected so the fallback runtime call keeps PHP
 //!   semantics. The whitelist is intentionally narrow.
+//! - String-producing calls fold only when PHP preserves or selects interned identity.
 
 use crate::parser::ast::{CallableTarget, Expr, ExprKind};
 use crate::string_bytes;
@@ -36,8 +37,8 @@ use crate::string_bytes;
 /// - `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_array`
 /// - `is_numeric` on int/float/bool/null literals
 /// - `gettype` on all literal types
-/// - `strtoupper`/`strtolower`/`strrev`/`ucfirst`/`lcfirst` on ASCII strings
-/// - `trim` on string literals (using PHP's default whitespace set)
+/// - Unchanged `strtoupper`/`strtolower`/`ucfirst`/`lcfirst` on ASCII literals
+/// - `trim` when unchanged or reduced to PHP's canonical empty string
 ///
 /// # Arguments
 /// * `value` - The left-hand side literal expression being piped
@@ -152,41 +153,61 @@ pub(super) fn try_fold_pure_pipe(value: &Expr, callable: &Expr) -> Option<ExprKi
         }
 
         // -- ASCII string transforms ------------------------------------------
-        ("strtoupper", ExprKind::StringLiteral(s)) if s.is_ascii() => {
-            Some(ExprKind::StringLiteral(s.to_ascii_uppercase()))
+        ("strtoupper", ExprKind::StringLiteral(s)) if s.is_ascii() && !s.bytes().any(|byte| byte.is_ascii_lowercase()) => {
+            Some(ExprKind::StringLiteral(s.clone()))
         }
-        ("strtolower", ExprKind::StringLiteral(s)) if s.is_ascii() => {
-            Some(ExprKind::StringLiteral(s.to_ascii_lowercase()))
+        ("strtolower", ExprKind::StringLiteral(s)) if s.is_ascii() && !s.bytes().any(|byte| byte.is_ascii_uppercase()) => {
+            Some(ExprKind::StringLiteral(s.clone()))
         }
-        ("strrev", ExprKind::StringLiteral(s)) if s.is_ascii() => {
-            let reversed: String = s.bytes().rev().map(char::from).collect();
-            Some(ExprKind::StringLiteral(reversed))
+        ("ucfirst", ExprKind::StringLiteral(s)) if s.is_ascii() && !s.as_bytes().first().is_some_and(u8::is_ascii_lowercase) => {
+            Some(ExprKind::StringLiteral(s.clone()))
         }
-        ("ucfirst", ExprKind::StringLiteral(s)) if s.is_ascii() => {
-            let mut out = s.clone();
-            if let Some(first) = out.get_mut(0..1) {
-                first.make_ascii_uppercase();
-            }
-            Some(ExprKind::StringLiteral(out))
-        }
-        ("lcfirst", ExprKind::StringLiteral(s)) if s.is_ascii() => {
-            let mut out = s.clone();
-            if let Some(first) = out.get_mut(0..1) {
-                first.make_ascii_lowercase();
-            }
-            Some(ExprKind::StringLiteral(out))
+        ("lcfirst", ExprKind::StringLiteral(s)) if s.is_ascii() && !s.as_bytes().first().is_some_and(u8::is_ascii_uppercase) => {
+            Some(ExprKind::StringLiteral(s.clone()))
         }
         // `trim` with no second argument strips PHP's default whitespace set:
-        // " \t\n\r\0\x0B\x0C".
+        // Space, tab, newline, carriage return, NUL, and vertical tab.
         ("trim", ExprKind::StringLiteral(s)) => {
             let trimmed: String = s
                 .trim_matches(|c: char| {
-                    matches!(c, ' ' | '\t' | '\n' | '\r' | '\0' | '\x0B' | '\x0C')
+                    matches!(c, ' ' | '\t' | '\n' | '\r' | '\0' | '\x0B')
                 })
                 .to_string();
-            Some(ExprKind::StringLiteral(trimmed))
+            (trimmed.is_empty() || trimmed == *s).then_some(ExprKind::StringLiteral(trimmed))
         }
 
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::span::Span;
+
+    /// Builds a direct first-class builtin pipe without involving parsing or runtime byte conversion.
+    fn folded(name: &str, value: &str) -> Option<ExprKind> {
+        let callable = Expr::new(ExprKind::FirstClassCallable(CallableTarget::Function(name.into())), Span::dummy());
+        try_fold_pure_pipe(&Expr::string_lit(value), &callable)
+    }
+
+    /// Keeps calls that produce fresh strings executable even when every output byte is known.
+    #[test]
+    fn string_identity_pipe_folds_keep_fresh_results_at_runtime() {
+        for (name, value) in [("strtolower", "ASCII"), ("strtoupper", "ascii"),
+            ("ucfirst", "ascii"), ("lcfirst", "ASCII"), ("strrev", "ASCII"),
+            ("strrev", "aba"), ("strrev", "a"), ("strrev", ""), ("trim", " ASCII ")] {
+            assert_eq!(folded(name, value), None, "{name}({value:?}) must retain PHP fresh-string identity");
+        }
+    }
+
+    /// Retains safe literal and canonical-empty folds while preserving PHP's form-feed trim behavior.
+    #[test]
+    fn string_identity_pipe_folds_preserve_interned_results() {
+        for (name, value, expected) in [("strtolower", "ascii", "ascii"), ("strtoupper", "ASCII", "ASCII"),
+            ("ucfirst", "ASCII", "ASCII"), ("lcfirst", "ascii", "ascii"), ("strtolower", "", ""),
+            ("trim", "ASCII", "ASCII"), ("trim", " \t\n\r\0\u{b}", ""), ("trim", "\u{c}ASCII\u{c}", "\u{c}ASCII\u{c}")] {
+            assert_eq!(folded(name, value), Some(ExprKind::StringLiteral(expected.to_owned())), "{name}({value:?})");
+        }
     }
 }

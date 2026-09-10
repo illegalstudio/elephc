@@ -76,7 +76,7 @@ pub(crate) fn lower_ref_assign_array_elem(
     let ExprKind::ArrayAccess { array, index } = &source.kind else {
         return;
     };
-    let array_value = lower_expr(ctx, array);
+    let array_value = prepare_array_reference_source(ctx, array, span);
     let mut index_value = lower_expr(ctx, index);
     index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
     // Use the array's declared element type (the inline storage shape), not the
@@ -96,6 +96,23 @@ pub(crate) fn lower_ref_assign_array_elem(
         Some(span),
     );
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
+/// Boxes a local indexed array before exposing an element as a dynamically writable reference.
+fn prepare_array_reference_source(
+    ctx: &mut LoweringContext<'_, '_>, array: &Expr, span: Span,
+) -> LoweredValue {
+    let value = lower_expr(ctx, array);
+    let ExprKind::Variable(name) = &array.kind else { return value; };
+    let PhpType::Array(_) = ctx.builder.value_php_type(value.value).codegen_repr() else { return value; };
+    // Captured references may later store any PHP type. Their source array must
+    // use the same boxed element representation before a cell address escapes.
+    // ArrayToMixed also separates preexisting COW copies of an already boxed array.
+    let ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let converted = ctx.emit_value(Op::ArrayToMixed, vec![value.value], None,
+        ty.clone(), Op::ArrayToMixed.default_effects(), Some(span));
+    ctx.store_mutated_local(name, converted, ty, Some(span));
+    converted
 }
 
 /// Lowers a named property read once the receiver is already evaluated.

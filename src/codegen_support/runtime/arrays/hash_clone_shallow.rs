@@ -113,7 +113,15 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.label("__rt_hash_clone_shallow_value_ref");
     emitter.instruction("ldr x3, [sp, #24]");                                   // x3 = source refcounted child pointer
     emitter.instruction("mov x0, x3");                                          // move the shared child pointer into the retain helper
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect this entry storage tag
+    emitter.instruction("cmp x9, #7");                                          // only boxed entries may contain PHP references
+    emitter.instruction("b.ne __rt_hash_clone_shallow_retain_child");           // typed payloads keep ordinary ownership
+    emitter.instruction("bl __rt_reference_array_copy");                        // detach orphan references before adding a cloned owner
+    emitter.instruction("str x0, [sp, #24]");                                   // publish the cloned boxed entry
+    emitter.instruction("b __rt_hash_clone_shallow_child_ready");               // continue with the owned boxed entry
+    emitter.label("__rt_hash_clone_shallow_retain_child");
     emitter.instruction("bl __rt_incref");                                      // retain the shared child pointer for the cloned hash
+    emitter.label("__rt_hash_clone_shallow_child_ready");
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload the retained child pointer after the helper call
     emitter.instruction("mov x4, xzr");                                         // refcounted hash values store only value_lo
     emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = refcounted value_tag copied as-is
@@ -129,6 +137,8 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
 
     // -- restore callee-saved registers and return the cloned hash --
     emitter.label("__rt_hash_clone_shallow_done");
+    emitter.instruction(&format!("ldr x9, [x19, #{}]", super::hash_layout::NEXT_INDEX_OFFSET)); // preserve deleted integer-key history from the source
+    emitter.instruction(&format!("str x9, [x20, #{}]", super::hash_layout::NEXT_INDEX_OFFSET)); // cloning retains automatic indexing independently of live keys
     emitter.instruction("mov x0, x20");                                         // return the cloned hash pointer
     emitter.instruction("ldp x21, x22, [sp, #72]");                             // restore callee-saved x21/x22
     emitter.instruction("ldp x19, x20, [sp, #56]");                             // restore callee-saved x19/x20
@@ -218,7 +228,14 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_clone_shallow_value_ref");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the shared refcounted child pointer that the cloned associative array must retain
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 7");                         // only boxed entries may contain PHP references
+    emitter.instruction("jne __rt_hash_clone_shallow_retain_child");            // typed payloads keep ordinary ownership
+    emitter.instruction("call __rt_reference_array_copy");                      // detach orphan references before adding a cloned owner
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // publish the cloned boxed entry
+    emitter.instruction("jmp __rt_hash_clone_shallow_child_ready");             // continue with the owned boxed entry
+    emitter.label("__rt_hash_clone_shallow_retain_child");
     emitter.instruction("call __rt_incref");                                    // retain the shared child pointer for the cloned associative-array owner
+    emitter.label("__rt_hash_clone_shallow_child_ready");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the retained child pointer into the hash-set value_lo register
     emitter.instruction("xor r8d, r8d");                                        // clear value_hi because refcounted associative-array payloads only occupy the low word
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the refcounted runtime value_tag into the hash-set value_tag register
@@ -234,6 +251,8 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_clone_shallow_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the cloned associative-array pointer in the x86_64 integer result register
+    emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", super::hash_layout::NEXT_INDEX_OFFSET)); // preserve deleted integer-key history from the source
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], r10", super::hash_layout::NEXT_INDEX_OFFSET)); // cloned arrays retain the same next automatic key
     emitter.instruction("mov r15, QWORD PTR [rbp - 96]");                       // restore r15 after using it as a nested-call scratch in the clone walk
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore r14 after using it to preserve packed associative-array metadata across helper calls
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore r13 after using it as the long-lived destination associative-array pointer

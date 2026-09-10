@@ -1,11 +1,11 @@
 ---
-title: "imagecolorat() — internals"
+title: "imagecolorat() - internals"
 description: "Compiler internals for imagecolorat(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 465
 ---
 
-## `imagecolorat()` — internals
+## `imagecolorat()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolorat(mixed $image, int $x, int $y): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

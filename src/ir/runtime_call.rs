@@ -53,6 +53,15 @@ impl ArrayKeySort {
     }
 }
 
+/// Physical argument storage retained independently of a runtime function's PHP signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuntimeArgumentLayout {
+    /// Each supplied PHP parameter is a separate EIR operand.
+    Values,
+    /// One owned array of copied Mixed values retains the actual positional argument count.
+    IndexedArray,
+}
+
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
@@ -68,18 +77,31 @@ pub enum RuntimeCallTarget {
     /// Creates an independently mutable boxed Mixed cell from one stored
     /// Mixed cell while retaining its tag-4/tag-5 payload ownership.
     MixedCellClone,
+    /// Registers an owner after the supplied guard (zero means chain head), returning its guard token.
+    ExceptionGuardOwned,
+    /// Removes an owned-value guard without releasing the value on the normal path.
+    ExceptionUnguardOwned,
+    /// Refreshes an active array guard after an append can relocate the container.
+    ExceptionUpdateArrayGuard,
+    /// Refreshes an active associative-array guard after insertion can relocate the hash.
+    ExceptionUpdateHashGuard,
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
     /// A typed PCNTL process-control operation with target-aware availability.
     Pcntl(crate::ir::PcntlRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
     Function(crate::ir::RuntimeFnId),
-    /// A source-sensitive runtime function plus the call site's strict-PHP visibility profile.
+    /// A source-sensitive runtime function with visibility and parameter-coercion profiles.
     ProfiledFunction {
         /// Stable runtime function dispatched by the backend.
         target: crate::ir::RuntimeFnId,
+        /// Physical operand layout, without changing the PHP-visible function signature.
+        arguments: RuntimeArgumentLayout,
         /// Whether strict PHP is effective at the physical call site.
         strict_php: bool,
+        /// PHP parameter strictness at a direct call site; None inherits the invoking caller.
+        /// Generated callable wrappers defer this choice instead of capturing their creation site.
+        strict_types: Option<bool>,
     },
 }
 
@@ -102,6 +124,22 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
+            RuntimeCallTarget::ExceptionGuardOwned => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 2,
+                max_operands: Some(2),
+            }),
+            RuntimeCallTarget::ExceptionUnguardOwned => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::I64],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::ExceptionUpdateArrayGuard => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Array), IrType::I64],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::ExceptionUpdateHashGuard => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Hash), IrType::I64],
+                result: IrType::Void,
+            }),
             RuntimeCallTarget::UnaryString(_) => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
@@ -110,8 +148,13 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::Function(target) => {
                 target.descriptor().logical_signature
             }
-            RuntimeCallTarget::ProfiledFunction { target, .. } => {
-                target.descriptor().logical_signature
+            RuntimeCallTarget::ProfiledFunction { target, arguments, .. } => {
+                match arguments {
+                    RuntimeArgumentLayout::Values => target.descriptor().logical_signature,
+                    RuntimeArgumentLayout::IndexedArray if target.uses_mbstring_runtime() =>
+                        Some(RuntimeCallSignature::Polymorphic { min_operands: 1, max_operands: Some(1) }),
+                    RuntimeArgumentLayout::IndexedArray => None,
+                }
             }
         }
     }
@@ -133,6 +176,10 @@ impl RuntimeCallTarget {
                 "array.mixed_cell_promote_attached_to_hash"
             }
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
+            RuntimeCallTarget::ExceptionGuardOwned => "exception.guard_owned",
+            RuntimeCallTarget::ExceptionUnguardOwned => "exception.unguard_owned",
+            RuntimeCallTarget::ExceptionUpdateArrayGuard => "exception.update_array_guard",
+            RuntimeCallTarget::ExceptionUpdateHashGuard => "exception.update_hash_guard",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::Pcntl(target) => target.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),

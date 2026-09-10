@@ -181,7 +181,7 @@ pub(super) fn execute_foreach_array_stmt(
     let len = values.array_len(array)?;
     for index in 0..len {
         let key = values.array_iter_key(array, index)?;
-        let value = values.array_get(array, key)?;
+        let value = values.array_iter_value(array, index)?;
         if let Some(key_name) = key_name {
             for replaced in set_scope_cell(
                 context,
@@ -189,6 +189,7 @@ pub(super) fn execute_foreach_array_stmt(
                 key_name.to_string(),
                 key,
                 ScopeCellOwnership::Owned,
+                values,
             )? {
                 values.release(replaced)?;
             }
@@ -201,6 +202,7 @@ pub(super) fn execute_foreach_array_stmt(
             value_name.to_string(),
             value,
             ScopeCellOwnership::Owned,
+            values,
         )? {
             values.release(replaced)?;
         }
@@ -286,6 +288,7 @@ pub(super) fn execute_foreach_iterator_stmt(
                 key_name.to_string(),
                 key,
                 ScopeCellOwnership::Owned,
+                values,
             )? {
                 values.release(replaced)?;
             }
@@ -296,6 +299,7 @@ pub(super) fn execute_foreach_iterator_stmt(
             value_name.to_string(),
             value,
             ScopeCellOwnership::Owned,
+            values,
         )? {
             values.release(replaced)?;
         }
@@ -323,31 +327,4 @@ pub(super) fn eval_foreach_object_is_a(
 ) -> Result<bool, EvalStatus> {
     dynamic_object_is_a(object, target, false, context, values)?
         .map_or_else(|| values.object_is_a(object, target, false), Ok)
-}
-
-/// Returns PHP's next automatic integer key for `$array[]` append writes.
-pub(in crate::interpreter) fn eval_array_append_key(
-    array: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut next_key = None;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        if values.type_tag(key)? != EVAL_TAG_INT {
-            continue;
-        }
-        let one = values.int(1)?;
-        let candidate = values.add(key, one)?;
-        let replace = if let Some(current) = next_key {
-            let is_greater = values.compare(EvalBinOp::Gt, candidate, current)?;
-            values.truthy(is_greater)?
-        } else {
-            true
-        };
-        if replace {
-            next_key = Some(candidate);
-        }
-    }
-    next_key.map_or_else(|| values.int(0), Ok)
 }

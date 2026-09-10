@@ -1,11 +1,11 @@
 ---
-title: "idate() — internals"
+title: "idate() - internals"
 description: "Compiler internals for idate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 226
 ---
 
-## `idate()` — internals
+## `idate()` - internals
 
 ## Where it lives
 

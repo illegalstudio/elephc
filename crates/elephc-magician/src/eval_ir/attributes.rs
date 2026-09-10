@@ -11,6 +11,8 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalAttributeArg {
     String(String),
+    /// A PHP string attribute argument containing non-UTF-8 bytes.
+    Bytes(Vec<u8>),
     Int(i64),
     Float(u64),
     Bool(bool),

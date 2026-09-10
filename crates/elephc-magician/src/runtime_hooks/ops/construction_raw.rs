@@ -119,6 +119,32 @@ macro_rules! impl_construction_raw_ops {
         usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)
     }
 
+    /// Reads automatic-key history without executing PHP or unwinding through Rust.
+    fn array_next_index(&mut self, array: RuntimeCellHandle) -> Result<Option<i64>, EvalStatus> {
+        unsafe extern "C" {
+            /// Borrows the current signed index, returning zero, exhaustion one, or invalid-storage two.
+            fn __elephc_eval_value_array_next_index(array: *mut RuntimeCell, index: *mut i64) -> u64;
+        }
+        let mut index = 0;
+        match unsafe { __elephc_eval_value_array_next_index(array.as_ptr(), &mut index) } {
+            0 => Ok(Some(index)),
+            1 => Ok(None),
+            _ => Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
+    /// Preserves automatic-key history when rebuilding a hash after eval unset.
+    fn array_copy_index_history(&mut self, source: RuntimeCellHandle, destination: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        unsafe extern "C" {
+            /// Copies only host array-index metadata into a new associative destination.
+            fn __elephc_eval_value_array_copy_index_history(source: *mut RuntimeCell, destination: *mut RuntimeCell) -> u64;
+        }
+        match unsafe { __elephc_eval_value_array_copy_index_history(source.as_ptr(), destination.as_ptr()) } {
+            0 => Ok(()),
+            _ => Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
     /// Returns whether a boxed Mixed cell has an array-like runtime tag.
     fn is_array_like(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_is_array_like(value.as_ptr()) != 0 })

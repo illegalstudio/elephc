@@ -75,6 +75,7 @@ struct RuntimeInstanceMethodDescriptorCacheEntry {
 struct RuntimeCallableInvokerCacheEntry {
     signature: FunctionSig,
     captures: Vec<(String, PhpType, bool)>,
+    mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
     label: String,
 }
 
@@ -260,10 +261,12 @@ impl SharedCodegenState {
         &self,
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
+        mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
     ) -> Option<String> {
         self.runtime_callable_invokers
             .iter()
-            .find(|entry| entry.signature == *signature && entry.captures == captures)
+            .find(|entry| entry.signature == *signature && entry.captures == captures
+                && entry.mbstring_operation == mbstring_operation)
             .map(|entry| entry.label.clone())
     }
 
@@ -272,12 +275,14 @@ impl SharedCodegenState {
         &mut self,
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
+        mbstring_operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
         label: &str,
     ) {
         self.runtime_callable_invokers
             .push(RuntimeCallableInvokerCacheEntry {
                 signature: signature.clone(),
                 captures: captures.to_vec(),
+                mbstring_operation,
                 label: label.to_string(),
             });
     }

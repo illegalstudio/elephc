@@ -175,6 +175,8 @@ pub(super) fn contextualize_local_assignment(
 ) -> (LoweredValue, PhpType) {
     let source_ty = ctx.builder.value_php_type(lowered.value);
     let source_repr = source_ty.codegen_repr();
+    let lowered = crate::ir_lower::ownership::copy_assignment_value(ctx, lowered, Some(span));
+
     let contextual_ty = if crate::superglobals::is_superglobal(name) {
         crate::superglobals::superglobal_type()
     } else {
@@ -312,4 +314,3 @@ pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, 
         }
     }
 }
-

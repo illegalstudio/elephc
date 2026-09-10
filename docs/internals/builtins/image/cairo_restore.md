@@ -1,11 +1,11 @@
 ---
-title: "cairo_restore() — internals"
+title: "cairo_restore() - internals"
 description: "Compiler internals for cairo_restore(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 429
 ---
 
-## `cairo_restore()` — internals
+## `cairo_restore()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_restore(mixed $context): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

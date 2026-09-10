@@ -1,11 +1,11 @@
 ---
-title: "cairo_rotate() — internals"
+title: "cairo_rotate() - internals"
 description: "Compiler internals for cairo_rotate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 430
 ---
 
-## `cairo_rotate()` — internals
+## `cairo_rotate()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_rotate(mixed $context, float $angle): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

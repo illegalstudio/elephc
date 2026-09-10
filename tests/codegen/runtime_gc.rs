@@ -13,6 +13,22 @@ mod basics;
 mod nullable_string_return;
 #[path = "runtime_gc/iconv.rs"]
 mod iconv;
+#[path = "runtime_gc/mbstring.rs"]
+mod mbstring;
+#[path = "runtime_gc/mbstring_capture_hash.rs"]
+mod mbstring_capture_hash;
+#[path = "runtime_gc/destructor_resurrection.rs"]
+mod destructor_resurrection;
+#[path = "runtime_gc/argument_guards.rs"]
+mod argument_guards;
+#[path = "runtime_gc/deep_cleanup.rs"]
+mod deep_cleanup;
+#[path = "runtime_gc/eval_constructor.rs"]
+mod eval_constructor;
+#[path = "runtime_gc/eval_native_calls.rs"]
+mod eval_native_calls;
+#[path = "runtime_gc/eval_cycles.rs"]
+mod eval_cycles;
 #[path = "runtime_gc/parse_url.rs"]
 mod parse_url;
 #[path = "runtime_gc/getenv.rs"]

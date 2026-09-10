@@ -1,0 +1,617 @@
+{
+    "php_version": "8.5.10",
+    "encodings": {
+        "SJIS": {
+            "single": {
+                "file": "sjis-single.bin",
+                "sha256": "ec3a1de05010c942296cd8a350eb7640ad14ed505415bf74889153dc8abb957f"
+            },
+            "pairs": {
+                "file": "sjis-pairs.bin",
+                "sha256": "274907603f94f58df0166bcba1138a220122b2440a791814fc76f35d813bdc21"
+            },
+            "triples": {
+                "file": "sjis-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "sjis-points.bin",
+                "sha256": "6e77d05cc4db1760fe5ca226ff42094c98dcbe64255a6b99f2329d60812109bd"
+            },
+            "encode": {
+                "file": "sjis-encode.bin",
+                "sha256": "69ae61ee13abdebe4347cd26733d08cc7252f9d43e3891379549bde89c68d3ce"
+            },
+            "bytes": {
+                "file": "sjis-bytes.bin",
+                "sha256": "775e561403c6ea11d2ba2c8ae097731606ec14b646378ebe01b5133ae55e834d"
+            },
+            "composites": {
+                "file": "sjis-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "sjis-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "CP932": {
+            "single": {
+                "file": "cp932-single.bin",
+                "sha256": "ec3a1de05010c942296cd8a350eb7640ad14ed505415bf74889153dc8abb957f"
+            },
+            "pairs": {
+                "file": "cp932-pairs.bin",
+                "sha256": "0f6c3bdfaf8fa813e34a596c622392802a5ad6f43b76805438cd03f6682a40a5"
+            },
+            "triples": {
+                "file": "cp932-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "cp932-points.bin",
+                "sha256": "e68dd9205a830e2a7f053307eece441a2db939ef05be95f0e8822ca957eaa5f0"
+            },
+            "encode": {
+                "file": "cp932-encode.bin",
+                "sha256": "8fd2f6f36ff8d0718e1176fd77fe939b5d54406996a3e49852a76cec5dc421cc"
+            },
+            "bytes": {
+                "file": "cp932-bytes.bin",
+                "sha256": "27a1dc848942a1ee581ae7932ebb8ed3f8d45402a262db9905240e92b5c05f83"
+            },
+            "composites": {
+                "file": "cp932-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "cp932-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "SJIS-win": {
+            "single": {
+                "file": "sjis-win-single.bin",
+                "sha256": "ec3a1de05010c942296cd8a350eb7640ad14ed505415bf74889153dc8abb957f"
+            },
+            "pairs": {
+                "file": "sjis-win-pairs.bin",
+                "sha256": "0f6c3bdfaf8fa813e34a596c622392802a5ad6f43b76805438cd03f6682a40a5"
+            },
+            "triples": {
+                "file": "sjis-win-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "sjis-win-points.bin",
+                "sha256": "e68dd9205a830e2a7f053307eece441a2db939ef05be95f0e8822ca957eaa5f0"
+            },
+            "encode": {
+                "file": "sjis-win-encode.bin",
+                "sha256": "292268fb17e6b29baa56e50594dac31c8d4377b6bc9af455ae6d10109a4bb0c7"
+            },
+            "bytes": {
+                "file": "sjis-win-bytes.bin",
+                "sha256": "edbbad33da51833b26704f4e3ca8cfdfc107a82cd3adc091622d6a4c969283fe"
+            },
+            "composites": {
+                "file": "sjis-win-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "sjis-win-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "SJIS-2004": {
+            "single": {
+                "file": "sjis-2004-single.bin",
+                "sha256": "ec3a1de05010c942296cd8a350eb7640ad14ed505415bf74889153dc8abb957f"
+            },
+            "pairs": {
+                "file": "sjis-2004-pairs.bin",
+                "sha256": "7e05e5641c34ef9e9352cb6c88a84bfaa896abae597ce5c10dbf5fa5196e0bb4"
+            },
+            "triples": {
+                "file": "sjis-2004-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "sjis-2004-points.bin",
+                "sha256": "8d90fb3919196f64e4fd03085a4e57120fc27a54c3d9cfb270e3370d901956f8"
+            },
+            "encode": {
+                "file": "sjis-2004-encode.bin",
+                "sha256": "9761fd8d67df2d01d9decd6477b655f9504dd8a13ff7006cad3ce77df7534403"
+            },
+            "bytes": {
+                "file": "sjis-2004-bytes.bin",
+                "sha256": "ed7d88fff9603c75dea03ce22883abd9670b0c6228e69769c15095b7159944fd"
+            },
+            "composites": {
+                "file": "sjis-2004-composites.bin",
+                "sha256": "3ab6e41bc19b6fa81191678e0786cc1d0326e55a1167f17b80920304ebc6544e"
+            },
+            "escapes": {
+                "file": "sjis-2004-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "SJIS-mac": {
+            "single": {
+                "file": "sjis-mac-single.bin",
+                "sha256": "f45086ef1e19f42b9b8042f08b5646475c850e9d6c6954eed6d49a15e925f7a3"
+            },
+            "pairs": {
+                "file": "sjis-mac-pairs.bin",
+                "sha256": "16655f91fdc18339d1a76e3c189ec0344a1f825aa62d7fd06385cc927b4a8875"
+            },
+            "triples": {
+                "file": "sjis-mac-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "sjis-mac-points.bin",
+                "sha256": "25011ffadef2f19ac20fde52ecd98179abaa9f533c0b341966e95e9d78579ef0"
+            },
+            "encode": {
+                "file": "sjis-mac-encode.bin",
+                "sha256": "af86fb997dc0a5e7193841a6678085a3f1601dcf4173bcde9e8145752da87e68"
+            },
+            "bytes": {
+                "file": "sjis-mac-bytes.bin",
+                "sha256": "3278b7c8f1f96c66bbf2e121f9ed41812717c8745a341b5586ce6ec9af6bc406"
+            },
+            "composites": {
+                "file": "sjis-mac-composites.bin",
+                "sha256": "a22eaecc96577d08de7353bca8f3c3e8abd7f93ec74db1397506366ca9c006f0"
+            },
+            "escapes": {
+                "file": "sjis-mac-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "EUC-CN": {
+            "single": {
+                "file": "euc-cn-single.bin",
+                "sha256": "719aea5dcd202ceaaafbe436f64d4052b3f95af56c96b56059b8fd67b335d321"
+            },
+            "pairs": {
+                "file": "euc-cn-pairs.bin",
+                "sha256": "b2edcd505882dd3564e22f3dca83c993adb4104dda5a8ba5782445c22df93598"
+            },
+            "triples": {
+                "file": "euc-cn-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "euc-cn-points.bin",
+                "sha256": "4871eb3ac02d70fc874aa2feabe173f6dd0fc1d724957ff5e551eb65def33ce2"
+            },
+            "encode": {
+                "file": "euc-cn-encode.bin",
+                "sha256": "61c85c6ebd562db0f1fd545b79ffcf0c09f4f2de389ae8677fb1dacc771822c2"
+            },
+            "bytes": {
+                "file": "euc-cn-bytes.bin",
+                "sha256": "8d6eb663481d5730e0142e8f9de49d7243ac3ac9bbc64de01ad9ed3550aee59e"
+            },
+            "composites": {
+                "file": "euc-cn-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "euc-cn-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "CP936": {
+            "single": {
+                "file": "cp936-single.bin",
+                "sha256": "a902e46c219e43dbc2656b85e586983f4c21d4e9c0a8e47d4a76424863f2ea1b"
+            },
+            "pairs": {
+                "file": "cp936-pairs.bin",
+                "sha256": "891e9bf4c9b541a6b9da4c4371fccd4591ea55e2a80c7d5fcec8932f56fafd28"
+            },
+            "triples": {
+                "file": "cp936-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "cp936-points.bin",
+                "sha256": "ec6252367b5610a02f6262fdfa433c46971955d50c7b027f859847f5785b6f53"
+            },
+            "encode": {
+                "file": "cp936-encode.bin",
+                "sha256": "75b5edb34289c99a01b079a9b135c9c910aae7531be13b985ff4d6316bfafae7"
+            },
+            "bytes": {
+                "file": "cp936-bytes.bin",
+                "sha256": "65c8fcf286ad76af748807941a6bc088bf4ee9b4efde9a6a67322cb86592d731"
+            },
+            "composites": {
+                "file": "cp936-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "cp936-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "BIG-5": {
+            "single": {
+                "file": "big-5-single.bin",
+                "sha256": "719aea5dcd202ceaaafbe436f64d4052b3f95af56c96b56059b8fd67b335d321"
+            },
+            "pairs": {
+                "file": "big-5-pairs.bin",
+                "sha256": "e735775685fcfd41fff322555666b2612cd1f674ddffbc6a3b1bf53b7430d967"
+            },
+            "triples": {
+                "file": "big-5-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "big-5-points.bin",
+                "sha256": "36aab6eb271de8ecf87a6f57c4c9c3271445878d5e7890d09ceb2a474defdf00"
+            },
+            "encode": {
+                "file": "big-5-encode.bin",
+                "sha256": "0c144e91d65a894d64dece20a9423d36dec698fab051626ae7671156b7037dc3"
+            },
+            "bytes": {
+                "file": "big-5-bytes.bin",
+                "sha256": "7651000a9d3f4b970508fe6c5796391f322de00f38d83f0633b3b744c230f589"
+            },
+            "composites": {
+                "file": "big-5-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "big-5-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "CP950": {
+            "single": {
+                "file": "cp950-single.bin",
+                "sha256": "719aea5dcd202ceaaafbe436f64d4052b3f95af56c96b56059b8fd67b335d321"
+            },
+            "pairs": {
+                "file": "cp950-pairs.bin",
+                "sha256": "30b2b3329f0943147b191facf57ac07ae427556ddc5e2e77a89af8f93d9dd65c"
+            },
+            "triples": {
+                "file": "cp950-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "cp950-points.bin",
+                "sha256": "9c2ea96861d713bafc84aa129037ad489a3ababdd27530a5b2553b2197ab023c"
+            },
+            "encode": {
+                "file": "cp950-encode.bin",
+                "sha256": "7d29eb6046add1a5cb4960b06bc72fde59535032185612dc6b050c5a5232859f"
+            },
+            "bytes": {
+                "file": "cp950-bytes.bin",
+                "sha256": "35742bfef5988fb6973f59f811d4006c7e831e1c01aebf871dfeead364ffa82c"
+            },
+            "composites": {
+                "file": "cp950-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "cp950-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "EUC-KR": {
+            "single": {
+                "file": "euc-kr-single.bin",
+                "sha256": "719aea5dcd202ceaaafbe436f64d4052b3f95af56c96b56059b8fd67b335d321"
+            },
+            "pairs": {
+                "file": "euc-kr-pairs.bin",
+                "sha256": "e8fa44214e582faf1221af3403deb76dd249dd60f9be0c2955ae158959d0b056"
+            },
+            "triples": {
+                "file": "euc-kr-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "euc-kr-points.bin",
+                "sha256": "f8a78907129b8dd8339315fa3156d9b36da82773b7c4b4743a7b8df83626912f"
+            },
+            "encode": {
+                "file": "euc-kr-encode.bin",
+                "sha256": "fb7595970bb7d42cc692cd7105f9b658cde69876bc45ee0aac66348f593bcc89"
+            },
+            "bytes": {
+                "file": "euc-kr-bytes.bin",
+                "sha256": "8b841c4e9cf1cc0c2886316cf9f04abb678429465f5a1b02f3f8cd9e016bf31b"
+            },
+            "composites": {
+                "file": "euc-kr-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "euc-kr-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "UHC": {
+            "single": {
+                "file": "uhc-single.bin",
+                "sha256": "719aea5dcd202ceaaafbe436f64d4052b3f95af56c96b56059b8fd67b335d321"
+            },
+            "pairs": {
+                "file": "uhc-pairs.bin",
+                "sha256": "3c4843b339a578c952bf43229a489829974517e5b3b07623a856f3646cf628fa"
+            },
+            "triples": {
+                "file": "uhc-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "uhc-points.bin",
+                "sha256": "effee83cfe32d0579ab81af3fd1598915615cfb35ee4703a079eafacec1733d6"
+            },
+            "encode": {
+                "file": "uhc-encode.bin",
+                "sha256": "2b287ee73f1ad9e8e14336be27d72cb3d87dcfe185eb00ed14006937480cac23"
+            },
+            "bytes": {
+                "file": "uhc-bytes.bin",
+                "sha256": "bc0a7f36092731a14772e5ce9cb77a018a400dfc56bf293592358d84e1681566"
+            },
+            "composites": {
+                "file": "uhc-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "uhc-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "SJIS-Mobile#DOCOMO": {
+            "single": {
+                "file": "sjis-mobile-docomo-single.bin",
+                "sha256": "ec3a1de05010c942296cd8a350eb7640ad14ed505415bf74889153dc8abb957f"
+            },
+            "pairs": {
+                "file": "sjis-mobile-docomo-pairs.bin",
+                "sha256": "1b8ad24cdb8e0461a61bee4c586f0b4026c097676f637f74005a8a156130d087"
+            },
+            "triples": {
+                "file": "sjis-mobile-docomo-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "sjis-mobile-docomo-points.bin",
+                "sha256": "6e35aa16e3f3467c6b56e798ef6c27de337935f7c300f5964e99997bc7e3e889"
+            },
+            "encode": {
+                "file": "sjis-mobile-docomo-encode.bin",
+                "sha256": "63b36b0fadf021be3764b2f5ecd61dfbaf5a31981622e9b7afbdaab3198cc518"
+            },
+            "bytes": {
+                "file": "sjis-mobile-docomo-bytes.bin",
+                "sha256": "88f888e3dc83c648b31d127dca9ae26cb88d6b238d30da4cb57f6b6fa1e7f64d"
+            },
+            "composites": {
+                "file": "sjis-mobile-docomo-composites.bin",
+                "sha256": "70c73b54ca4849af45afa976685d83716bcc7f3dd97bbcfe49c0f1be54b4fbb8"
+            },
+            "escapes": {
+                "file": "sjis-mobile-docomo-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "SJIS-Mobile#KDDI": {
+            "single": {
+                "file": "sjis-mobile-kddi-single.bin",
+                "sha256": "ec3a1de05010c942296cd8a350eb7640ad14ed505415bf74889153dc8abb957f"
+            },
+            "pairs": {
+                "file": "sjis-mobile-kddi-pairs.bin",
+                "sha256": "79f568d03e42a9468a411a2e738ee81d4573ff19ae7a11f4f221131624ce0882"
+            },
+            "triples": {
+                "file": "sjis-mobile-kddi-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "sjis-mobile-kddi-points.bin",
+                "sha256": "3b4bd6f32574980dffd88f0e721bf2471aa4ed346239c69a216c5b8ce0ae40cf"
+            },
+            "encode": {
+                "file": "sjis-mobile-kddi-encode.bin",
+                "sha256": "776f75a01bb286f63f108f2e5cc7bcc6815f8503d547eb704ced1afc4644a3d6"
+            },
+            "bytes": {
+                "file": "sjis-mobile-kddi-bytes.bin",
+                "sha256": "76fd6fafc51b46abb881a5ca6aa2db73594b70c924207bc394dc89be550f4d6a"
+            },
+            "composites": {
+                "file": "sjis-mobile-kddi-composites.bin",
+                "sha256": "f5e2238272c10f976c27fde489681cf3f57a96a4f5cfd8162029ae5016def89b"
+            },
+            "escapes": {
+                "file": "sjis-mobile-kddi-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "SJIS-Mobile#SOFTBANK": {
+            "single": {
+                "file": "sjis-mobile-softbank-single.bin",
+                "sha256": "50c8b8ebb43e166b432c16044dce6caf56bee17d77f03a70f8aba91ca4971574"
+            },
+            "pairs": {
+                "file": "sjis-mobile-softbank-pairs.bin",
+                "sha256": "ec4699ef4bcf3559b49675a9e5ad86d45b37f88d36530781df88419d352738a5"
+            },
+            "triples": {
+                "file": "sjis-mobile-softbank-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "sjis-mobile-softbank-points.bin",
+                "sha256": "9aa25fcd265c3ca27f0bd0ba93e73d36d4cafc1cae58a26cff113c142ecf56c1"
+            },
+            "encode": {
+                "file": "sjis-mobile-softbank-encode.bin",
+                "sha256": "a81eee5b7dded4104e040361e9e5c2440dad5ae837df61bd56f3ac046c74cec7"
+            },
+            "bytes": {
+                "file": "sjis-mobile-softbank-bytes.bin",
+                "sha256": "5f49e34ad819dd412d95c253938045e6cf84f1f7161dd4c12e444f44ee1935be"
+            },
+            "composites": {
+                "file": "sjis-mobile-softbank-composites.bin",
+                "sha256": "bf18fda794ee72e58535af4d10cb2bf79664f9d092a0cf32f367360a114d65aa"
+            },
+            "escapes": {
+                "file": "sjis-mobile-softbank-escapes.bin",
+                "sha256": "b45f1f9c562f19ef8d31a58f19425d7f278a0152f7821faf498956b8b16be870"
+            }
+        },
+        "EUC-JP": {
+            "single": {
+                "file": "euc-jp-single.bin",
+                "sha256": "719aea5dcd202ceaaafbe436f64d4052b3f95af56c96b56059b8fd67b335d321"
+            },
+            "pairs": {
+                "file": "euc-jp-pairs.bin",
+                "sha256": "ca8aabfdf414d1d821f42612d3de125e50f5ce0e3ea94faf71d352e7265563b3"
+            },
+            "triples": {
+                "file": "euc-jp-triples.bin",
+                "sha256": "e39cbe7fa721f3d1f853b0d438d7a519cd54227ea262c9d5e672e06690dfbf30"
+            },
+            "points": {
+                "file": "euc-jp-points.bin",
+                "sha256": "6bf4917789b0d0ce1c3205afe9e80f7ee650512e97e2be6358d83935b8db45ce"
+            },
+            "encode": {
+                "file": "euc-jp-encode.bin",
+                "sha256": "faf61d2cd558ecd307b90ba184edb1d81405a9e5e9cee9ef70b51c47ba55e2a4"
+            },
+            "bytes": {
+                "file": "euc-jp-bytes.bin",
+                "sha256": "0be0ed1a22c59302a8d350f6da39cbe6a07b0f0e88a0fc217ce109d1eae490f5"
+            },
+            "composites": {
+                "file": "euc-jp-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "euc-jp-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "eucJP-win": {
+            "single": {
+                "file": "eucjp-win-single.bin",
+                "sha256": "719aea5dcd202ceaaafbe436f64d4052b3f95af56c96b56059b8fd67b335d321"
+            },
+            "pairs": {
+                "file": "eucjp-win-pairs.bin",
+                "sha256": "9a15dd4dd845ac5e59819a9d73cac419c9e62bdf667ec07cccb30b6af4a5e909"
+            },
+            "triples": {
+                "file": "eucjp-win-triples.bin",
+                "sha256": "5454087cb633a30a75b59b44552a1c58115726b938711ddaf2a9ab1996674b4c"
+            },
+            "points": {
+                "file": "eucjp-win-points.bin",
+                "sha256": "17ab7d999d3b8f9ce4e5ea4b68149635bf1e6adc583529647dafe487080fcf9e"
+            },
+            "encode": {
+                "file": "eucjp-win-encode.bin",
+                "sha256": "d83f6da1abd98821a3bfd9dc63c4ec025d761a1eeb58d42da54a902d21ac1571"
+            },
+            "bytes": {
+                "file": "eucjp-win-bytes.bin",
+                "sha256": "a7de6183b303d3ab2af66c748cc6190309b90f7399b7510a748b427952186fd6"
+            },
+            "composites": {
+                "file": "eucjp-win-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "eucjp-win-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "EUC-JP-2004": {
+            "single": {
+                "file": "euc-jp-2004-single.bin",
+                "sha256": "719aea5dcd202ceaaafbe436f64d4052b3f95af56c96b56059b8fd67b335d321"
+            },
+            "pairs": {
+                "file": "euc-jp-2004-pairs.bin",
+                "sha256": "3e0b6c491489bde407247362fcf63a0288b0246c912671927117431442ce8b5e"
+            },
+            "triples": {
+                "file": "euc-jp-2004-triples.bin",
+                "sha256": "db561a97ac8acedb20a86a2a77d085aceb9b84811cc16a819b8e8083303bab3d"
+            },
+            "points": {
+                "file": "euc-jp-2004-points.bin",
+                "sha256": "3189a8e1bbf6b405ef27516ab03c2d14256de147bf9b3a8393277e748bff2a70"
+            },
+            "encode": {
+                "file": "euc-jp-2004-encode.bin",
+                "sha256": "1a9e1e5ee733bd9fcfcd6a40da81a8decd0dea84ad3e0ff7570e1a09b2ebcfc9"
+            },
+            "bytes": {
+                "file": "euc-jp-2004-bytes.bin",
+                "sha256": "010ba1cd10de175b196fdd2bb921cba4b50c482138f9462e0c5ccf0f458840d6"
+            },
+            "composites": {
+                "file": "euc-jp-2004-composites.bin",
+                "sha256": "6ec9cc5b6c4f1cb6f97a1629ed03e27a4279ba0a08f4f355d43cbe59dc50cebb"
+            },
+            "escapes": {
+                "file": "euc-jp-2004-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        },
+        "CP51932": {
+            "single": {
+                "file": "cp51932-single.bin",
+                "sha256": "719aea5dcd202ceaaafbe436f64d4052b3f95af56c96b56059b8fd67b335d321"
+            },
+            "pairs": {
+                "file": "cp51932-pairs.bin",
+                "sha256": "9376b377cacc1568d189b7cea1a86a00bc9b6123262647d421d0d862885968cb"
+            },
+            "triples": {
+                "file": "cp51932-triples.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "points": {
+                "file": "cp51932-points.bin",
+                "sha256": "5214521f7cce59032357f5f0f39bb0a7d5eec6b0183c578527af4e1d37073017"
+            },
+            "encode": {
+                "file": "cp51932-encode.bin",
+                "sha256": "7f7fe601903fcde3daf6652e56eb2e72d6173c0c248255eaaa7a11f033f996dd"
+            },
+            "bytes": {
+                "file": "cp51932-bytes.bin",
+                "sha256": "56f54d5497f9c5c00ed75c93cbc9b2cffce81a01cc7281548fc6051c95cb838a"
+            },
+            "composites": {
+                "file": "cp51932-composites.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "escapes": {
+                "file": "cp51932-escapes.bin",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        }
+    }
+}

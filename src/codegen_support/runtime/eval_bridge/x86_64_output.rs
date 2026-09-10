@@ -91,6 +91,8 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_install_ob_handler_hook");
     crate::codegen::abi::emit_symbol_address(emitter, "r9", "_elephc_eval_ob_handler_fn"); // materialize the eval handler hook slot
     emitter.instruction("mov QWORD PTR [r9], rdi");                             // install the magician ob-handler callback
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_elephc_eval_ob_release_fn"); // locate the buffer-retirement callback slot
+    emitter.instruction("mov QWORD PTR [r9], rsi");                             // install callback-owner retirement alongside invocation support
     emitter.instruction("ret");                                                 // return to Rust
 
     label_c_global(emitter, "__elephc_eval_ob_get_clean_pop");
@@ -190,11 +192,20 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_string_bytes");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across string casting
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // reserve slots for the caller's output pointers
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for the caller's output pointers
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the caller's out_ptr storage address
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the caller's out_len storage address
     emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_string input
-    emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed eval value to a PHP string pair
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // retain the original box for non-string conversion
+    emitter.instruction("call __rt_mixed_unbox");                               // inspect the concrete tag and borrowed byte range
+    emitter.instruction("cmp rax, 1");                                          // an actual string needs no allocating cast for a borrowed view
+    emitter.instruction("je __elephc_eval_value_string_bytes_borrowed");        // preserve the original string owner with its caller
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the original non-string box
+    emitter.instruction("call __rt_mixed_cast_string");                         // scalar casts provide borrowed runtime scratch or fixed text
+    emitter.instruction("jmp __elephc_eval_value_string_bytes_ready");          // share output storage with the direct borrowed-string path
+    emitter.label("__elephc_eval_value_string_bytes_borrowed");
+    emitter.instruction("mov rax, rdi");                                        // adapt the unboxed string pointer to the borrowed-view result convention
+    emitter.label("__elephc_eval_value_string_bytes_ready");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the optional out_ptr storage address
     emitter.instruction("test r10, r10");                                       // did the caller request the string pointer?
     emitter.instruction("jz __elephc_eval_value_string_bytes_len");             // skip pointer storage when the caller passed null
@@ -206,7 +217,7 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], rdx");                            // store the string byte length for Rust
     emitter.label("__elephc_eval_value_string_bytes_done");
     emitter.instruction("mov rax, 1");                                          // report successful string conversion to Rust
-    emitter.instruction("add rsp, 16");                                         // release the string-bytes wrapper slots
+    emitter.instruction("add rsp, 32");                                         // release the string-bytes wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the success flag to Rust
 
@@ -221,11 +232,11 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_pcntl_aot_signal_handler");
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_value");
     emitter.instruction("mov rax, QWORD PTR [r10 + rdi*8]");                    // load the AOT table's original boxed PHP handler
-    emitter.instruction("test rax, rax");                                      // untouched entries have no handler owner
+    emitter.instruction("test rax, rax");                                       // untouched entries have no handler owner
     emitter.instruction("jz __elephc_eval_pcntl_aot_signal_handler_none_x86");  // return null for an empty table entry
-    emitter.instruction("jmp __rt_incref");                                    // give eval an independent owner of the handler value
+    emitter.instruction("jmp __rt_incref");                                     // give eval an independent owner of the handler value
     emitter.label("__elephc_eval_pcntl_aot_signal_handler_none_x86");
-    emitter.instruction("ret");                                                // return the null pointer already held in rax
+    emitter.instruction("ret");                                                 // return the null pointer already held in rax
 
     label_c_global(emitter, "__elephc_eval_value_final_object_identity");
     emitter.instruction("mov rax, rdi");                                        // inspect the C boxed Mixed argument without changing refcounts

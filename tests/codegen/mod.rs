@@ -27,6 +27,7 @@ mod eval_callables;
 mod eval_closures;
 mod eval_constructors;
 mod eval_reflection_invocation;
+mod eval_global_scope;
 mod operators;
 mod control_flow;
 mod scalar_strings;

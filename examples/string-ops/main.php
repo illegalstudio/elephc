@@ -31,6 +31,16 @@ echo "strtoupper: " . strtoupper($str) . "\n";
 echo "ucfirst: " . ucfirst("hello") . "\n";
 echo "lcfirst: " . lcfirst("HELLO") . "\n";
 
+// Unicode product names and compact display labels
+$product = "Straße 東京";
+echo "Unicode uppercase: " . mb_strtoupper($product) . "\n";
+echo "Unicode lowercase: " . mb_strtolower("ΑΘΗΝΑ") . "\n";
+echo "Case-folded search key: " . mb_convert_case($product, MB_CASE_FOLD) . "\n";
+echo "Display width: " . mb_strwidth($product) . "\n";
+echo "Compact label: " . mb_strimwidth($product, 0, 9, "..") . "\n";
+echo "Display name: " . mb_ucfirst("éloïse") . "\n";
+echo "Lowercase initial: " . mb_lcfirst("Éloïse") . "\n";
+
 // Trimming
 echo "\n--- Trim ---\n";
 echo "trim: [" . trim("  spaced  ") . "]\n";
@@ -156,6 +166,9 @@ try {
 echo "\n--- Encoding ---\n";
 echo "mb_strlen UTF-8: " . mb_strlen("héllo", "UTF-8") . "\n";
 echo "mb_strlen bytes: " . mb_strlen("héllo", "8bit") . "\n";
+// Count Japanese text from a legacy Shift-JIS export without converting the file.
+$legacyName = "\x82\xA0\x82\xA2\x82\xA4";
+echo "mb_strlen Shift-JIS: " . mb_strlen($legacyName, "SJIS") . "\n";
 echo "htmlspecialchars: " . htmlspecialchars("<b>bold</b>") . "\n";
 echo "urlencode: " . urlencode("hello world") . "\n";
 echo "base64: " . base64_encode("Hello") . "\n";

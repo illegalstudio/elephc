@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_line_cap() — internals"
+title: "cairo_set_line_cap() - internals"
 description: "Compiler internals for cairo_set_line_cap(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 434
 ---
 
-## `cairo_set_line_cap()` — internals
+## `cairo_set_line_cap()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_set_line_cap(mixed $context, int $lineCap): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

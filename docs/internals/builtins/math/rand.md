@@ -1,16 +1,16 @@
 ---
-title: "rand() — internals"
+title: "rand() - internals"
 description: "Compiler internals for rand(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 594
 ---
 
-## `rand()` — internals
+## `rand()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/rand.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/rand.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

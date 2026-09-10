@@ -1,11 +1,11 @@
 ---
-title: "_cairo_clamp8() — internals"
+title: "_cairo_clamp8() - internals"
 description: "Compiler internals for _cairo_clamp8(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1057
+  order: 1119
 ---
 
-## `_cairo_clamp8()` — internals
+## `_cairo_clamp8()` - internals
 
 ## Where it lives
 
@@ -38,8 +38,8 @@ function _cairo_clamp8(int $v): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

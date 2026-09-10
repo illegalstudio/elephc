@@ -31,11 +31,8 @@ pub(in crate::interpreter) fn eval_builtin_var_dump(
     if args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated_args.push(eval_expr(arg, context, scope, values)?);
-    }
-    eval_var_dump_result(&evaluated_args, context, values)
+    let arguments = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+    eval_builtin_call("var_dump", &arguments, context, scope, values)
 }
 
 /// Emits already materialized values using PHP-style `var_dump()` debug formatting.
@@ -63,7 +60,10 @@ pub(in crate::interpreter) fn eval_var_dump_result(
         )?;
     }
     let output = values.string_bytes_value(&output)?;
-    values.echo(output)?;
+    let result = values.echo(output);
+    let cleanup = eval_release_value(context, values, output);
+    result?;
+    cleanup?;
     values.null()
 }
 

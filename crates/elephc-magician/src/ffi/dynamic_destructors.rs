@@ -84,18 +84,23 @@ pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcE
     Some(context as *mut ElephcEvalContext)
 }
 
-/// Runs an eval dynamic object destructor from the native object free path.
+/// Runs an eval destructor, returning zero for a miss, one for completion, or two for a throw.
 ///
 /// # Safety
 /// `object` must be null or a live elephc runtime object pointer. The runtime
 /// calls this only while its object destruction guard bit is set, so boxing the
 /// borrowed object for `$this` cannot recursively free the same storage.
+/// `thrown` must point to writable output storage; status two transfers one owned
+/// boxed Throwable into it for the native caller to propagate after Rust returns.
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_dynamic_object_destruct(
     object: *mut RuntimeCell,
+    thrown: *mut *mut RuntimeCell,
 ) -> u64 {
-    std::panic::catch_unwind(|| unsafe { dynamic_object_destruct_inner(object) }).unwrap_or(0)
+    if thrown.is_null() { return 0; }
+    unsafe { *thrown = std::ptr::null_mut(); }
+    std::panic::catch_unwind(|| unsafe { dynamic_object_destruct_inner(object, thrown) }).unwrap_or(0)
 }
 
 /// Executes the callback body after the exported ABI shim has installed a panic boundary.
@@ -104,7 +109,10 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_object_destruct(
 /// Mirrors `__elephc_eval_dynamic_object_destruct`; callers must pass a live raw
 /// object pointer whose refcount guard already marks destruction as active.
 #[cfg(not(test))]
-unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
+unsafe fn dynamic_object_destruct_inner(
+    object: *mut RuntimeCell,
+    thrown: *mut *mut RuntimeCell,
+) -> u64 {
     if object.is_null() {
         return 0;
     }
@@ -136,11 +144,33 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
     let destruct_result =
         eval_dynamic_destructor_for_object_cell(identity, object_cell, context, &mut values);
     let release_result = values.release(object_cell);
-    context.forget_dynamic_object(identity);
+    if destruct_result.is_err() || release_result.is_err() {
+        if let Some(pending) = context.take_pending_throw() {
+            unsafe { *thrown = pending.as_ptr(); }
+            return 2;
+        }
+    }
     match (destruct_result, release_result) {
         (Ok(true), Ok(())) => 1,
         (Ok(false), Ok(())) => 0,
         (Err(EvalStatus::UnsupportedConstruct), _) => 1,
         (Err(_), _) | (_, Err(_)) => 1,
+    }
+}
+
+/// Removes eval identity metadata after native object storage has finished child cleanup.
+///
+/// # Safety
+/// `object` is a raw object identity about to be returned to the native heap.
+/// The owning context, when registered, must remain live until this callback returns.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_object_forget(object: *mut RuntimeCell) {
+    let identity = object as u64;
+    let Some(context) = dynamic_object_owner_context(identity) else { return; };
+    if let Some(context) = unsafe { context.as_mut() } {
+        context.forget_dynamic_object(identity);
+    } else {
+        unregister_dynamic_object(identity);
     }
 }

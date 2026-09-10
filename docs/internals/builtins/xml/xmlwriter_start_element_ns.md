@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_start_element_ns() — internals"
+title: "xmlwriter_start_element_ns() - internals"
 description: "Compiler internals for xmlwriter_start_element_ns(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 960
+  order: 1021
 ---
 
-## `xmlwriter_start_element_ns()` — internals
+## `xmlwriter_start_element_ns()` - internals
 
 ## Where it lives
 

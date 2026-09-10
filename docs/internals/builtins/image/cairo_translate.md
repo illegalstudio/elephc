@@ -1,11 +1,11 @@
 ---
-title: "cairo_translate() — internals"
+title: "cairo_translate() - internals"
 description: "Compiler internals for cairo_translate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 445
 ---
 
-## `cairo_translate()` — internals
+## `cairo_translate()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_translate(mixed $context, float $tx, float $ty): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

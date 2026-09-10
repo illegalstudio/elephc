@@ -333,6 +333,22 @@ impl ElephcEvalScope {
         }
     }
 
+    /// Marks a mutated reference and its local aliases dirty without transferring their ownership.
+    pub fn mark_reference_changed(&mut self, name: &str) {
+        let Some(cell) = self.visible_cell(name) else { return; };
+        self.bump_generation();
+        for (entry_name, entry) in &mut self.entries {
+            let flags = entry.flags();
+            if flags.is_visible() && entry.cell() == cell && (entry_name == name || flags.by_ref) {
+                *entry = if flags.by_ref {
+                    ScopeEntry::reference(cell, flags.ownership, self.generation)
+                } else {
+                    ScopeEntry::present(cell, flags.ownership, self.generation)
+                };
+            }
+        }
+    }
+
     /// Returns the entry for a named variable, including unset markers.
     pub fn entry(&self, name: &str) -> Option<ScopeEntry> {
         self.entries.get(name).copied()

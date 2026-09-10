@@ -117,6 +117,7 @@ Some optional features are implemented as Rust *bridge crates* (`staticlib`
 archives) that elephc links into the program: `pdo` (database access), `tls`
 (`https://`/`ftps://` streams), `crypto` (the `hash()`/`md5()`/`sha1()` family),
 `bcmath` (exact arbitrary-precision decimal arithmetic),
+`mbstring` (the shared multibyte string engine),
 `iconv` (character-set conversion and the character-oriented `iconv_*` functions),
 `phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
 processing), `pcntl` (Unix process control and signals), `xml` (the `ext/xml`
@@ -127,11 +128,16 @@ dynamic `eval()`), `web` (the `--web` server), and `curl` (the libcurl-backed
 By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
 calling a `bc*` function pulls in `bcmath`, calling an `iconv*` function pulls in
-`iconv`, referencing `PDO` pulls in `pdo`, creating an `XMLWriter` or calling an
-`xml_*` function pulls in `xml`, and so on. An `eval()` call pulls in Magician
+`iconv`, calling `mb_strlen()` pulls in `mbstring`, referencing `PDO` pulls in
+`pdo`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
+An `eval()` call pulls in Magician
 only when it needs runtime parsing: eligible literal fragments can be parsed at
 compile time and lowered to native EIR without the interpreter bridge. Programs
 that do not need a feature never link its crate, so binaries stay small.
+
+When building from a source checkout, elephc refreshes bridge archives after changes
+to their local Cargo dependencies, including shared contracts. Workspace manifests,
+the lockfile, and Cargo configuration also participate in this freshness check.
 
 `--with-CRATE` force-enables a bridge regardless of that auto-detection. It
 force-links the staticlib (whole-archived, so it is retained even if no symbol
@@ -144,6 +150,7 @@ that detection cannot see. The flag is repeatable:
 elephc app.php --with-pdo
 elephc app.php --with-crypto --with-tls
 elephc app.php --with-bcmath
+elephc app.php --with-mbstring
 elephc app.php --with-iconv
 elephc app.php --with-pcntl
 elephc app.php --with-eval
@@ -216,10 +223,12 @@ since the whole archive is included.
 
 Bridge crates are Elephc's optional Rust workspace components. They are not
 installed or versioned by `elephc native`. A bridge or runtime-capability flag
-may require a separately declared managed package — `--with-regex` requires
+may require a separately declared managed package: `--with-regex` requires
 `pcre2`, `--with-curl` requires `curl` (which in turn declares `openssl` and
-`zlib`), `--with-xml` requires `libxml2` — but the flag itself does not install
-it. Composer dependencies are
+`zlib`), `--with-mbstring` requires `oniguruma` and `pcre2`, and `--with-xml`
+requires `libxml2`. Programs using mbstring or opaque eval need `pcre2` for
+response MIME selection even with default INI settings. These flags do not
+install the packages. Composer dependencies are
 PHP source handled by the compile-time autoload pipeline and remain separate.
 
 ## Heap size

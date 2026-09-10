@@ -9,6 +9,9 @@
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
 pub mod autoload;
+/// Local Cargo source inputs shared by bridge discovery and integration-test builders.
+#[doc(hidden)]
+pub mod bridge_sources;
 /// Builtin catalog and signature metadata snapshots.
 pub mod builtin_metadata;
 /// Single-source builtin registry: catalog, signatures, type-check, and lowering dispatch.
@@ -65,6 +68,7 @@ pub(crate) mod numeric_string;
 pub mod opcache;
 /// `opcache_get_configuration()` standard-library prelude injection.
 pub mod opcache_prelude;
+pub(crate) mod shared_ini_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.

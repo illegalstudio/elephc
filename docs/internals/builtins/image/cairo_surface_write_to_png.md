@@ -1,11 +1,11 @@
 ---
-title: "cairo_surface_write_to_png() — internals"
+title: "cairo_surface_write_to_png() - internals"
 description: "Compiler internals for cairo_surface_write_to_png(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 443
 ---
 
-## `cairo_surface_write_to_png()` — internals
+## `cairo_surface_write_to_png()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_surface_write_to_png(mixed $surface, string $filename): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

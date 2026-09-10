@@ -1,16 +1,16 @@
 ---
-title: "php_sapi_name() — internals"
+title: "php_sapi_name() - internals"
 description: "Compiler internals for php_sapi_name(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 653
 ---
 
-## `php_sapi_name()` — internals
+## `php_sapi_name()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/version_prelude.rs`:50](https://github.com/illegalstudio/elephc/blob/main/src/version_prelude.rs#L50) (`php_sapi_name`)
+- **Lowering**: [`src/version_prelude.rs`:48](https://github.com/illegalstudio/elephc/blob/main/src/version_prelude.rs#L48) (`php_sapi_name`)
 - **Function symbol**: `php_sapi_name()`
 
 
@@ -38,7 +38,7 @@ function php_sapi_name(): string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

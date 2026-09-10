@@ -21,6 +21,7 @@ const HARNESS_SOURCE: &str = r#"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 int32_t elephc_pcre2_v1_compile(
     void **handle_out,
@@ -36,6 +37,10 @@ int32_t elephc_pcre2_v1_exec(
     uint32_t eflags
 );
 void elephc_pcre2_v1_free(void *opaque_handle);
+int32_t elephc_pcre2_v1_mime_compile(void **handle, const uint8_t *pattern, uint64_t length, uint64_t *offset);
+int32_t elephc_pcre2_v1_mime_match(void *handle, const uint8_t *subject, uint64_t length);
+void elephc_pcre2_v1_mime_free(void *handle);
+int32_t elephc_pcre2_v1_error_message(int32_t error, uint8_t *buffer, uint64_t capacity);
 
 #define CHECK(condition, message)                                                \
     do {                                                                         \
@@ -167,6 +172,52 @@ static int check_guard_contracts(void) {
     return 0;
 }
 
+/* Exercises PCRE2 syntax, caseless matching, explicit byte lengths, and diagnostic ownership. */
+static int check_mime_native_contract(void) {
+    void *handle = (void *)(uintptr_t)1;
+    uint64_t offset = UINT64_MAX;
+    uint8_t message[256];
+    uint8_t small[2] = {77, 88};
+    const uint8_t subject[] = {'X', 0, 'y'};
+    const char *pattern = "(?<=^application/)json";
+    int32_t error;
+    int32_t length;
+
+    error = elephc_pcre2_v1_mime_compile(&handle, (const uint8_t *)"[", 1, &offset);
+    CHECK(error > 0 && handle == NULL && offset == 1, "invalid MIME pattern must preserve PCRE2 error and byte offset");
+    length = elephc_pcre2_v1_error_message(error, message, sizeof(message));
+    CHECK(length > 0 && (size_t)length == strlen((char *)message), "MIME diagnostic length excludes the terminator");
+    CHECK(strcmp((char *)message, "missing terminating ] for character class") == 0, "MIME diagnostic uses native PCRE2 wording");
+    CHECK(elephc_pcre2_v1_error_message(error, small, sizeof(small)) < 0 && small[1] == 0, "short diagnostic buffer must terminate safely");
+    CHECK(elephc_pcre2_v1_error_message(error, small, 0) < 0, "zero diagnostic capacity must fail");
+    CHECK(elephc_pcre2_v1_error_message(error, NULL, 1) < 0, "null diagnostic buffer must fail");
+
+    CHECK(elephc_pcre2_v1_mime_compile(&handle, (const uint8_t *)pattern, strlen(pattern), &offset) == 0,
+        "native lookbehind MIME syntax must compile");
+    CHECK(handle != NULL && offset == 0, "successful MIME compile clears the error offset");
+    CHECK(elephc_pcre2_v1_mime_match(handle, (const uint8_t *)"APPLICATION/JSON", 16) == 1, "MIME matching is caseless");
+    CHECK(elephc_pcre2_v1_mime_match(handle, (const uint8_t *)"text/plain", 10) == 0, "valid MIME nonmatch returns zero");
+    CHECK(elephc_pcre2_v1_mime_match(handle, NULL, 1) < 0, "null nonempty MIME subject must fail");
+    CHECK(elephc_pcre2_v1_mime_match(handle, subject, UINT64_MAX) < 0, "oversized MIME subject must fail before reading");
+    elephc_pcre2_v1_mime_free(handle);
+
+    pattern = "x\\x00y";
+    CHECK(elephc_pcre2_v1_mime_compile(&handle, (const uint8_t *)pattern, strlen(pattern), &offset) == 0, "binary subject fixture compiles");
+    CHECK(elephc_pcre2_v1_mime_match(handle, subject, sizeof(subject)) == 1, "MIME shim preserves explicit binary subject length");
+    elephc_pcre2_v1_mime_free(handle);
+
+    CHECK(elephc_pcre2_v1_mime_compile(&handle, NULL, 0, &offset) == 0, "null empty pattern is safe");
+    CHECK(elephc_pcre2_v1_mime_match(handle, NULL, 0) == 1, "null empty subject is safe");
+    elephc_pcre2_v1_mime_free(handle);
+    CHECK(elephc_pcre2_v1_mime_compile(&handle, NULL, 1, &offset) < 0 && handle == NULL && offset == 0, "invalid MIME arguments clear outputs");
+    CHECK(elephc_pcre2_v1_mime_compile(&handle, subject, UINT64_MAX, &offset) < 0, "oversized pattern must fail before reading");
+    CHECK(elephc_pcre2_v1_mime_compile(NULL, subject, sizeof(subject), &offset) < 0, "null handle output must fail");
+    CHECK(elephc_pcre2_v1_mime_compile(&handle, subject, sizeof(subject), NULL) < 0 && handle == NULL, "null offset output clears handle");
+    CHECK(elephc_pcre2_v1_mime_match(NULL, subject, sizeof(subject)) < 0, "null MIME handle must fail");
+    elephc_pcre2_v1_mime_free(NULL);
+    return 0;
+}
+
 int main(void) {
     int result;
 
@@ -183,6 +234,10 @@ int main(void) {
         return result;
     }
     result = check_guard_contracts();
+    if (result != 0) {
+        return result;
+    }
+    result = check_mime_native_contract();
     if (result != 0) {
         return result;
     }

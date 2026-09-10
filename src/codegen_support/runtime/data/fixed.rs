@@ -13,7 +13,7 @@ use super::{
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
-    MB_STRLEN_UNKNOWN_ENCODING_MSG, MIXED_SORT_NON_SCALAR_MSG,
+    MIXED_SORT_NON_SCALAR_MSG,
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
@@ -57,6 +57,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
+    out.push_str(&comm_directive("_mbstring_deferred_capture_head", 8, target));
+    out.push_str(&comm_directive("_mbstring_deferred_capture_tail", 8, target));
+    out.push_str(&comm_directive("_mbstring_deferred_capture_draining", 8, target));
+    out.push_str(&comm_directive("_mbstring_ini_native_active", 8, target));
     out.push_str(&comm_directive("_unser_depth", 8, target));
     out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
     out.push_str(&comm_directive("_unser_allowed_mode", 8, target));
@@ -106,6 +111,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     }
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
+    out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
+    out.push_str(".globl _mbstring_warning_prefix\n_mbstring_warning_prefix:\n    .ascii \"Warning: \"\n");
+    out.push_str(".globl _mbstring_deprecated_prefix\n_mbstring_deprecated_prefix:\n    .ascii \"Deprecated: \"\n");
+    out.push_str(".globl _mbstring_diagnostic_newline\n_mbstring_diagnostic_newline:\n    .ascii \"\\n\"\n");
     out.push_str(&format!(
         ".globl _diag_sprintf_array_to_string\n_diag_sprintf_array_to_string:\n    .ascii {SPRINTF_ARRAY_TO_STRING_WARNING:?}\n"
     ));
@@ -163,6 +172,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // an eval-registered ob_start() handler: fn(id, buf, len, phase) -> Mixed
     // result cell pointer (0 = pass-through). Called via __rt_ob_eval_trampoline.
     out.push_str(&comm_directive("_elephc_eval_ob_handler_fn", 8, target));
+    // Eval callback retirement accepts (registry id, boxed Throwable output) and returns a status.
+    out.push_str(&comm_directive("_elephc_eval_ob_release_fn", 8, target));
     // "Closure::__invoke": PHP display name for closure / first-class-callable
     // output handlers in ob_get_status()/ob_list_handlers().
     out.push_str(&format!(
@@ -439,6 +450,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     out.push_str(&comm_directive("_gc_collecting", 8, target));
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
+    out.push_str(&comm_directive("_hash_write_guard_top", 8, target));
     out.push_str(&comm_directive("_json_last_error", 8, target));
     out.push_str(&comm_directive("_json_active_flags", 8, target));
     out.push_str(&comm_directive("_json_active_depth", 8, target));
@@ -476,6 +488,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(
         ".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii {:?}\n",
         ARRAY_ALLOC_SIZE_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _hash_append_err_msg\n_hash_append_err_msg:\n    .ascii {:?}\n",
+        super::HASH_APPEND_ERROR_MSG
     ));
     out.push_str(&format!(
         ".globl _mixed_sort_non_scalar_msg\n_mixed_sort_non_scalar_msg:\n    .ascii {:?}\n",
@@ -551,16 +567,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".globl _hash_copy_finalized_ctx_msg\n_hash_copy_finalized_ctx_msg:\n    .ascii {:?}\n",
         HASH_COPY_FINALIZED_CTX_MSG
     ));
-    out.push_str(&format!(
-        ".globl _mb_strlen_unknown_encoding_msg\n_mb_strlen_unknown_encoding_msg:\n    .ascii {:?}\n",
-        MB_STRLEN_UNKNOWN_ENCODING_MSG
-    ));
-    out.push_str(".globl _mb_strlen_utf8_name\n_mb_strlen_utf8_name:\n    .asciz \"UTF-8\"\n");
-    out.push_str(".globl _mb_strlen_utf8_alias\n_mb_strlen_utf8_alias:\n    .asciz \"UTF8\"\n");
-    out.push_str(".globl _mb_strlen_utf32le_name\n_mb_strlen_utf32le_name:\n    .asciz \"UTF-32LE\"\n");
-    out.push_str(".globl _mb_strlen_8bit_name\n_mb_strlen_8bit_name:\n    .asciz \"8bit\"\n");
-    out.push_str(".globl _mb_strlen_binary_name\n_mb_strlen_binary_name:\n    .asciz \"binary\"\n");
-    out.push_str(".globl _mb_strlen_7bit_name\n_mb_strlen_7bit_name:\n    .asciz \"7bit\"\n");
     // Fixed algorithm-name constants for md5()/sha1(): both route through the
     // same elephc_crypto_hash entry point as hash(), so __rt_md5 / __rt_sha1
     // load these literal names into the algorithm-name register pair before

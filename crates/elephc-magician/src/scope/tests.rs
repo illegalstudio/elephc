@@ -179,6 +179,24 @@ fn global_alias_to_records_target_name() {
     assert_eq!(scope.global_alias_target("source"), None);
 }
 
+/// Marks every local reference alias dirty while keeping exactly one owner for the group.
+#[test]
+fn reference_mutation_preserves_alias_ownership() {
+    let mut scope = ElephcEvalScope::new();
+    let value = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+    scope.set("value", value, ScopeCellOwnership::Owned);
+    scope.set_reference("alias", "value", value, ScopeCellOwnership::Owned);
+    let owned_before = ["value", "alias"].map(|name| scope.entry(name).unwrap().flags().ownership);
+    scope.mark_all_clean();
+    scope.mark_reference_changed("alias");
+    for (name, ownership) in ["value", "alias"].into_iter().zip(owned_before) {
+        let entry = scope.entry(name).unwrap();
+        assert!(entry.flags().dirty);
+        assert_eq!(entry.flags().ownership, ownership);
+    }
+    assert_eq!(scope.drain_owned_cells(), vec![value]);
+}
+
 /// Verifies draining a scope returns only visible owned cells.
 #[test]
 fn drain_owned_cells_returns_visible_owned_entries() {

@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_end_dtd() — internals"
+title: "xmlwriter_end_dtd() - internals"
 description: "Compiler internals for xmlwriter_end_dtd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 937
+  order: 998
 ---
 
-## `xmlwriter_end_dtd()` — internals
+## `xmlwriter_end_dtd()` - internals
 
 ## Where it lives
 

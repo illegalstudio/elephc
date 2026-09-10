@@ -1,0 +1,164 @@
+{
+    "php_version": "8.5.10",
+    "languages": {
+        "neutral": {
+            "aliases": [],
+            "detect_order": [
+                "ASCII",
+                "UTF-8"
+            ],
+            "mail_charset": "UTF-8",
+            "mail_header_encoding": "BASE64",
+            "mail_body_encoding": "BASE64"
+        },
+        "uni": {
+            "aliases": [
+                "universal"
+            ],
+            "detect_order": [
+                "ASCII",
+                "UTF-8"
+            ],
+            "mail_charset": "UTF-8",
+            "mail_header_encoding": "BASE64",
+            "mail_body_encoding": "BASE64"
+        },
+        "English": {
+            "aliases": [
+                "en"
+            ],
+            "detect_order": [
+                "ASCII",
+                "UTF-8"
+            ],
+            "mail_charset": "ISO-8859-1",
+            "mail_header_encoding": "Quoted-Printable",
+            "mail_body_encoding": "8bit"
+        },
+        "German": {
+            "aliases": [
+                "de",
+                "Deutsch"
+            ],
+            "detect_order": [
+                "ASCII",
+                "UTF-8"
+            ],
+            "mail_charset": "ISO-8859-15",
+            "mail_header_encoding": "Quoted-Printable",
+            "mail_body_encoding": "8bit"
+        },
+        "Japanese": {
+            "aliases": [
+                "ja"
+            ],
+            "detect_order": [
+                "ASCII",
+                "JIS",
+                "UTF-8",
+                "EUC-JP",
+                "SJIS"
+            ],
+            "mail_charset": "ISO-2022-JP",
+            "mail_header_encoding": "BASE64",
+            "mail_body_encoding": "7bit"
+        },
+        "Korean": {
+            "aliases": [
+                "ko"
+            ],
+            "detect_order": [
+                "ASCII",
+                "UTF-8",
+                "EUC-KR",
+                "UHC"
+            ],
+            "mail_charset": "ISO-2022-KR",
+            "mail_header_encoding": "BASE64",
+            "mail_body_encoding": "7bit"
+        },
+        "Simplified Chinese": {
+            "aliases": [
+                "zh-cn"
+            ],
+            "detect_order": [
+                "ASCII",
+                "UTF-8",
+                "EUC-CN",
+                "CP936"
+            ],
+            "mail_charset": "HZ",
+            "mail_header_encoding": "BASE64",
+            "mail_body_encoding": "7bit"
+        },
+        "Traditional Chinese": {
+            "aliases": [
+                "zh-tw"
+            ],
+            "detect_order": [
+                "ASCII",
+                "UTF-8",
+                "EUC-TW",
+                "BIG-5"
+            ],
+            "mail_charset": "BIG-5",
+            "mail_header_encoding": "BASE64",
+            "mail_body_encoding": "8bit"
+        },
+        "Russian": {
+            "aliases": [
+                "ru"
+            ],
+            "detect_order": [
+                "ASCII",
+                "UTF-8",
+                "KOI8-R",
+                "Windows-1251",
+                "CP866"
+            ],
+            "mail_charset": "KOI8-R",
+            "mail_header_encoding": "Quoted-Printable",
+            "mail_body_encoding": "8bit"
+        },
+        "Ukrainian": {
+            "aliases": [
+                "ua"
+            ],
+            "detect_order": [
+                "ASCII",
+                "UTF-8",
+                "KOI8-U"
+            ],
+            "mail_charset": "KOI8-U",
+            "mail_header_encoding": "Quoted-Printable",
+            "mail_body_encoding": "8bit"
+        },
+        "Armenian": {
+            "aliases": [
+                "hy"
+            ],
+            "detect_order": [
+                "ASCII",
+                "UTF-8",
+                "ArmSCII-8"
+            ],
+            "mail_charset": "ArmSCII-8",
+            "mail_header_encoding": "Quoted-Printable",
+            "mail_body_encoding": "8bit"
+        },
+        "Turkish": {
+            "aliases": [
+                "tr"
+            ],
+            "detect_order": [
+                "ASCII",
+                "UTF-8",
+                "Windows-1254",
+                "ISO-8859-9"
+            ],
+            "mail_charset": "ISO-8859-9",
+            "mail_header_encoding": "Quoted-Printable",
+            "mail_body_encoding": "8bit"
+        }
+    }
+}

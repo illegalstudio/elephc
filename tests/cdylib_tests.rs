@@ -23,6 +23,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
+#[path = "cdylib/mbstring.rs"]
+mod mbstring;
+
 /// Creates an isolated temporary directory for one cdylib test, unique across
 /// parallel test threads and processes.
 fn make_test_dir(prefix: &str) -> PathBuf {

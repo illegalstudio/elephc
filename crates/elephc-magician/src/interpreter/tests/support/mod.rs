@@ -29,7 +29,7 @@ mod runtime_ops;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) enum FakeKey {
     Int(i64),
-    String(String),
+    String(Vec<u8>),
 }
 
 /// Test-only runtime value representation used behind opaque cell handles.
@@ -67,6 +67,9 @@ pub(super) const FAKE_STD_STREAM_MAX_PAYLOAD: i64 = 2;
 pub(super) struct FakeOps {
     pub(super) next_id: usize,
     pub(super) values: HashMap<usize, FakeValue>,
+    /// Independent fake storage history for automatic associative-array indices.
+    pub(super) array_next_indices: HashMap<usize, i64>,
+    pub(super) references: HashMap<usize, RuntimeCellHandle>,
     /// Fake mirror of the runtime resource-id registry: native payload to PHP id.
     ///
     /// WHY THIS EXISTS. The fake used to answer `payload + 1` for every resource
@@ -95,6 +98,7 @@ pub(super) struct FakeOps {
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
     pub(super) warnings: Vec<String>,
+    pub(super) pending_runtime_throwable: Option<RuntimeCellHandle>,
     pub(super) fail_array_set_call: Option<usize>,
     pub(super) array_set_calls: usize,
     pub(super) ob_stack: Vec<FakeObLevel>,
@@ -125,6 +129,13 @@ impl FakeOps {
         }
         self.next_id += 1;
         let id = self.next_id;
+        if let FakeValue::Assoc(entries) = &value {
+            let next = entries.iter().filter_map(|(key, _)| match key {
+                FakeKey::Int(key) => Some(key.saturating_add(1)),
+                FakeKey::String(_) => None,
+            }).max().unwrap_or(i64::MIN);
+            self.array_next_indices.insert(id, next);
+        }
         self.values.insert(id, value);
         RuntimeCellHandle::from_raw(id as *mut RuntimeCell)
     }
@@ -203,6 +214,7 @@ impl FakeOps {
     /// Reads a fake runtime cell by opaque handle.
     pub(super) fn get(&self, handle: RuntimeCellHandle) -> FakeValue {
         let id = handle.as_ptr() as usize;
+        if let Some(value) = self.references.get(&id) { return self.get(*value); }
         self.values.get(&id).cloned().expect("fake cell missing")
     }
 
@@ -213,18 +225,11 @@ impl FakeOps {
             FakeValue::Int(value) => Ok(FakeKey::Int(value)),
             FakeValue::String(value) => eval_numeric_string_array_key(value.as_bytes())
                 .map(FakeKey::Int)
-                .map_or_else(|| Ok(FakeKey::String(value)), Ok),
+                .map_or_else(|| Ok(FakeKey::String(value.into_bytes())), Ok),
             FakeValue::Bytes(value) => eval_numeric_string_array_key(&value)
                 .map(FakeKey::Int)
-                .map_or_else(
-                    || {
-                        Ok(FakeKey::String(
-                            String::from_utf8_lossy(&value).into_owned(),
-                        ))
-                    },
-                    Ok,
-                ),
-            FakeValue::Null => Ok(FakeKey::String(String::new())),
+                .map_or_else(|| Ok(FakeKey::String(value)), Ok),
+            FakeValue::Null => Ok(FakeKey::String(Vec::new())),
             value => Ok(FakeKey::Int(self.fake_int(&value))),
         }
     }
@@ -233,7 +238,7 @@ impl FakeOps {
     pub(super) fn alloc_key(&mut self, key: &FakeKey) -> Result<RuntimeCellHandle, EvalStatus> {
         match key {
             FakeKey::Int(value) => self.int(*value),
-            FakeKey::String(value) => self.string(value),
+            FakeKey::String(value) => self.string_bytes_value(value),
         }
     }
 

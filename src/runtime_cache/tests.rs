@@ -46,7 +46,8 @@ use super::*;
         );
         let variants = [
             RuntimeFeatures { regex: true, ..RuntimeFeatures::none() },
-            RuntimeFeatures { mb_strlen: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { mbstring: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { mbregex: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { phar_archive: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { descriptor_invoker: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { eval_bridge: true, ..RuntimeFeatures::none() },

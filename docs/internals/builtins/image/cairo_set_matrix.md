@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_matrix() — internals"
+title: "cairo_set_matrix() - internals"
 description: "Compiler internals for cairo_set_matrix(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 437
 ---
 
-## `cairo_set_matrix()` — internals
+## `cairo_set_matrix()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_set_matrix(mixed $context, mixed $matrix): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -368,6 +368,10 @@ fn eval_closure_capture(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalClosureCaptureBinding, EvalStatus> {
     if capture.by_ref() {
+        if let Some(reference) = eval_persistent_variable_reference(capture.name(), context, scope, values)? {
+            let reference = values.retain(reference)?;
+            return Ok(EvalClosureCaptureBinding::new(capture.name(), reference, Some(EvalReferenceTarget::Cell { cell: reference })));
+        }
         let expr = EvalExpr::LoadVar(capture.name().to_string());
         let (value, target) = eval_call_arg_value(&expr, context, scope, values)?;
         return Ok(EvalClosureCaptureBinding::new(
@@ -377,7 +381,7 @@ fn eval_closure_capture(
         ));
     }
     let value = if let Some(value) = visible_scope_cell(context, scope, capture.name()) {
-        values.retain(value)?
+        if values.is_reference(value)? { values.copy_value(value)? } else { values.retain(value)? }
     } else {
         values.null()?
     };
@@ -392,6 +396,7 @@ pub(in crate::interpreter) fn eval_match_expr(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+    own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let subject = eval_expr(subject, context, scope, values)?;
     for arm in arms {
@@ -399,11 +404,11 @@ pub(in crate::interpreter) fn eval_match_expr(
             let pattern = eval_expr(pattern, context, scope, values)?;
             let matched = values.compare(EvalBinOp::StrictEq, subject, pattern)?;
             if values.truthy(matched)? {
-                return eval_expr(&arm.value, context, scope, values);
+                return eval_expr_with_result_ownership(&arm.value, context, scope, values, own_result);
             }
         }
     }
     default
-        .map(|expr| eval_expr(expr, context, scope, values))
+        .map(|expr| eval_expr_with_result_ownership(expr, context, scope, values, own_result))
         .unwrap_or(Err(EvalStatus::RuntimeFatal))
 }

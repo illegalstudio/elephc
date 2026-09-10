@@ -1,11 +1,11 @@
 ---
-title: "cairo_fill() — internals"
+title: "cairo_fill() - internals"
 description: "Compiler internals for cairo_fill(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 403
 ---
 
-## `cairo_fill()` — internals
+## `cairo_fill()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_fill(mixed $context): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

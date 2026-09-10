@@ -1,11 +1,11 @@
 ---
-title: "imagesetthickness() — internals"
+title: "imagesetthickness() - internals"
 description: "Compiler internals for imagesetthickness(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 529
 ---
 
-## `imagesetthickness()` — internals
+## `imagesetthickness()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagesetthickness(mixed $image, int $thickness): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -97,7 +97,9 @@ pub(super) fn acquire_returned_this(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if !matches!(value_expr.map(|expr| &expr.kind), Some(ExprKind::This)) {
+    if !matches!(value_expr.map(|expr| &expr.kind), Some(ExprKind::This))
+        || ctx.value_is_owning_temporary(value)
+    {
         return value;
     }
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
@@ -128,10 +130,10 @@ pub(super) fn persist_scratch_return_string(
     )
 }
 
-/// Acquires return values read from heap containers before local cleanup runs.
+/// Gives typed object returns an independent owner and stabilizes borrowed heap reads.
 ///
 /// Function-static slots are included: the slot keeps owning its boxed value across
-/// calls, so `return $static_local` must hand the caller an extra reference — the
+/// calls, so `return $static_local` must hand the caller an extra reference, since the
 /// caller releases call results after consuming them, and without the retain that
 /// release frees the box the slot still points to.
 pub(super) fn acquire_borrowed_return_value(
@@ -139,10 +141,23 @@ pub(super) fn acquire_borrowed_return_value(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if ctx.value_is_owning_temporary(value) {
+    let temporary = ctx.value_is_owning_temporary(value);
+    let php_type = ctx.builder.value_php_type(value.value);
+    if !ctx.by_ref_return && matches!(php_type.codegen_repr(), PhpType::Object(_)) {
+        // Concrete local loads are provisional owners until final slot widening is known.
+        // Acquire the return independently, then release a possible owned Mixed unbox.
+        // Builder finalization removes that release when the local remains concrete.
+        if !temporary || ctx.value_is_owned_unboxed_local_load(value.value) {
+            let acquired = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+            if temporary {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            return acquired;
+        }
+    }
+    if temporary {
         return value;
     }
-    let php_type = ctx.builder.value_php_type(value.value);
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }

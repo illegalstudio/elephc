@@ -86,6 +86,7 @@ pub(in crate::interpreter) fn execute_matching_catch(
             var_name.clone(),
             thrown,
             ScopeCellOwnership::Owned,
+            values,
         )? {
             values.release(replaced)?;
         }

@@ -89,7 +89,11 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         }
         if value.is_none() {
             if position < required_count {
-                return Err(EvalStatus::RuntimeFatal);
+                return eval_throw_argument_count_error(
+                    "Too few arguments",
+                    context,
+                    values,
+                );
             }
             let Some(Some(default)) = parameter_defaults.get(position) else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -454,7 +458,7 @@ fn eval_method_parameter_variant_accepts_exact(
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
         EvalParameterTypeVariant::Callable => Ok(matches!(
             tag,
-            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT
+            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE
         )),
         EvalParameterTypeVariant::Class(class_name) => {
             eval_method_parameter_class_accepts(value, tag, class_name, context, values)
@@ -472,12 +476,12 @@ fn eval_method_parameter_variant_accepts_exact(
         }
         EvalParameterTypeVariant::Mixed => Ok(true),
         EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void => Ok(false),
-        EvalParameterTypeVariant::Object => Ok(tag == EVAL_TAG_OBJECT),
+        EvalParameterTypeVariant::Object => Ok(matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE)),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
     }
 }
 
-/// Returns whether an object value satisfies one class/interface parameter target.
+/// Returns whether an object or native closure satisfies one class/interface parameter target.
 fn eval_method_parameter_class_accepts(
     value: RuntimeCellHandle,
     tag: u64,
@@ -485,13 +489,15 @@ fn eval_method_parameter_class_accepts(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    let target = eval_method_parameter_runtime_class_name(class_name, context)?;
+    if tag == EVAL_TAG_CALLABLE {
+        return Ok(target.eq_ignore_ascii_case("Closure"));
+    }
     if tag != EVAL_TAG_OBJECT {
         return Ok(false);
     }
-    let target = eval_method_parameter_runtime_class_name(class_name, context)?;
-    let identity = values.object_identity(value)?;
-    if let Some(class) = context.dynamic_object_class(identity) {
-        return Ok(context.class_is_a(class.name(), &target, false));
+    if let Some(accepted) = dynamic_object_is_a(value, &target, false, context, values)? {
+        return Ok(accepted);
     }
     values.object_is_a(value, &target, false)
 }

@@ -1,11 +1,11 @@
 ---
-title: "getimagesizefromstring() — internals"
+title: "getimagesizefromstring() - internals"
 description: "Compiler internals for getimagesizefromstring(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 452
 ---
 
-## `getimagesizefromstring()` — internals
+## `getimagesizefromstring()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function getimagesizefromstring(string $data): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

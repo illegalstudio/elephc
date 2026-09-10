@@ -1,11 +1,11 @@
 ---
-title: "imagesx() — internals"
+title: "imagesx() - internals"
 description: "Compiler internals for imagesx(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 532
 ---
 
-## `imagesx()` — internals
+## `imagesx()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagesx(mixed $image): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

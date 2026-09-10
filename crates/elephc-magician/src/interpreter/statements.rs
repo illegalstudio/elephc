@@ -11,6 +11,7 @@
 
 mod abstract_requirements;
 mod array_updates;
+mod array_append;
 mod attributes_magic_validation;
 mod callable_objects;
 mod class_declarations;
@@ -47,6 +48,7 @@ use crate::context::{
 
 use abstract_requirements::*;
 pub(crate) use array_updates::*;
+use array_append::{eval_array_append_value, eval_owned_unset_index};
 use attributes_magic_validation::*;
 pub(in crate::interpreter) use callable_objects::*;
 pub(in crate::interpreter) use class_declarations::*;

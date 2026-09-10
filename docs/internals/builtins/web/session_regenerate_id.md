@@ -1,11 +1,11 @@
 ---
-title: "session_regenerate_id() — internals"
+title: "session_regenerate_id() - internals"
 description: "Compiler internals for session_regenerate_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 898
+  order: 959
 ---
 
-## `session_regenerate_id()` — internals
+## `session_regenerate_id()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_regenerate_id(bool $delete_old = false): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

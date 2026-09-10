@@ -9,8 +9,8 @@
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex
 //!   helpers because generated SPL methods can call them.
-//! - Lowered `mb_strlen()` calls enable its iconv-backed runtime helper without
-//!   imposing that native dependency on programs that never use the builtin.
+//! - Lowered mbstring calls enable the shared encoding bridge. Dynamic eval uses
+//!   the same archive, so settings and caches have a single owner.
 //! - Emitted stream/archive classes enable PHAR bridge libraries because their
 //!   generated methods route dynamic paths through `__rt_*_maybe_phar` helpers.
 //! - The dynamic builtin dispatcher (descriptor invoker) emits per-builtin
@@ -44,8 +44,10 @@ pub enum LinkRequirement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeFeatures {
     pub regex: bool,
-    /// True when lowered code can call the optional iconv-backed `mb_strlen()` helper.
-    pub mb_strlen: bool,
+    /// True when lowered code can call the optional mbstring bridge.
+    pub mbstring: bool,
+    /// True when matching operations require the managed Oniguruma provider.
+    pub mbregex: bool,
     pub phar_archive: bool,
     /// True when codegen can emit the runtime callable dispatcher (descriptor
     /// invoker) that builds per-builtin wrappers referencing `elephc_crypto`.
@@ -118,7 +120,7 @@ impl RuntimeFeatures {
     /// them or reusing a retired bit is not, and would serve one feature set's object for another.
     pub const fn cache_key_bits(&self) -> u64 {
         (self.regex as u64)
-            | ((self.mb_strlen as u64) << 1)
+            | ((self.mbstring as u64) << 1)
             | ((self.phar_archive as u64) << 2)
             | ((self.descriptor_invoker as u64) << 3)
             | ((self.eval_bridge as u64) << 4)
@@ -129,13 +131,15 @@ impl RuntimeFeatures {
             | ((self.generator as u64) << 9)
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
+            | ((self.mbregex as u64) << 12)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
     pub const fn none() -> Self {
         Self {
             regex: false,
-            mb_strlen: false,
+            mbstring: false,
+            mbregex: false,
             phar_archive: false,
             descriptor_invoker: false,
             eval_bridge: false,
@@ -154,7 +158,8 @@ impl RuntimeFeatures {
     pub const fn all() -> Self {
         Self {
             regex: true,
-            mb_strlen: true,
+            mbstring: true,
+            mbregex: true,
             phar_archive: true,
             descriptor_invoker: true,
             eval_bridge: true,
@@ -186,9 +191,10 @@ pub fn runtime_features_for_program_and_classes(
 /// Returns typed final-link requirements for the selected optional runtime features.
 pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<LinkRequirement> {
     let mut requirements = Vec::new();
-    if features.regex {
+    if features.regex || features.mbstring || features.mbregex || features.eval_bridge {
         requirements.push(LinkRequirement::NativePackage("pcre2"));
     }
+    if features.mbregex { requirements.push(LinkRequirement::NativePackage("oniguruma")); }
     if features.phar_archive {
         requirements.push(LinkRequirement::Bridge("elephc_phar"));
         requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
@@ -209,6 +215,9 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         // Regex is a separate optional capability registered only when enabled.
         requirements.push(LinkRequirement::Bridge("elephc_magician"));
         requirements.push(LinkRequirement::Bridge("elephc_bcmath"));
+    }
+    if features.mbstring || features.mbregex || features.eval_bridge {
+        requirements.push(LinkRequirement::Bridge("elephc_mbstring"));
     }
     requirements
 }
@@ -617,7 +626,6 @@ fn is_regex_builtin_name(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
         "preg_match" | "preg_match_all" | "preg_replace" | "preg_replace_callback" | "preg_split"
-        | "mb_ereg_match"
     )
 }
 
@@ -1079,7 +1087,7 @@ mod tests {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
-    /// Verifies eval requests Magician followed by its standalone BCMath ABI provider.
+    /// Verifies eval requests Magician, shared scalar bridges, and PCRE2 for mbstring MIME selection.
     #[test]
     fn test_eval_runtime_features_require_magician_and_bcmath_bridges() {
         assert_eq!(
@@ -1088,8 +1096,10 @@ mod tests {
                 ..RuntimeFeatures::none()
             }),
             vec![
+                LinkRequirement::NativePackage("pcre2"),
                 LinkRequirement::Bridge("elephc_magician"),
-                LinkRequirement::Bridge("elephc_bcmath")
+                LinkRequirement::Bridge("elephc_bcmath"),
+                LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
     }
@@ -1106,7 +1116,8 @@ mod tests {
             vec![
                 LinkRequirement::NativePackage("pcre2"),
                 LinkRequirement::Bridge("elephc_magician"),
-                LinkRequirement::Bridge("elephc_bcmath")
+                LinkRequirement::Bridge("elephc_bcmath"),
+                LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
     }
@@ -1267,7 +1278,8 @@ mod tests {
     fn test_descriptor_invoker_runtime_features_require_elephc_crypto_bridge() {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures {
             regex: false,
-            mb_strlen: false,
+            mbstring: false,
+            mbregex: false,
             phar_archive: false,
             descriptor_invoker: true,
             eval_bridge: false,
@@ -1296,9 +1308,21 @@ mod tests {
                 ..RuntimeFeatures::none()
             }),
             vec![
+                LinkRequirement::NativePackage("pcre2"),
                 LinkRequirement::Bridge("elephc_magician"),
-                LinkRequirement::Bridge("elephc_bcmath")
+                LinkRequirement::Bridge("elephc_bcmath"),
+                LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
+    }
+
+    /// Includes the managed MIME provider for default mbstring without exposing eval preg_* support.
+    #[test]
+    fn test_mbstring_runtime_features_require_mime_provider() {
+        let features = RuntimeFeatures { mbstring: true, ..RuntimeFeatures::none() };
+        assert_eq!(link_requirements_for_runtime_features(features), vec![
+            LinkRequirement::NativePackage("pcre2"), LinkRequirement::Bridge("elephc_mbstring"),
+        ]);
+        assert!(!features.regex);
     }
 }

@@ -20,6 +20,7 @@ mod catalog_classes;
 mod catalog_constants;
 mod catalog_constants_curl;
 mod catalog_data;
+mod catalog_mbstring;
 mod catalog_pcntl;
 mod catalog_xml;
 #[cfg(feature = "curl")]
@@ -33,6 +34,10 @@ mod registry;
 mod requirements;
 mod runtime_id;
 mod spec;
+mod type_spec;
+pub mod mbstring_abi;
+pub mod output_abi;
+pub mod string_literal;
 mod support;
 mod symbol_registry;
 

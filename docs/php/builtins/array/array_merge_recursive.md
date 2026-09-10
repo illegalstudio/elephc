@@ -14,7 +14,7 @@ function array_merge_recursive(...$arrays): array
 Recursively merges two arrays, combining scalar collisions into lists.
 
 **Parameters**:
-- `...$arrays` — variadic: collects excess arguments into `$arrays`.
+- `...$arrays` - variadic: collects excess arguments into `$arrays`.
 
 **Returns**: `array`
 
@@ -23,7 +23,7 @@ Recursively merges two arrays, combining scalar collisions into lists.
 - **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -2398,3 +2398,6 @@ fn web_opcache_gate_ignores_enable_cli() {
         assert!(resp.ends_with(expected), "{why}; response was {resp:?}");
     }
 }
+
+#[path = "web/mbstring.rs"]
+mod mbstring;

@@ -16,7 +16,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// (length); on x86_64 uses rax (pointer) and rdx (length). Both registers are
 /// read and updated in place: on return, x1/rax points to the first non-default-mask
 /// byte and x2/rdx holds the remaining length. Trims PHP's default mask bytes:
-/// NUL, tab, newline, vertical tab, form feed, carriage return, and space.
+/// NUL, tab, newline, vertical tab, carriage return, and space.
 pub fn emit_ltrim(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ltrim_linux_x86_64(emitter);
@@ -39,8 +39,6 @@ pub fn emit_ltrim(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_ltrim_skip");                                // if newline, skip it
     emitter.instruction("cmp w9, #11");                                         // check for vertical tab (0x0B)
     emitter.instruction("b.eq __rt_ltrim_skip");                                // if vertical tab, skip it
-    emitter.instruction("cmp w9, #12");                                         // check for form feed (0x0C)
-    emitter.instruction("b.eq __rt_ltrim_skip");                                // if form feed, skip it
     emitter.instruction("cmp w9, #13");                                         // check for carriage return (0x0D)
     emitter.instruction("b.eq __rt_ltrim_skip");                                // if CR, skip it
     emitter.instruction("b __rt_ltrim_done");                                   // byte outside PHP's default trim mask found, stop trimming
@@ -59,7 +57,7 @@ pub fn emit_ltrim(emitter: &mut Emitter) {
 ///
 /// Reads rax (pointer) and rdx (length) in place. On return, rax points to the
 /// first non-default-mask byte and rdx holds the remaining length. Trims PHP's default
-/// mask bytes: NUL, tab, newline, vertical tab, form feed, carriage return, and space.
+/// mask bytes: NUL, tab, newline, vertical tab, carriage return, and space.
 fn emit_ltrim_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ltrim ---");
@@ -78,8 +76,6 @@ fn emit_ltrim_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_ltrim_skip_x86");                              // strip the leading newline and continue trimming from the new front
     emitter.instruction("cmp cl, 11");                                          // is the first byte a vertical tab that ltrim() should discard?
     emitter.instruction("je __rt_ltrim_skip_x86");                              // strip the leading vertical tab and continue trimming from the new front
-    emitter.instruction("cmp cl, 12");                                          // is the first byte a form feed that ltrim() should discard?
-    emitter.instruction("je __rt_ltrim_skip_x86");                              // strip the leading form feed and continue trimming from the new front
     emitter.instruction("cmp cl, 13");                                          // is the first byte a carriage return that ltrim() should discard?
     emitter.instruction("je __rt_ltrim_skip_x86");                              // strip the leading carriage return and continue trimming from the new front
     emitter.instruction("jmp __rt_ltrim_done_x86");                             // stop once the first byte is outside PHP's default trim mask

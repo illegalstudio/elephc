@@ -1,11 +1,11 @@
 ---
-title: "mysqli_num_fields() — internals"
+title: "mysqli_num_fields() - internals"
 description: "Compiler internals for mysqli_num_fields(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 141
 ---
 
-## `mysqli_num_fields()` — internals
+## `mysqli_num_fields()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_num_fields(mixed $result): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

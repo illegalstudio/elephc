@@ -69,7 +69,8 @@ trap cleanup EXIT INT TERM
 
 # Run tests with the project mounted as a volume. Build the bridge staticlib
 # crates first so libelephc_tls.a / libelephc_pdo.a / libelephc_crypto.a /
-# libelephc_bcmath.a / libelephc_iconv.a / libelephc_phar.a / libelephc_tz.a /
+# libelephc_bcmath.a / libelephc_mbstring.a / libelephc_iconv.a /
+# libelephc_phar.a / libelephc_tz.a /
 # libelephc_image.a / libelephc_web.a / libelephc_pcntl.a / libelephc_xml.a /
 # libelephc_magician.a / libelephc_curl.a exist in the target dir —
 # `cargo test` alone never emits the staticlib crate-type.
@@ -82,7 +83,7 @@ trap cleanup EXIT INT TERM
 # ELEPHC_XML_LIBXML2_LIB_DIR compiles the crate's libxml2-calling unit tests in
 # (crates/elephc-xml/build.rs), and ELEPHC_TEST_REQUIRE_XML_NATIVE turns a
 # missing artifact into a loud failure in tests/codegen/xml instead of a skip.
-DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-instr -p elephc-probe -p elephc-curl \
+DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-instr -p elephc-probe -p elephc-curl \
     && cargo build --bin elephc \
     && "$CARGO_TARGET_DIR/debug/elephc" native install --locked --target linux-aarch64 --manifest-path examples/xml/elephc.toml \
     && ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-aarch64)" \

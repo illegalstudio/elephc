@@ -8,10 +8,28 @@
 //! Key details:
 //! - `FakeOps` mirrors the runtime contract: echoes route into the top fake
 //!   buffer, flushing routes into the parent buffer or the captured output, and
-//!   `ob_start()` rejects non-null handler callbacks with a warning.
+//!   `ob_start()` validates callback shapes and registers callable display names.
 
 use super::super::*;
 use super::support::*;
+
+/// Retires a rejected start's callback before the still-live eval context is torn down.
+#[test]
+fn output_handler_failed_start_releases_registration() {
+    let program = parse_fragment(br#"return ob_start("strtoupper");"#).unwrap();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    values.ob_stack.resize_with(64, FakeObLevel::default);
+    let result = execute_program_outcome_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    let EvalOutcome::Value(result) = result else { panic!("failed start must return false"); };
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+    let callback_releases = values.releases.iter().filter(|value|
+        values.get(**value) == FakeValue::String("strtoupper".to_string())).count();
+    assert_eq!(callback_releases, 2, "release the argument temporary and retained registration");
+    assert!(crate::ffi::ob_handlers::unregister_ob_handlers_for_context(&mut context).is_empty());
+    assert_eq!(values.ob_stack.len(), 64);
+}
 
 /// Verifies ob_start/ob_get_clean capture eval'd echoes instead of emitting them.
 #[test]

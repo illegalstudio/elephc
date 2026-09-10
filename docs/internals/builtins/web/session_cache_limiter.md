@@ -1,11 +1,11 @@
 ---
-title: "session_cache_limiter() — internals"
+title: "session_cache_limiter() - internals"
 description: "Compiler internals for session_cache_limiter(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 887
+  order: 948
 ---
 
-## `session_cache_limiter()` — internals
+## `session_cache_limiter()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_cache_limiter(?string $value = null): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

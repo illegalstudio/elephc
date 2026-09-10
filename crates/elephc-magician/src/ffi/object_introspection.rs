@@ -20,6 +20,7 @@ use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
 use crate::errors::EvalStatus;
 use crate::interpreter::{self, EvalOutcome};
 use crate::runtime_hooks::ElephcRuntimeOps;
+use crate::interpreter::RuntimeValueOps;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 const CLASS_LOOKUP_GET_CLASS: u64 = 0;
@@ -29,6 +30,32 @@ const MEMBER_LOOKUP_PROPERTY_EXISTS: u64 = 1;
 const CLASS_RELATION_IMPLEMENTS: u64 = 0;
 const CLASS_RELATION_PARENTS: u64 = 1;
 const CLASS_RELATION_USES: u64 = 2;
+
+/// Resolves an object's owning eval context before falling back to the active caller context.
+/// Dynamic classes can use native stdClass payloads, so ownership lookup precedes class tables.
+///
+/// # Safety
+/// `object` must be null or a live boxed object and `ctx` null or a valid context handle.
+/// The returned context is borrowed from its existing request host.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_object_context(
+    ctx: *mut ElephcEvalContext, object: *mut RuntimeCell,
+) -> *mut ElephcEvalContext {
+    std::panic::catch_unwind(|| {
+        if object.is_null() { return std::ptr::null_mut(); }
+        let object = RuntimeCellHandle::from_raw(object);
+        let mut values = ElephcRuntimeOps::new();
+        let owner = values.object_identity(object).ok().and_then(|identity| {
+            crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+        });
+        let resolved = owner.unwrap_or(ctx);
+        match unsafe { resolved.as_ref() } {
+            Some(context) if context.abi_version() == ABI_VERSION => resolved,
+            _ => std::ptr::null_mut(),
+        }
+    }).unwrap_or(std::ptr::null_mut())
+}
 
 /// Resolves `get_class()` or `get_parent_class()` against eval dynamic objects.
 ///

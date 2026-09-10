@@ -1,11 +1,11 @@
 ---
-title: "cairo_arc_negative() — internals"
+title: "cairo_arc_negative() - internals"
 description: "Compiler internals for cairo_arc_negative(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 399
 ---
 
-## `cairo_arc_negative()` — internals
+## `cairo_arc_negative()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_arc_negative(mixed $context, float $xc, float $yc, float $radius,
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

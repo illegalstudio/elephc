@@ -587,7 +587,8 @@ Offset  Size  Field
  16      8    value_type  (coarse summary: 0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed, 8=null)
  24      8    head        (slot index of first inserted entry, or -1)
  32      8    tail        (slot index of last inserted entry, or -1)
- 40      ...  entries     (each entry is 64 bytes)
+ 40      8    entries     (owned pointer to separate storage, each entry is 64 bytes)
+ 48      8    pins        (physical lifetime roots excluded from PHP copy-on-write ownership)
 ```
 
 Each hash table entry:

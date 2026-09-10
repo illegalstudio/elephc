@@ -1,11 +1,11 @@
 ---
-title: "mysqli_get_charset() — internals"
+title: "mysqli_get_charset() - internals"
 description: "Compiler internals for mysqli_get_charset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 128
 ---
 
-## `mysqli_get_charset()` — internals
+## `mysqli_get_charset()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_get_charset(mixed $mysql): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

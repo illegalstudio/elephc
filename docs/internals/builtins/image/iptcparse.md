@@ -1,11 +1,11 @@
 ---
-title: "iptcparse() — internals"
+title: "iptcparse() - internals"
 description: "Compiler internals for iptcparse(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 538
 ---
 
-## `iptcparse()` — internals
+## `iptcparse()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function iptcparse(string $iptcblock): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

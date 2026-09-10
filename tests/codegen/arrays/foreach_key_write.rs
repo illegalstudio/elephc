@@ -21,6 +21,26 @@
 
 use crate::support::*;
 
+/// Releases promoted hash owners when an indexed loop contract no longer matches concrete storage.
+#[test]
+fn test_foreach_string_key_loop_contract_ownership() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function rebuild_owned(mixed $source): void {
+    $destination = [];
+    foreach ($source as $key => $value) {
+        $destination[(string)$key] = $value;
+    }
+    echo count($destination), ";";
+}
+rebuild_owned(["alpha" => "one", "beta" => "two"]);
+rebuild_owned([]);
+rebuild_owned(["gamma" => "three"]);
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "2;0;1;");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Rebuilds a string-keyed `array` source through a foreach key write and
 /// verifies every entry survives (previously all but the last collapsed onto
 /// index 0).

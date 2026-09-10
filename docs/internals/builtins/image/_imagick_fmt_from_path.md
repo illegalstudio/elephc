@@ -1,11 +1,11 @@
 ---
-title: "_imagick_fmt_from_path() — internals"
+title: "_imagick_fmt_from_path() - internals"
 description: "Compiler internals for _imagick_fmt_from_path(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1067
+  order: 1129
 ---
 
-## `_imagick_fmt_from_path()` — internals
+## `_imagick_fmt_from_path()` - internals
 
 ## Where it lives
 
@@ -38,8 +38,8 @@ function _imagick_fmt_from_path(string $path): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

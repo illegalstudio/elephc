@@ -60,6 +60,11 @@ pub fn emit_ob_apply_handler(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_ob_handler_stubs");               // materialize the handler-stub slot array
     emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // load the slot's handler stub
     emitter.instruction("cbz x10, __rt_ob_apply_none");                         // default handler — report pass-through
+    abi::emit_symbol_address(emitter, "x11", "_ob_flags");
+    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // inspect the handler's stored lifecycle state
+    emitter.instruction("tbnz x12, #13, __rt_ob_apply_none");                   // disabled handlers do not run again
+    emitter.instruction("orr x12, x12, #4096");                                 // publish STARTED before invoking PHP
+    emitter.instruction("str x12, [x11, x0, lsl #3]");                          // retain actual status independently of phase computation
     // -- first-run START bit + started flag --
     abi::emit_symbol_address(emitter, "x11", "_ob_started");                    // materialize the started-flag slot array
     emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's started flag
@@ -116,6 +121,10 @@ fn emit_ob_apply_handler_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // load the slot's handler stub
     emitter.instruction("test r10, r10");                                       // does this buffer have a user handler?
     emitter.instruction("jz __rt_ob_apply_none_x86");                           // default handler — report pass-through
+    abi::emit_symbol_address(emitter, "r11", "_ob_flags");
+    emitter.instruction("test QWORD PTR [r11 + rdi*8], 8192");                  // inspect whether a previous invocation disabled the handler
+    emitter.instruction("jnz __rt_ob_apply_none_x86");                          // disabled handlers permanently pass raw bytes through
+    emitter.instruction("or QWORD PTR [r11 + rdi*8], 4096");                    // publish STARTED before calling PHP
     // -- first-run START bit + started flag --
     abi::emit_symbol_address(emitter, "r11", "_ob_started");                    // materialize the started-flag slot array
     emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's started flag
@@ -178,6 +187,8 @@ pub fn emit_ob_result_to_bytes(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_ob_res_none");                            // no result cell — pass the raw bytes through
     emitter.instruction("str x0, [sp, #0]");                                    // save the handler result cell
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the result tag and payload words
+    emitter.instruction("cmp x0, #1");                                          // string payloads already provide a borrowed byte pair
+    emitter.instruction("b.eq __rt_ob_res_persist");                            // persist strings once while their result cell remains alive
     emitter.instruction("cmp x0, #3");                                          // is the result a boolean cell?
     emitter.instruction("b.ne __rt_ob_res_cast");                               // non-bool results are stringified
     emitter.instruction("cbnz x1, __rt_ob_res_cast");                           // boolean true is stringified like PHP ("1")
@@ -187,6 +198,7 @@ pub fn emit_ob_result_to_bytes(emitter: &mut Emitter) {
     emitter.label("__rt_ob_res_cast");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the result cell for the string cast
     emitter.instruction("bl __rt_mixed_cast_string");                           // cast the handler result to a PHP string pair
+    emitter.label("__rt_ob_res_persist");
     emitter.instruction("bl __rt_str_persist");                                 // copy the (possibly borrowed) pair while the cell is alive
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the owned replacement pair
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the result cell for release
@@ -215,6 +227,11 @@ fn emit_ob_result_to_bytes_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_ob_res_none_x86");                             // no result cell — pass the raw bytes through
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the handler result cell
     emitter.instruction("call __rt_mixed_unbox");                               // expose the result tag and payload words
+    emitter.instruction("cmp rax, 1");                                          // a string result already carries its borrowed byte pair
+    emitter.instruction("jne __rt_ob_res_nonstring_x86");                       // other PHP values still require scalar string conversion
+    emitter.instruction("mov rax, rdi");                                        // adapt the borrowed string payload to persistence input
+    emitter.instruction("jmp __rt_ob_res_persist_x86");                         // avoid allocating an unused intermediate string copy
+    emitter.label("__rt_ob_res_nonstring_x86");
     emitter.instruction("cmp rax, 3");                                          // is the result a boolean cell?
     emitter.instruction("jne __rt_ob_res_cast_x86");                            // non-bool results are stringified
     emitter.instruction("test rdi, rdi");                                       // boolean payload: false = 0
@@ -225,6 +242,7 @@ fn emit_ob_result_to_bytes_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_ob_res_cast_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the result cell for the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // cast the handler result to a PHP string pair
+    emitter.label("__rt_ob_res_persist_x86");
     emitter.instruction("call __rt_str_persist");                               // copy the (possibly borrowed) pair while the cell is alive
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the owned replacement pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the owned replacement length
@@ -260,9 +278,9 @@ pub fn emit_ob_invoke_descriptor(emitter: &mut Emitter) {
     emitter.comment("--- runtime: ob_invoke_descriptor ---");
     emitter.label_global("__rt_ob_invoke_descriptor");
     // frame: [0]=descriptor, [8]=phase/replaced, [16]=scratch/rep ptr, [24]=cell/rep len, [32]=container
-    emitter.instruction("sub sp, sp, #64");                                     // allocate the invoke-descriptor frame
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish the invoke-descriptor frame pointer
+    emitter.instruction("sub sp, sp, #128");                                    // allocate the invoke-descriptor frame
+    emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #112");                                   // establish the invoke-descriptor frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the callable descriptor pointer
     emitter.instruction("str x3, [sp, #8]");                                    // save the phase argument
     // -- persist the buffer bytes as an owned string and box it (tag 1) --
@@ -302,6 +320,8 @@ pub fn emit_ob_invoke_descriptor(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #32]");                                   // save the boxed argument container
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the raw argument array
     emitter.instruction("bl __rt_decref_any");                                  // drop the extra array retain (the box owns it)
+    emitter.instruction("ldr x0, [sp, #32]");                                   // retain the boxed argument container throughout PHP execution
+    crate::codegen_support::runtime::exceptions::guards::guard(emitter, 48, 80);
     // -- call the descriptor's uniform invoker --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the callable descriptor pointer
     emitter.instruction("ldr x10, [x9, #56]");                                  // load the uniform invoker from the descriptor
@@ -314,19 +334,25 @@ pub fn emit_ob_invoke_descriptor(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #8]");                                    // save the replaced flag
     emitter.instruction("str x1, [sp, #16]");                                   // save the replacement string pointer
     emitter.instruction("str x2, [sp, #24]");                                   // save the replacement string length
+    emitter.instruction("cmp x0, #0");                                          // only successful replacements own their returned pointer
+    emitter.instruction("csel x0, x1, xzr, ne");                                // guard no owner on pass-through results
+    crate::codegen_support::runtime::exceptions::guards::guard(emitter, 80, 112);
+    crate::codegen_support::runtime::exceptions::guards::unguard(emitter, 48, 80);
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed argument container
     emitter.instruction("bl __rt_decref_any");                                  // release the argument container (cascades to cells)
+    crate::codegen_support::runtime::exceptions::guards::unguard(emitter, 80, 112);
     emitter.instruction("ldr x0, [sp, #8]");                                    // return the replaced flag
     emitter.instruction("ldr x1, [sp, #16]");                                   // return the replacement string pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // return the replacement string length
     emitter.instruction("b __rt_ob_invoke_desc_done");                          // finish
     emitter.label("__rt_ob_invoke_desc_missing");
+    crate::codegen_support::runtime::exceptions::guards::unguard(emitter, 48, 80);
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed argument container
     emitter.instruction("bl __rt_decref_any");                                  // release the unused argument container
     emitter.instruction("mov x0, #0");                                          // report pass-through (no invoker)
     emitter.label("__rt_ob_invoke_desc_done");
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the invoke-descriptor frame
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // release the invoke-descriptor frame
     emitter.instruction("ret");                                                 // return the replacement triple
 }
 
@@ -339,7 +365,7 @@ fn emit_ob_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     //        [rbp-32]=cell/rep len, [rbp-40]=container
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the invoke-descriptor frame pointer
-    emitter.instruction("sub rsp, 48");                                         // reserve the invoke-descriptor local slots
+    emitter.instruction("sub rsp, 112");                                        // reserve the invoke-descriptor local slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the callable descriptor pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the phase argument
     // -- persist the buffer bytes as an owned string and box it (tag 1) --
@@ -382,6 +408,8 @@ fn emit_ob_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed argument container
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the raw argument array
     emitter.instruction("call __rt_decref_any");                                // drop the extra array retain (the box owns it)
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // guard the caller-owned argument container across PHP exceptions
+    crate::codegen_support::runtime::exceptions::guards::guard(emitter, 48, 80);
     // -- call the descriptor's uniform invoker --
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the callable descriptor pointer
     emitter.instruction("mov r11, QWORD PTR [r10 + 56]");                       // load the uniform invoker from the descriptor
@@ -395,18 +423,25 @@ fn emit_ob_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the replaced flag
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the replacement string pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the replacement string length
+    emitter.instruction("test rax, rax");                                       // distinguish owned replacement bytes from pass-through state
+    emitter.instruction("mov eax, 0");                                          // initialize an empty exceptional owner without changing flags
+    emitter.instruction("cmovnz rax, rdi");                                     // retain only the actual replacement owner
+    crate::codegen_support::runtime::exceptions::guards::guard(emitter, 80, 112);
+    crate::codegen_support::runtime::exceptions::guards::unguard(emitter, 48, 80);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed argument container
     emitter.instruction("call __rt_decref_any");                                // release the argument container (cascades to cells)
+    crate::codegen_support::runtime::exceptions::guards::unguard(emitter, 80, 112);
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the replaced flag
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // return the replacement string pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // return the replacement string length
     emitter.instruction("jmp __rt_ob_invoke_desc_done_x86");                    // finish
     emitter.label("__rt_ob_invoke_desc_missing_x86");
+    crate::codegen_support::runtime::exceptions::guards::unguard(emitter, 48, 80);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed argument container
     emitter.instruction("call __rt_decref_any");                                // release the unused argument container
     emitter.instruction("xor eax, eax");                                        // report pass-through (no invoker)
     emitter.label("__rt_ob_invoke_desc_done_x86");
-    emitter.instruction("add rsp, 48");                                         // release the invoke-descriptor local slots
+    emitter.instruction("add rsp, 112");                                        // release the invoke-descriptor local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the replacement triple
 }
@@ -418,46 +453,7 @@ fn emit_ob_invoke_descriptor_x86_64(emitter: &mut Emitter) {
 /// `x1`/`rsi` = buffer pointer, `x2`/`rdx` = buffer length, `x3`/`rcx` = phase.
 /// Output: the replacement triple (pass-through when no hook is installed).
 pub fn emit_ob_eval_trampoline(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_ob_eval_trampoline_x86_64(emitter);
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: ob_eval_trampoline ---");
-    emitter.label_global("__rt_ob_eval_trampoline");
-    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the hook call
-    abi::emit_symbol_address(emitter, "x9", "_elephc_eval_ob_handler_fn");      // materialize the installed hook slot address
-    emitter.instruction("ldr x9, [x9]");                                        // load the installed magician hook
-    emitter.instruction("cbz x9, __rt_ob_eval_trampoline_none");                // no hook installed — pass the raw bytes through
-    emitter.instruction("blr x9");                                              // hook(id, buf, len, phase) → Mixed result cell
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
-    emitter.instruction("b __rt_ob_result_to_bytes");                           // tail-map the result cell to the replacement triple
-    emitter.label("__rt_ob_eval_trampoline_none");
-    emitter.instruction("mov x0, #0");                                          // report pass-through
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
-    emitter.instruction("ret");                                                 // return the pass-through triple
-}
-
-/// Emits the Linux x86_64 variant of `__rt_ob_eval_trampoline`.
-fn emit_ob_eval_trampoline_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: ob_eval_trampoline ---");
-    emitter.label_global("__rt_ob_eval_trampoline");
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the hook call
-    emitter.instruction("mov rbp, rsp");                                        // establish a frame pointer for the hook call
-    abi::emit_symbol_address(emitter, "r9", "_elephc_eval_ob_handler_fn");      // materialize the installed hook slot address
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the installed magician hook
-    emitter.instruction("test r9, r9");                                         // is an eval hook installed?
-    emitter.instruction("jz __rt_ob_eval_trampoline_none_x86");                 // no hook installed — pass the raw bytes through
-    emitter.instruction("call r9");                                             // hook(id, buf, len, phase) → Mixed result cell
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("jmp __rt_ob_result_to_bytes");                         // tail-map the result cell to the replacement triple
-    emitter.label("__rt_ob_eval_trampoline_none_x86");
-    emitter.instruction("xor eax, eax");                                        // report pass-through
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the pass-through triple
+    super::ob_eval_handler::emit(emitter);
 }
 
 /// Emits `__rt_ob_notice_named`: write a flags-gated ob_* notice with the

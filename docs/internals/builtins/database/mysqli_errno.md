@@ -1,11 +1,11 @@
 ---
-title: "mysqli_errno() — internals"
+title: "mysqli_errno() - internals"
 description: "Compiler internals for mysqli_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 108
 ---
 
-## `mysqli_errno()` — internals
+## `mysqli_errno()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_errno(mixed $mysql): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

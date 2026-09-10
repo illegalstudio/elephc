@@ -636,6 +636,9 @@ fn type_expr(ty: &TypeExpr) -> String {
         TypeExpr::Void => "void".to_string(),
         TypeExpr::Never => "never".to_string(),
         TypeExpr::Iterable => "iterable".to_string(),
+        TypeExpr::Nullable(inner) if matches!(inner.as_ref(), TypeExpr::Union(_)) => {
+            format!("{}|null", type_expr(inner))
+        }
         TypeExpr::Nullable(inner) => format!("?{}", type_expr(inner)),
         TypeExpr::Union(members) => members
             .iter()

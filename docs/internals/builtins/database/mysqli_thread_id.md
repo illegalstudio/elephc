@@ -1,11 +1,11 @@
 ---
-title: "mysqli_thread_id() — internals"
+title: "mysqli_thread_id() - internals"
 description: "Compiler internals for mysqli_thread_id(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 178
 ---
 
-## `mysqli_thread_id()` — internals
+## `mysqli_thread_id()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_thread_id(mixed $mysql): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -32,7 +32,7 @@
 //!   or terminal). Buffer capacity is PHP-shaped: 16384 by default,
 //!   `((chunk >> 12) + 1) << 12` when a chunk size is set, growing by doubling.
 //! - `__rt_ob_flush_all` drains top-down with FINAL handler phases behind the
-//!   `_ob_flushing` re-entry guard and never frees (the process is exiting).
+//!   `_ob_flushing` re-entry guard and retires each drained buffer's owners.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::runtime::data::{
@@ -160,6 +160,8 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the chunk size
     abi::emit_symbol_address(emitter, "x11", "_ob_flags");                      // materialize the flags slot array
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload the flags word
+    emitter.instruction("and x12, x12, #0xfffffffffffffff0");                   // handler type is selected by the runtime rather than caller flags
+    emitter.instruction("bic x12, x12, #0xf000");                               // PHP 8.4 and later forbid caller-supplied status bits
     emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the flags word
     abi::emit_symbol_address(emitter, "x11", "_ob_started");                    // materialize the started-flag slot array
     emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // the handler has not run yet
@@ -271,6 +273,7 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the chunk size
     abi::emit_symbol_address(emitter, "r11", "_ob_flags");                      // materialize the flags slot array
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the flags word
+    emitter.instruction("and rcx, -61456");                                     // clear caller-supplied handler type and lifecycle status bits
     emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the flags word
     abi::emit_symbol_address(emitter, "r11", "_ob_started");                    // materialize the started-flag slot array
     emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                      // the handler has not run yet
@@ -294,219 +297,16 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_ob_start_ex");                                // tail-call the full entry point
 }
 
-/// Emits `__rt_ob_process_and_write`: shared flush/clean core for one slot.
-///
-/// Inputs: `x0`/`rdi` = slot index, `x1`/`rsi` = handler phase bits,
-/// `x2`/`rdx` = write flag (non-zero: emit the surviving bytes to the parent
-/// sink). No result. Runs the handler, substitutes its replacement on write
-/// paths, discards it on clean paths, and truncates the buffer.
+/// Emits the shared flush/clean core, including FINAL retirement before deferred exceptions escape.
+/// Inputs are slot, phase, and parent-write flag in the target C argument convention.
 pub fn emit_ob_process_and_write(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_ob_process_and_write_x86_64(emitter);
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: ob_process_and_write ---");
-    emitter.label_global("__rt_ob_process_and_write");
-    // frame: [0]=slot, [8]=write flag, [16]=replaced?, [24]=rep ptr, [32]=rep len
-    emitter.instruction("sub sp, sp, #64");                                     // allocate the process frame
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish the process frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save the slot index
-    emitter.instruction("str x2, [sp, #8]");                                    // save the write flag
-    emitter.instruction("bl __rt_ob_apply_handler");                            // run the user handler (slot in x0, phase in x1)
-    emitter.instruction("str x0, [sp, #16]");                                   // save the replaced flag
-    emitter.instruction("str x1, [sp, #24]");                                   // save the replacement pointer
-    emitter.instruction("str x2, [sp, #32]");                                   // save the replacement length
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the write flag
-    emitter.instruction("cbz x9, __rt_ob_process_free_rep");                    // clean path — discard without writing
-    // -- choose the surviving bytes: replacement or raw buffer --
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the replaced flag
-    emitter.instruction("cbz x9, __rt_ob_process_raw");                         // pass-through — write the raw buffer
-    emitter.instruction("ldr x0, [sp, #24]");                                   // write pointer = the replacement string
-    emitter.instruction("ldr x1, [sp, #32]");                                   // write length = the replacement length
-    emitter.instruction("b __rt_ob_process_have_bytes");                        // emit the chosen bytes
-    emitter.label("__rt_ob_process_raw");
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // write pointer = the raw buffer base
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("ldr x1, [x11, x10, lsl #3]");                          // write length = the raw byte count
-    emitter.label("__rt_ob_process_have_bytes");
-    emitter.instruction("cbz x1, __rt_ob_process_free_rep");                    // nothing to write — skip the parent write
-    // -- publish level = slot so the write routes to the parent sink --
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the slot index
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("str x10, [x9]");                                       // temporarily pop the level for parent routing
-    emitter.instruction("bl __rt_stdout_write");                                // write the surviving bytes to the parent sink
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the slot index
-    emitter.instruction("add x10, x10, #1");                                    // restore depth = slot + 1
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("str x10, [x9]");                                       // restore the buffer-stack depth
-    emitter.label("__rt_ob_process_free_rep");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the replaced flag
-    emitter.instruction("cbz x9, __rt_ob_process_truncate");                    // no replacement to free
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the replacement string
-    emitter.instruction("bl __rt_decref_any");                                  // release the replacement string
-    emitter.label("__rt_ob_process_truncate");
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // truncate the processed buffer
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the process frame
-    emitter.instruction("ret");                                                 // return to caller
+    super::ob_process::emit(emitter);
 }
 
-/// Emits the Linux x86_64 variant of `__rt_ob_process_and_write`.
-fn emit_ob_process_and_write_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: ob_process_and_write ---");
-    emitter.label_global("__rt_ob_process_and_write");
-    // frame: [rbp-8]=slot, [rbp-16]=write flag, [rbp-24]=replaced?, [rbp-32]=rep ptr, [rbp-40]=rep len
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the process frame pointer
-    emitter.instruction("sub rsp, 48");                                         // reserve the process local slots (16-aligned)
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the slot index
-    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the write flag
-    emitter.instruction("call __rt_ob_apply_handler");                          // run the user handler (slot in rdi, phase in rsi)
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the replaced flag
-    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the replacement pointer
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the replacement length
-    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the write flag
-    emitter.instruction("test r9, r9");                                         // is this a flush path?
-    emitter.instruction("jz __rt_ob_process_free_rep_x86");                     // clean path — discard without writing
-    // -- choose the surviving bytes: replacement or raw buffer --
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the replaced flag
-    emitter.instruction("test r9, r9");                                         // did the handler replace the contents?
-    emitter.instruction("jz __rt_ob_process_raw_x86");                          // pass-through — write the raw buffer
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // write pointer = the replacement string
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // write length = the replacement length
-    emitter.instruction("jmp __rt_ob_process_have_bytes_x86");                  // emit the chosen bytes
-    emitter.label("__rt_ob_process_raw_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov rdi, QWORD PTR [r11 + r10*8]");                    // write pointer = the raw buffer base
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov rsi, QWORD PTR [r11 + r10*8]");                    // write length = the raw byte count
-    emitter.label("__rt_ob_process_have_bytes_x86");
-    emitter.instruction("test rsi, rsi");                                       // is there anything to write?
-    emitter.instruction("jz __rt_ob_process_free_rep_x86");                     // nothing to write — skip the parent write
-    // -- publish level = slot so the write routes to the parent sink --
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the slot index
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // temporarily pop the level for parent routing
-    emitter.instruction("call __rt_stdout_write");                              // write the surviving bytes to the parent sink
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the slot index
-    emitter.instruction("add r10, 1");                                          // restore depth = slot + 1
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // restore the buffer-stack depth
-    emitter.label("__rt_ob_process_free_rep_x86");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the replaced flag
-    emitter.instruction("test r9, r9");                                         // was a replacement allocated?
-    emitter.instruction("jz __rt_ob_process_truncate_x86");                     // no replacement to free
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the replacement string
-    emitter.instruction("call __rt_decref_any");                                // release the replacement string
-    emitter.label("__rt_ob_process_truncate_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                      // truncate the processed buffer
-    emitter.instruction("add rsp, 48");                                         // release the process local slots
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return to caller
-}
-
-/// Emits `__rt_ob_pop_free`: pop the top buffer, releasing its handler
-/// descriptor (when AOT-owned), its persisted display name, and its storage.
-///
-/// No inputs, no result. Publishes the decremented depth before freeing so a
-/// fatal inside the deallocator cannot observe the dying buffer.
+/// Emits buffer removal with auxiliary storage freed before native or eval callback destruction.
+/// Publishes the closed depth and transfers copied owners independently of slot reuse.
 pub fn emit_ob_pop_free(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_ob_pop_free_x86_64(emitter);
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: ob_pop_free ---");
-    emitter.label_global("__rt_ob_pop_free");
-    emitter.instruction("sub sp, sp, #32");                                     // allocate the pop frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // establish the pop frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
-    emitter.instruction("cbz x10, __rt_ob_pop_done");                           // defensive: nothing to pop
-    emitter.instruction("sub x10, x10, #1");                                    // dying slot index = depth - 1
-    emitter.instruction("str x10, [x9]");                                       // publish the popped depth before freeing
-    emitter.instruction("str x10, [sp, #0]");                                   // save the dying slot index
-    // -- release an AOT handler descriptor (env is a retained descriptor) --
-    abi::emit_symbol_address(emitter, "x11", "_ob_handler_stubs");              // materialize the handler-stub slot array
-    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the slot's handler stub
-    abi::emit_symbol_address(emitter, "x13", "__rt_ob_invoke_descriptor");      // materialize the descriptor-invoker stub address
-    emitter.instruction("cmp x12, x13");                                        // is the env a retained callable descriptor?
-    emitter.instruction("b.ne __rt_ob_pop_name");                               // eval/default handlers carry no descriptor
-    abi::emit_symbol_address(emitter, "x11", "_ob_handler_envs");               // materialize the handler-env slot array
-    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // load the retained descriptor pointer
-    emitter.instruction("cbz x0, __rt_ob_pop_name");                            // defensive: nothing to release
-    emitter.instruction("bl __rt_decref_any");                                  // release the retained descriptor
-    emitter.label("__rt_ob_pop_name");
-    // -- release the persisted display name --
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the dying slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_name_ptrs");                  // materialize the handler-name pointer array
-    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // load the persisted display name
-    emitter.instruction("bl __rt_decref_any");                                  // release the persisted display name
-    // -- release the capture buffer block --
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the dying slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // load the dying buffer base pointer
-    emitter.instruction("bl __rt_heap_free");                                   // release the dying buffer block
-    emitter.label("__rt_ob_pop_done");
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the pop frame
-    emitter.instruction("ret");                                                 // return to caller
-}
-
-/// Emits the Linux x86_64 variant of `__rt_ob_pop_free`.
-fn emit_ob_pop_free_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: ob_pop_free ---");
-    emitter.label_global("__rt_ob_pop_free");
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the pop frame pointer
-    emitter.instruction("sub rsp, 16");                                         // reserve an aligned slot for the dying index
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
-    emitter.instruction("test r10, r10");                                       // defensive: is anything active?
-    emitter.instruction("jz __rt_ob_pop_done_x86");                             // nothing to pop
-    emitter.instruction("sub r10, 1");                                          // dying slot index = depth - 1
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the popped depth before freeing
-    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the dying slot index
-    // -- release an AOT handler descriptor (env is a retained descriptor) --
-    abi::emit_symbol_address(emitter, "r11", "_ob_handler_stubs");              // materialize the handler-stub slot array
-    emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the slot's handler stub
-    abi::emit_symbol_address(emitter, "r8", "__rt_ob_invoke_descriptor");       // materialize the descriptor-invoker stub address
-    emitter.instruction("cmp rcx, r8");                                         // is the env a retained callable descriptor?
-    emitter.instruction("jne __rt_ob_pop_name_x86");                            // eval/default handlers carry no descriptor
-    abi::emit_symbol_address(emitter, "r11", "_ob_handler_envs");               // materialize the handler-env slot array
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the retained descriptor pointer
-    emitter.instruction("test rax, rax");                                       // defensive: is a descriptor recorded?
-    emitter.instruction("jz __rt_ob_pop_name_x86");                             // nothing to release
-    emitter.instruction("call __rt_decref_any");                                // release the retained descriptor
-    emitter.label("__rt_ob_pop_name_x86");
-    // -- release the persisted display name --
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the dying slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_name_ptrs");                  // materialize the handler-name pointer array
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the persisted display name
-    emitter.instruction("call __rt_decref_any");                                // release the persisted display name
-    // -- release the capture buffer block --
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the dying slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the dying buffer base pointer
-    emitter.instruction("call __rt_heap_free");                                 // release the dying buffer block
-    emitter.label("__rt_ob_pop_done_x86");
-    emitter.instruction("add rsp, 16");                                         // release the pop frame
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return to caller
+    super::ob_pop::emit(emitter);
 }
 
 /// Emits `__rt_ob_append`: append bytes to the top output buffer, growing it as
@@ -827,9 +627,7 @@ fn emit_ob_queries_x86_64(emitter: &mut Emitter) {
 ///
 /// Shared shape: no buffer → write `no_buffer_msg` and return 0; missing
 /// `required_flag` → `__rt_ob_notice_named(gated_msg, slot)` and return 0;
-/// otherwise run `__rt_ob_process_and_write(slot, phase, write)` (and
-/// `__rt_ob_pop_free` when `pop`) and return 1.
-#[allow(clippy::too_many_arguments)]
+/// Otherwise complete the requested operation through `__rt_ob_process_and_write` and return 1.
 fn emit_gated_op(
     emitter: &mut Emitter,
     label: &str,
@@ -838,7 +636,6 @@ fn emit_gated_op(
     required_flag: i64,
     phase: i64,
     write: bool,
-    pop: bool,
 ) {
     let fail = format!("{label}_fail");
     let gated = format!("{label}_gated");
@@ -866,9 +663,6 @@ fn emit_gated_op(
     emitter.instruction(&format!("mov x1, #{}", phase));                        // this operation's handler phase bits
     emitter.instruction(&format!("mov x2, #{}", i64::from(write)));             // write flag: flush paths emit to the parent sink
     emitter.instruction("bl __rt_ob_process_and_write");                        // run the handler and clean/flush the buffer
-    if pop {
-        emitter.instruction("bl __rt_ob_pop_free");                             // pop and free the processed buffer
-    }
     emitter.instruction("mov x0, #1");                                          // report success
     emitter.instruction(&format!("b {done}"));                                  // finish
     emitter.label(&fail);
@@ -890,7 +684,6 @@ fn emit_gated_op(
 }
 
 /// Emits the Linux x86_64 variant of one flags-gated public ob_* mutation.
-#[allow(clippy::too_many_arguments)]
 fn emit_gated_op_x86_64(
     emitter: &mut Emitter,
     label: &str,
@@ -899,7 +692,6 @@ fn emit_gated_op_x86_64(
     required_flag: i64,
     phase: i64,
     write: bool,
-    pop: bool,
 ) {
     let fail = format!("{label}_fail_x86");
     let gated = format!("{label}_gated_x86");
@@ -928,9 +720,6 @@ fn emit_gated_op_x86_64(
     emitter.instruction(&format!("mov esi, {}", phase));                        // this operation's handler phase bits
     emitter.instruction(&format!("mov edx, {}", i64::from(write)));             // write flag: flush paths emit to the parent sink
     emitter.instruction("call __rt_ob_process_and_write");                      // run the handler and clean/flush the buffer
-    if pop {
-        emitter.instruction("call __rt_ob_pop_free");                           // pop and free the processed buffer
-    }
     emitter.instruction("mov eax, 1");                                          // report success
     emitter.instruction(&format!("jmp {done}"));                                // finish
     emitter.label(&fail);
@@ -955,14 +744,13 @@ fn emit_gated_op_x86_64(
 /// `__rt_ob_end_clean`, `__rt_ob_flush`, and `__rt_ob_end_flush`, with PHP's
 /// per-operation gating flags, handler phases, and notice texts.
 pub fn emit_ob_gated_ops(emitter: &mut Emitter) {
-    let ops: [(&str, (&str, usize), (&str, usize), i64, i64, bool, bool); 4] = [
+    let ops: [(&str, (&str, usize), (&str, usize), i64, i64, bool); 4] = [
         (
             "__rt_ob_clean",
             ("_ob_ntc_no_clean", OB_NTC_NO_CLEAN.len()),
             ("_ob_ntc_g_clean", OB_NTC_G_CLEAN.len()),
             OB_FLAG_CLEANABLE,
             OB_PHASE_CLEAN,
-            false,
             false,
         ),
         (
@@ -972,7 +760,6 @@ pub fn emit_ob_gated_ops(emitter: &mut Emitter) {
             OB_FLAG_REMOVABLE,
             OB_PHASE_CLEAN | OB_PHASE_FINAL,
             false,
-            true,
         ),
         (
             "__rt_ob_flush",
@@ -981,7 +768,6 @@ pub fn emit_ob_gated_ops(emitter: &mut Emitter) {
             OB_FLAG_FLUSHABLE,
             OB_PHASE_FLUSH,
             true,
-            false,
         ),
         (
             "__rt_ob_end_flush",
@@ -990,14 +776,13 @@ pub fn emit_ob_gated_ops(emitter: &mut Emitter) {
             OB_FLAG_REMOVABLE,
             OB_PHASE_FINAL,
             true,
-            true,
         ),
     ];
-    for (label, no_buffer, gated, flag, phase, write, pop) in ops {
+    for (label, no_buffer, gated, flag, phase, write) in ops {
         if emitter.target.arch == Arch::X86_64 {
-            emit_gated_op_x86_64(emitter, label, no_buffer, gated, flag, phase, write, pop);
+            emit_gated_op_x86_64(emitter, label, no_buffer, gated, flag, phase, write);
         } else {
-            emit_gated_op(emitter, label, no_buffer, gated, flag, phase, write, pop);
+            emit_gated_op(emitter, label, no_buffer, gated, flag, phase, write);
         }
     }
 }
@@ -1028,19 +813,19 @@ fn emit_get_pop_op(
         label.trim_start_matches("__rt_")
     ));
     emitter.label_global(label);
-    // frame: [0]=slot, [8]=raw ptr, [16]=raw len
-    emitter.instruction("sub sp, sp, #48");                                     // allocate the get-pop frame
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish the get-pop frame pointer
+    // frame: [0]=slot, [8]=raw ptr, [16]=raw len, [24..56]=owned-result guard
+    emitter.instruction("sub sp, sp, #80");                                     // allocate the get-pop frame
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish the get-pop frame pointer
     abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
-    emitter.instruction(&format!("cbz x10, {fail}"));                           // no active buffer — refuse
+    emitter.instruction(&format!("cbz x10, {fail}"));                           // no active buffer ; refuse
     emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
     emitter.instruction("str x10, [sp, #0]");                                   // save the top slot index
     abi::emit_symbol_address(emitter, "x11", "_ob_flags");                      // materialize the flags slot array
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the slot's flags word
     emitter.instruction(&format!("tst x12, #{}", OB_FLAG_REMOVABLE));           // may this buffer be removed?
-    emitter.instruction(&format!("b.eq {gated}"));                              // not removable — refuse with the gated notice
+    emitter.instruction(&format!("b.eq {gated}"));                              // not removable ; refuse with the gated notice
     // -- persist the raw contents before the handler runs --
     abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
     emitter.instruction("ldr x1, [x11, x10, lsl #3]");                          // persist source pointer = the raw buffer base
@@ -1048,12 +833,19 @@ fn emit_get_pop_op(
     emitter.instruction("ldr x2, [x11, x10, lsl #3]");                          // persist source length = the raw byte count
     emitter.instruction("bl __rt_str_persist");                                 // copy the raw contents into an owned heap string
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the raw contents pair
+    emitter.instruction("str x1, [sp, #48]");                                   // transfer exceptional ownership of the copied string into its guard
+    abi::emit_symbol_address(emitter, "x9", "__rt_exception_release_owned");
+    emitter.instruction("str x9, [sp, #32]");                                   // register the existing protected heap-owner cleanup callback
+    emitter.instruction("add x0, sp, #24");                                     // pass the stack-local result guard to the activation chain
+    emitter.instruction("mov x1, #0");                                          // insert this result owner at the current cleanup chain head
+    emitter.instruction("bl __rt_exception_guard_owned");                       // release the raw copy if handler execution or callback retirement throws
     // -- run the handler (flush paths emit the survivors), then pop --
     emitter.instruction("ldr x0, [sp, #0]");                                    // process the saved top slot
     emitter.instruction(&format!("mov x1, #{}", phase));                        // this operation's handler phase bits
     emitter.instruction(&format!("mov x2, #{}", i64::from(write)));             // write flag: get_flush emits to the parent sink
     emitter.instruction("bl __rt_ob_process_and_write");                        // run the handler and clean/flush the buffer
-    emitter.instruction("bl __rt_ob_pop_free");                                 // pop and free the processed buffer
+    emitter.instruction("add x0, sp, #24");                                     // identify the completed result's exact cleanup guard
+    emitter.instruction("bl __rt_exception_unguard_owned");                     // transfer the copied string to the normal return path
     emitter.instruction("ldp x1, x2, [sp, #8]");                                // return the raw contents pair
     emitter.instruction(&format!("b {done}"));                                  // finish
     emitter.label(&fail);
@@ -1072,8 +864,8 @@ fn emit_get_pop_op(
     emitter.instruction("mov x1, #0");                                          // null pointer signals refusal
     emitter.instruction("mov x2, #0");                                          // zero length for the failure pair
     emitter.label(&done);
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the get-pop frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the get-pop frame
     emitter.instruction("ret");                                                 // return the raw contents pair
 }
 
@@ -1097,20 +889,20 @@ fn emit_get_pop_op_x86_64(
         label.trim_start_matches("__rt_")
     ));
     emitter.label_global(label);
-    // frame: [rbp-8]=slot, [rbp-16]=raw ptr, [rbp-24]=raw len
+    // frame: [rbp-8]=slot, [rbp-16]=raw ptr, [rbp-24]=raw len, [rbp-64..-32]=guard
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the get-pop frame pointer
-    emitter.instruction("sub rsp, 32");                                         // reserve the get-pop local slots (16-aligned)
+    emitter.instruction("sub rsp, 64");                                         // reserve the get-pop local slots (16-aligned)
     abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is any buffer active?
-    emitter.instruction(&format!("jz {fail}"));                                 // no active buffer — refuse
+    emitter.instruction(&format!("jz {fail}"));                                 // no active buffer ; refuse
     emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the top slot index
     abi::emit_symbol_address(emitter, "r11", "_ob_flags");                      // materialize the flags slot array
     emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the slot's flags word
     emitter.instruction(&format!("test rcx, {}", OB_FLAG_REMOVABLE));           // may this buffer be removed?
-    emitter.instruction(&format!("jz {gated}"));                                // not removable — refuse with the gated notice
+    emitter.instruction(&format!("jz {gated}"));                                // not removable ; refuse with the gated notice
     // -- persist the raw contents before the handler runs --
     abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
     emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // persist source pointer = the raw buffer base
@@ -1119,12 +911,19 @@ fn emit_get_pop_op_x86_64(
     emitter.instruction("call __rt_str_persist");                               // copy the raw contents into an owned heap string
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the raw contents pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the raw contents length
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // transfer exceptional ownership of the persisted string to the result guard
+    abi::emit_symbol_address(emitter, "r10", "__rt_exception_release_owned");
+    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // reuse the protected heap-owner cleanup callback
+    emitter.instruction("lea rdi, [rbp - 64]");                                 // pass the aligned stack-local ownership record
+    emitter.instruction("xor esi, esi");                                        // insert the result owner at the activation chain head
+    emitter.instruction("call __rt_exception_guard_owned");                     // guard the copy throughout handler execution and buffer retirement
     // -- run the handler (flush paths emit the survivors), then pop --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // process the saved top slot
     emitter.instruction(&format!("mov esi, {}", phase));                        // this operation's handler phase bits
     emitter.instruction(&format!("mov edx, {}", i64::from(write)));             // write flag: get_flush emits to the parent sink
     emitter.instruction("call __rt_ob_process_and_write");                      // run the handler and clean/flush the buffer
-    emitter.instruction("call __rt_ob_pop_free");                               // pop and free the processed buffer
+    emitter.instruction("lea rdi, [rbp - 64]");                                 // identify the exact result guard after successful callback retirement
+    emitter.instruction("call __rt_exception_unguard_owned");                   // remove exceptional ownership before transferring the raw result
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the raw contents pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // return the raw contents length
     emitter.instruction(&format!("jmp {done}"));                                // finish
@@ -1144,7 +943,7 @@ fn emit_get_pop_op_x86_64(
     emitter.instruction("xor eax, eax");                                        // null pointer signals refusal
     emitter.instruction("xor edx, edx");                                        // zero length for the failure pair
     emitter.label(&done);
-    emitter.instruction("add rsp, 32");                                         // release the get-pop local slots
+    emitter.instruction("add rsp, 64");                                         // release the get-pop local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the raw contents pair
 }
@@ -1176,8 +975,8 @@ pub fn emit_ob_get_pop_ops(emitter: &mut Emitter) {
 /// No inputs, no result. Drains top-down so each handler (FINAL phase) sees its
 /// own buffer and its output folds into the parent, matching PHP's shutdown
 /// order. Guarded by `_ob_flushing` against handler-triggered re-entry (e.g. a
-/// handler calling `exit()`); never frees storage because the process is
-/// exiting. Gating flags are ignored: PHP force-flushes at shutdown.
+/// handler calling `exit()`). Drained buffers retire their owners through the shared
+/// completion path. Gating flags are ignored: PHP force-flushes at shutdown.
 pub fn emit_ob_flush_all(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ob_flush_all_x86_64(emitter);
@@ -1202,11 +1001,6 @@ pub fn emit_ob_flush_all(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x1, #{}", OB_PHASE_FINAL));               // shutdown handler phase = FINAL
     emitter.instruction("mov x2, #1");                                          // emit the surviving bytes to the parent sink
     emitter.instruction("bl __rt_ob_process_and_write");                        // run the handler and flush the buffer
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("ldr x10, [x9]");                                       // reload the depth (handlers may have changed it)
-    emitter.instruction("cbz x10, __rt_ob_flush_all_done");                     // stack drained — done
-    emitter.instruction("sub x10, x10, #1");                                    // pop the drained slot (no frees at exit)
-    emitter.instruction("str x10, [x9]");                                       // publish the shrunken depth
     emitter.instruction("b __rt_ob_flush_all_loop");                            // continue draining
     emitter.label("__rt_ob_flush_all_done");
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
@@ -1234,12 +1028,6 @@ fn emit_ob_flush_all_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov esi, {}", OB_PHASE_FINAL));               // shutdown handler phase = FINAL
     emitter.instruction("mov edx, 1");                                          // emit the surviving bytes to the parent sink
     emitter.instruction("call __rt_ob_process_and_write");                      // run the handler and flush the buffer
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // reload the depth (handlers may have changed it)
-    emitter.instruction("test r10, r10");                                       // is anything left to pop?
-    emitter.instruction("jz __rt_ob_flush_all_done_x86");                       // stack drained — done
-    emitter.instruction("sub r10, 1");                                          // pop the drained slot (no frees at exit)
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the shrunken depth
     emitter.instruction("jmp __rt_ob_flush_all_loop_x86");                      // continue draining
     emitter.label("__rt_ob_flush_all_done_x86");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

@@ -26,20 +26,7 @@ use serde_json::{json, Value};
 
 /// Renders a `TypeSpec` as a PHP-style type string for documentation JSON.
 fn type_spec_str(ty: &TypeSpec) -> String {
-    match ty {
-        TypeSpec::Int => "int".to_string(),
-        TypeSpec::Float => "float".to_string(),
-        TypeSpec::Str => "string".to_string(),
-        TypeSpec::Bool => "bool".to_string(),
-        TypeSpec::Mixed => "mixed".to_string(),
-        TypeSpec::Void => "void".to_string(),
-        // Not a PHP type: the `Area::Pointers` builtins are elephc extensions and this is the
-        // raw address their check hook returns. Rendering it as `mixed` would document a lie.
-        TypeSpec::Ptr => "pointer".to_string(),
-        TypeSpec::Callable => "callable".to_string(),
-        TypeSpec::Array => "array".to_string(),
-        TypeSpec::Nullable(inner) => format!("?{}", type_spec_str(inner)),
-    }
+    ty.to_string()
 }
 
 /// Maps a builtin `Area` to its lowercase documentation category name.
@@ -182,6 +169,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     };
     let argument_lowering = match semantics.argument_lowering {
         BuiltinArgumentLowering::Standard => "standard",
+        BuiltinArgumentLowering::PreserveValues => "preserve_values",
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",
         BuiltinArgumentLowering::JsonDecode => "json_decode",

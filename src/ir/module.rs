@@ -51,6 +51,9 @@ pub struct TraitMethodInfo {
 pub struct Module {
     pub target: Target,
     pub source_path: Option<String>,
+    /// Optional mbstring startup arguments: effective core encodings followed by raw INI pairs.
+    /// These belong to user assembly, never the reusable runtime object.
+    pub mbstring_startup: Option<Vec<Vec<u8>>>,
     /// `--probe` build key, embedded as `_elephc_probe_key` so the probe endpoint
     /// can prove the binary's identity through the HMAC handshake. `None` unless
     /// `--probe` is set.
@@ -109,6 +112,7 @@ impl Module {
         Self {
             target,
             source_path: None,
+            mbstring_startup: None,
             probe_key: None,
             functions: Vec::new(),
             class_methods: Vec::new(),

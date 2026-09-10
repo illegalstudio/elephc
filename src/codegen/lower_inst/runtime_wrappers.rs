@@ -15,15 +15,32 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
-    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
-        return label;
-    }
+    emit_runtime_callable_invoker_with_operation_inline(ctx, sig, captures, None)
+}
+
+/// Adds the shared PHP arity boundary to mbstring builtin descriptor invokers.
+pub(super) fn emit_runtime_builtin_invoker_inline(ctx: &mut FunctionContext<'_>, name: &str, sig: &FunctionSig) -> String {
+    let operation = crate::builtins::registry::lookup(name).and_then(|definition| {
+        if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(target) = definition.spec.semantics.runtime_functions {
+            target.mbstring_operation()
+        } else { None }
+    });
+    emit_runtime_callable_invoker_with_operation_inline(ctx, sig, &[], operation)
+}
+
+/// Emits a descriptor adapter, caching its signature together with the diagnostic operation.
+fn emit_runtime_callable_invoker_with_operation_inline(
+    ctx: &mut FunctionContext<'_>, sig: &FunctionSig, captures: &[(String, PhpType, bool)],
+    operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
+) -> String {
+    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures, operation) { return label; }
     let label = ctx.next_global_label("callable_invoker");
     let done_label = ctx.next_label("callable_invoker_done");
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
         label: &label,
         sig,
         captures,
+        mbstring_operation: operation,
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
     // enclosing function back before continuing it, or its tail lands in there.
@@ -32,8 +49,7 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
-    ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, &label);
+    ctx.shared.cache_runtime_callable_invoker(sig, captures, operation, &label);
     label
 }
 
@@ -255,7 +271,9 @@ impl crate::builtins::semantics::BuiltinLoweringContext
             crate::ir::RuntimeCallTarget::Function(target) => {
                 crate::ir::RuntimeCallTarget::ProfiledFunction {
                     target,
+                    arguments: crate::ir::RuntimeArgumentLayout::Values,
                     strict_php: self.strict_php,
+                    strict_types: None,
                 }
             }
             target => target,

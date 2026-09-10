@@ -1,0 +1,103 @@
+{
+    "php_version": "8.5.10",
+    "encodings": {
+        "JIS": {
+            "encode": "d833b56234d35a04f7c35f268d570126d17db5ebc031c844f33facbcf0b20023",
+            "prefixes": {
+                "": "213a792e8d6a57fd3931c59e545b17e71be92b2298d27a3cdb5f69345d1b0e08",
+                "1b2442": "8f6cb900500ac56a7084b5583f1f324b3821f2098bf5e97f4764c4082c7afc72",
+                "1b242844": "83b7d85384f28f06dbe7a49294ddc3ac02dc0526ef70f5cb2bc6f445b61aba9a",
+                "1b24283f": "7816e3bacc0574ec7e69a763390a3b5116bddf498ff762a1c273d77b32bfb841",
+                "1b284a": "e4644b2a9085dea12f3e2ed6e3f20b4cde090dd6973542d5285ffe53e30d7243",
+                "1b2849": "5fb19f472cb15375ca0919f5c5a22946914754d2f8a775f8a360cd65da33a13c",
+                "0e": "5ba2b479d4d7db806a86beaff0a231b4626ecd218c446ef0fb4e5f0aea56ddd9"
+            }
+        },
+        "ISO-2022-JP": {
+            "encode": "125f7e77914e22e4d92e66d74b534f279d717cd341ada9929a3d178e9200b8da",
+            "prefixes": {
+                "": "02c9d473f044490f731542e9f49682761e2f6e41853977dd9f08a377a5e471db",
+                "1b2442": "28df257e69e83d847dcd374efb165b4a6ea889cf9e2267db06fbda53a0257a88",
+                "1b242844": "e2b2c704be86d9e37517882014da6b8580d9fa490a912303e674bb056a251845",
+                "1b24283f": "a0b113782dc623dd25b9c3480ae48a81da1ac9ebcd441e3cbf4d57e432a16bf9",
+                "1b284a": "913cdd2f3128f9285f3302e479fa92df2400d878dff08053e7488202f5a7c498",
+                "1b2849": "591c9fb7ad06219805e353278c66ae17593ba5c54685fbd95daa244a1e8c6936",
+                "0e": "591c9fb7ad06219805e353278c66ae17593ba5c54685fbd95daa244a1e8c6936"
+            }
+        },
+        "ISO-2022-JP-MS": {
+            "encode": "203ae0f92b4a1f3e99a364c890261aebd136dc92bf239b7dbb849929c2e6ebae",
+            "prefixes": {
+                "": "f4ae44f736e078cd8fd6d761dc8c0216c9c73c7f61185900737a494eb0b0f302",
+                "1b2442": "61c336f3adf2580c56f8296efc197e66c7c8eaceb01760b6b4ebbe6623d97405",
+                "1b242844": "1231b3f3cc0a80baa3d421c10c83f73086b5ce4e664791641bd5a25004f875e3",
+                "1b24283f": "b501f1c48f31692f402fdb43af59f33160c1d01acdcb342f727cadfaf905d7ce",
+                "1b284a": "f4ae44f736e078cd8fd6d761dc8c0216c9c73c7f61185900737a494eb0b0f302",
+                "1b2849": "fa482a68289ed80bde8cb53d6acf1eba4d41080c35449705b1b931f049bdb9ed",
+                "0e": "c0118ccbe4f25fca6b791f13009b80f04127c552b16c45785bc23d3c0900d04d"
+            }
+        },
+        "CP50220": {
+            "encode": "75bdd0ef49aab1c84656ff4fdcaf57b603a94ce0ae4a8756103c996c4b6eb898",
+            "prefixes": {
+                "": "66e4fa526bb9d11477f596e9f05e2dfb9d083dfa9386188592699cbbade175da",
+                "1b2442": "b0912c90409f41bfdcb4a11d787b4d7aee795a4b43458093b28e19afa825a3ef",
+                "1b242844": "e09d34314a10b0f457404247bd5ffbb75aaee8c89b65b21777fbf57484dd0b4d",
+                "1b24283f": "b2c7be50abb59a5782414b89034a5a7769bfa90121662862877a26d25e2df86d",
+                "1b284a": "d264fe9610effbfb33111c9b6fe1770e1bb1054b7f2633d34fcddf3f51fa953e",
+                "1b2849": "6742d14ecc1ce85c271e9ece637c3dbf897a5285ad1296ff928844041b2d0aa6",
+                "0e": "6742d14ecc1ce85c271e9ece637c3dbf897a5285ad1296ff928844041b2d0aa6"
+            }
+        },
+        "CP50221": {
+            "encode": "54ec6710346dfd2a271096294965a3efae4bd089d2bc4d5d1cae3e8499a7f06c",
+            "prefixes": {
+                "": "15dc40f51b4ef82b585cd76d1b9fa62c7d92a9262a2303135a312bc8a383d6cd",
+                "1b2442": "4d69f2cf4a7a177c69e434216c844636fa227986c2c2f919f853e69564bd992a",
+                "1b242844": "79ec4b9f8d94b3cb550d4d36762d2eb13c09de8ff0d039e25ec7a6a5c7d13e8b",
+                "1b24283f": "7816e3bacc0574ec7e69a763390a3b5116bddf498ff762a1c273d77b32bfb841",
+                "1b284a": "fa574b3247a87b16302e1e4e466cac8f81769a7559d3c1c8c9cf125c378d4a5c",
+                "1b2849": "b6750947d25a83843c068725b2559c9e3a4d67148b497a10421585a957d4f170",
+                "0e": "b6750947d25a83843c068725b2559c9e3a4d67148b497a10421585a957d4f170"
+            }
+        },
+        "CP50222": {
+            "encode": "996ff246e9b60a6d4554a650d2984370f15499d303088419bc44351be2e7c095",
+            "prefixes": {
+                "": "a6a812cc947e10a55a3ed685a4d3b93087dc0287a20c8f610130cadd9a1e87bb",
+                "1b2442": "f43b7aceeb4e9d97175e39a5652feccd118af21870e82e42d2fc54b667de4598",
+                "1b242844": "8350dbedaad01fe249713d76e02fcbc7b4dfc9b8668da6302a415d3486dddfdb",
+                "1b24283f": "ad11b1971cbb99d0c894fc9668ac43ecc895b16b7ef7ef4907ff153f45df865e",
+                "1b284a": "e29961891b41af9c65491b64229e07d669ffacd9c309bd4cf4db1e818f33b612",
+                "1b2849": "7b56a4ab5df1ce8daa8c2df243e40dd67285476ce8ced593a10328ec54f35b9a",
+                "0e": "7b56a4ab5df1ce8daa8c2df243e40dd67285476ce8ced593a10328ec54f35b9a"
+            }
+        },
+        "ISO-2022-JP-2004": {
+            "encode": "97db6d4e71e5434b5ed4914fc5a951cfc3bfdb930f370862effc3f2b5513cce0",
+            "prefixes": {
+                "": "acb3f381c36600f95ef8d0702a465f372329dd778e8fa0a72f7a76966353dd43",
+                "1b2442": "66967cb46255282bb8c3c49046589726cd294fc6f445eb60aa972dda0792f80d",
+                "1b242844": "bbed7688c6939a83cba6aa5cb3beffd2240f0a44c2732dfc64feec70ec95cd14",
+                "1b24283f": "bbed7688c6939a83cba6aa5cb3beffd2240f0a44c2732dfc64feec70ec95cd14",
+                "1b284a": "bbed7688c6939a83cba6aa5cb3beffd2240f0a44c2732dfc64feec70ec95cd14",
+                "1b2849": "bbed7688c6939a83cba6aa5cb3beffd2240f0a44c2732dfc64feec70ec95cd14",
+                "0e": "3daf8299f69e65a31102be7db0d7fedeb5875c36e65e7682e44504396344e23d",
+                "1b242851": "9ea24a2b160628906a9c7723d0bff8549da15c6fb17c32257bc50fb5adce7b56",
+                "1b242850": "14795cd87fe83c873f65ef2644267370a1093ec92336ecb5684408281e9503e3"
+            }
+        },
+        "ISO-2022-JP-MOBILE#KDDI": {
+            "encode": "20990b77f5f242d2c0bd833db6951f07b97a44e96d5f709411c54d87e0c667b3",
+            "prefixes": {
+                "": "f4ae44f736e078cd8fd6d761dc8c0216c9c73c7f61185900737a494eb0b0f302",
+                "1b2442": "755af5302ae0e06eaea88b17822d00246817058092924f98b76948d585860b77",
+                "1b242844": "1231b3f3cc0a80baa3d421c10c83f73086b5ce4e664791641bd5a25004f875e3",
+                "1b24283f": "1231b3f3cc0a80baa3d421c10c83f73086b5ce4e664791641bd5a25004f875e3",
+                "1b284a": "f4ae44f736e078cd8fd6d761dc8c0216c9c73c7f61185900737a494eb0b0f302",
+                "1b2849": "fa482a68289ed80bde8cb53d6acf1eba4d41080c35449705b1b931f049bdb9ed",
+                "0e": "c0118ccbe4f25fca6b791f13009b80f04127c552b16c45785bc23d3c0900d04d"
+            }
+        }
+    }
+}

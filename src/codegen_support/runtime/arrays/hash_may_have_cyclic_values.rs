@@ -8,6 +8,7 @@
 //! Key details:
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// hash_may_have_cyclic_values: detect whether any entry can participate in a cycle.
@@ -32,9 +33,7 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
         emitter.instruction("cmp r10, r9");                                     // have all hash slots been scanned already?
         emitter.instruction("jae __rt_hash_may_have_cyclic_values_no");         // yes — no cyclic-capable payloads were found
         emitter.instruction("mov r11, 64");                                     // hash entries are 64 bytes wide in the runtime layout
-        emitter.instruction("mov r12, r10");                                    // preserve the slot index while scaling it by the entry width
-        emitter.instruction("imul r12, r11");                                   // compute slot_index * entry_size for this hash entry walk
-        emitter.instruction("lea r12, [rax + r12 + 40]");                       // advance from the hash base to the current slot payload after the 40-byte header
+    hash_layout::emit_entry_address(emitter, "r12", "rax", "r10");
         emitter.instruction("mov r13, QWORD PTR [r12]");                        // load the occupied flag for the current hash slot
         emitter.instruction("cmp r13, 1");                                      // is this slot currently occupied by a live hash entry?
         emitter.instruction("jne __rt_hash_may_have_cyclic_values_next");       // skip empty and tombstone slots during the cycle-capability scan
@@ -105,9 +104,7 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
 
     // -- compute the current slot address --
     emitter.instruction("mov x11, #64");                                        // hash entries are 64 bytes wide
-    emitter.instruction("mul x12, x10, x11");                                   // x12 = slot index * entry size
-    emitter.instruction("add x12, x0, x12");                                    // advance from the hash base to this slot
-    emitter.instruction("add x12, x12, #40");                                   // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x12", "x0", "x10");
     emitter.instruction("ldr x13, [x12]");                                      // load the occupied flag
     emitter.instruction("cmp x13, #1");                                         // is this slot occupied?
     emitter.instruction("b.ne __rt_hash_may_have_cyclic_values_next");          // skip empty and tombstone slots

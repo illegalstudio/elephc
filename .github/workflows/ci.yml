@@ -23,6 +23,7 @@ env:
     -p elephc-pdo
     -p elephc-crypto
     -p elephc-bcmath
+    -p elephc-mbstring
     -p elephc-iconv
     -p elephc-phar
     -p elephc-tz
@@ -117,6 +118,9 @@ jobs:
             --target-dir target/elephc-magician-curl-test-build
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
+
+      - name: Prepare offline Oniguruma test bundle
+        run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target macos-aarch64
 
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
@@ -251,6 +255,9 @@ jobs:
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
 
+      - name: Prepare offline Oniguruma test bundle
+        run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-x86_64
+
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
 
@@ -378,6 +385,9 @@ jobs:
             --target-dir target/elephc-magician-curl-test-build
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
+
+      - name: Prepare offline Oniguruma test bundle
+        run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-aarch64
 
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
@@ -1668,6 +1678,40 @@ jobs:
             --offline \
             --target "${{ matrix.target }}" \
             --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
+
+      - name: Materialize Oniguruma and verify locked offline reuse
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/oniguruma-project"
+          ./target/debug/elephc native add oniguruma \
+            --target "${{ matrix.target }}" \
+            --manifest-path "$RUNNER_TEMP/oniguruma-project/elephc.toml"
+          ./target/debug/elephc native install --locked --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path "$RUNNER_TEMP/oniguruma-project/elephc.toml"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["ELEPHC_NATIVE_CACHE"]) / "artifacts/oniguruma"
+          archives = list(root.rglob("libelephc_oniguruma_shim.a"))
+          assert len(archives) == 1, archives
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"ELEPHC_ONIGURUMA_TEST_PREFIX={archives[0].parent.parent}\n")
+          PY
+
+      - name: Compare the managed mbregex provider with the PHP oracle
+        run: cargo test -p elephc-mbstring --test regex --test regex_request --test regex_ini_abi --test invoke regex -- --include-ignored
+
+      - name: Build Oniguruma providers for iOS device and Simulator
+        if: matrix.target == 'macos-aarch64'
+        shell: bash
+        run: |
+          for target in ios-arm64 ios-sim-arm64; do
+            mkdir -p "$RUNNER_TEMP/oniguruma-$target"
+            ./target/debug/elephc native add oniguruma \
+              --target "$target" \
+              --manifest-path "$RUNNER_TEMP/oniguruma-$target/elephc.toml"
+          done
 
       - name: Materialize catalog curl (and its libssh2/nghttp2/openssl/zlib dependencies) from verified source
         # curl's recipe declares libssh2, nghttp2, openssl and zlib as

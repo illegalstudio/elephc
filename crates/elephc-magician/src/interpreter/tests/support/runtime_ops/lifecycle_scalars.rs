@@ -40,6 +40,37 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_retain(value)
     }
+    /// Models runtime-owned references without borrowing a test scope address.
+    fn supports_persistent_references(&self) -> bool { true }
+    /// Recognizes a fake reference independently from its current concrete PHP value.
+    fn is_reference(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        Ok(self.references.contains_key(&(value.as_ptr() as usize)))
+    }
+    /// Creates a stable fake reference holding one detached value.
+    fn reference_new(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        let value = self.copy_value(value)?;
+        let reference = self.alloc(FakeValue::Null);
+        self.references.insert(reference.as_ptr() as usize, value);
+        Ok(reference)
+    }
+    /// Replaces the fake current value and returns its previous owner for explicit release.
+    fn reference_replace(&mut self, reference: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        let value = self.copy_value(value)?;
+        self.references.insert(reference.as_ptr() as usize, value).ok_or(EvalStatus::RuntimeFatal)
+    }
+    /// Copies scalar and array values while preserving fake object and resource identity.
+    fn copy_value(&mut self, mut value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        while let Some(child) = self.references.get(&(value.as_ptr() as usize)) { value = *child; }
+        match self.get(value) {
+            FakeValue::Object(_) | FakeValue::Resource(_) => self.retain(value),
+            data => {
+                let history = self.array_next_indices.get(&(value.as_ptr() as usize)).copied();
+                let copied = self.alloc(data);
+                if let Some(next) = history { self.array_next_indices.insert(copied.as_ptr() as usize, next); }
+                Ok(copied)
+            }
+        }
+    }
     /// Records fake PHP warnings without writing to stderr.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
         self.runtime_warning(message)

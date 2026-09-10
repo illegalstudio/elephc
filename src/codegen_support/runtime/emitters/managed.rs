@@ -22,7 +22,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_heap_debug_validate_free_list(emitter);
     arrays::emit_heap_debug_report(emitter);
     arrays::emit_heap_kind(emitter);
-    arrays::emit_heap_free(emitter);
+    arrays::emit_heap_free(emitter, features.mbstring || features.eval_bridge);
     arrays::emit_array_free_deep(emitter);
     arrays::emit_array_clone_shallow(emitter);
     arrays::emit_array_ensure_unique(emitter);
@@ -54,6 +54,8 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_hash_normalize_key(emitter);
     arrays::emit_hash_clone_shallow(emitter);
     arrays::emit_hash_ensure_unique(emitter);
+    arrays::emit_hash_pin(emitter);
+    arrays::emit_hash_write_guards(emitter);
     arrays::emit_hash_new(emitter);
     arrays::emit_hash_grow(emitter);
     arrays::emit_hash_may_have_cyclic_values(emitter);
@@ -166,6 +168,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_gc_note_child_ref(emitter);
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_collect_cycles(emitter);
+    arrays::emit_mixed_reference(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_cast_array(emitter);
@@ -194,13 +197,13 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_object_free_deep(emitter, features);
     arrays::emit_refcount(emitter);
     if features.eval_bridge {
-        eval_bridge::emit_eval_bridge_runtime(emitter);
+        eval_bridge::emit_eval_bridge_runtime(emitter, features);
     } else if features.eval_scope {
         // Scope-only programs run compiled eval fragments natively: they need
         // the self-contained value wrappers plus the native scope helpers
         // (the magician staticlib supplies the scope symbols only in the full
         // bridge configuration).
-        eval_bridge::emit_eval_bridge_runtime(emitter);
+        eval_bridge::emit_eval_bridge_runtime(emitter, features);
         eval_scope::emit_eval_scope_runtime(emitter);
     }
 

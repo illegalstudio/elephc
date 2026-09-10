@@ -1,11 +1,11 @@
 ---
-title: "exif_tagname() — internals"
+title: "exif_tagname() - internals"
 description: "Compiler internals for exif_tagname(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 448
 ---
 
-## `exif_tagname()` — internals
+## `exif_tagname()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function exif_tagname(int $index): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

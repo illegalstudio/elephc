@@ -69,6 +69,11 @@ pub(super) fn ensure_eval_global_scope(ctx: &mut FunctionContext<'_>) -> Result<
 
 /// Returns the hidden frame slot that owns this function's persistent eval scope.
 pub(super) fn eval_scope_slot(ctx: &FunctionContext<'_>) -> Result<LocalSlotId> {
+    // Main executes in the global symbol table, including names first created by
+    // opaque eval. Keep one owning slot so frame cleanup frees the table once.
+    if ctx.is_main {
+        return eval_global_scope_slot(ctx);
+    }
     ctx.function
         .locals
         .iter()

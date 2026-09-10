@@ -10,8 +10,8 @@
 //! - Main currently exits through the process syscall used by normal executable output.
 //! - Each frame stores the inherited concat-buffer offset so statement resets do not clobber
 //!   `_concat_buf` slices that were passed in by the caller.
-//! - Cdylib user frames publish cleanup activations so boundary-caught exceptions release
-//!   owned locals before control returns to the native host.
+//! - Cdylib user frames and native destructors publish exceptional local cleanup activations.
+//! - Destructor cleanup contains each owner release so later owners are consumed after a throw.
 
 use std::collections::{HashMap, HashSet};
 
@@ -22,7 +22,7 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::data_section::DataWord;
-use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
+use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
@@ -32,6 +32,9 @@ use super::context::FunctionContext;
 use super::local_analysis::LocalSlotAnalysis;
 use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
+
+mod destructor_cleanup;
+pub(super) use destructor_cleanup::is_destructor;
 
 const FRAME_FOOTER_BYTES: usize = 16;
 
@@ -50,6 +53,7 @@ pub(super) struct FrameLayout {
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
+    pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
     pub(super) frame_size: usize,
@@ -112,6 +116,14 @@ pub(super) fn layout_for_function(
         offset += TRY_HANDLER_SLOT_SIZE;
         try_handler_offsets.insert(token, offset);
     }
+    let mut exception_guard_offsets = HashMap::new();
+    for inst in &function.instructions {
+        if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionGuardOwned))) {
+            let token = inst.result.expect("owned-value guard produces its stack token");
+            offset += EXCEPTION_GUARD_SLOT_SIZE;
+            exception_guard_offsets.insert(token, offset);
+        }
+    }
     let mut callee_saved_offsets = Vec::new();
     for reg in allocation.used_callee_saved() {
         offset += 8;
@@ -142,6 +154,7 @@ pub(super) fn layout_for_function(
         local_offsets,
         ref_cell_state_offsets,
         try_handler_offsets,
+        exception_guard_offsets,
         concat_base_offset,
         exception_activation_offset,
         frame_size,
@@ -349,7 +362,7 @@ pub(super) fn emit_function_prologue_with_label(
     Ok(())
 }
 
-/// Publishes one cleanup activation for a cdylib-callable PHP frame.
+/// Publishes one cleanup activation for a library-callable PHP frame or native destructor.
 fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &str) {
     let Some(offset) = ctx.exception_activation_offset else {
         return;
@@ -386,12 +399,16 @@ fn emit_exception_activation_pop(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
 }
 
-/// Emits the cleanup callback referenced by a cdylib PHP activation record.
+/// Emits the owned-local cleanup callback referenced by a PHP activation record.
 pub(super) fn emit_exception_cleanup_callback(
     ctx: &mut FunctionContext<'_>,
     entry_label: &str,
 ) {
     if ctx.exception_activation_offset.is_none() {
+        return;
+    }
+    if is_destructor(ctx.function) {
+        destructor_cleanup::emit_callback(ctx, entry_label);
         return;
     }
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
@@ -469,6 +486,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_release_catalog");
+    }
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and
@@ -898,6 +918,9 @@ fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let done = ctx.next_label("eval_scope_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    if is_destructor(ctx.function) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     if arg_reg != result_reg {
         ctx.emitter
@@ -915,6 +938,9 @@ fn emit_eval_context_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let done = ctx.next_label("eval_context_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    if is_destructor(ctx.function) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     if arg_reg != result_reg {
         ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));   // pass the persistent eval context handle to the free helper
@@ -983,6 +1009,10 @@ pub(super) fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: us
     let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, ptr_reg, offset);
+    if is_destructor(ctx.function) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset - 8);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -1004,6 +1034,9 @@ pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset
     let result_reg = abi::int_result_reg(ctx.emitter);
     let done = ctx.next_label("main_refcounted_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
+    if is_destructor(ctx.function) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -1042,6 +1075,10 @@ fn emit_function_local_epilogue_cleanup(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
 ) {
+    if ctx.exception_activation_offset.is_some() && is_destructor(ctx.function) {
+        destructor_cleanup::emit_call(ctx);
+        return;
+    }
     // Instrument exit runs FIRST — before the early return for cleanup-free
     // functions — so every return path records the exit. It preserves the
     // return value across its own call.

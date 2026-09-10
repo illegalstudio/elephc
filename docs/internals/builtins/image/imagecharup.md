@@ -1,11 +1,11 @@
 ---
-title: "imagecharup() — internals"
+title: "imagecharup() - internals"
 description: "Compiler internals for imagecharup(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 462
 ---
 
-## `imagecharup()` — internals
+## `imagecharup()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecharup(mixed $image, int $font, int $x, int $y, string $char, int 
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,0 +1,19 @@
+mb_split() expects at least 2 arguments, 0 given
+mb_split() expects at least 2 arguments, 1 given
+mb_split() expects at most 3 arguments, 4 given
+mb_split(): Argument #1 ($pattern) must be of type string, array given
+mb_split(): Argument #2 ($string) must be of type string, array given
+mb_split(): Argument #3 ($limit) must be of type int, array given
+bool(false)
+bool(false)
+bool(false)
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(3) "b,c"
+}
+array(1) {
+  [0]=>
+  string(5) "a,b,c"
+}

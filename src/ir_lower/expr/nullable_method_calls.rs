@@ -216,7 +216,26 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
     signature: Option<&FunctionSig>,
     span: Span,
 ) {
+    let owned_object_result = result.is_some_and(|result| {
+        matches!(ctx.builder.value_php_type(result).codegen_repr(), PhpType::Object(_))
+            && signature.is_some_and(|signature| !signature.by_ref_return)
+            && matches!(ctx.builder.value_defining_op(result),
+                Some(Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall))
+    });
+    let guarded_result = result.filter(|_| owned_object_result && args.iter().any(|value| {
+        ctx.value_is_owning_temporary(LoweredValue {
+            value: *value,
+            ir_type: ctx.builder.value_type(*value),
+        })
+    }));
+    if let Some(value) = guarded_result {
+        guard_descriptor_container(ctx, LoweredValue {
+            value,
+            ir_type: ctx.builder.value_type(value),
+        }, span);
+    }
     for (parameter_index, value) in args.iter().enumerate() {
+        ctx.unguard_call_argument(*value, span);
         let php_type = ctx.builder.value_php_type(*value);
         let lowered = LoweredValue {
             value: *value,
@@ -275,7 +294,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
                         && conditionally_releasable
                         && ctx.arg_and_result_types_can_alias(*value, result))
             });
-            if !callee_owns && !independently_boxed && result_reuses_arg {
+            if !owned_object_result && !callee_owns && !independently_boxed && result_reuses_arg {
                 // Both suppression reasons above are MAY facts, so an unconditional skip is
                 // right only on the calls that actually hand the payload back. Emitting a
                 // conditional release instead lets each call decide at runtime: the codegen
@@ -307,6 +326,9 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
             }
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
         }
+    }
+    if let Some(value) = guarded_result {
+        ctx.unguard_call_argument(value, span);
     }
 }
 

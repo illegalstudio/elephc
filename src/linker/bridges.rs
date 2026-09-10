@@ -25,6 +25,10 @@ use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan};
 
 use super::LinkError;
 
+use crate::bridge_sources as sources;
+#[cfg(test)]
+use sources::any_file_newer_than;
+
 /// A Rust `staticlib` bridge that can be linked into generated programs.
 pub(super) struct BridgeStaticlib {
     /// Linker library name without the `lib` prefix or archive extension.
@@ -111,6 +115,17 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extensions: &["bcmath"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_mbstring",
+        env_var: "ELEPHC_MBSTRING_LIB_DIR",
+        crate_name: "elephc-mbstring",
+        flag_name: "mbstring",
+        whole_archive: false,
+        apple_frameworks: &[],
+        needs_libdl: true,
+        php_extensions: &["mbstring"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -536,35 +551,6 @@ fn bridge_for_library(name: &str) -> Option<&'static BridgeStaticlib> {
     bridge
 }
 
-/// Returns whether any file under `directory` was modified after `instant`.
-///
-/// Stops at the first one, so an up-to-date tree costs a full walk and a stale one usually
-/// costs much less. An unreadable entry is skipped rather than treated as newer: this decides
-/// whether to SPAWN CARGO, and a directory elephc cannot read is not evidence of an edit.
-fn any_file_newer_than(directory: &Path, instant: std::time::SystemTime) -> bool {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        // A nested `target/` is this bridge's own build output, never its input.
-        if metadata.is_dir() {
-            if path.file_name().is_some_and(|name| name == "target") {
-                continue;
-            }
-            if any_file_newer_than(&path, instant) {
-                return true;
-            }
-        } else if metadata.modified().is_ok_and(|modified| modified > instant) {
-            return true;
-        }
-    }
-    false
-}
-
 impl BridgeStaticlib {
     /// Returns the archive filename produced by this bridge's Cargo package.
     pub(super) fn archive_filename(&self) -> String {
@@ -912,16 +898,15 @@ impl BridgeStaticlib {
             .is_ok_and(|mut attempted| attempted.insert(self.crate_name))
     }
 
-    /// Returns whether any file under this bridge's crate is newer than `archive`.
+    /// Returns whether this bridge or any local build dependency is newer than `archive`.
     ///
-    /// The whole crate directory is walked, not just `src`, because `Cargo.toml` and build
-    /// scripts change what the archive contains too. The walk stops at the first newer file.
+    /// Shared contracts are embedded in each staticlib and must trigger all affected rebuilds.
+    /// Cargo remains authoritative for conditional features and actual compilation work.
     fn sources_are_newer_than(&self, workspace: &Path, archive: &Path) -> bool {
         let Ok(built_at) = std::fs::metadata(archive).and_then(|meta| meta.modified()) else {
             return false;
         };
-        let crate_dir = workspace.join("crates").join(self.crate_name);
-        any_file_newer_than(&crate_dir, built_at)
+        sources::local_inputs_newer_than(workspace, self.crate_name, built_at)
     }
 
     /// Finds the checkout this elephc was built from, if it was built from one.

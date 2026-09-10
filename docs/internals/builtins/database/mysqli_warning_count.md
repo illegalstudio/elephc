@@ -1,11 +1,11 @@
 ---
-title: "mysqli_warning_count() — internals"
+title: "mysqli_warning_count() - internals"
 description: "Compiler internals for mysqli_warning_count(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 181
 ---
 
-## `mysqli_warning_count()` — internals
+## `mysqli_warning_count()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_warning_count(mixed $mysql): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

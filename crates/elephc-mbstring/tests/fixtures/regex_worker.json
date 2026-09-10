@@ -1,0 +1,138 @@
+[
+  {
+    "directive": "mbstring.internal_encoding",
+    "input": "UTF-8",
+    "first": {
+      "before": [
+        "pr",
+        "UTF-8",
+        false
+      ],
+      "state": [
+        "ib",
+        "ASCII",
+        1,
+        [
+          "a"
+        ],
+        true
+      ]
+    },
+    "second": {
+      "before": [
+        "ib",
+        "UTF-8",
+        false
+      ],
+      "state": [
+        "ib",
+        "UTF-8",
+        0,
+        false,
+        "No pattern was provided"
+      ]
+    }
+  },
+  {
+    "directive": "mbstring.internal_encoding",
+    "input": "SJIS-WIN",
+    "first": {
+      "before": [
+        "pr",
+        "SJIS",
+        true
+      ],
+      "state": [
+        "ib",
+        "ASCII",
+        1,
+        [
+          "a"
+        ],
+        true
+      ]
+    },
+    "second": {
+      "before": [
+        "ib",
+        "SJIS",
+        false
+      ],
+      "state": [
+        "ib",
+        "SJIS",
+        0,
+        false,
+        "No pattern was provided"
+      ]
+    }
+  },
+  {
+    "directive": "default_charset",
+    "input": "SJIS-WIN",
+    "first": {
+      "before": [
+        "pr",
+        "SJIS",
+        true
+      ],
+      "state": [
+        "ib",
+        "ASCII",
+        1,
+        [
+          "a"
+        ],
+        true
+      ]
+    },
+    "second": {
+      "before": [
+        "ib",
+        "SJIS",
+        false
+      ],
+      "state": [
+        "ib",
+        "SJIS",
+        0,
+        false,
+        "No pattern was provided"
+      ]
+    }
+  },
+  {
+    "directive": "mbstring.internal_encoding",
+    "input": "Windows-1252",
+    "first": {
+      "before": [
+        "pr",
+        "UTF-8",
+        false
+      ],
+      "state": [
+        "ib",
+        "ASCII",
+        1,
+        [
+          "a"
+        ],
+        true
+      ]
+    },
+    "second": {
+      "before": [
+        "ib",
+        "UTF-8",
+        false
+      ],
+      "state": [
+        "ib",
+        "UTF-8",
+        0,
+        false,
+        "No pattern was provided"
+      ]
+    }
+  }
+]

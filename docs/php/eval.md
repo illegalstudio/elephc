@@ -83,10 +83,12 @@ The implementation boundary is documented in
 
 ## Optional regex capability
 
-Dynamic eval source is opaque to compile-time feature detection. Merely linking
-Magician therefore does not link PCRE2 or expose `preg_*` inside evaluated code.
-A program without the capability still compiles; `function_exists("preg_match")`
-returns `false` inside dynamic eval and a call fails at runtime.
+Dynamic eval source is opaque to compile-time feature detection. Its shared
+mbstring output support requires the managed PCRE2 MIME-pattern provider. That
+dependency does not expose `preg_*` inside evaluated code. With the provider
+installed, a program without the regex capability still compiles;
+`function_exists("preg_match")` returns `false` inside dynamic eval and a call
+fails at runtime.
 
 If evaluated source may use regex, declare the managed package and explicitly
 enable the capability:
@@ -98,9 +100,11 @@ elephc --with-regex example.php
 
 The compiler prints a post-compilation reminder when a binary contains dynamic
 eval without regex support. Static source that visibly uses `preg_*`,
-`mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator` continues to
-auto-detect regex and makes the same provider available to dynamic eval. Merely
-declaring PCRE2 in `elephc.toml` never forces it into a binary.
+`RegexIterator`, or `RecursiveRegexIterator` continues to auto-detect regex and
+makes that capability available to dynamic eval. Mbstring regex functions use
+the separate managed Oniguruma provider; `--with-mbstring` enables those calls
+for opaque eval. Merely declaring a package in `elephc.toml` does not enable its
+PHP call surfaces.
 
 ## Scope behavior
 

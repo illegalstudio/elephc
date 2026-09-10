@@ -1,11 +1,11 @@
 ---
-title: "imagefilledarc() — internals"
+title: "imagefilledarc() - internals"
 description: "Compiler internals for imagefilledarc(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 500
 ---
 
-## `imagefilledarc()` — internals
+## `imagefilledarc()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagefilledarc(mixed $image, int $center_x, int $center_y, int $width, 
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,16 +1,16 @@
 ---
-title: "ini_get_all() — internals"
+title: "ini_get_all() - internals"
 description: "Compiler internals for ini_get_all(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 883
+  order: 944
 ---
 
-## `ini_get_all()` — internals
+## `ini_get_all()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:5029](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L5029) (`ini_get_all`)
+- **Lowering**: [`src/shared_ini_prelude.rs`:61](https://github.com/illegalstudio/elephc/blob/main/src/shared_ini_prelude.rs#L61) (`ini_get_all`)
 - **Function symbol**: `ini_get_all()`
 
 
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function ini_get_all(?string $extension = null, bool $details = true): mixed
+function ini_get_all(?string $extension = null, bool $details = true): array|false
 ```
 
 ## What the type checker enforces
@@ -38,7 +38,7 @@ function ini_get_all(?string $extension = null, bool $details = true): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

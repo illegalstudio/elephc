@@ -146,6 +146,7 @@ def _check_backend_contracts(
         # The date/calendar procedural families the name resolver rewrites onto the
         # DateTime and calendar classes.
         "name-resolver-rewrite": 54,
+        # Three eval-only functions have no compiled implementation.
         "none": 3,
     }
     expected_total = sum(expected_counts.values())
@@ -198,7 +199,8 @@ def _check_backend_contracts(
 
     for record in raw:
         supported = bool((record.get("aot") or {}).get("supported"))
-        if bool(record.get("eval_only")) == supported:
+        expected_eval_only = not supported and bool((record.get("eval") or {}).get("supported"))
+        if bool(record.get("eval_only")) != expected_eval_only:
             errors.append(f"{record['name']} has an inconsistent eval_only flag")
     stats["backend_contract_checks"] = len(non_registry)
 

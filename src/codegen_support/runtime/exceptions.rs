@@ -9,6 +9,12 @@
 //! - Exception matching and unwinding must keep handler-stack, call-frame cleanup, and class metadata invariants aligned.
 
 mod cleanup_frames;
+mod owned_values;
+mod protected;
+pub(crate) mod deep_cleanup;
+pub(crate) mod guards;
+mod cleanup_previous;
+mod previous_storage;
 mod class_implements;
 mod dynamic_instanceof;
 mod matches;
@@ -18,6 +24,8 @@ mod uncaught_report;
 
 pub use class_implements::emit_class_implements_interface;
 pub use cleanup_frames::emit_exception_cleanup_frames;
+pub(crate) use protected::emit as emit_protected;
+pub(crate) use protected::emit_status as emit_protected_status;
 pub use dynamic_instanceof::emit_dynamic_instanceof;
 pub use matches::emit_exception_matches;
 // The fixed-data emitter defines the string this helper prints; both must agree on its bytes.

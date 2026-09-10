@@ -104,6 +104,14 @@ pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext)
 /// `ctx` must point to a live context allocated by `__elephc_eval_context_new`
 /// and no process-global PCNTL handler may still reference it.
 pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
+    let callbacks = crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
+    #[cfg(not(test))]
+    if let Some(context) = unsafe { ctx.as_mut() } {
+        let mut values = crate::runtime_hooks::ElephcRuntimeOps::with_context(ctx);
+        let _ = crate::interpreter::release_ob_handler_callbacks(callbacks, context, &mut values);
+    }
+    #[cfg(test)]
+    let _ = callbacks;
     #[cfg(all(feature = "curl", not(test)))]
     if let Some(context) = unsafe { ctx.as_mut() } {
         let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
@@ -114,7 +122,6 @@ pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
     if let Some(context) = unsafe { ctx.as_ref() } {
         context.unregister_dynamic_object_context();
     }
-    crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
     unsafe { drop(Box::from_raw(ctx)) };
 }
 

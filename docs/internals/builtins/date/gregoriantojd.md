@@ -1,11 +1,11 @@
 ---
-title: "gregoriantojd() — internals"
+title: "gregoriantojd() - internals"
 description: "Compiler internals for gregoriantojd(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 224
 ---
 
-## `gregoriantojd()` — internals
+## `gregoriantojd()` - internals
 
 ## Where it lives
 

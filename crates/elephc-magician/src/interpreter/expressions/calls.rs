@@ -31,14 +31,32 @@ pub(in crate::interpreter) fn positional_call_arg_exprs(
     Ok(args.iter().map(|arg| arg.value().clone()).collect())
 }
 
-/// Evaluates method-call arguments, preserving named metadata for eval method binding.
-pub(in crate::interpreter) fn eval_method_call_arg_values(
+/// Invokes an instance method with source-ordered arguments and balanced literal temporary owners.
+pub(in crate::interpreter) fn eval_instance_method_call(
+    object: RuntimeCellHandle,
+    method: &str,
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    eval_call_arg_values(args, context, scope, values)
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_literal_call_arguments(args, context, scope, values, |args, context, _, values| {
+        eval_method_call_result_with_evaluated_args(object, method, args, context, values)
+    })
+}
+
+/// Invokes a static method with the same argument ownership and binding rules as instance methods.
+pub(in crate::interpreter) fn eval_static_method_call(
+    class_name: &str,
+    method: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_literal_call_arguments(args, context, scope, values, |args, context, scope, values| {
+        eval_static_method_call_result_from_scope(class_name, method, args, scope, context, values)
+    })
 }
 
 /// Evaluates supported function-like calls from a runtime eval fragment.
@@ -168,6 +186,9 @@ pub(in crate::interpreter) fn eval_call(
         return eval_builtin_array_mutating_declared_call(name, args, context, scope, values);
     }
     if eval_php_visible_builtin_exists(name) {
+        if eval_builtin_uses_owned_arguments(name) {
+            return eval_builtin_call(name, args, context, scope, values);
+        }
         if eval_call_args_are_plain_positional(args) {
             let args = positional_call_arg_exprs(args)?;
             return eval_positional_expr_call(name, &args, context, scope, values);
@@ -210,26 +231,32 @@ pub(in crate::interpreter) fn eval_dynamic_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_expr(callee, context, scope, values)?;
-    if values.type_tag(callback)? == EVAL_TAG_OBJECT {
-        let is_closure_object = values
-            .object_identity(callback)
-            .ok()
-            .and_then(|identity| context.closure_object_target(identity))
-            .is_some();
-        let is_detached_pcntl_handler = context
-            .pcntl_foreign_callable_owner(callback)
-            .is_some()
-            || crate::context::pcntl_runtime::is_handler_callable(callback);
-        if !is_closure_object && !is_detached_pcntl_handler {
-            eval_invokable_object_precheck(callback, context, values)?;
-            let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-            return eval_invokable_object_call_result(callback, evaluated_args, context, values);
+    with_owned_receiver(callee, context, scope, values, |callback, context, scope, values| {
+        if values.type_tag(callback)? == EVAL_TAG_OBJECT {
+            let is_closure_object = values
+                .object_identity(callback)
+                .ok()
+                .and_then(|identity| context.closure_object_target(identity))
+                .is_some();
+            let is_detached_pcntl_handler = context
+                .pcntl_foreign_callable_owner(callback)
+                .is_some()
+                || crate::context::pcntl_runtime::is_handler_callable(callback);
+            if !is_closure_object && !is_detached_pcntl_handler {
+                eval_invokable_object_precheck(callback, context, values)?;
+                let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+                return eval_invokable_object_call_result(callback, evaluated_args, context, values);
+            }
         }
-    }
-    let callback = eval_callable(callback, context, values)?;
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+        let callback = eval_callable(callback, context, values)?;
+        if let EvaluatedCallable::Named { name, .. } = &callback {
+            if eval_builtin_uses_owned_arguments(name) {
+                return eval_builtin_call(name, args, context, scope, values);
+            }
+        }
+        let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+        eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+    })
 }
 
 /// Returns true for language constructs that need unevaluated argument expressions.

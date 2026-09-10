@@ -2,29 +2,29 @@
 title: "ucwords()"
 description: "Uppercases the first character of each word in a string."
 sidebar:
-  order: 846
+  order: 907
 ---
 
 ## ucwords()
 
 ```php
-function ucwords(string $string, string $separators = ' \t\r\n\x0c\x0b'): string
+function ucwords(string $string, string $separators = " \t\r\n\x0C\x0B"): string
 ```
 
 Uppercases the first character of each word in a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$separators` (`string`), default `' \t\r\n\x0c\x0b'`, optional
+- `$separators` (`string`), default `" \t\r\n\x0C\x0B"`, optional
 
 **Returns**: `string`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ucwords.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ucwords.rs)).
+- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ucwords.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ucwords.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

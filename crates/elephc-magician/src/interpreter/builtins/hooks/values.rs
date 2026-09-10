@@ -210,8 +210,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Round,
     /// Dispatches `range(...)`.
     Range,
-    /// Dispatches `mb_ereg_match(...)`.
-    MbEregMatch,
     /// Dispatches `preg_match(...)`.
     PregMatch,
     /// Dispatches `preg_match_all(...)`.
@@ -541,7 +539,6 @@ impl EvalValuesHook {
                 }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::MbEregMatch => eval_mb_ereg_match_values_result(evaluated_args, values),
             Self::PregMatch => eval_preg_match_values_result(evaluated_args, values),
             Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, values),
             Self::PregReplace => eval_preg_replace_values_result(evaluated_args, values),
@@ -680,13 +677,6 @@ impl EvalValuesHook {
             },
             Self::Iconv => eval_iconv_values(name, evaluated_args, context, values),
             Self::Strlen => match name {
-                "mb_strlen" => match evaluated_args {
-                    [value] => eval_mb_strlen_result(*value, None, context, values),
-                    [value, encoding] => {
-                        eval_mb_strlen_result(*value, Some(*encoding), context, values)
-                    }
-                    _ => Err(EvalStatus::RuntimeFatal),
-                },
                 "strlen" => one_arg(evaluated_args, values, eval_strlen_result),
                 _ => Err(EvalStatus::RuntimeFatal),
             },

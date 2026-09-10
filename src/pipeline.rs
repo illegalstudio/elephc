@@ -33,6 +33,7 @@ use crate::{
 mod backend;
 mod eir_output;
 mod frontend;
+mod mbstring_configuration;
 mod output;
 
 use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
@@ -664,6 +665,7 @@ pub(crate) fn compile(config: CliConfig) {
     backend::emit_and_link(backend::BackendInputs {
         filename,
         with_crates: &with_crates,
+        ini_overrides: &ini_overrides,
         linked_php_surfaces: &linked_php_surfaces,
         ir_module,
         web,

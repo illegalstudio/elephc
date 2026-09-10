@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_source_rgb() — internals"
+title: "cairo_set_source_rgb() - internals"
 description: "Compiler internals for cairo_set_source_rgb(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 439
 ---
 
-## `cairo_set_source_rgb()` — internals
+## `cairo_set_source_rgb()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_set_source_rgb(mixed $context, float $red, float $green, float $b
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

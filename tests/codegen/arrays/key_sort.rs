@@ -282,6 +282,24 @@ foreach ($a as $key => $value) { echo $key, "=", $value, ";"; }
     assert_eq!(out, "true:1:2=3;1=2;0=1;");
 }
 
+/// Keeps the promoted local's boxed owner alive when EIR subsequently releases its argument.
+#[test]
+fn test_krsort_promoted_local_keeps_boxed_owner_after_argument_cleanup() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1, 2, 3];
+echo krsort($a) ? "true:" : "false:";
+echo $a[0], ":";
+$copy = $a;
+$a[0] = 99;
+echo $copy[0], ":", $a[0], ":";
+foreach ($copy as $key => $value) { echo $key, "=", $value, ";"; }
+"#,
+    );
+    assert_eq!(out.stdout, "true:1:1:99:2=3;1=2;0=1;", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// `krsort()` on a statically empty indexed array stays accepted, because an empty receiver
 /// is trivially representable in either direction.
 #[test]

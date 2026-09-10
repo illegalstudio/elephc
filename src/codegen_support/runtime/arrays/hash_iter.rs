@@ -8,6 +8,7 @@
 //! Key details:
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -72,12 +73,10 @@ pub fn emit_hash_iter(emitter: &mut Emitter) {
     emitter.label("__rt_hash_iter_resume");
     emitter.instruction("sub x6, x1, #1");                                      // decode slot index = cursor - 1
 
-    // -- compute entry address: base + 40 + index * 64 --
+    // -- compute entry address: entries + index * 64 --
     emitter.label("__rt_hash_iter_entry");
     emitter.instruction("mov x7, #64");                                         // x7 = hash entry size in bytes
-    emitter.instruction("mul x8, x6, x7");                                      // x8 = slot index * 64
-    emitter.instruction("add x8, x0, x8");                                      // advance from the hash base to the selected slot
-    emitter.instruction("add x8, x8, #40");                                     // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x8", "x0", "x6");
 
     // -- return the selected entry and encode the next cursor --
     emitter.instruction("ldr x9, [x8, #56]");                                   // x9 = next slot index from the insertion-order chain
@@ -143,10 +142,7 @@ fn emit_hash_iter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, 1");                                          // decode slot index = cursor - 1 for resumed insertion-order walks
 
     emitter.label("__rt_hash_iter_entry");
-    emitter.instruction("mov r11, r10");                                        // copy the slot index before scaling it into a byte offset
-    emitter.instruction("shl r11, 6");                                          // convert the slot index into a 64-byte hash-entry offset
-    emitter.instruction("add r11, rdi");                                        // advance from the hash-table base pointer to the selected entry block
-    emitter.instruction("add r11, 40");                                         // skip the fixed 40-byte hash header to land on the selected entry
+    hash_layout::emit_entry_address(emitter, "r11", "rdi", "r10");
     emitter.instruction("mov rax, QWORD PTR [r11 + 56]");                       // load the insertion-order next-slot index from the current entry
     emitter.instruction("cmp rax, -1");                                         // is this entry the insertion-order tail?
     emitter.instruction("je __rt_hash_iter_tail");                              // tail entries return the post-last cursor so the next probe yields done

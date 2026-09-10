@@ -12,6 +12,9 @@ use super::*;
 /// Emits AArch64 value predicates, raw handles, and cast wrappers.
 pub(super) fn emit_aarch64_casts(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_is_array_like");
+    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the C caller while resolving a persistent reference
+    emitter.instruction("bl __rt_mixed_deref");                                 // inspect the current array or object behind any reference wrappers
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore linkage before the leaf predicate branches
     emitter.instruction("cbz x0, __elephc_eval_value_is_array_like_false");     // null handles cannot be indexed as arrays
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
     emitter.instruction("cmp x9, #4");                                          // tag 4 = indexed array

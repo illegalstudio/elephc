@@ -153,6 +153,8 @@ pub enum BuiltinRuntimeFunctions {
 pub enum BuiltinArgumentLowering {
     /// Use shared signature planning and ordinary source-order evaluation.
     Standard,
+    /// Preserve concrete values and nullable types for runtime-owned PHP parameter conversion.
+    PreserveValues,
     /// Drop the unsupported statically-default count mode after shared planning.
     Count,
     /// Preserve date's literal-format specialization inputs.
@@ -463,7 +465,9 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::One(target),
-        argument_lowering: BuiltinArgumentLowering::Standard,
+        argument_lowering: if target.uses_mbstring_runtime() {
+            BuiltinArgumentLowering::PreserveValues
+        } else { BuiltinArgumentLowering::Standard },
         callable: if target.runtime_callable_supported() {
             BuiltinCallablePolicy::DynamicRuntime(target)
         } else {

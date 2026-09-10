@@ -275,6 +275,8 @@ mod strict_php;
 mod math_builtins;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
+#[path = "error_tests/mbstring.rs"]
+mod mbstring;
 #[path = "error_tests/io_builtins/mod.rs"]
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]

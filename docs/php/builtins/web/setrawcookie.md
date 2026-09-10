@@ -2,7 +2,7 @@
 title: "setrawcookie()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 909
+  order: 970
 ---
 
 ## setrawcookie()
@@ -29,7 +29,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -9,6 +9,7 @@
 //!   contract while respecting the System V register ABI.
 //! - Equal operands are taken from the left run, so relinking preserves PHP 8 stability.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::sentinels::NULL_SENTINEL;
@@ -57,7 +58,7 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the merge-sort frame pointer
     emitter.instruction("sub rsp, 96");                                         // allocate the aligned merge-sort frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash-table pointer
-    emitter.instruction("lea r10, [rdi + 40]");                                 // compute the first hash-entry address
+    hash_layout::emit_entries(emitter, "r10", "rdi");
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the entries-region base
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save direction and key/value mode bits
     emitter.instruction("mov QWORD PTR [rbp - 32], 1");                         // seed the first pass with one-entry runs

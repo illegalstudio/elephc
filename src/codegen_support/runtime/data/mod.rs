@@ -111,6 +111,9 @@ pub(crate) const STACK_OVERFLOW_MSG: &str =
 /// per-call-site context inside `__rt_array_new`, so it reports the shared cause.
 pub(crate) const ARRAY_ALLOC_SIZE_MSG: &str =
     "Fatal error: requested array size exceeds the maximum allowed array size\n";
+/// Catchable Error message when PHP_INT_MAX is already occupied during array append.
+pub(crate) const HASH_APPEND_ERROR_MSG: &str =
+    "Cannot add element to the array as the next element is already occupied";
 /// Fatal error emitted when `sort()` or `rsort()` receives a runtime-typed array
 /// containing values whose PHP ordering is not implemented by the Mixed sorter.
 pub(crate) const MIXED_SORT_NON_SCALAR_MSG: &str =
@@ -220,6 +223,3 @@ pub(crate) const HASH_FINAL_FINALIZED_CTX_MSG: &str =
 /// Catchable `\TypeError` message for `hash_copy()` of an already-finalized context.
 pub(crate) const HASH_COPY_FINALIZED_CTX_MSG: &str =
     "hash_copy(): Argument #1 ($context) must be a valid, non-finalized HashContext";
-/// Catchable `\ValueError` message when `mb_strlen()` receives an unknown encoding name.
-pub(crate) const MB_STRLEN_UNKNOWN_ENCODING_MSG: &str =
-    "mb_strlen(): Argument #2 ($encoding) must be a valid encoding";

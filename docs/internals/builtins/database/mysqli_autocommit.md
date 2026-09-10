@@ -1,11 +1,11 @@
 ---
-title: "mysqli_autocommit() — internals"
+title: "mysqli_autocommit() - internals"
 description: "Compiler internals for mysqli_autocommit(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 99
 ---
 
-## `mysqli_autocommit()` — internals
+## `mysqli_autocommit()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_autocommit(mixed $mysql, bool $enable): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "imagecolorset() — internals"
+title: "imagecolorset() - internals"
 description: "Compiler internals for imagecolorset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 475
 ---
 
-## `imagecolorset()` — internals
+## `imagecolorset()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolorset(mixed $image, int $color, int $red, int $green, int $blue
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

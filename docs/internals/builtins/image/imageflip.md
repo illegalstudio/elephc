@@ -1,11 +1,11 @@
 ---
-title: "imageflip() — internals"
+title: "imageflip() - internals"
 description: "Compiler internals for imageflip(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 506
 ---
 
-## `imageflip()` — internals
+## `imageflip()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imageflip(mixed $image, int $mode): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

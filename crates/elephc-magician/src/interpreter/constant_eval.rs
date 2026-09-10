@@ -21,7 +21,8 @@ pub(super) fn eval_const(
         EvalConst::Bool(value) => values.bool_value(*value),
         EvalConst::Int(value) => values.int(*value),
         EvalConst::Float(value) => values.float(*value),
-        EvalConst::String(value) => values.string(value),
+        EvalConst::String(value) => values.string_literal(value),
+        EvalConst::Bytes(value) => values.string_literal_bytes(value),
     }
 }
 

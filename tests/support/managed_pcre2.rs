@@ -24,7 +24,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 const PCRE2_VERSION: &str = "10.47";
-const PCRE2_RECIPE: u32 = 2;
+const PCRE2_RECIPE: u32 = 3;
 // This catalog identity and the project files embedded below are canonicalized by
 // `examples/date-json-regex/elephc.toml` and `examples/date-json-regex/elephc.lock`.
 const PCRE2_SOURCE_SHA256: &str =

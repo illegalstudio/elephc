@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefromjpeg() — internals"
+title: "imagecreatefromjpeg() - internals"
 description: "Compiler internals for imagecreatefromjpeg(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 488
 ---
 
-## `imagecreatefromjpeg()` — internals
+## `imagecreatefromjpeg()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecreatefromjpeg(string $filename): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

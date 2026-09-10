@@ -1,16 +1,16 @@
 ---
-title: "pcntl_signal_dispatch() — internals"
+title: "pcntl_signal_dispatch() - internals"
 description: "Compiler internals for pcntl_signal_dispatch(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 636
 ---
 
-## `pcntl_signal_dispatch()` — internals
+## `pcntl_signal_dispatch()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_signal_dispatch.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_signal_dispatch.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

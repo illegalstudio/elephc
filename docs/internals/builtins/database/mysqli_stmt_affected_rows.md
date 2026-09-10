@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_affected_rows() — internals"
+title: "mysqli_stmt_affected_rows() - internals"
 description: "Compiler internals for mysqli_stmt_affected_rows(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 159
 ---
 
-## `mysqli_stmt_affected_rows()` — internals
+## `mysqli_stmt_affected_rows()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_stmt_affected_rows(mixed $statement): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

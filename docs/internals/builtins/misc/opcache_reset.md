@@ -1,11 +1,11 @@
 ---
-title: "opcache_reset() — internals"
+title: "opcache_reset() - internals"
 description: "Compiler internals for opcache_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 619
 ---
 
-## `opcache_reset()` — internals
+## `opcache_reset()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function opcache_reset(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

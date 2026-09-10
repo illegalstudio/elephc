@@ -10,6 +10,8 @@
 use super::super::*;
 use super::support::*;
 
+mod argument_ownership;
+
 /// Verifies eval fragments can dispatch registered native AOT functions.
 #[test]
 fn execute_program_calls_registered_native_function() {
@@ -50,6 +52,100 @@ fn execute_program_checks_registered_native_function_return_type() {
         .expect_err("native return type mismatch should fail");
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(values.releases.iter().filter(|value| **value == expected).count(), 1);
+}
+
+/// Releases the native result that runtime return-type coercion replaces with a new cell.
+#[test]
+fn execute_program_releases_coerced_native_return_value() {
+    let program = parse_fragment(br#"return native_answer();"#).expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let original = values.string("42").expect("allocate native result");
+    let mut native = NativeFunction::new(original.as_ptr().cast(), fake_native_return_descriptor, 0);
+    native.set_return_type(EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false));
+    assert!(context.define_native_function("native_answer", native).is_ok());
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("coerce native return");
+
+    assert_eq!(values.get(result), FakeValue::Int(42));
+    assert_ne!(result, original);
+    assert_eq!(values.releases.iter().filter(|value| **value == original).count(), 1);
+    assert!(!values.releases.contains(&result));
+}
+
+/// Releases the coerced result when destruction of the original Stringable object throws.
+#[test]
+fn execute_program_releases_coerced_return_when_destructor_throws() {
+    let program = parse_fragment(br#"
+class ReturnCleanupFailure {
+    public function __toString(): string { return "coerced-return"; }
+    public function __destruct() { throw new Exception("cleanup"); }
+}
+function string_return(): string { return new ReturnCleanupFailure(); }
+return string_return();
+"#).expect("parse return cleanup fixture");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
+
+    assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+    let strings = values.values.iter().filter_map(|(id, value)| {
+        (*value == FakeValue::String("coerced-return".to_string())).then_some(*id)
+    }).collect::<Vec<_>>();
+    assert_eq!(strings.len(), 1);
+    assert_eq!(values.releases.iter().filter(|value| value.as_ptr() as usize == strings[0]).count(), 1);
+}
+
+/// Releases invalid native results for void and never contracts before propagating validation failure.
+#[test]
+fn execute_program_releases_invalid_native_void_and_never_returns() {
+    for variant in [EvalParameterTypeVariant::Void, EvalParameterTypeVariant::Never] {
+        let program = parse_fragment(br#"return native_answer();"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let original = values.int(42).expect("allocate native result");
+        let mut native = NativeFunction::new(original.as_ptr().cast(), fake_native_return_descriptor, 0);
+        native.set_return_type(EvalParameterType::new(vec![variant], false));
+        assert!(context.define_native_function("native_answer", native).is_ok());
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
+
+        assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+        assert_eq!(values.releases.iter().filter(|value| **value == original).count(), 1);
+    }
+}
+
+/// Releases every argument-array index on success and when either insertion fails.
+#[test]
+fn execute_program_releases_native_argument_array_keys() {
+    for failure in [None, Some(0), Some(1)] {
+        let program = parse_fragment(br#"return native_answer("left", "right");"#)
+            .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let expected = values.int(42).expect("allocate native result");
+        let native = NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 2);
+        assert!(context.define_native_function("native_answer", native).is_ok());
+        if let Some(index) = failure { values.fail_array_set_call(index); }
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
+
+        assert_eq!(result, failure.map_or(Ok(expected), |_| Err(EvalStatus::UnsupportedConstruct)));
+        let keys = values.values.iter().filter_map(|(id, value)| {
+            matches!(value, FakeValue::Int(0 | 1)).then_some(*id)
+        }).collect::<Vec<_>>();
+        assert_eq!(keys.len(), failure.map_or(2, |index| index + 1));
+        for key in keys {
+            assert_eq!(values.releases.iter().filter(|value| value.as_ptr() as usize == key).count(), 1);
+        }
+    }
 }
 
 /// Verifies raw native by-reference staging is released when invoker argument setup fails.

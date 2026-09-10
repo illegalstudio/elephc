@@ -87,6 +87,8 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_install_ob_handler_hook");
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_ob_handler_fn"); // materialize the eval handler hook slot
     emitter.instruction("str x0, [x9]");                                        // install the magician ob-handler callback
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_ob_release_fn"); // locate the independent buffer-retirement callback
+    emitter.instruction("str x1, [x9]");                                        // install callback-owner retirement with invocation support
     emitter.instruction("ret");                                                 // return to Rust
 
     label_c_global(emitter, "__elephc_eval_ob_get_clean_pop");
@@ -176,7 +178,13 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // save the caller's out_ptr storage address
     emitter.instruction("str x2, [sp, #8]");                                    // save the caller's out_len storage address
-    emitter.instruction("bl __rt_mixed_cast_string");                           // cast the boxed eval value to a PHP string pair
+    emitter.instruction("str x0, [sp, #16]");                                   // retain the original box for non-string conversion
+    emitter.instruction("bl __rt_mixed_unbox");                                 // inspect the concrete value without acquiring a string owner
+    emitter.instruction("cmp x0, #1");                                          // an existing string already provides a stable borrowed byte range
+    emitter.instruction("b.eq __elephc_eval_value_string_bytes_ready");         // avoid allocating an owner that this borrowed-view ABI cannot return
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the original scalar before using the runtime cast helper
+    emitter.instruction("bl __rt_mixed_cast_string");                           // non-string scalar casts return borrowed scratch or fixed bytes
+    emitter.label("__elephc_eval_value_string_bytes_ready");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the optional out_ptr storage address
     emitter.instruction("cbz x9, __elephc_eval_value_string_bytes_len");        // skip pointer storage when the caller passed null
     emitter.instruction("str x1, [x9]");                                        // store the string pointer for Rust to copy immediately
@@ -198,11 +206,11 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
 
     label_c_global(emitter, "__elephc_eval_pcntl_aot_signal_handler");
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_handler_value");
-    emitter.instruction("ldr x0, [x9, x0, lsl #3]");                           // load the AOT table's original boxed PHP handler
+    emitter.instruction("ldr x0, [x9, x0, lsl #3]");                            // load the AOT table's original boxed PHP handler
     emitter.instruction("cbz x0, __elephc_eval_pcntl_aot_signal_handler_none"); // untouched entries have no handler owner
-    emitter.instruction("b __rt_incref");                                      // give eval an independent owner of the handler value
+    emitter.instruction("b __rt_incref");                                       // give eval an independent owner of the handler value
     emitter.label("__elephc_eval_pcntl_aot_signal_handler_none");
-    emitter.instruction("ret");                                                // return null for an empty AOT table entry
+    emitter.instruction("ret");                                                 // return null for an empty AOT table entry
 
     label_c_global(emitter, "__elephc_eval_value_final_object_identity");
     emitter.instruction("cbz x0, __elephc_eval_value_final_object_none");       // null handles cannot release an object

@@ -15,6 +15,7 @@ use super::*;
 pub(super) struct BackendInputs<'a> {
     pub(super) filename: &'a str,
     pub(super) with_crates: &'a HashSet<String>,
+    pub(super) ini_overrides: &'a [(String, String)],
     /// PHP surfaces injected into this compilation ("PDO", "mysqli"), reported to
     /// `extension_loaded()` alongside archive-derived bridge extensions. Needed
     /// because the shared `elephc_pdo` archive cannot identify a surface by itself.
@@ -62,6 +63,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let BackendInputs {
         filename,
         with_crates,
+        ini_overrides,
         linked_php_surfaces,
         mut ir_module,
         web,
@@ -93,6 +95,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if with_crates.contains("regex") {
         ir_module.required_runtime_features.regex = true;
     }
+    if with_crates.contains("mbstring") {
+        ir_module.required_runtime_features.mbstring = true;
+        ir_module.required_runtime_features.mbregex = true;
+    }
     let probe = with_crates.contains("probe");
     if probe {
         // A build that cannot produce a real key does not produce a binary. The
@@ -114,6 +120,9 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         ir_module.probe_key = Some(key);
     }
     let mut runtime_features = ir_module.required_runtime_features;
+    if runtime_features.mbstring || runtime_features.mbregex || runtime_features.eval_bridge {
+        ir_module.mbstring_startup = Some(super::mbstring_configuration::arguments(ini_overrides));
+    }
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
     // sole driver of the web runtime feature: it is CLI-driven, not derived from the
     // program, so the runtime cache (keyed on the generated assembly hash) keeps the
@@ -304,6 +313,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         .any(|library| library == "elephc_curl")
     {
         native_requirements.push(NativeRequirement::package("curl"));
+    }
+    // Default and configured MIME selection use PCRE2 without enabling preg_* in opaque eval.
+    if ir_module.mbstring_startup.is_some() {
+        native_requirements.push(NativeRequirement::package("pcre2"));
     }
     // The xml bridge is the same shape as curl: `elephc_xml` is a Rust `staticlib`
     // whose parser is libxml2 itself, reached through the Elephc-owned C shim the

@@ -26,6 +26,7 @@ pub mod lower;
 mod parse_cache;
 pub mod parser;
 mod regex_provider;
+mod mbregex_provider;
 pub mod runtime_hooks;
 pub mod scope;
 mod strict_php_mode;

@@ -1,11 +1,11 @@
 ---
-title: "mysqli_field_count() — internals"
+title: "mysqli_field_count() - internals"
 description: "Compiler internals for mysqli_field_count(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 124
 ---
 
-## `mysqli_field_count()` — internals
+## `mysqli_field_count()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_field_count(mixed $mysql): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

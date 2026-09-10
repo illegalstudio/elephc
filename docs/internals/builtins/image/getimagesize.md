@@ -1,11 +1,11 @@
 ---
-title: "getimagesize() — internals"
+title: "getimagesize() - internals"
 description: "Compiler internals for getimagesize(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 451
 ---
 
-## `getimagesize()` — internals
+## `getimagesize()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function getimagesize(string $filename): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

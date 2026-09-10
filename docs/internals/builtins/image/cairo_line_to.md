@@ -1,11 +1,11 @@
 ---
-title: "cairo_line_to() — internals"
+title: "cairo_line_to() - internals"
 description: "Compiler internals for cairo_line_to(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 411
 ---
 
-## `cairo_line_to()` — internals
+## `cairo_line_to()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_line_to(mixed $context, float $x, float $y): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

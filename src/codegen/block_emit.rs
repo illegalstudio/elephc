@@ -10,6 +10,7 @@
 //!   explicit unsupported-feature errors for control flow not lowered yet.
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
+//! - Native destructor frames publish local cleanup activations outside library boundaries too.
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
@@ -86,6 +87,7 @@ pub(super) fn emit_module(
         }
     }
     function_variants::emit_dispatchers(module, emitter, data);
+    super::shared_mbstring_callable::emit(module, emitter, data, &mut shared)?;
     // Emitted before the module's own bodies so every string context that calls them is
     // lowered against helpers that already exist.
     super::shared_mixed_string::emit_shared_mixed_string_helpers(
@@ -380,7 +382,7 @@ fn is_property_init_thunk(function: &Function) -> bool {
     function.name.starts_with("_class_propinit_")
 }
 
-/// Emits a class method using the legacy runtime metadata symbol shape.
+/// Emits a class method and gives runtime-called destructors exceptional local cleanup.
 fn emit_class_method(
     module: &Module,
     function: &Function,
@@ -408,7 +410,7 @@ fn emit_class_method(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        emitter.cdylib_boundary || frame::is_destructor(function),
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -938,6 +940,14 @@ fn emit_main_function(
     }
     if requires_elephc_tls {
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
+    }
+    if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
+        if module.mbstring_startup.is_some() {
+            abi::emit_call_label(ctx.emitter, "__rt_mbstring_startup");
+        }
+        // This entry runs once per CLI invocation or once per web request. Eval fragments
+        // enter below it, preserving the same request settings and encoding lookup cache.
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_request_reset");
     }
     // Enum cases are NOT initialized here any more: each case now materializes on
     // its first evaluation through `super::enum_singletons`, so a case that user

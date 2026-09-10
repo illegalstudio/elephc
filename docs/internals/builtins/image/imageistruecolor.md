@@ -1,11 +1,11 @@
 ---
-title: "imageistruecolor() — internals"
+title: "imageistruecolor() - internals"
 description: "Compiler internals for imageistruecolor(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 513
 ---
 
-## `imageistruecolor()` — internals
+## `imageistruecolor()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imageistruecolor(mixed $image): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

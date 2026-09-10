@@ -12,6 +12,19 @@ use super::*;
 
 #[cfg(not(test))]
 impl ElephcRuntimeOps {
+    /// Converts protected cleanup statuses to ordinary eval exception propagation.
+    pub(super) fn handle_native_cleanup_status(&self, status: u64) -> Result<(), EvalStatus> {
+        match status {
+            0 => Ok(()),
+            2 => {
+                let thrown = self.take_pending_native_throwable().ok_or(EvalStatus::RuntimeFatal)?;
+                self.schedule_pending_throw(thrown)?;
+                Err(EvalStatus::UncaughtThrowable)
+            },
+            _ => Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
     /// Converts a generated native method-call result into an eval result status.
     pub(super) fn handle_native_call_result(
         &self,
@@ -27,13 +40,16 @@ impl ElephcRuntimeOps {
             })
     }
 
-    /// Takes a native Throwable that escaped through the generated constructor bridge.
+    /// Moves a native pending Throwable owner into one eval box without retaining a second owner.
     pub(super) fn take_pending_native_throwable(&self) -> Option<RuntimeCellHandle> {
         let thrown = unsafe { __elephc_eval_value_take_pending_throwable() };
         if thrown.is_null() {
             None
         } else {
-            Self::object_from_raw(thrown).ok()
+            let boxed = Self::object_from_raw(thrown).ok();
+            // The box retains its payload; consume the raw owner transferred out of `_exc_value`.
+            unsafe { __elephc_eval_value_release_raw_heap_word(thrown as u64); }
+            boxed
         }
     }
 

@@ -198,7 +198,7 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     let signature_owner = bridge_scope.unwrap_or(class_name);
     let signature = context.native_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
-    let bound_args =
+    let (bound_args, defaults) =
         bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
     let result = if let Some(scope) = bridge_scope {
         eval_native_method_call_with_scope(
@@ -214,9 +214,10 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
         values.method_call(object, method_name, native_bound_arg_values(&bound_args))
     };
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
-    match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(result), Ok(())) => eval_declared_native_return_value(
+    let cleanup = release_native_call_defaults(defaults, values);
+    match (result, writeback, cleanup) {
+        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
+        (Ok(result), Ok(()), Ok(())) => eval_declared_native_return_value(
             return_type.as_ref(),
             Some(signature_owner),
             called_class_scope.or(Some(class_name)),
@@ -385,7 +386,7 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     let signature_owner = bridge_scope.unwrap_or(class_name);
     let signature = context.native_static_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
-    let bound_args =
+    let (bound_args, defaults) =
         bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
     let result = if let Some(scope) = bridge_scope {
         eval_native_static_method_call_with_scope(
@@ -401,9 +402,10 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
         values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
     };
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
-    match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(result), Ok(())) => eval_declared_native_return_value(
+    let cleanup = release_native_call_defaults(defaults, values);
+    match (result, writeback, cleanup) {
+        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
+        (Ok(result), Ok(()), Ok(())) => eval_declared_native_return_value(
             return_type.as_ref(),
             Some(signature_owner),
             called_class_scope.or(Some(class_name)),

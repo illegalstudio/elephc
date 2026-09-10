@@ -649,6 +649,34 @@ fn validate_typed_runtime_call(
     let Some(Immediate::RuntimeCall(target)) = inst.immediate else {
         return Ok(());
     };
+    if target == crate::ir::RuntimeCallTarget::ExceptionGuardOwned {
+        check_count(inst_id, inst, 2, "owned heap value and insertion token")?;
+        check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+        let operand = inst.operands[0];
+        let source = function.value(operand).ok_or(ValidationError::UnknownValue(operand))?;
+        if !Ownership::php_type_needs_lifetime_tracking(&source.php_type) {
+            return Err(ValidationError::OperandTypeMismatch {
+                inst: inst_id, operand, expected: "owned heap value", actual: source.ir_type,
+            });
+        }
+        let token = inst.result.ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+        if inst.result_type != IrType::I64 { return Err(ValidationError::ResultTypeMismatch(token)); }
+        if function.value(token).ok_or(ValidationError::UnknownValue(token))?.php_type != PhpType::Int {
+            return Err(ValidationError::PhpTypeMismatch(token));
+        }
+        return Ok(());
+    }
+    if matches!(target, crate::ir::RuntimeCallTarget::ProfiledFunction {
+        arguments: crate::ir::RuntimeArgumentLayout::IndexedArray, ..
+    }) {
+        check_count(inst_id, inst, 1, "one packed argument array")?;
+        check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+        let operand = inst.operands[0];
+        if function.value(operand).ok_or(ValidationError::UnknownValue(operand))?.php_type
+            != PhpType::Array(Box::new(PhpType::Mixed)) {
+            return Err(ValidationError::PhpTypeMismatch(operand));
+        }
+    }
     let signature = target
         .signature()
         .ok_or(ValidationError::UnknownRuntimeCallSignature(inst_id))?;

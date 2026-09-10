@@ -16,6 +16,17 @@ pub(in crate::interpreter) fn eval_property_get_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_property_get_result_with_ownership(object, property_name, context, values, None)
+}
+
+/// Reads a property while optionally retaining reference-backed values for a native caller.
+pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    owned: Option<&mut Vec<RuntimeCellHandle>>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
     };
@@ -143,7 +154,10 @@ pub(in crate::interpreter) fn eval_property_get_result(
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
     {
-        return eval_reference_target_value(&target, context, values);
+        return match owned {
+                Some(owners) => eval_owned_reference_target_value(&target, context, values, owners),
+                None => eval_reference_target_value(&target, context, values),
+            };
     }
     values.property_get(object, &storage_property_name)
 }

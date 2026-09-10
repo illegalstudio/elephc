@@ -1,11 +1,11 @@
 ---
-title: "cairo_pattern_create_rgb() — internals"
+title: "cairo_pattern_create_rgb() - internals"
 description: "Compiler internals for cairo_pattern_create_rgb(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 426
 ---
 
-## `cairo_pattern_create_rgb()` — internals
+## `cairo_pattern_create_rgb()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_pattern_create_rgb(float $red, float $green, float $blue): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

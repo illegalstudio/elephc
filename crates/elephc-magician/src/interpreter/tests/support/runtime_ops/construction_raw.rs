@@ -66,6 +66,21 @@ macro_rules! impl_fake_construction_raw_ops {
     fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus> {
         self.runtime_array_len(array)
     }
+    /// Uses fake storage history for automatic keys instead of recreating interpreter key scans.
+    fn array_next_index(&mut self, array: RuntimeCellHandle) -> Result<Option<i64>, EvalStatus> {
+        self.runtime_array_next_index(array)
+    }
+    /// Preserves fake storage history after rebuilding an unset array.
+    fn array_copy_index_history(&mut self, source: RuntimeCellHandle, destination: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        let mut source = source;
+        while let Some(current) = self.references.get(&(source.as_ptr() as usize)) { source = *current; }
+        let next = match self.get(source) {
+            FakeValue::Array(elements) if !elements.is_empty() => elements.len() as i64,
+            _ => *self.array_next_indices.get(&(source.as_ptr() as usize)).unwrap_or(&i64::MIN),
+        };
+        self.array_next_indices.insert(destination.as_ptr() as usize, next);
+        Ok(())
+    }
     /// Returns whether a fake runtime cell is an indexed or associative array.
     fn is_array_like(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         self.runtime_is_array_like(value)

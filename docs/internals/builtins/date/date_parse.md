@@ -1,11 +1,11 @@
 ---
-title: "date_parse() — internals"
+title: "date_parse() - internals"
 description: "Compiler internals for date_parse(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 205
 ---
 
-## `date_parse()` — internals
+## `date_parse()` - internals
 
 ## Where it lives
 

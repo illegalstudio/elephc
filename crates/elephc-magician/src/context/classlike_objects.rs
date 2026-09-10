@@ -398,27 +398,6 @@ impl ElephcEvalContext {
             .remove(&(identity, storage_property_name.to_string()))
     }
 
-    /// Binds one runtime array element slot to a PHP reference target.
-    pub fn bind_array_element_alias(
-        &mut self,
-        array: RuntimeCellHandle,
-        key: EvalArrayReferenceKey,
-        target: EvalReferenceTarget,
-    ) -> Option<EvalReferenceTarget> {
-        self.array_element_aliases
-            .insert((array.as_ptr() as usize, key), target)
-    }
-
-    /// Returns the persistent reference target bound to one runtime array element slot.
-    pub fn array_element_alias(
-        &self,
-        array: RuntimeCellHandle,
-        key: &EvalArrayReferenceKey,
-    ) -> Option<&EvalReferenceTarget> {
-        self.array_element_aliases
-            .get(&(array.as_ptr() as usize, key.clone()))
-    }
-
     /// Marks one eval object storage slot as initialized.
     pub fn mark_dynamic_property_initialized(
         &mut self,

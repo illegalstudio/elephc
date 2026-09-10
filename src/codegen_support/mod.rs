@@ -25,6 +25,7 @@ pub(crate) mod emit;
 pub(crate) mod hash_crypto;
 pub(crate) mod iconv_bridge;
 pub(crate) mod interface_wrappers;
+pub(crate) mod mbstring_query;
 pub(crate) mod phar_stream;
 /// Platform module.
 pub mod platform;

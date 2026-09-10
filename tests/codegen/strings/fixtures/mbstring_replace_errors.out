@@ -1,0 +1,32 @@
+ArgumentCountError:mb_ereg_replace() expects at least 3 arguments, 0 given
+ArgumentCountError:mb_ereg_replace() expects at least 3 arguments, 2 given
+ArgumentCountError:mb_ereg_replace() expects at most 4 arguments, 5 given
+TypeError:mb_ereg_replace(): Argument #1 ($pattern) must be of type string, array given
+TypeError:mb_ereg_replace(): Argument #2 ($replacement) must be of type string, array given
+TypeError:mb_ereg_replace(): Argument #3 ($string) must be of type string, array given
+TypeError:mb_ereg_replace(): Argument #4 ($options) must be of type ?string, array given
+bool(false)
+ValueError:Option "Q" is not supported
+NULL
+string(0) ""
+string(2) "42"
+string(1) "X"
+string(1) "A"
+string(1) "A"
+bool(false)
+ArgumentCountError:mb_eregi_replace() expects at least 3 arguments, 0 given
+ArgumentCountError:mb_eregi_replace() expects at least 3 arguments, 2 given
+ArgumentCountError:mb_eregi_replace() expects at most 4 arguments, 5 given
+TypeError:mb_eregi_replace(): Argument #1 ($pattern) must be of type string, array given
+TypeError:mb_eregi_replace(): Argument #2 ($replacement) must be of type string, array given
+TypeError:mb_eregi_replace(): Argument #3 ($string) must be of type string, array given
+TypeError:mb_eregi_replace(): Argument #4 ($options) must be of type ?string, array given
+bool(false)
+ValueError:Option "Q" is not supported
+NULL
+string(0) ""
+string(2) "42"
+string(1) "X"
+string(1) "X"
+string(1) "X"
+bool(false)

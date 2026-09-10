@@ -1,11 +1,11 @@
 ---
-title: "imageaffinematrixconcat() — internals"
+title: "imageaffinematrixconcat() - internals"
 description: "Compiler internals for imageaffinematrixconcat(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 456
 ---
 
-## `imageaffinematrixconcat()` — internals
+## `imageaffinematrixconcat()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imageaffinematrixconcat(array $matrix1, array $matrix2): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "cairo_pattern_create_radial() — internals"
+title: "cairo_pattern_create_radial() - internals"
 description: "Compiler internals for cairo_pattern_create_radial(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 425
 ---
 
-## `cairo_pattern_create_radial()` — internals
+## `cairo_pattern_create_radial()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_pattern_create_radial(float $cx0, float $cy0, float $radius0, flo
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

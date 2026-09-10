@@ -946,7 +946,6 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
 
 
 RUNTIME_HELPER_OVERRIDES: Dict[str, List[str]] = {
-    "mb_ereg_match": ["__rt_mb_ereg_match"],
 }
 
 

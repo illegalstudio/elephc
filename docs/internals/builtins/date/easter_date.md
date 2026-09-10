@@ -1,11 +1,11 @@
 ---
-title: "easter_date() — internals"
+title: "easter_date() - internals"
 description: "Compiler internals for easter_date(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 216
 ---
 
-## `easter_date()` — internals
+## `easter_date()` - internals
 
 ## Where it lives
 

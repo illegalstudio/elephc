@@ -9,6 +9,7 @@
 //!   allocation, preserving bucket addresses, payload ownership, and COW boundaries.
 //! - Equal operands are always taken from the left run, preserving PHP 8 sort stability.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::sentinels::NULL_SENTINEL;
@@ -57,7 +58,7 @@ fn emit_sort_links(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #112]");                            // preserve frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish the merge-sort frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the hash-table pointer
-    emitter.instruction("add x9, x0, #40");                                     // compute the first hash-entry address
+    hash_layout::emit_entries(emitter, "x9", "x0");
     emitter.instruction("str x9, [sp, #8]");                                    // save the entries-region base
     emitter.instruction("str x1, [sp, #16]");                                   // save direction and key/value mode bits
     emitter.instruction("mov x9, #1");                                          // seed the first pass with one-entry runs

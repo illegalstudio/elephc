@@ -398,11 +398,11 @@ impl<'a> Lexer<'a> {
                     '\'' => out.push('\''),
                     other => {
                         out.push('\\');
-                        out.push(other);
+                        elephc_builtin_contract::string_literal::push_literal_char(other, &mut out);
                     }
                 }
             } else {
-                out.push(ch);
+                elephc_builtin_contract::string_literal::push_literal_char(ch, &mut out);
             }
         }
         Err(EvalParseError::UnterminatedString)

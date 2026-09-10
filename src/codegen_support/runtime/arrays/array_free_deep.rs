@@ -9,8 +9,10 @@
 //! - Deep free helpers recursively release owned child storage and must match the heap kind/tag layout exactly.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 use crate::codegen_support::platform::Arch;
 
+const CLEANUP: Scope = Scope { arm: 16, x86: 48 };
 
 /// Emits `__rt_array_free_deep` and `__rt_array_free_deep_done` helpers.
 ///
@@ -18,7 +20,7 @@ use crate::codegen_support::platform::Arch;
 /// dispatching on architecture. For ARM64 emits the full helper inline; for x86_64 Linux
 /// delegates to `emit_array_free_deep_linux_x86_64`. Child payloads (strings, nested
 /// arrays, objects, boxed mixed) are released through `__rt_decref_any`. The collector
-/// run suppression flag is set before the walk and cleared before freeing the struct.
+/// run suppression flag is set before the walk and restored after freeing the struct.
 ///
 /// Called from:
 /// - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`
@@ -50,13 +52,11 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_array_free_deep_done");                      // not on heap, skip
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #32");                                     // allocate stack frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // set up frame pointer
+    emitter.instruction("sub sp, sp, #48");                                     // allocate stack frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // set up frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save array pointer
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
-    emitter.instruction("mov x10, #1");                                         // ordinary deep-free walks suppress nested collector runs
-    emitter.instruction("str x10, [x9]");                                       // store release-suppressed = 1 for child cleanup
+    CLEANUP.begin(emitter);
 
     // -- load the packed runtime value_type tag for this array --
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load the full kind word from the heap header
@@ -112,11 +112,11 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("str x12, [sp, #8]");                                   // save index (reuse slot, length in x10)
     emitter.instruction("cmp x10, #10");                                        // is this slot a callable descriptor payload?
     emitter.instruction("b.eq __rt_array_free_deep_release_callable");          // callable descriptors use the descriptor release helper
-    emitter.instruction("bl __rt_decref_any");                                  // release the heap-backed slot payload if needed
+    CLEANUP.call(emitter, "__rt_decref_any", false);                            // release the heap-backed slot payload if needed
     emitter.instruction("b __rt_array_free_deep_after_release");                // skip the callable-specific release path
 
     emitter.label("__rt_array_free_deep_release_callable");
-    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the callable descriptor stored in this slot
+    CLEANUP.call(emitter, "__rt_callable_descriptor_release", false);           // release the callable descriptor stored in this slot
     emitter.label("__rt_array_free_deep_after_release");
 
     // -- advance --
@@ -129,15 +129,15 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
 
     // -- free the array struct itself --
     emitter.label("__rt_array_free_deep_struct");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
-    emitter.instruction("str xzr, [x9]");                                       // clear release suppression before freeing the container storage
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array pointer
     emitter.instruction("bl __rt_heap_free");                                   // free array struct
+    CLEANUP.finish(emitter);
 
     // -- restore frame --
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_array_free_deep_done");
     emitter.instruction("ret");                                                 // return
 }
@@ -174,10 +174,9 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_array_free_deep_done");                       // other heap kinds must not be released through the indexed-array deep-free helper
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving indexed-array deep-free spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved array pointer, length, and loop index
-    emitter.instruction("sub rsp, 32");                                         // reserve local storage for the array pointer, logical length, and loop index. 32, NOT the 24 those three slots need: `push rbp` already moved rsp to a 16-byte boundary, so subtracting 24 would leave every `call` below misaligned by 8 and hand the callee a stack SysV forbids — harmless for the hand-written helpers, fatal once one of them reaches C (a `CurlHandle` element releases through __rt_decref_any -> __rt_mixed_free_deep -> __rt_curl_easy_free -> the elephc_curl bridge, whose SSE spills then fault)
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned pointer, loop, and deferred-cleanup state
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the indexed-array pointer across nested decref_any and heap_free calls
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
-    emitter.instruction("mov QWORD PTR [r10], 1");                              // suppress nested collector runs while this indexed-array deep-free walk releases child payloads
+    CLEANUP.begin(emitter);
     emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load the full stamped heap kind word again so the packed indexed-array value_type tag can be inspected
     emitter.instruction("shr rcx, 8");                                          // move the packed indexed-array value_type tag into the low bits
     emitter.instruction("and ecx, 0x7f");                                       // isolate the indexed-array value_type tag without the persistent COW bit
@@ -226,23 +225,23 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_free_deep_release");
     emitter.instruction("cmp ecx, 10");                                         // is this slot a callable descriptor payload?
     emitter.instruction("je __rt_array_free_deep_release_callable");            // callable descriptors use the descriptor release helper
-    emitter.instruction("call __rt_decref_any");                                // release the heap-backed child payload if the current indexed-array slot owns one
+    CLEANUP.call(emitter, "__rt_decref_any", false);                            // release the heap-backed child payload if the current indexed-array slot owns one
     emitter.instruction("jmp __rt_array_free_deep_after_release");              // skip the callable-specific release path
 
     emitter.label("__rt_array_free_deep_release_callable");
-    emitter.instruction("call __rt_callable_descriptor_release");               // release the callable descriptor stored in this slot
+    CLEANUP.call(emitter, "__rt_callable_descriptor_release", false);           // release the callable descriptor stored in this slot
     emitter.label("__rt_array_free_deep_after_release");
     emitter.instruction("add QWORD PTR [rbp - 24], 1");                         // advance the indexed-array loop index to the next logical slot
     emitter.instruction("jmp __rt_array_free_deep_loop");                       // continue scanning indexed-array slots until every owned child payload is released
 
     emitter.label("__rt_array_free_deep_struct");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the indexed-array pointer after finishing the optional child cleanup pass
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
-    emitter.instruction("mov QWORD PTR [r10], 0");                              // re-enable targeted collector runs now that the indexed-array deep-free walk is complete
     emitter.instruction("call __rt_heap_free");                                 // release the indexed-array storage itself through the x86_64 heap wrapper
-    emitter.instruction("add rsp, 32");                                         // release the spill slots reserved for the indexed-array deep-free scan state (32, matching the aligned reservation above)
+    CLEANUP.finish(emitter);
+    emitter.instruction("add rsp, 48");                                         // release the spill slots reserved for the indexed-array deep-free scan state (48, including deferred exception state)
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_array_free_deep_done");
     emitter.instruction("ret");                                                 // return to the caller after releasing the indexed array and any owned heap-backed elements
 }

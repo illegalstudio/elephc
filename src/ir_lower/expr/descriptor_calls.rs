@@ -27,7 +27,8 @@ pub(super) fn lower_literal_callable_array_expr_call(
     instance_array_callable_target(ctx, items)?;
     let lowered_callee = lower_expr(ctx, callee);
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
-    let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
+    guard_owned_descriptor_callback(ctx, lowered_callee, expr.span);
+    let arg_container = lower_guarded_descriptor_invoker_arg_container(ctx, args, expr.span)?;
     Some(emit_callable_descriptor_invoke(
         ctx,
         lowered_callee,
@@ -45,8 +46,9 @@ pub(super) fn lower_expr_call_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_callable_result_type(ctx, callee.value, expr);
+    guard_owned_descriptor_callback(ctx, callee, expr.span);
     if let Some(arg_container) =
-        lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+        lower_guarded_descriptor_invoker_arg_container(ctx, args, expr.span)
     {
         return emit_callable_descriptor_invoke(ctx, callee, arg_container, result_type, expr.span);
     }
@@ -69,9 +71,27 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     span: Span,
 ) -> Option<LoweredValue> {
     if crate::types::call_args::has_named_args(args) {
-        return Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span));
+        return Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span, false));
     }
-    Some(lower_untyped_descriptor_invoker_indexed_container(ctx, args, span))
+    Some(lower_untyped_descriptor_invoker_indexed_container(ctx, args, span, false))
+}
+
+/// Protects a descriptor container from its first allocation through argument evaluation and invocation.
+pub(super) fn lower_guarded_descriptor_invoker_arg_container(
+    ctx: &mut LoweringContext<'_, '_>, args: &[Expr], span: Span,
+) -> Option<LoweredValue> {
+    if crate::types::call_args::has_named_args(args) {
+        Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span, true))
+    } else {
+        Some(lower_untyped_descriptor_invoker_indexed_container(ctx, args, span, true))
+    }
+}
+
+/// Publishes one container guard without changing a surrounding call's parameter capture group.
+pub(super) fn guard_descriptor_container(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
+    ctx.begin_argument_guard_scope();
+    ctx.guard_call_argument(value, 0, span);
+    ctx.end_argument_guard_scope();
 }
 
 /// Builds an indexed descriptor-invoker container for signature-unknown calls.
@@ -79,6 +99,7 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
+    guarded: bool,
 ) -> LoweredValue {
     let elem_ty = PhpType::Mixed;
     let array_ty = PhpType::Array(Box::new(elem_ty.clone()));
@@ -90,6 +111,7 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    if guarded { guard_descriptor_container(ctx, array, span); }
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
             let source = lower_expr(ctx, inner);
@@ -104,6 +126,7 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
+        ctx.refresh_argument_array_guard(array, arg.span);
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
     }
     array
@@ -114,6 +137,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
+    guarded: bool,
 ) -> LoweredValue {
     let hash_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
@@ -127,6 +151,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
         Op::HashNew.default_effects(),
         Some(span),
     );
+    if guarded { guard_descriptor_container(ctx, hash, span); }
     let mut next_positional_key = emit_i64_at_span(ctx, 0, span);
     for arg in args {
         match &arg.kind {
@@ -140,6 +165,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
                     Op::HashSet.default_effects(),
                     Some(arg.span),
                 );
+                release_value_after_retaining_insert(ctx, Some(&PhpType::Mixed), value, arg.span);
             }
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
@@ -161,6 +187,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
                     Op::HashSet.default_effects(),
                     Some(arg.span),
                 );
+                release_value_after_retaining_insert(ctx, Some(&PhpType::Mixed), value, arg.span);
                 let one = emit_i64_at_span(ctx, 1, arg.span);
                 next_positional_key = ctx.emit_value(
                     Op::IAdd,
@@ -173,7 +200,10 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             }
         }
     }
-    ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span))
+    if guarded { ctx.unguard_call_argument(hash.value, span); }
+    let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span));
+    if guarded { guard_descriptor_container(ctx, boxed, span); }
+    boxed
 }
 
 /// Copies an indexed spread source into a descriptor-invoker hash with numeric keys.
@@ -328,6 +358,7 @@ pub(super) fn lower_first_class_callable_expr_call(
 ) -> Option<LoweredValue> {
     match &callee.kind {
         ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            if builtin_callable_needs_runtime_arity(name, args) { return None; }
             Some(lower_function_call(ctx, name, args, expr))
         }
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
@@ -337,12 +368,13 @@ pub(super) fn lower_first_class_callable_expr_call(
             let signature = static_callable_binding_for_expr(ctx, callee)
                 .and_then(|target| signature_for_static_callable_binding(ctx, target));
             let callable = lower_first_class_callable(ctx, target, callee);
+            guard_owned_descriptor_callback(ctx, callable, expr.span);
             let result_type = signature
                 .as_ref()
                 .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
                 .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
             let arg_container =
-                lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
+                lower_guarded_descriptor_invoker_arg_container(ctx, args, expr.span)?;
             Some(emit_callable_descriptor_invoke(
                 ctx,
                 callable,
@@ -354,4 +386,3 @@ pub(super) fn lower_first_class_callable_expr_call(
         _ => None,
     }
 }
-

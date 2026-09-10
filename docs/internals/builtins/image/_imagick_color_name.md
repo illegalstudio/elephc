@@ -1,11 +1,11 @@
 ---
-title: "_imagick_color_name() — internals"
+title: "_imagick_color_name() - internals"
 description: "Compiler internals for _imagick_color_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1066
+  order: 1128
 ---
 
-## `_imagick_color_name()` — internals
+## `_imagick_color_name()` - internals
 
 ## Where it lives
 
@@ -38,8 +38,8 @@ function _imagick_color_name(string $name): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

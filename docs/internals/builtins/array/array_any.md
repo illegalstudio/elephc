@@ -1,16 +1,16 @@
 ---
-title: "array_any() — internals"
+title: "array_any() - internals"
 description: "Compiler internals for array_any(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 2
 ---
 
-## `array_any()` — internals
+## `array_any()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_any.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_any.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,7 +48,7 @@ function array_any(mixed $array, mixed $callback): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

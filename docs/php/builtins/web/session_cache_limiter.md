@@ -2,7 +2,7 @@
 title: "session_cache_limiter()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 887
+  order: 948
 ---
 
 ## session_cache_limiter()
@@ -23,7 +23,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 
