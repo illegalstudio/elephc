@@ -10,6 +10,25 @@
 
 use crate::ir::print_module;
 
+/// Nullable integer keys use their inline tag for hash reads and probes on every ABI.
+#[test]
+fn nullable_integer_hash_keys_lower_on_every_target() {
+    let source = r#"<?php
+function nullableKeyProbe(array $items, ?int $key): bool { return isset($items[$key]); }
+function nullableKeyRead(array $items, ?int $key): mixed { return $items[$key]; }
+$items = ['' => 9, 0 => 10];
+echo nullableKeyProbe($items, $argc > 1 ? null : 0), nullableKeyRead($items, null);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("tagged_hash_key_null"), "{target}");
+    }
+}
+
 /// Scalar and descriptor writes stamp the post-COW array returned by the shared word helpers.
 #[test]
 fn indexed_array_word_writes_preserve_semantic_tags_on_every_target() {

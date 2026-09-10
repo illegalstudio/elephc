@@ -448,3 +448,19 @@ Build, test compilation, assembly-comment alignment, all generated-document
 audits and diff hygiene pass. The documentation skill updated the membership
 callable policy in the registry and internal reference. No local tests were
 executed; executable membership behavior and heap cleanup still await CI.
+
+### Nullable integer hash keys
+
+The completed Linux x86_64 shard 14 reports an unsupported TaggedScalar hash
+key. Both target materializers now decode the inline tag/payload pair: a real
+integer stays an integer key, while null selects the empty string key. This
+does not reinterpret the pair as a boxed pointer. Expanded the existing isset
+regression to distinguish null from zero and null-valued entries. Additional
+coverage exercises read/write/unset, caller alias preservation, heap cleanup
+and code emission on all five targets.
+
+Build, test compilation, assembly-comment alignment and diff hygiene pass.
+No tests were executed locally. A fresh origin fetch still finds main at
+b068c2b7d, already included in the branch. Linux x86_64 shard 15 additionally
+confirms that the hydration cleanup-throw failure remains on that platform;
+the earlier ARM64 shard result does not establish cross-target recovery.

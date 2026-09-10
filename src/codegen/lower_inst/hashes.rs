@@ -724,6 +724,20 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
+        PhpType::TaggedScalar => {
+            let null = ctx.next_label("tagged_hash_key_null");
+            let done = ctx.next_label("tagged_hash_key_done");
+            ctx.load_value_to_result(key)?;
+            ctx.emitter.instruction("cmp x1, #8");                              // the inline tag distinguishes PHP null from integer zero
+            ctx.emitter.instruction(&format!("b.eq {null}"));                   // null becomes the empty string key, not an integer key
+            ctx.emitter.instruction("mov x1, x0");                              // preserve the non-null integer payload as key_lo
+            abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&null);
+            emit_empty_string_hash_key_aarch64(ctx);
+            ctx.emitter.label(&done);
+            Ok(())
+        }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "d0")?;
             abi::emit_php_float_to_int(ctx.emitter, "x1");
@@ -758,6 +772,20 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.load_value_to_reg(key, "rsi")?;
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            let null = ctx.next_label("tagged_hash_key_null");
+            let done = ctx.next_label("tagged_hash_key_done");
+            ctx.load_value_to_result(key)?;
+            ctx.emitter.instruction("cmp rdx, 8");                              // the inline tag distinguishes PHP null from integer zero
+            ctx.emitter.instruction(&format!("je {null}"));                     // null becomes the empty string key, not an integer key
+            ctx.emitter.instruction("mov rsi, rax");                            // preserve the non-null integer payload as key_lo
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&null);
+            emit_empty_string_hash_key_x86_64(ctx);
+            ctx.emitter.label(&done);
             Ok(())
         }
         PhpType::Float => {
