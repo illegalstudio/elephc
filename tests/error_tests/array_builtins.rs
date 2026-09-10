@@ -538,6 +538,17 @@ fn test_error_array_column_wrong_args() {
     );
 }
 
+/// Proven array support does not authorize scalar receivers or unrestricted Mixed values.
+#[test]
+fn test_error_array_column_rejects_unproven_array_receivers() {
+    for source in [
+        "<?php array_column(42, 'id');",
+        "<?php function readColumn(mixed $value): array { return array_column($value, 'id'); } readColumn(42);",
+    ] {
+        expect_error(source, "array_column() first argument must be array");
+    }
+}
+
 /// Verifies that error array map wrong args.
 #[test]
 fn test_error_array_map_wrong_args() {

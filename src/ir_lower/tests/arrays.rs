@@ -10,6 +10,27 @@
 
 use crate::ir::print_module;
 
+/// Declared array inputs select column extraction that understands both container layouts.
+#[test]
+fn declared_array_columns_use_boxed_row_lookup_on_every_target() {
+    let source = r#"<?php
+function readDeclaredColumn(array $rows, string $key): array {
+    return array_column($rows, $key);
+}
+echo readDeclaredColumn([["id" => 17]], "id")[0];
+echo readDeclaredColumn(["row" => ["id" => 23]], "id")[0];
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        assert!(asm.contains("__rt_array_column_boxed"), "{target}");
+    }
+}
+
 /// Declared array splice results remain boxed arrays at the caller and return boundaries.
 #[test]
 fn declared_array_splice_results_keep_the_boxed_contract_on_every_target() {

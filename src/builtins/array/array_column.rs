@@ -5,10 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` reproduces the legacy rule: the first argument must be an `Array` of
-//!   associative arrays; the result is an indexed `Array` of the associative value
-//!   type. Other shapes are rejected. A check hook is required because the return type
-//!   depends on the inferred argument type.
+//! - Concrete associative rows preserve their value type in the indexed result.
+//!   Declared PHP arrays use runtime row lookup and return indexed Mixed cells.
 //! - Arity (exactly 2 arguments) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 //!   Note elephc only supports the 2-argument form (`array`, `column_key`).
@@ -27,12 +25,15 @@ builtin! {
 
 /// Returns the extracted-column array type for an `array_column` call.
 ///
-/// The first argument must be an `Array` of associative arrays; the result is an
-/// indexed `Array` of the associative value type. Other shapes are rejected. The
+/// Concrete associative rows determine the result element type; declared PHP
+/// arrays require runtime row lookup and return Mixed elements. The
 /// argument is re-inferred here to drive the return type; the registry already
 /// inferred every argument once for side effects, and arity (exactly 2) is pre-validated.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if ty.is_php_array() {
+        return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+    }
     match ty {
         PhpType::Array(inner) => match *inner {
             PhpType::AssocArray { value, .. } => Ok(PhpType::Array(value)),

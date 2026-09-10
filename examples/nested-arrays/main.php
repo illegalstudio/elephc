@@ -22,3 +22,10 @@ $matrix[] = [10, 11, 12];
 echo "\nAfter adding a row:\n";
 echo "Rows: " . count($matrix) . "\n";
 echo "New row: " . $matrix[3][0] . " " . $matrix[3][1] . " " . $matrix[3][2] . "\n";
+
+// Extract a report column from rows returned through the PHP array contract.
+function reportRows(): array {
+    return ["first" => ["name" => "Ada"], "second" => ["name" => "Linus"]];
+}
+$names = array_column(reportRows(), "name");
+echo "Report names: " . implode(", ", $names) . "\n";

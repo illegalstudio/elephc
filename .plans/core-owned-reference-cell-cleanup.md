@@ -840,3 +840,19 @@ retains and explicit retirement. Declared array property append instead borrows
 the cell already separated and published by PropGetForWrite, so its test checks
 that address is passed to MixedArrayAppend and is never released as an owned
 temporary. Test compilation and diff hygiene pass without local execution.
+
+### Declared array column extraction
+
+array_column now accepts proven PHP array arguments and selects a target-aware
+boxed path instead of assuming raw indexed rows. The helper uses the logical
+iterator, normalizes numeric-string keys, distinguishes missing keys from present
+nulls, and adopts owned row reads into an independent Mixed-valued indexed result.
+No user callback or warning runs while source rows are borrowed. The existing
+concrete-row helpers and the two-argument string-column scope are unchanged.
+
+Added all-target lowering/emitter coverage and heap regressions for packed/keyed
+rows, missing and null columns, string/nested/object lifetimes, COW and growth.
+Extended the nested-array example and kept negative scalar/Mixed receiver checks.
+Build, test compilation, assembly comments, generated builtin docs and contract
+audits pass. No tests ran locally. CI on 541bd9814 still reports typed callback
+array rejection and the six-block opaque usort cleanup leak, which remain open.

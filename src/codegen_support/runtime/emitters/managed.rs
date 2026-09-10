@@ -123,6 +123,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_chunk(emitter);
     arrays::emit_array_chunk_refcounted(emitter);
     arrays::emit_array_column(emitter);
+    arrays::emit_array_column_boxed(emitter);
     arrays::emit_array_column_mixed(emitter);
     arrays::emit_array_column_ref(emitter);
     arrays::emit_array_column_str(emitter);

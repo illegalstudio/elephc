@@ -51,6 +51,7 @@ mod boxed_array_spread;
 mod boxed_array_map;
 mod boxed_array_implode;
 mod boxed_array_reference_outputs;
+mod boxed_array_column;
 mod boxed_array_take;
 mod boxed_array_unshift;
 mod boxed_array_sort;

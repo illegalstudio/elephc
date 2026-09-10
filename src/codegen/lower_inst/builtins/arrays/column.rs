@@ -1,7 +1,6 @@
 //! Purpose:
 //! Lowers PHP `array_column()` builtin calls for the EIR backend.
-//! Materializes an indexed array of associative rows plus a string column key
-//! into the existing target-aware runtime extraction helpers.
+//! Selects concrete-row or boxed-array extraction with a string column key.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::arrays::lower_array_column()`.
@@ -24,10 +23,25 @@ pub(super) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
     super::super::ensure_arg_count(inst, "array_column", 2)?;
     let array = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
-    let value_ty = array_column_source_value_type(ctx.value_php_type(array)?)?;
+    let source_ty = ctx.value_php_type(array)?;
+    let boxed = source_ty.codegen_repr() == PhpType::Mixed;
+    let value_ty = if boxed {
+        PhpType::Mixed
+    } else {
+        array_column_source_value_type(source_ty)?
+    };
     require_array_column_key_type(ctx.value_php_type(key)?)?;
     let result_elem_ty = array_column_result_element_type(inst, &value_ty)?;
-    lower_array_column_call(ctx, array, key, &value_ty)?;
+    let helper = if boxed { "__rt_array_column_boxed" } else { array_column_runtime_helper(&value_ty) };
+    lower_array_column_call(ctx, array, key, helper)?;
+    if boxed {
+        let valid = ctx.next_label("array_column_boxed_valid");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
+        crate::codegen::lower_inst::exceptions::emit_type_error(
+            ctx, "array_column(): Argument #1 ($array) must be of type array",
+        );
+        ctx.emitter.label(&valid);
+    }
     super::normalize_indexed_array_result(ctx, "array_column", &value_ty, &result_elem_ty)?;
     super::box_array_result_for_mixed_builtin(ctx, inst, &result_elem_ty);
     store_if_result(ctx, inst)
@@ -89,7 +103,7 @@ fn lower_array_column_call(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     key: ValueId,
-    value_ty: &PhpType,
+    helper: &str,
 ) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -101,7 +115,7 @@ fn lower_array_column_call(
             ctx.load_string_value_to_regs(key, "rsi", "rdx")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, array_column_runtime_helper(value_ty));
+    abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
 
