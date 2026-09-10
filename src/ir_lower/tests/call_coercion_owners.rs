@@ -8,7 +8,34 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
-/// Verifies that one exact call operand is stored in a final root spanning its call.
+/// Follows ownership-only forwarding while preserving the underlying producer identity.
+fn ownership_forwarding_source(
+    function: &crate::ir::Function,
+    mut value: crate::ir::ValueId,
+) -> crate::ir::ValueId {
+    use crate::ir::{Op, ValueDef};
+
+    loop {
+        let Some(metadata) = function.value(value) else {
+            return value;
+        };
+        let ValueDef::Instruction { inst, .. } = metadata.def else {
+            return value;
+        };
+        let Some(producer) = function.instruction(inst) else {
+            return value;
+        };
+        if !matches!(producer.op, Op::Acquire | Op::Borrow | Op::Move) {
+            return value;
+        }
+        let Some(source) = producer.operands.first().copied() else {
+            return value;
+        };
+        value = source;
+    }
+}
+
+/// Verifies that one final root slot protects an ownership-equivalent operand across its call.
 fn assert_final_operand_root_spans_call(
     function: &crate::ir::Function,
     call_index: usize,
@@ -18,47 +45,60 @@ fn assert_final_operand_root_spans_call(
 ) -> crate::ir::LocalSlotId {
     use crate::ir::{Immediate, Op};
 
-    let stores = function
+    let roots = function
         .instructions
         .iter()
-        .filter(|inst| inst.op == Op::StoreLocal && inst.operands == [operand])
+        .enumerate()
+        .filter_map(|(store_index, store)| {
+            let Some(Immediate::LocalSlot(slot)) = store.immediate.as_ref() else {
+                return None;
+            };
+            if store.op != Op::StoreLocal || store_index >= call_index {
+                return None;
+            }
+            let stored = *store.operands.first()?;
+            if ownership_forwarding_source(function, stored)
+                != ownership_forwarding_source(function, operand)
+            {
+                return None;
+            }
+            let push = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+                (index > store_index
+                    && index < call_index
+                    && inst.op == Op::PushCallOperandOwner
+                    && inst.immediate == Some(Immediate::LocalSlot(*slot)))
+                .then_some(index)
+            })?;
+            let pop = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+                (index > call_index
+                    && inst.op == Op::PopCallOperandOwner
+                    && inst.immediate == Some(Immediate::LocalSlot(*slot)))
+                .then_some(index)
+            })?;
+            let release = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+                (index > pop
+                    && inst.op == Op::ReleaseLocalSlot
+                    && inst.immediate == Some(Immediate::LocalSlot(*slot)))
+                .then_some(index)
+            })?;
+            Some((*slot, stored, push, pop, release))
+        })
         .collect::<Vec<_>>();
-    assert_eq!(stores.len(), 1, "{target}: {detail} must have one final root store");
-    let Some(Immediate::LocalSlot(slot)) = stores[0].immediate else {
-        panic!("{target}: {detail} final root must name a slot");
-    };
-    let push = function
-        .instructions
-        .iter()
-        .position(|inst| {
-            inst.op == Op::PushCallOperandOwner
-                && inst.immediate == Some(Immediate::LocalSlot(slot))
-        })
-        .unwrap_or_else(|| panic!("{target}: {detail} final root must be published"));
-    let pop = function
-        .instructions
-        .iter()
-        .position(|inst| {
-            inst.op == Op::PopCallOperandOwner
-                && inst.immediate == Some(Immediate::LocalSlot(slot))
-        })
-        .unwrap_or_else(|| panic!("{target}: {detail} final root must be detached"));
-    let release = function
-        .instructions
-        .iter()
-        .position(|inst| {
-            inst.op == Op::ReleaseLocalSlot
-                && inst.immediate == Some(Immediate::LocalSlot(slot))
-        })
-        .unwrap_or_else(|| panic!("{target}: {detail} final root must be retired"));
+    assert_eq!(roots.len(), 1, "{target}: {detail} must have one final root slot");
+    let (slot, stored, push, pop, release) = roots[0];
     assert!(push < call_index && call_index < pop && pop < release, "{target}: {detail}");
+    assert_eq!(function.instructions.iter().filter(|inst| {
+        inst.op == Op::StoreLocal
+            && inst.immediate == Some(Immediate::LocalSlot(slot))
+            && inst.operands == [stored]
+    }).count(), 1, "{target}: {detail} final root value must be stored once");
     for op in [Op::PushCallOperandOwner, Op::PopCallOperandOwner, Op::ReleaseLocalSlot] {
         assert_eq!(function.instructions.iter().filter(|inst| {
             inst.op == op && inst.immediate == Some(Immediate::LocalSlot(slot))
         }).count(), 1, "{target}: {detail} must contain one {op:?}");
     }
     assert!(!function.instructions.iter().any(|inst| {
-        inst.op == Op::Release && inst.operands == [operand]
+        inst.op == Op::Release && (inst.operands == [operand] || inst.operands == [stored])
     }), "{target}: {detail} final rooted SSA must not also be released directly");
     slot
 }
@@ -121,6 +161,15 @@ invokeMergedCallback($argc, "");
                 operand,
                 target,
                 "extracted callable descriptor",
+            );
+            assert_eq!(
+                function
+                    .instructions
+                    .iter()
+                    .filter(|inst| inst.op == Op::Release && inst.operands == [value])
+                    .count(),
+                1,
+                "{target}: extracted descriptor must transfer exactly once into its final root",
             );
         }
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();

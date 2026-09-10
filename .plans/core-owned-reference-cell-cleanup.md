@@ -2165,3 +2165,17 @@ five-target managed-cell ownership coverage and a heap/tagged regression that
 unsets the original name before reading the returned alias. Existing boxed walk
 reference-return coverage remains intact. Cargo check --tests, assembly-comment
 alignment and diff hygiene pass. No local tests execute.
+
+### Honor the retained descriptor owner extracted from Mixed callable storage
+
+The runtime-selected comparator leaks its retained descriptor because an explicit
+owned MixedUnbox callable producer was absent from the temporary-owner classifier.
+Recognize exactly this producer and representation, without changing borrowed
+Mixed projections of other types. Final call roots now retire the descriptor
+normally and on unwind. Correlate structural assertions through ownership-only
+forwarding and require a single transfer release of the extracted descriptor.
+
+Native Sol traced the 80-byte CI residue to this missing owner classification.
+Cargo check --tests, exporter build, documentation and target-boundary audits,
+assembly-comment alignment and diff hygiene pass. Generated docs are unchanged.
+No local tests execute; the comparator fixtures remain the runtime gate.
