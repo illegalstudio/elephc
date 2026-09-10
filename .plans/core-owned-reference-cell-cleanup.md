@@ -1805,3 +1805,11 @@ PHP-array input and Mixed result instead of the superseded integer-array ABI.
 Regenerate the seven affected internals pages and registry through the builtin
 docs skill. Build, test compilation, all three docs/boundary audits and diff
 hygiene pass. No local test runs; the monitoring-policy gate still needs CI.
+
+### Pin comparator diagnostic positions for both inputs
+
+Grok confirmed that the uintersect error assertion predates the shared checker:
+the implementation now numbers either invalid array operand, while the fixture
+still expected the old first-argument wording. Update that expectation without
+changing acceptance or runtime behavior, and add both operand positions for
+udiff and uintersect. Cargo check --tests and diff hygiene pass; tests are CI-only.

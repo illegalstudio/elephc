@@ -876,8 +876,21 @@ fn test_error_array_udiff_wrong_args() {
 fn test_error_array_uintersect_non_array() {
     expect_error(
         "<?php function c($a, $b) { return 0; } array_uintersect(5, [2], \"c\");",
-        "array_uintersect() first argument must be array",
+        "array_uintersect() argument #1 must be array",
     );
+}
+
+/// Comparator set operations identify whichever array operand is invalid.
+#[test]
+fn test_error_array_set_comparators_non_array_operand_positions() {
+    for builtin in ["array_udiff", "array_uintersect"] {
+        for (arguments, position) in [("5, [2]", 1), ("[1], 5", 2)] {
+            expect_error(
+                &format!("<?php function c($a, $b) {{ return 0; }} {builtin}({arguments}, \"c\");"),
+                &format!("{builtin}() argument #{position} must be array"),
+            );
+        }
+    }
 }
 
 /// Verifies that array_multisort() with a single argument reports an arity error.
