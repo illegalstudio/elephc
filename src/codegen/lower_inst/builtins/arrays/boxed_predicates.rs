@@ -95,9 +95,16 @@ pub(super) fn acquire_callback_descriptor(
 
 /// Rejects scalar or sentinel array operands before descriptor ownership is acquired.
 pub(super) fn validate_source(ctx: &mut FunctionContext<'_>, name: &str, stack_bytes: usize) {
+    validate_source_at(ctx, &format!("{name}(): Argument #1 ($array) must be of type array"), stack_bytes, 0);
+}
+
+/// Validates a borrowed array triple at an explicit stack offset before callback normalization.
+pub(super) fn validate_source_at(
+    ctx: &mut FunctionContext<'_>, message: &str, stack_bytes: usize, offset: usize,
+) {
     let invalid = ctx.next_label("array_predicate_invalid_source");
     let valid = ctx.next_label("array_predicate_valid_source");
-    abi::emit_temporary_stack_address(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_temporary_stack_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -116,8 +123,6 @@ pub(super) fn validate_source(ctx: &mut FunctionContext<'_>, name: &str, stack_b
     abi::emit_jump(ctx.emitter, &valid);
     ctx.emitter.label(&invalid);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
-    crate::codegen::lower_inst::exceptions::emit_type_error(
-        ctx, &format!("{name}(): Argument #1 ($array) must be of type array"),
-    );
+    crate::codegen::lower_inst::exceptions::emit_type_error(ctx, message);
     ctx.emitter.label(&valid);
 }

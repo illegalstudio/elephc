@@ -1,6 +1,6 @@
 ---
 title: "array_udiff()"
-description: "Computes the difference of arrays using a callback comparator."
+description: "Returns entries from the first of exactly two arrays whose values are absent from the second according to an integer-cast callback comparator, preserving keys."
 sidebar:
   order: 41
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_udiff(array $array1, array $array2, callable $callback): array
 ```
 
-Computes the difference of arrays using a callback comparator.
+Returns entries from the first of exactly two arrays whose values are absent from the second according to an integer-cast callback comparator, preserving keys.
 
 **Parameters**:
 - `$array1` (`array`)

@@ -79,6 +79,7 @@ pub mod prev;
 pub mod range;
 pub mod reset;
 pub mod rsort;
+mod set_comparator;
 pub mod shuffle;
 pub mod sort;
 pub mod uasort;

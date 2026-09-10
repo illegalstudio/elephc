@@ -4966,9 +4966,9 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "Computes the difference of arrays using a callback comparator.",
+        summary: "Returns entries from the first of exactly two arrays whose values are absent from the second according to an integer-cast callback comparator, preserving keys.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-udiff.php"),
@@ -5009,9 +5009,9 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "Computes the intersection of arrays using a callback comparator.",
+        summary: "Returns entries from the first of exactly two arrays whose values occur in the second according to an integer-cast callback comparator, preserving keys.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-uintersect.php"),

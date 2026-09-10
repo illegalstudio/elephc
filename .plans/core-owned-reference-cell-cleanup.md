@@ -1693,3 +1693,28 @@ Both Linux architectures report empty strings in the retained-reference loop,
 with balanced allocation and release counts. Preserve the exact source and
 expected values, and include the generated program assembly in failure output.
 This is diagnostic coverage, not a claimed fix. No tests execute locally.
+
+### Complete boxed two-array comparator selection
+
+Cursor GPT 5.6 Sol completed the delegated comparator implementation and focused
+regression coverage. ArrayUdiff and ArrayUintersect now declare fresh result owners
+and conservative callback/destructor effects. Direct, CUF and FCC signatures agree
+on the boxed PHP-array result. Both inputs are validated before callback ownership
+is acquired; snapshots, candidate values, callback arguments and incomplete results
+are covered by a resumable native exception boundary. Integer-cast comparisons
+preserve first-array keys and retained nested values. The common frame also removes
+the old x86_64 misaligned-callback exception from the alignment audit.
+
+The neutral contract and generated pages describe the supported two-array form,
+not PHP's arbitrary variadic array form. Add native heap-debug/tagged coverage for
+keys, heterogeneous values, source COW, temporary ownership, callable routes,
+invalid operands and callback exceptions, plus five-target EIR/emitter assertions.
+Coordinator review also updates the manual array page and requires clean heap
+ownership for invalid-input cases. Build, test compilation, exporter generation,
+builtin audits and assembly-comment checks pass; runtime tests remain CI-only.
+
+The exact edc05ab8f CI evidence still contains six distinct Linux failures: set
+comparators, multisort, static callable-property storage, retained string capture
+values, merge descriptor cleanup and eval metadata cleanup. Grok classified the
+completed job logs; separate Cursor agents own the property fix and string-value
+diagnosis. No local tests execute and the PR remains draft, without a merge.

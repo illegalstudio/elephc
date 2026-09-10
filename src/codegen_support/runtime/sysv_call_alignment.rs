@@ -43,8 +43,8 @@ use crate::codegen_support::runtime_features::RuntimeFeatures;
 ///
 /// NOTHING HERE REACHES THE `elephc_curl` BRIDGE — that was checked, not assumed: none of
 /// these helpers calls a decref/release helper, so none of them can reach
-/// `__rt_mixed_free_deep`'s resource ladder. The three entries that DO reach code outside
-/// the hand-written runtime (`__rt_usort`, `__rt_array_udiff_uintersect`, `__rt_fiber_entry`)
+/// `__rt_mixed_free_deep`'s resource ladder. The two entries that DO reach code outside
+/// the hand-written runtime (`__rt_usort`, `__rt_fiber_entry`)
 /// are called out individually below and are the ones worth fixing first.
 const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     // -- No frame at all: the helper calls without adjusting rsp, so the callee is entered
@@ -104,16 +104,12 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
         "multi-push frame off by 8: calls __rt_concat_reserve / __rt_wordwrap_cpy_x86_64, \
          integer-only assembly",
     ),
-    // -- The three that reach code this runtime did not write. FIX THESE FIRST.
+    // -- The two that reach code this runtime did not write. FIX THESE FIRST.
     (
         "__rt_usort",
         "REACHES NON-RUNTIME CODE: `call r12` is the user's comparator, i.e. COMPILED PHP. \
          It has survived because codegen spills floats with `movsd`/`movq` (alignment-\
          tolerant) rather than `movaps`, which is luck, not design",
-    ),
-    (
-        "__rt_array_udiff_uintersect",
-        "REACHES NON-RUNTIME CODE: same `call r12` user-callback shape as __rt_usort",
     ),
     (
         "__rt_fiber_entry",

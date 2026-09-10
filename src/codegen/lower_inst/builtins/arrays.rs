@@ -42,6 +42,7 @@ mod boxed_membership;
 mod boxed_aggregate;
 mod boxed_reduce;
 mod boxed_predicates;
+mod boxed_set_comparator;
 mod boxed_reverse;
 mod boxed_mutation;
 mod boxed_unshift;
@@ -104,6 +105,7 @@ pub(crate) use reduce_sets::{
 };
 pub(crate) use boxed_reduce::lower_array_reduce;
 pub(crate) use boxed_predicates::{lower_array_find, lower_array_any, lower_array_all};
+pub(crate) use boxed_set_comparator::{lower_array_udiff, lower_array_uintersect};
 pub(crate) use misc_dispatch::{
     lower_array_values, lower_array_keys, lower_array_rand, lower_range,
     lower_array_pop, lower_array_shift, lower_array_unshift, lower_sort,
@@ -115,7 +117,7 @@ pub(crate) use misc_dispatch::{
 };
 pub(crate) use callback_builtins::{
     lower_array_walk_recursive,
-    lower_array_udiff, lower_array_uintersect, lower_array_multisort, lower_array_search,
+    lower_array_multisort, lower_array_search,
     lower_in_array,
 };
 pub(super) use in_array_cases::InArrayMode;

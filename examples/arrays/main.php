@@ -206,6 +206,18 @@ echo "High scorers: " . implode(", ", array_keys($highScores)) . "\n";
 $details = array_filter(["name" => "Ada", "nickname" => "", "language" => "PHP"]);
 echo "Available details: " . implode(", ", array_keys($details)) . "\n";
 
+// Elephc currently supports the two-array form of comparator set operations.
+// Both functions cast the callback result to int and preserve keys from the first array.
+function compare_languages(string $left, string $right): int {
+    return strcmp(strtolower($left), strtolower($right));
+}
+$available = ["primary" => "PHP", 7 => "Rust", "target" => "ARM64"];
+$used = ["php", "arm64"];
+$unused = array_udiff($available, $used, "compare_languages");
+$matched = array_uintersect($available, $used, compare_languages(...));
+echo "Unused language keys: " . implode(", ", array_keys($unused)) . "\n";
+echo "Matched language keys: " . implode(", ", array_keys($matched)) . "\n";
+
 // String array
 $langs = ["PHP", "Rust", "ARM64"];
 echo "Compiled " . $langs[0] . " to " . $langs[2] . " with " . $langs[1] . "\n";

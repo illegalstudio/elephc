@@ -870,6 +870,11 @@ impl RuntimeFnId {
                     *callback_ty = PhpType::Callable;
                 }
             }
+            RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect => {
+                // Every invocation route receives the same owned hash-capable Mixed cell.
+                // Do not let an FCC wrapper narrow that ABI to a packed Array<Mixed> pointer.
+                sig.return_type = PhpType::php_array();
+            }
             RuntimeFnId::ZvalPack => {
                 if let Some((_, value_ty)) = sig.params.get_mut(0) {
                     *value_ty = PhpType::Mixed;
@@ -950,7 +955,8 @@ impl RuntimeFnId {
         match self {
             // Callback results and snapshots can run destructors independently of the callback body.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayFind | RuntimeFnId::ArrayAny
-            | RuntimeFnId::ArrayAll | RuntimeFnId::ArrayReduce => crate::ir::Effects::all(),
+            | RuntimeFnId::ArrayAll | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayUdiff
+            | RuntimeFnId::ArrayUintersect => crate::ir::Effects::all(),
             // Unsupported entries can invoke arbitrary warning handlers, including
             // mutation of globals and destruction of the replaced source array.
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => crate::ir::Effects::from_bits_retain(
@@ -1313,15 +1319,14 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayMap
             | RuntimeFnId::ArrayWalk
-            | RuntimeFnId::ArrayWalkRecursive
-            | RuntimeFnId::ArrayUdiff
-            | RuntimeFnId::ArrayUintersect => {
+            | RuntimeFnId::ArrayWalkRecursive => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
             // of the selected callback's effect summary. Validation may also throw.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
-            | RuntimeFnId::ArrayAny | RuntimeFnId::ArrayAll => E::all(),
+            | RuntimeFnId::ArrayAny | RuntimeFnId::ArrayAll
+            | RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect => E::all(),
             RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
             ),
@@ -1875,6 +1880,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayShift
                 | RuntimeFnId::ArraySlice
                 | RuntimeFnId::ArraySum
+                // Comparator set operations always allocate a fresh hash-backed result and
+                // retain each selected value independently of both borrowed source operands.
+                | RuntimeFnId::ArrayUdiff
+                | RuntimeFnId::ArrayUintersect
                 | RuntimeFnId::ArrayUnique
                 | RuntimeFnId::ArrayValues
                 // `base64_decode()`'s result is `string|false`, so its lowering boxes BOTH

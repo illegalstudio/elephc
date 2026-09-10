@@ -33,6 +33,7 @@ mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
 mod boxed_array_predicates;
+mod boxed_array_set_comparators;
 mod reference_loop_cleanup;
 mod static_callable_string_owners;
 mod reference_cells;

@@ -17944,7 +17944,7 @@
     },
     "area": "Array",
     "canonical_name": "array_udiff",
-    "description": "Computes the difference of arrays using a callback comparator.",
+    "description": "Returns entries from the first of exactly two arrays whose values are absent from the second according to an integer-cast callback comparator, preserving keys.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -17987,6 +17987,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -17994,10 +17995,13 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
-          "may_deopt"
+          "may_deopt",
+          "blocking_io",
+          "network_io"
         ]
       },
       "lowering": {
@@ -18006,13 +18010,13 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "array_udiff"
       ],
@@ -18027,7 +18031,7 @@
       "target_support_kind": "all",
       "validation": {
         "kind": "checker_hook",
-        "lazy": false
+        "lazy": true
       }
     },
     "sig": {
@@ -18094,7 +18098,7 @@
     },
     "area": "Array",
     "canonical_name": "array_uintersect",
-    "description": "Computes the intersection of arrays using a callback comparator.",
+    "description": "Returns entries from the first of exactly two arrays whose values occur in the second according to an integer-cast callback comparator, preserving keys.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -18137,6 +18141,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -18144,10 +18149,13 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
-          "may_deopt"
+          "may_deopt",
+          "blocking_io",
+          "network_io"
         ]
       },
       "lowering": {
@@ -18156,13 +18164,13 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "array_uintersect"
       ],
@@ -18177,7 +18185,7 @@
       "target_support_kind": "all",
       "validation": {
         "kind": "checker_hook",
-        "lazy": false
+        "lazy": true
       }
     },
     "sig": {
