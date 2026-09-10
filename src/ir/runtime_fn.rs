@@ -954,9 +954,15 @@ impl RuntimeFnId {
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
             // Callback results and snapshots can run destructors independently of the callback body.
+            // Keep every observable callback effect, but classify I/O at the nested runtime
+            // boundary that performs it, not at the surrounding array operation.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayFind | RuntimeFnId::ArrayAny
             | RuntimeFnId::ArrayAll | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayUdiff
-            | RuntimeFnId::ArrayUintersect => crate::ir::Effects::all(),
+            | RuntimeFnId::ArrayUintersect => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             // Unsupported entries can invoke arbitrary warning handlers, including
             // mutation of globals and destruction of the replaced source array.
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => crate::ir::Effects::from_bits_retain(
@@ -1326,7 +1332,7 @@ impl RuntimeFnId {
             // of the selected callback's effect summary. Validation may also throw.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
             | RuntimeFnId::ArrayAny | RuntimeFnId::ArrayAll
-            | RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect => E::all(),
+            | RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect => self.effects(),
             RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
             ),

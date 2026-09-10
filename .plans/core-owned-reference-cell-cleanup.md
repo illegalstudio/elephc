@@ -1789,3 +1789,19 @@ review removed a newly unused normalization wrapper. Cargo build and cargo
 check --tests pass without warnings; exporter regeneration, all builtin docs
 audits and diff hygiene pass. No local tests execute. Runtime leak cleanliness
 and destructor ordering remain for CI on the new commit.
+
+### Keep callback barriers without misclassifying array operations as I/O
+
+The exact 902dd2b73 registry failure comes from declaring every effect on array
+predicates, reduce and comparator-set operations. Their nested callbacks and
+cleanup remain fully observable, but the surrounding array helper is not itself
+a blocking or network boundary. Apply the existing implode/array_sum convention:
+retain all eighteen non-I/O effects in both ordinary and intrinsic summaries.
+Do not relax the registry monitoring gate or invent network events for arrays.
+Add a focused effect contract test and update the comparator target assertion.
+The array_sum/product callable-signature assertion now checks the actual boxed
+PHP-array input and Mixed result instead of the superseded integer-array ABI.
+
+Regenerate the seven affected internals pages and registry through the builtin
+docs skill. Build, test compilation, all three docs/boundary audits and diff
+hygiene pass. No local test runs; the monitoring-policy gate still needs CI.

@@ -9,6 +9,27 @@
 
 use crate::ir::{Effects, Op, RuntimeFnId};
 
+/// Array callbacks and cleanup stay observable without inventing a surrounding I/O event.
+#[test]
+fn array_callback_effects_preserve_barriers_without_claiming_io_boundaries() {
+    let io_boundary = Effects::BLOCKING_IO | Effects::NETWORK_IO;
+    let expected = Effects::all() & !io_boundary;
+    for target in [
+        RuntimeFnId::ArrayFilter,
+        RuntimeFnId::ArrayFind,
+        RuntimeFnId::ArrayAny,
+        RuntimeFnId::ArrayAll,
+        RuntimeFnId::ArrayReduce,
+        RuntimeFnId::ArrayUdiff,
+        RuntimeFnId::ArrayUintersect,
+    ] {
+        assert_eq!(target.effects(), expected, "{target:?}");
+        assert_eq!(target.intrinsic_effects(), expected, "{target:?}");
+        assert!(expected.may_observe() && expected.may_mutate() && expected.is_observable());
+        assert!(!target.monitoring_policy().is_evented(), "{target:?}");
+    }
+}
+
 /// Joins may invoke string conversions and destructors even when their string result is discarded.
 #[test]
 fn implode_effects_preserve_string_conversion_callbacks() {

@@ -46,8 +46,9 @@ targetSetComparators([false, false]);
         RuntimeFnId::ArrayUintersect.result_ownership(),
         crate::builtins::semantics::BuiltinResultOwnership::Fresh,
     );
-    assert_eq!(RuntimeFnId::ArrayUdiff.effects(), Effects::all());
-    assert_eq!(RuntimeFnId::ArrayUintersect.effects(), Effects::all());
+    let callback_barrier = Effects::all() & !(Effects::BLOCKING_IO | Effects::NETWORK_IO);
+    assert_eq!(RuntimeFnId::ArrayUdiff.effects(), callback_barrier);
+    assert_eq!(RuntimeFnId::ArrayUintersect.effects(), callback_barrier);
     for builtin in ["array_udiff", "array_uintersect"] {
         assert_eq!(
             crate::types::first_class_callable_builtin_sig(builtin)

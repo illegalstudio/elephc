@@ -952,9 +952,15 @@ mod tests {
         crate::ir::RuntimeFnId::Count.refine_runtime_callable_wrapper_sig(&mut count);
         assert_eq!(count.params.len(), 1);
 
-        let mut sum = callable_wrapper_sig(&function_sig("array_sum").expect("array_sum signature"));
-        crate::ir::RuntimeFnId::ArraySum.refine_runtime_callable_wrapper_sig(&mut sum);
-        assert_eq!(sum.params[0].1, PhpType::Array(Box::new(PhpType::Int)));
+        for (name, target) in [
+            ("array_sum", crate::ir::RuntimeFnId::ArraySum),
+            ("array_product", crate::ir::RuntimeFnId::ArrayProduct),
+        ] {
+            let mut sig = callable_wrapper_sig(&function_sig(name).expect("array arithmetic signature"));
+            target.refine_runtime_callable_wrapper_sig(&mut sig);
+            assert_eq!(sig.params[0].1, PhpType::php_array(), "{name}");
+            assert_eq!(sig.return_type, PhpType::Mixed, "{name}");
+        }
 
         let mut clamp = callable_wrapper_sig(&function_sig("clamp").expect("clamp signature"));
         crate::ir::RuntimeFnId::Clamp.refine_runtime_callable_wrapper_sig(&mut clamp);
