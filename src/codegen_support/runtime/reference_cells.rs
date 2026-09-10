@@ -184,6 +184,9 @@ fn emit_clone(emitter: &mut Emitter) {
     emitter.label("__rt_reference_cell_clone_finish");
     abi::load_at_offset(emitter, result, 16);
     abi::emit_frame_restore(emitter, 48);
+    abi::emit_return(emitter);
+    // Keep the frameless null return separate from the restored framed path
+    // so instruction-level ABI audits never merge distinct stack depths.
     emitter.label("__rt_reference_cell_clone_done");
     abi::emit_return(emitter);
     emitter.label("__rt_reference_cell_clone_shared");
@@ -256,6 +259,19 @@ fn emit_owner_lookup(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// The framed clone returns before the separate frameless null path on every supported ABI.
+    #[test]
+    fn reference_cell_clone_has_distinct_framed_and_frameless_returns() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_clone(&mut emitter);
+            let assembly = emitter.output();
+            let (framed, early) = assembly.split_once("__rt_reference_cell_clone_done:").unwrap();
+            assert!(framed.trim_end().ends_with("ret"), "{name}: framed path must return before the early-out label");
+            assert!(early.trim_start().starts_with("ret"), "{name}: null path must not restore a frame");
+        }
+    }
 
     /// Mach-O conditional branches require local labels even when a helper is emitted in the same object.
     #[test]

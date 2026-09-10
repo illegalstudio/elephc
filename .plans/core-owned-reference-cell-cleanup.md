@@ -549,3 +549,12 @@ reference counting and observable execution. This addresses the registry
 monitoring gate without suppressing string conversions or inventing I/O events.
 Build, test compilation and all generated-document audits pass. The docs skill
 updated implode/join effect counts and the registry; no tests ran locally.
+
+### Reference clone return paths
+
+The reference-cell clone now returns immediately after restoring its frame,
+leaving its frameless null-return label separate. This preserves runtime behavior
+and lets the SysV instruction walker follow both paths without merging their
+different recorded stack depths. No alignment allowlist was expanded. Added
+all-target structural coverage for both return sites. Build, test compilation,
+assembly-comment alignment and diff hygiene pass; executable CI remains required.
