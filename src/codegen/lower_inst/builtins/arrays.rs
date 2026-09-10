@@ -620,7 +620,8 @@ fn hash_sort_source_is_attached_mixed_cell(
 /// `-1` — is a real length, so the runtime helpers cannot recognise "no length" from the length value
 /// itself. The flag is therefore materialized separately: an omitted or statically `Void` argument is
 /// the immediate `0`, a statically typed integer is the immediate `1`, and a boxed `Mixed` argument is
-/// unboxed at runtime so a `null` payload (runtime tag 8) also reports `0`.
+/// unboxed at runtime so a `null` payload (runtime tag 8) also reports `0`. Tagged nullable
+/// integers use their separate tag word, never their possibly sentinel-colliding payload.
 fn resolve_slice_length_present_to_result(
     ctx: &mut FunctionContext<'_>,
     length: Option<ValueId>,
@@ -631,15 +632,21 @@ fn resolve_slice_length_present_to_result(
         return Ok(());
     }
     let length = length.expect("length present");
-    if !matches!(
-        ctx.value_php_type(length)?.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
-        abi::emit_load_int_immediate(ctx.emitter, reg, 1);
-        return Ok(());
+    match ctx.value_php_type(length)?.codegen_repr() {
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(length)?;
+            let tag = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_reg_move(ctx.emitter, reg, tag);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(length)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        }
+        _ => {
+            abi::emit_load_int_immediate(ctx.emitter, reg, 1);
+            return Ok(());
+        }
     }
-    ctx.load_value_to_result(length)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 marks a boxed PHP null length argument

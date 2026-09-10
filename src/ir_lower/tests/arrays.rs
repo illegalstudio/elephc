@@ -145,6 +145,32 @@ echo count(sliceBoxedSnapshot([1, 2, 3, 4]));
     }
 }
 
+/// Nullable integer lengths inspect the tag and preserve plain length payloads on every ABI.
+#[test]
+fn slice_and_splice_accept_tagged_nullable_lengths_on_every_target() {
+    let source = r#"<?php
+function optionalSlice(mixed $items, ?int $length): array { return array_slice($items, 1, $length); }
+function optionalSplice(array &$items, ?int $length): array { return array_splice($items, 1, $length); }
+$items = [1, 2, 3, 4];
+echo count(optionalSlice($items, null));
+echo count(optionalSplice($items, -1));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(name).unwrap(),
+        );
+        for function_name in ["optionalSlice", "optionalSplice"] {
+            let function = module.functions.iter().find(|f| f.name == function_name).unwrap();
+            assert!(function.params.iter().any(|param| param.php_type.codegen_repr() == crate::types::PhpType::TaggedScalar),
+                "{name}: the fixture must retain its two-word nullable ABI");
+        }
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let tag_to_result = if name == "linux-x86_64" { "mov rax, rdx" } else { "mov x0, x1" };
+        assert!(asm.contains(tag_to_result), "{name}: presence depends on the tag word");
+    }
+}
+
 /// Splice separates the outer cell before consuming and mutating its packed payload owner.
 #[test]
 fn boxed_array_splice_separates_receiver_before_payload_on_every_target() {

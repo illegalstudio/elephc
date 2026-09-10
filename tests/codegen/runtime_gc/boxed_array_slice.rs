@@ -9,6 +9,32 @@
 
 use crate::support::*;
 
+/// Null, zero, negative and sentinel-colliding integer lengths stay distinct in the nullable ABI.
+#[test]
+fn test_core_nullable_slice_and_splice_lengths_preserve_presence_tags() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nullableSlice(mixed $items, ?int $length): array { return array_slice($items, 1, $length); }
+function nullableSplice(array &$items, ?int $length): array { return array_splice($items, 1, $length); }
+function showNullableWindow(?int $length): void {
+    $items = [1, 2, 3, 4];
+    $slice = nullableSlice($items, $length);
+    $removed = nullableSplice($items, $length);
+    echo implode(",", $slice), ":", implode(",", $removed), ":", implode(",", $items), "|";
+}
+showNullableWindow(null);
+showNullableWindow(0);
+showNullableWindow(-1);
+showNullableWindow(1);
+showNullableWindow(PHP_INT_MAX - 1);
+echo "done";
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout,
+        "2,3,4:2,3,4:1|::1,2,3,4|2,3:2,3:1,4|2:2:1,3,4|2,3,4:2,3,4:1|done",
+        "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Reading slices through a Mixed parameter leaves concrete aliases and later writes independent.
 #[test]
 fn test_core_boxed_array_slice_preserves_concrete_sources_and_aliases() {

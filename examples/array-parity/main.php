@@ -40,6 +40,13 @@ function prependQueueEvent(array &$queue, string $event): int {
 }
 echo 'queued: ', prependQueueEvent($queue, 'reopened'), ': ', implode(', ', $queue), "\n";
 
+// A nullable page size distinguishes an open-ended slice from an empty page.
+function eventPage(array $events, ?int $limit = null): array {
+    return array_slice($events, 1, $limit);
+}
+echo 'remaining page: ', implode(', ', eventPage(['opened', 'reviewed', 'closed'])), "\n";
+echo 'empty page: ', count(eventPage(['opened', 'reviewed', 'closed'], 0)), "\n";
+
 // Sorting a declared array parameter leaves the caller's original order intact.
 function sortedEventNames(array $events): array {
     sort($events);

@@ -923,3 +923,18 @@ class-name bridge's separately allocated result-cell cleanup remains a distinct
 open issue. This change does not claim to resolve that bridge allocation.
 Build, test compilation, generated builtin documentation and all contract/site
 audits pass. No tests were executed locally.
+
+### Nullable slice and splice lengths
+
+The CI slice fixture exposed an unsupported TaggedScalar operand when a helper
+passes its nullable integer length to array_slice. Both slice and splice now
+convert that two-word value through the shared nullable integer conversion and
+derive the separate length-presence flag from its tag. Null means open-ended;
+zero, negative lengths and integers matching the null payload sentinel remain
+real lengths. No boxed cell or source mutation is needed for this conversion.
+
+Added all-target lowering coverage and a heap regression for null, zero,
+negative, positive and sentinel-colliding lengths through slice and splice.
+Extended the array example with a nullable page limit. Test compilation and
+assembly-comment checks pass. Runtime verification remains assigned to CI;
+no tests were executed locally.
