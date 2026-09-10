@@ -33,11 +33,13 @@ $second = new OrdinaryLeaseChild($argc);
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        let caller = asm.split_once("constructOrdinaryLease:\n").unwrap().1;
+        let caller = asm.split_once("@fn name=constructOrdinaryLease ").unwrap().1
+            .split_once("@endfn name=constructOrdinaryLease").unwrap().0;
+        let constructor = crate::names::method_symbol("OrdinaryLeaseConstructor", "__construct");
         let call = caller.lines().find(|line| {
             let line = line.trim_start();
             (line.starts_with("call ") || line.starts_with("bl "))
-                && line.contains("OrdinaryLeaseConstructor") && line.contains("__construct")
+                && line.contains(&constructor)
         }).expect("ordinary constructor call");
         let offset = caller.find(call).unwrap();
         assert!(caller[..offset].contains("__rt_reference_cell_new"), "{name}");

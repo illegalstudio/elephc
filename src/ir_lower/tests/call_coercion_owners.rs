@@ -191,7 +191,16 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
             "{target}: callback validation must run through the runtime descriptor boundary");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         assert_eq!(asm.matches("_eir_callable_argument_normalizer:").count(), 1, "{target}");
-        assert!(asm.contains("__rt_callable_descriptor_retain"), "{target}: existing descriptors remain owned");
+        let normalizer = asm.split_once("_eir_callable_argument_normalizer:\n").unwrap().1;
+        let descriptor_label = normalizer.lines().find(|line| {
+            line.trim_end().ends_with(':') && line.contains("mixed_callable_value_descriptor_")
+        }).expect("the normalizer must have an existing-descriptor branch");
+        let descriptor_branch: Vec<_> = normalizer.split_once(descriptor_label).unwrap().1.lines()
+            .take_while(|line| !line.trim_end().ends_with(':')).collect();
+        assert_eq!(descriptor_branch.iter().filter(|line| {
+            let line = line.trim_start();
+            (line.starts_with("bl ") || line.starts_with("call ")) && line.contains("__rt_incref")
+        }).count(), 1, "{target}: the existing descriptor acquires exactly one owner");
         assert!(asm.contains("__rt_throw_current"), "{target}: invalid callbacks remain catchable");
         assert!(!asm.contains("__elephc_eval_dynamic_callable_invoker"), "{target}: no eval dependency");
     }
@@ -378,6 +387,8 @@ echo widenedStringReaders($argc), borrowedStringReader("x");
 /// Two implicit array boxes receive paired records around the native call on every supported ABI.
 #[test]
 fn implicit_array_argument_boxes_have_unwind_records_on_all_targets() {
+    use crate::ir::Op;
+
     let source = r#"<?php
 function coercionTarget(array $left, array $right): int { return count($left) + count($right); }
 function coercionCaller(int $seed): int {
@@ -392,6 +403,11 @@ echo coercionCaller($argc);
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
+        let caller = module.functions.iter().find(|function| function.name == "coercionCaller").unwrap();
+        assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::PushCallOperandOwner).count(),
+            2, "{target}: both source arrays retain independent EIR roots");
+        assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::PopCallOperandOwner).count(),
+            2, "{target}: both source roots must be detached");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = asm.split_once("@fn name=coercionCaller ").unwrap().1
             .split_once("@endfn name=coercionCaller").unwrap().0;
@@ -400,8 +416,12 @@ echo coercionCaller($argc);
             (line.starts_with("bl ") || line.starts_with("call ")) && line.contains("coercionTarget")
         }).unwrap_or_else(|| panic!("{target}: missing native call in {body}"));
         let (before, after) = body.split_once(invoke).unwrap();
-        assert_eq!(before.matches("publish temporary call operand owner").count(), 2, "{target}: {body}");
-        assert_eq!(after.matches("detach temporary call operand owner").count(), 2, "{target}: {body}");
+        // Two explicit EIR roots protect the source arrays, and two backend roots protect
+        // the implicit Mixed boxes. Each layer must publish and retire its own owners.
+        assert_eq!(before.matches("publish temporary call operand owner").count(), 4, "{target}: {body}");
+        assert_eq!(after.matches("detach temporary call operand owner").count(), 4, "{target}: {body}");
+        let implicit = after.split_once("op=pop_call_operand_owner").unwrap().0;
+        assert_eq!(implicit.matches("detach temporary call operand owner").count(), 2, "{target}: {body}");
         let (inner, outer) = if target == "linux-x86_64" {
             ("mov r10, QWORD PTR [rsp + 80]", "mov r10, QWORD PTR [rsp + 16]")
         } else {

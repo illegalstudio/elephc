@@ -42,9 +42,11 @@ echo makeProducedArray()[0];
 fn mixed_reference_stores_adopt_acquired_strings_on_all_targets() {
     let source = r#"<?php
 function replace_mixed_reference(mixed &$value): void { $value = "replaced"; }
-$value = null;
-replace_mixed_reference($value);
-echo $value;
+function exercise_mixed_reference(mixed $value): void {
+    replace_mixed_reference($value);
+    echo $value;
+}
+exercise_mixed_reference(null);
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
@@ -858,14 +860,30 @@ run(5);
         .iter()
         .find(|function| function.name == "run")
         .expect("expected the run EIR function");
-    let call = function
+    let call_index = function
         .instructions
         .iter()
-        .find(|inst| inst.op == Op::Call)
+        .position(|inst| inst.op == Op::Call)
         .expect("expected the idv call");
-    for value in [call.operands[0], call.result.expect("expected the detached result")] {
-        assert_eq!(function.instructions.iter().filter(|inst| {
-            inst.op == Op::Release && inst.operands == [value]
-        }).count(), 1, "each independent producer must release exactly one owner");
+    let call = &function.instructions[call_index];
+    let argument = call.operands[0];
+    let root = function.instructions[..call_index].iter().find(|inst| {
+        inst.op == Op::StoreLocal && inst.operands == [argument]
+    }).expect("the independent argument owner must be rooted before invocation");
+    assert_eq!(function.instructions[..call_index].iter().filter(|inst| {
+        inst.op == Op::PushCallOperandOwner && inst.immediate == root.immediate
+    }).count(), 1, "the argument has exactly one unwind root");
+    for op in [Op::PopCallOperandOwner, Op::ReleaseLocalSlot] {
+        assert_eq!(function.instructions[call_index + 1..].iter().filter(|inst| {
+            inst.op == op && inst.immediate == root.immediate
+        }).count(), 1, "the rooted argument retires exactly once: {op:?}");
     }
+    assert!(!function.instructions.iter().any(|inst| {
+        inst.op == Op::Release && inst.operands == [argument]
+    }), "the argument's transferred root owner must not also be released as SSA");
+    let result = call.result.expect("expected the detached result");
+    assert_ne!(argument, result);
+    assert_eq!(function.instructions[call_index + 1..].iter().filter(|inst| {
+        inst.op == Op::Release && inst.operands == [result]
+    }).count(), 1, "the detached result still releases its independent SSA owner");
 }

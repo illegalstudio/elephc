@@ -1831,3 +1831,26 @@ five-target emitter test that proves the Mixed branch bypasses reboxing.
 Coordinator review checked the production register assignments and shared
 retain/coercion cleanup. Build, test compilation, assembly-comment and diff
 audits pass. No local tests execute; the unchanged runtime fixture awaits CI.
+
+### Align structural ownership assertions with the actual EIR and ABI
+
+Cursor Opus 4.8 confirmed four test traversal/matcher defects from source and CI.
+Nested key-sort checks must include class_methods, not only free functions.
+Filter assembly contains six source calls plus the required synthetic first-class
+wrapper. Constructor calls must be matched through method_symbol's underscore
+escaping. Callable normalization retains existing descriptors through __rt_incref;
+the coordinator scopes that assertion to the existing-descriptor branch and
+requires exactly one retain, rather than accepting any retain in the program.
+
+CI assembly also proves implicit array coercion has four owner records, not two:
+two EIR source roots and two backend Mixed-box roots. Check both layers and their
+separate retirement order. The Mixed argument/return assertion now follows the
+argument's transferred root slot and the result's independent SSA owner, with
+exactly one retirement each and no duplicate argument SSA release. Its source
+program is unchanged. The reference-store emitter fixture now supplies declared
+Mixed storage through a by-value wrapper instead of hitting the existing scalar
+by-reference storage rejection before its intended string-store assertions.
+Keep that rejection policy and its existing error tests unchanged.
+
+Cargo check --tests and diff hygiene pass. No local tests execute; all strengthened
+structural assertions remain subject to the five-target CI emitter matrix.

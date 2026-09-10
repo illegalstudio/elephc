@@ -710,7 +710,7 @@ reverseDeclaredNestedTarget($items);
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
         let mut sorts = 0;
-        for function in &module.functions {
+        for function in module.functions.iter().chain(&module.class_methods) {
             for (index, inst) in function.instructions.iter().enumerate() {
                 if !matches!(inst.immediate, Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
                     RuntimeFnId::Ksort | RuntimeFnId::Krsort,

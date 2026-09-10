@@ -93,7 +93,10 @@ echo count($first), count($second), count($third);
         }
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        assert_eq!(asm.matches("__rt_array_predicate_boxed").count(), 6, "{name}");
+        // The first-class descriptor also emits one synthetic wrapper directly into assembly.
+        // It is not part of the six source call sites in the original EIR module.
+        assert_eq!(asm.matches("__rt_array_predicate_boxed").count(), 7,
+            "{name}: six source calls and one first-class descriptor wrapper");
         assert!(!asm.contains("__rt_array_filter"), "{name}: no scalar-only filter runtime");
     }
 }
