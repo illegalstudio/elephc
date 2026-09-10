@@ -13,9 +13,11 @@ archives into a target- and toolchain-specific cache.
 The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
 libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, and libxml2 2.15.3.
 Programs using `preg_*`, `RegexIterator`, or `RecursiveRegexIterator` require
-PCRE2 at final link time. Mbstring and opaque eval also require PCRE2 for the
-shared output MIME-pattern provider, including with default startup settings.
-This dependency does not enable `preg_*` inside opaque eval. zlib is the second
+PCRE2 at final link time. Mbstring uses the same managed package only when a
+program selects its custom output MIME-pattern provider. The contract-owned
+default MIME expression is matched internally and does not make ordinary
+mbstring or opaque eval depend on PCRE2. This dependency does not enable
+`preg_*` inside opaque eval. zlib is the second
 pure-C recipe and proves the manager is not PCRE2-specific; declaring it makes
 its verified static artifact available for future runtime/builtin integrations
 but does not by itself add `libz.a` to every program. curl has the largest
@@ -217,8 +219,8 @@ libpcre2-8.a
 
 There is no production fallback to a system PCRE2 installation and raw
 `--link pcre2-posix` flags do not satisfy the managed requirement. A program
-without regex, mbstring, or eval does not link PCRE2 merely because the project
-declares it. `--check`, `--emit-ir`, and `--emit-asm` do not perform the final link and
+without regex or custom mbstring MIME selection does not link PCRE2 merely
+because the project declares it. `--check`, `--emit-ir`, and `--emit-asm` do not perform the final link and
 therefore do not require an installed artifact.
 
 Every missing/stale/corrupt state uses the same diagnostic tail. It reports the

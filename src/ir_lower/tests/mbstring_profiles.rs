@@ -105,7 +105,8 @@ fn mbregex_lowering_requires_managed_provider() {
         "<?php $name = $argc > 0 ? 'mb_ereg_match' : 'mb_check_encoding'; echo call_user_func($name, 'a', 'abc');",
     ] {
         let features = lower_source(source).required_runtime_features;
-        assert!(features.mbstring && features.mbregex && !features.regex, "{source}: {features:?}");
+        assert!(features.mbstring && features.mbregex && !features.regex && !features.mbstring_mime,
+            "{source}: {features:?}");
         let requirements = link_requirements_for_runtime_features(features);
         assert!(requirements.contains(&LinkRequirement::NativePackage("oniguruma")));
         assert!(requirements.contains(&LinkRequirement::Bridge("elephc_mbstring")));
@@ -113,9 +114,24 @@ fn mbregex_lowering_requires_managed_provider() {
     }
     for source in ["<?php echo mb_strlen('hello');", "<?php echo mb_regex_encoding(), mb_regex_set_options();"] {
         let features = lower_source(source).required_runtime_features;
-        assert!(features.mbstring && !features.mbregex && !features.regex, "{features:?}");
+        assert!(features.mbstring && !features.mbregex && !features.regex && !features.mbstring_mime,
+            "{features:?}");
         assert!(!link_requirements_for_runtime_features(features).contains(&LinkRequirement::NativePackage("oniguruma")));
     }
+}
+
+/// Selects the MIME provider for direct and callable output handlers without broad mbstring coupling.
+#[test]
+fn mbstring_output_handler_lowering_requires_mime_provider() {
+    for source in [
+        "<?php echo mb_output_handler('text', 9);",
+        "<?php $handler = mb_output_handler(...); echo $handler('text', 9);",
+    ] {
+        let features = lower_source(source).required_runtime_features;
+        assert!(features.mbstring && features.mbstring_mime, "{source}: {features:?}");
+    }
+    assert!(!lower_source("<?php echo mb_strlen('text');")
+        .required_runtime_features.mbstring_mime);
 }
 
 /// Assembles actual capture and query calls after frontend lowering on every supported target.

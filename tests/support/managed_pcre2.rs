@@ -236,8 +236,14 @@ pub(crate) fn prepare_managed_pcre2_cli_project(dir: &Path, target: Target) -> P
     )
     .expect("failed to write managed-PCRE2 test lock");
 
-    let toolchain = resolve_test_native_toolchain(target);
     let cache = dir.join("managed-native-cache");
+    populate_managed_pcre2_cache(&cache, target);
+    cache
+}
+
+/// Populates an existing managed-native cache with the target-aligned PCRE2 fixture.
+pub(crate) fn populate_managed_pcre2_cache(cache: &Path, target: Target) {
+    let toolchain = resolve_test_native_toolchain(target);
     let artifact = cache
         .join("artifacts")
         .join("pcre2")
@@ -321,7 +327,6 @@ pub(crate) fn prepare_managed_pcre2_cli_project(dir: &Path, target: Target) -> P
     encoded.push(b'\n');
     fs::write(artifact.join("receipt.json"), encoded)
         .expect("failed to write managed-PCRE2 receipt");
-    cache
 }
 
 /// Resolves target tools and reproduces the production fingerprint payload.

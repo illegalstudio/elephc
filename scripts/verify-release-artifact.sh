@@ -110,8 +110,8 @@ while IFS=$'\t' read -r kind name archives; do
     # already covered by its own line.
     #
     # Some packed bridges need managed native packages when force-enabled.
-    # Prepare curl's dependency chain, mbstring's Oniguruma and MIME providers,
-    # the eval MIME provider, and XML's libxml2 provider before their probes.
+    # Prepare curl's dependency chain, mbstring's Oniguruma and optional MIME
+    # providers, and XML's libxml2 provider before their probes.
     # Each bridge must still compile and link once its requirements are present.
     #
     # The check ends at the link. Producing the executable is what proves the
@@ -132,7 +132,6 @@ while IFS=$'\t' read -r kind name archives; do
     case "$name" in
         curl) native_packages="curl" ;;
         mbstring) native_packages="oniguruma pcre2" ;;
-        eval) native_packages="pcre2" ;;
     esac
     native_ready=true
     for native_package in $native_packages; do

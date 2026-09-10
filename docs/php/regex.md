@@ -9,7 +9,9 @@ elephc implements PHP regular expressions with PCRE2 through an Elephc-owned
 opaque shim over PCRE2's POSIX-compatible wrapper. Programs using `preg_*`,
 `RegexIterator`, or `RecursiveRegexIterator` require the managed `pcre2` package
 during the final native link. Mbstring and opaque eval also use PCRE2 for output
-MIME-pattern selection. Mbstring regex functions, including `mb_ereg_match`, use
+MIME-pattern selection only when a custom expression selects that provider; the
+shared default matcher needs no native package. Mbstring regex functions,
+including `mb_ereg_match`, use
 the separate managed Oniguruma provider. Programs without these features do not
 link PCRE2 merely because the package is declared.
 

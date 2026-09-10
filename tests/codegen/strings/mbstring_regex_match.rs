@@ -86,7 +86,7 @@ fn test_mbstring_regex_match_forced_eval_capability() {
         let dir = make_cli_test_dir("elephc_mbregex_eval_capability");
         let php = dir.join("main.php");
         fs::write(&php, "<?php $source = (string)getenv('ELEPHC_MBREGEX_SOURCE'); eval($source);").unwrap();
-        let mut command = if enabled { elephc_cli_command_with_oniguruma(&dir) } else { elephc_cli_command(&dir) };
+        let mut command = if enabled { elephc_cli_command_with_mbstring_native(&dir) } else { elephc_cli_command(&dir) };
         if enabled { command.arg("--with-mbstring"); }
         let compiled = command.arg(&php).output().unwrap();
         assert!(compiled.status.success(), "enabled={enabled}: {}", String::from_utf8_lossy(&compiled.stderr));

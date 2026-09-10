@@ -189,6 +189,8 @@ fn packed_managed_bridges_are_ok_after_native_add() {
     assert!(ok, "probe should pass after add-first native add; log:\n{log}");
     assert!(log.contains("adding managed native package oniguruma before --with-mbstring"), "{log}");
     assert!(log.contains("mock: native add oniguruma"), "{log}");
+    assert!(log.contains("adding managed native package pcre2 before --with-mbstring"), "{log}");
+    assert!(log.contains("mock: native add pcre2"), "{log}");
     assert!(log.contains("ok    bridge mbstring (libelephc_mbstring.a)"), "{log}");
     assert!(
         log.contains("ok    bridge curl (libelephc_curl.a)"),

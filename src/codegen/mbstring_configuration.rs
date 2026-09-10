@@ -5,7 +5,8 @@
 //! - User assembly finalization and the CLI/web request entry before mbstring reset.
 //!
 //! Key details:
-//! - PCRE2 registration and validated startup installation are idempotent across requests.
+//! - PCRE2 registration is emitted only for programs that match or validate MIME expressions.
+//! - Validated startup installation remains idempotent across requests.
 //! - Program values never enter cached runtime objects or enable ordinary eval regex capability.
 //! - Startup diagnostics cannot execute PHP; library callers receive status after bridge cleanup.
 
@@ -32,12 +33,14 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
     }
     let arguments_label = data.add_words(words);
     let count = data.add_words(vec![DataWord::U64(arguments.len() as u64)]);
-    let mut provider = vec![DataWord::U64(1 | (40 << 32))];
-    for symbol in ["elephc_pcre2_v1_mime_compile", "elephc_pcre2_v1_mime_match",
-        "elephc_pcre2_v1_mime_free", "elephc_pcre2_v1_error_message"] {
-        provider.push(DataWord::Symbol(emitter.target.extern_symbol(symbol)));
-    }
-    let provider = data.add_words(provider);
+    let provider = module.required_runtime_features.mbstring_mime.then(|| {
+        let mut provider = vec![DataWord::U64(1 | (40 << 32))];
+        for symbol in ["elephc_pcre2_v1_mime_compile", "elephc_pcre2_v1_mime_match",
+            "elephc_pcre2_v1_mime_free", "elephc_pcre2_v1_error_message"] {
+            provider.push(DataWord::Symbol(emitter.target.extern_symbol(symbol)));
+        }
+        data.add_words(provider)
+    });
     let host = data.add_words(vec![DataWord::U64(1 | (24 << 32)), DataWord::U64(0),
         DataWord::Symbol("__rt_mbstring_startup_diagnostic".into())]);
     let arm = emitter.target.arch == Arch::AArch64;
@@ -51,13 +54,15 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
         emitter.instruction("mov rbp, rsp");                                    // establish a stable startup adapter frame
         emitter.instruction("sub rsp, 64");                                     // reserve the owned result and preserved status
     }
-    abi::emit_symbol_address(emitter, if arm { "x0" } else { "rdi" }, &provider);
-    emitter.bl_c("elephc_mbstring_mime_provider_v1");
-    if arm {
-        emitter.instruction("cbnz w0, __rt_mbstring_startup_status_done");      // reject an invalid provider before requesting any bridge result
-    } else {
-        emitter.instruction("test eax, eax");                                   // inspect provider validation before startup state changes
-        emitter.instruction("jnz __rt_mbstring_startup_status_done");           // preserve fatal integration failure without an uninitialized release
+    if let Some(provider) = provider {
+        abi::emit_symbol_address(emitter, if arm { "x0" } else { "rdi" }, &provider);
+        emitter.bl_c("elephc_mbstring_mime_provider_v1");
+        if arm {
+            emitter.instruction("cbnz w0, __rt_mbstring_startup_status_done");  // reject an invalid provider before requesting any bridge result
+        } else {
+            emitter.instruction("test eax, eax");                               // inspect provider validation before startup state changes
+            emitter.instruction("jnz __rt_mbstring_startup_status_done");       // preserve fatal integration failure without an uninitialized release
+        }
     }
     abi::emit_symbol_address(emitter, if arm { "x0" } else { "rdi" }, &arguments_label);
     abi::emit_load_symbol_to_reg(emitter, if arm { "x1" } else { "rsi" }, &count, 0);

@@ -192,8 +192,10 @@ The engine preserves owned data instead of reproducing this memory defect.
 `elephc_mbstring_ini_v1` releases request borrows before protected PHP diagnostics.
 A pending throwable suppresses subsequent callback delivery while the handler
 finishes its state changes. The native MIME provider has a process-lifetime table
-and paired allocation/free operations. Missing or malformed providers fail without
-fabricating PHP syntax warnings. The native test loads the actual repository
+and paired allocation/free operations. The contract-owned default expression has
+an exact internal prefix matcher, while a custom expression without the provider
+reports the missing `--with-mbstring` capability. Malformed installed providers
+remain fatal. The native test loads the actual repository
 PCRE2 shim, using Homebrew on macOS and the aligned pkg-config provider on Linux.
 Process startup configuration is immutable and shared with newly initialized
 threads; resetting a request copies the validated prototype without recompiling
