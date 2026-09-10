@@ -684,3 +684,16 @@ native throws and escaping captures, plus all-target structural coverage.
 Build, test compilation, assembly-comment checks and builtin-document regeneration
 and audits pass. No local tests ran. CI on 83cb548a1 is still running; this does
 not close the other known callable, eval Throwable, checker and unserialize issues.
+
+### Handler preparation owners
+
+Core handler registration now releases the temporary normalized descriptor and any
+new display box after the active registration retains them. Already-boxed callbacks
+remain borrowed instead of creating a fake MixedBox owner. Normalization precedes
+boxing so rejected callbacks cannot strand a new display box.
+
+Added heap regressions for temporary captured handlers, restoration and caller-owned
+boxed callbacks, plus structural checks across all supported targets. Build, test
+compilation, generated builtin docs and audits pass without local test execution.
+The latest CI remains in progress; captured local cells require a separate ownership
+fix and the other recorded failures are still open.

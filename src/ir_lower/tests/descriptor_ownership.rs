@@ -9,6 +9,56 @@
 
 use crate::ir::Op;
 
+/// Handler registration retires internal boxes and descriptors without consuming a caller's box.
+#[test]
+fn handler_graphs_release_only_their_prepared_owners_on_all_targets() {
+    let source = r#"<?php
+function directHandlers(): void {
+    set_error_handler(function(int $level, string $message): bool { return true; });
+    restore_error_handler();
+    set_exception_handler(function(Throwable $error): void {});
+    restore_exception_handler();
+}
+function boxedHandler(mixed $callback): void { set_error_handler($callback); restore_error_handler(); }
+directHandlers();
+boxedHandler(function(int $level, string $message): bool { return true; });
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let mut registrations = 0;
+        for function in &module.functions {
+            for (index, inst) in function.instructions.iter().enumerate() {
+                if inst.op != Op::CoreBuiltin { continue; }
+                let Some(crate::ir::Immediate::I64(selector)) = inst.immediate else { continue; };
+                if !matches!(crate::ir::CoreBuiltinOp::from_i64(selector), Some(
+                    crate::ir::CoreBuiltinOp::SetErrorHandler | crate::ir::CoreBuiltinOp::SetExceptionHandler
+                )) { continue; }
+                registrations += 1;
+                let cleanup = &function.instructions[index + 1..];
+                assert_eq!(cleanup[0].op, Op::Release, "{target}");
+                assert_eq!(cleanup[0].operands, vec![inst.operands[1]], "{target}");
+                let source_op = function.value(inst.operands[0]).and_then(|value| match value.def {
+                    crate::ir::ValueDef::Instruction { inst, .. } => function.instruction(inst).map(|inst| inst.op),
+                    _ => None,
+                });
+                if source_op == Some(Op::MixedBox) {
+                    assert_eq!(cleanup[1].op, Op::Release, "{target}");
+                    assert_eq!(cleanup[1].operands, vec![inst.operands[0]], "{target}");
+                }
+            }
+            if function.name == "boxedHandler" {
+                assert!(!function.instructions.iter().any(|inst| inst.op == Op::MixedBox),
+                    "{target}: borrowed boxed handlers must not acquire a fake boxing owner");
+            }
+        }
+        assert_eq!(registrations, 3, "{target}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Both forms of direct boxed calls use the existing tag-checked descriptor ABI on every target.
 #[test]
 fn boxed_array_read_direct_calls_lower_through_descriptors_on_all_targets() {

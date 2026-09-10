@@ -164,14 +164,32 @@ pub fn lower_core_builtin(
         CoreBuiltinOp::GetIncludedFiles => Vec::new(),
         _ => call.operands.to_vec(),
     };
-    Ok(ctx.emit_value(
+    let handler_temporaries = if matches!(
+        operation,
+        CoreBuiltinOp::SetErrorHandler | CoreBuiltinOp::SetExceptionHandler,
+    ) {
+        let mut owners = vec![operands[1]];
+        if operands[0] != call.operand(0)? {
+            owners.push(operands[0]);
+        }
+        owners
+    } else {
+        Vec::new()
+    };
+    let result = ctx.emit_value(
         Op::CoreBuiltin,
         operands,
         Some(Immediate::I64(operation.as_i64())),
         call.result_type.clone(),
         operation.effects(),
         Some(call.span),
-    ))
+    );
+    for owner in handler_temporaries {
+        ctx.emit_void(
+            Op::Release, vec![owner], None, Op::Release.default_effects(), Some(call.span),
+        );
+    }
+    Ok(result)
 }
 
 /// Returns one supplied operand or emits the integer default required by the Core signature.
@@ -241,14 +259,6 @@ fn lower_handler_operands(
 ) -> Result<Vec<crate::ir::ValueId>, BuiltinLoweringError> {
     let callback = call.operand(0)?;
     let callback_type = ctx.value_php_type(callback).codegen_repr();
-    let original = ctx.emit_value(
-        Op::MixedBox,
-        vec![callback],
-        None,
-        PhpType::Mixed,
-        Op::MixedBox.default_effects(),
-        Some(call.span),
-    );
     let descriptor = if matches!(callback_type, PhpType::Void | PhpType::Never) {
         ctx.emit_value(
             Op::ConstI64,
@@ -268,7 +278,22 @@ fn lower_handler_operands(
             Some(call.span),
         )
     };
-    let mut operands = vec![original.value, descriptor.value];
+    // Normalize before allocating the display box so rejected callbacks cannot strand it.
+    // An already-boxed callback is borrowed; MixedBox would only forward its pointer.
+    let original = if matches!(callback_type, PhpType::Mixed | PhpType::Union(_)) {
+        callback
+    } else {
+        ctx.emit_value(
+            Op::MixedBox,
+            vec![callback],
+            None,
+            PhpType::Mixed,
+            Op::MixedBox.default_effects(),
+            Some(call.span),
+        )
+        .value
+    };
+    let mut operands = vec![original, descriptor.value];
     if with_mask {
         let default_mask = ctx.error_reporting_mask();
         operands.push(operand_or_const_int(ctx, call, 1, default_mask));
