@@ -114,7 +114,8 @@ class SetComparatorOwner {
     public string $value;
     public function __construct(string $value) { $this->value = $value; }
 }
-$left = ["a" => "one", "b" => "two"];
+function snapshotSetComparatorLeft(): array { return ["a" => "one", "b" => "two"]; }
+$left = snapshotSetComparatorLeft();
 $right = ["two"];
 $compare = function(string $first, string $second) use (&$left, &$right): int {
     $left = ["replacement"];

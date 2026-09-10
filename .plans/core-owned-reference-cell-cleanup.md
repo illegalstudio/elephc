@@ -1896,3 +1896,13 @@ invalid-first and invalid-second descriptor calls with heap-clean/tagged checks.
 Cargo build, cargo check --tests, exporter generation, builtin audits and diff
 hygiene pass. No tests execute locally; CI must confirm that the observed leak
 is gone and the new per-operand cleanup remains balanced.
+
+### Exercise comparator snapshots through the declared boxed array boundary
+
+The snapshot fixture declared a concrete associative string array, then captured
+it by reference and assigned an incompatible indexed layout. The checker correctly
+rejects that concrete-storage escape before the comparator can run. Return the
+same initializer through a declared array factory, matching this fixture's boxed
+storage purpose. Preserve both callback mutations, exact output, exception cases
+and heap-clean/tagged assertions. Grok independently reviewed the narrow fixture
+change. Cargo check --tests passes; no local test executes.
