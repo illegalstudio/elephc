@@ -103,6 +103,53 @@ $callback();
     }
 }
 
+/// Callee-owned array parameters remain rooted even when opaque dispatch makes return aliasing unknown.
+#[test]
+fn owned_shadow_arguments_have_unwind_roots_with_unknown_results_on_all_targets() {
+    use crate::ir::{Immediate, Op, ValueDef};
+    let source = r#"<?php
+function invokeShadowTarget(callable $target, array $arguments): mixed {
+    return call_user_func_array($target, $arguments);
+}
+function shadowArgumentCaller(callable $target): mixed {
+    return invokeShadowTarget($target, [["value" => "kept"]]);
+}
+function retainLaterCallback(array $items, callable $callback): callable { return $callback; }
+function laterCallbackCaller(int $seed): callable {
+    return retainLaterCallback([$seed], function() use ($seed): void { echo $seed; });
+}
+function countShadowArgument(array $value): int { return count($value); }
+echo shadowArgumentCaller(countShadowArgument(...));
+$callback = laterCallbackCaller($argc);
+$callback();
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["shadowArgumentCaller", "laterCallbackCaller"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            let push = function.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner).unwrap();
+            let call = function.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+            let pop = function.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner).unwrap();
+            assert!(push < call && call < pop, "{target}: {name} must protect its array argument");
+            let Some(Immediate::LocalSlot(slot)) = function.instructions[push].immediate else { panic!("missing root slot"); };
+            assert_ne!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), crate::types::PhpType::Callable,
+                "{target}: raw callable passthrough must retain its transfer contract");
+            if name == "laterCallbackCaller" {
+                let callback = function.instructions[call].operands[1];
+                let ValueDef::Instruction { inst, .. } = function.value(callback).unwrap().def else { panic!("missing closure"); };
+                assert_eq!(function.instruction(inst).unwrap().op, Op::ClosureNew);
+                assert!(!function.instructions.iter().any(|instruction| {
+                    instruction.op == Op::Release && instruction.operands == [callback]
+                }), "{target}: rooting parameter zero must not renumber the returned callback");
+            }
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Static type-name results cannot keep an owned boxed read alive through argument-alias suppression.
 #[test]
 fn gettype_releases_boxed_read_arguments_on_all_targets() {

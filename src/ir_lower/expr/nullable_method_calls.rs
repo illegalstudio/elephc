@@ -227,7 +227,26 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
     signature: Option<&FunctionSig>,
     span: Span,
 ) {
+    release_owned_call_arg_temporaries_with_roots(
+        ctx, args, result, return_alias, signature, &[], span,
+    );
+}
+
+/// Retires scoped roots and ordinary temporaries in parameter order without renumbering alias facts.
+pub(super) fn release_owned_call_arg_temporaries_with_roots(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[crate::ir::ValueId],
+    result: Option<crate::ir::ValueId>,
+    return_alias: &ReturnArgAlias,
+    signature: Option<&FunctionSig>,
+    roots: &[(usize, crate::ir::LocalSlotId)],
+    span: Span,
+) {
     for (parameter_index, value) in args.iter().enumerate() {
+        if let Some((_, slot)) = roots.iter().find(|(index, _)| *index == parameter_index) {
+            retire_owned_call_operand(ctx, *slot, span);
+            continue;
+        }
         let php_type = ctx.builder.value_php_type(*value);
         let lowered = LoweredValue {
             value: *value,

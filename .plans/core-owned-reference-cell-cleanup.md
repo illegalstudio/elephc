@@ -972,3 +972,20 @@ attach the original fixture's user assembly to its heap failure. These controls
 distinguish the temporary key from the getter's fresh string without suppressing
 the heap assertion. The leak remains open pending CI evidence; no local tests
 were executed.
+
+### Callee-owned arguments with aliasing results
+
+The merge descriptor fixture reaches its arity and type-error branches through
+a user function returning Mixed. Its unknown return-alias summary suppressed
+caller-side unwind roots even for the declared array parameter, whose callee
+shadow has an independent owner. Use that existing signature ownership proof
+per argument, not only the whole call's result-alias summary. Raw passthrough
+callables and by-reference returns retain their previous transfer rules.
+
+Normal cleanup now visits rooted and unrooted arguments in their original
+parameter order. It does not filter and renumber the unrooted operands, which
+would apply the wrong alias summary when a later callable is returned. Added
+all-target EIR assertions, heap regressions for array/Mixed shadow returns and
+throws, and a later-callable passthrough control. The existing boxed merge
+descriptor fixture remains the end-to-end arity/error gate. No tests were
+executed locally; executable verification remains assigned to CI.

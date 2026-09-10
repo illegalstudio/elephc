@@ -50,6 +50,16 @@ array_walk($items, "show");
 $result = call_user_func("double", 21);
 echo "call_user_func(double, 21) = " . $result . "\n";
 
+// Temporary argument lists are retired even when the callback rejects their arity.
+function invoke_callback_arguments(callable $callback, array $arguments): mixed {
+    return call_user_func_array($callback, $arguments);
+}
+try {
+    invoke_callback_arguments(double(...), []);
+} catch (ArgumentCountError $error) {
+    echo "callback requires an argument\n";
+}
+
 class Formatter {
     public function bracket(string $value): string {
         return "[" . $value . "]";

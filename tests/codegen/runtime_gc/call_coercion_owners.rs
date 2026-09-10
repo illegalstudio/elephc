@@ -10,6 +10,61 @@
 
 use crate::support::*;
 
+/// Returned array and Mixed shadows survive caller-root retirement, including exceptional calls.
+#[test]
+fn test_core_user_call_shadow_arguments_retire_on_return_and_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class UserCallShadowOwner { public function __destruct() { echo "drop|"; } }
+function forwardArrayShadow(array $items, bool $fail): array {
+    if ($fail) { throw new RuntimeException("stop"); }
+    return $items;
+}
+function forwardMixedShadow(mixed $items, bool $fail): mixed {
+    if ($fail) { throw new RuntimeException("stop"); }
+    return $items;
+}
+for ($i = 0; $i < 3; $i++) {
+    $array = forwardArrayShadow([new UserCallShadowOwner()], false);
+    echo count($array), ":";
+    unset($array);
+    try { forwardArrayShadow([new UserCallShadowOwner()], true); }
+    catch (RuntimeException $error) { echo "caught|"; unset($error); }
+    $mixed = forwardMixedShadow([new UserCallShadowOwner()], false);
+    echo count($mixed), ":";
+    unset($mixed);
+    try { forwardMixedShadow([new UserCallShadowOwner()], true); }
+    catch (RuntimeException $error) { echo "caught|"; unset($error); }
+}
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("{}done", "1:drop|drop|caught|1:drop|drop|caught|".repeat(3)), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Rooted array arguments do not renumber a later callable's passthrough ownership.
+#[test]
+fn test_core_user_call_partial_roots_preserve_later_callable_return() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class LaterArgumentOwner { public function __destruct() { echo "drop|"; } }
+function keepLaterCallback(array $items, callable $callback): callable {
+    echo count($items), ":";
+    return $callback;
+}
+function makeLaterCallback(): callable {
+    $owner = new LaterArgumentOwner();
+    return function() use ($owner): void { echo "called|"; };
+}
+$callback = keepLaterCallback([str_repeat("x", 24)], makeLaterCallback());
+$callback();
+unset($callback);
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1:called|drop|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Throwing direct, static and instance calls release implicit boxes without consuming input aliases.
 #[test]
 fn test_core_call_coercion_owners_unwind_with_overflow_and_float_arguments() {
