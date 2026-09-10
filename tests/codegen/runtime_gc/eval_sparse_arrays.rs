@@ -87,6 +87,30 @@ unset($items);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// A computed-key owner is retired when a destructor throws into a catch in the same function.
+#[test]
+fn test_core_unset_computed_key_root_retires_before_same_frame_catch() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class SameFrameUnsetElement {
+    public function __destruct() { throw new RuntimeException("removed"); }
+}
+function removeSameFrameElement(array &$items): void {
+    try { unset($items[str_repeat("d", 8)]); }
+    catch (RuntimeException $error) { echo "caught|"; unset($error); }
+    echo count($items), ":", $items["keep"], "|";
+}
+for ($iteration = 0; $iteration < 3; $iteration++) {
+    $items = ["dddddddd" => new SameFrameUnsetElement(), "keep" => 41];
+    removeSameFrameElement($items);
+    unset($items);
+}
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|1:41|caught|1:41|caught|1:41|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Boxed array reversal preserves source keys and string keys while obeying the runtime numeric-key policy.
 #[test]
 fn test_core_native_php_array_reverse_preserves_keys_and_source() {

@@ -1023,3 +1023,24 @@ the captured cell genuinely supports both layouts. Keep the callback replacement
 recursive flip, original snapshot assertions and clean-heap assertion intact.
 This repairs the boxed-runtime fixture without changing concrete-array assignment
 rules or claiming that the runtime heap checks have passed locally.
+
+### Unset computed-key widening fix
+
+The user assembly from CI job 102742016886 locates the one-string leak. The
+computed key was stored in an OwnedTemp later assigned null, which widened the
+slot to Mixed. Loading that slot as Str called mixed_cast_string and created a
+second owner that was not rooted across hash_unset. In the same assembly,
+getMessage's persisted string is explicitly freed after echo, ruling out the
+earlier getter hypothesis for this fixture.
+
+Use the shared scoped operand root for the key. It preserves the concrete
+operand type, is visible to same-frame catches, and retires through a slot
+release rather than a null assignment. Added an all-target root/type/order gate
+and a repeated same-frame-catch heap fixture alongside the original external
+catch and isolation regressions. Tests were compiled, not executed locally.
+
+Remaining CI evidence on 25e023f67 includes declared-array aggregate/callback
+rejections, boxed-map static-descriptor owners, eval exception transfers and
+eval parameter-shadow owners. Job 102742016924 also reports the escaping
+descriptor default reference capture returning 1:1 instead of 2:3, with six
+live blocks. None of these distinct failures is claimed fixed by the key root.

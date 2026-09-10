@@ -451,7 +451,43 @@ echo implode(",", $items);
     }
 }
 
-/// Native declared-array removal reaches the rooted boxed storage path on all supported ABIs.
+/// Computed unset keys retain concrete string storage and a scoped owner on every supported ABI.
+#[test]
+fn php_array_unset_computed_string_key_keeps_a_concrete_unwind_root() {
+    use crate::codegen::platform::Target;
+    use crate::ir::{Immediate, Op};
+    use crate::types::PhpType;
+    use std::path::Path;
+
+    let source = r#"<?php
+function removeComputedArrayOffset(array &$items): void { unset($items[str_repeat("d", 8)]); }
+$items = ["dddddddd" => 10];
+removeComputedArrayOffset($items);
+echo count($items);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|f| f.name == "removeComputedArrayOffset").unwrap();
+        let push = function.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner)
+            .expect("computed key needs a scoped root");
+        let remove = function.instructions.iter().position(|inst| inst.op == Op::OffsetUnset).unwrap();
+        let pop = function.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner).unwrap();
+        assert!(push < remove && remove < pop, "{name}: guard key across destructor execution");
+        let Some(Immediate::LocalSlot(slot)) = function.instructions[push].immediate else {
+            panic!("{name}: scoped key root must name its owning local");
+        };
+        assert_eq!(function.locals[slot.as_raw() as usize].php_type, PhpType::Str,
+            "{name}: retiring the key must not widen it to Mixed");
+        assert!(function.instructions[pop + 1..].iter().any(|inst| {
+            inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(slot))
+        }), "{name}: normal removal retires the same root");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Native declared-array removal reaches installed sparse storage on all supported ABIs.
 #[test]
 fn php_array_unset_uses_installed_sparse_storage_on_every_target() {
     use crate::codegen::platform::Target;

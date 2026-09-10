@@ -152,16 +152,10 @@ fn lower_unset_boxed_array_element(
     expr: &Expr,
 ) {
     let index_value = lower_expr(ctx, index);
-    let key_owner = if ctx.value_is_owning_temporary(index_value) {
-        let ty = ctx.builder.value_php_type(index_value.value);
-        let temp = ctx.declare_owned_hidden_temp(ty.clone());
-        ctx.store_local(&temp, index_value, ty, Some(index.span));
-        Some(temp)
-    } else {
-        None
-    };
-    let index_value = key_owner.as_ref()
-        .map_or(index_value, |temp| ctx.load_local(temp, Some(index.span)));
+    // Clearing a key temp through a PHP null assignment widens its storage to Mixed.
+    // Reloading it as Str then creates an unrooted copy before the destructor can throw.
+    // Keep the concrete operand and clear its scoped owner without changing the slot type.
+    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
     let array_value = crate::ir_lower::stmt::load_array_local_for_write(ctx, name, array_span);
     ctx.emit_void(
         Op::OffsetUnset,
@@ -170,9 +164,8 @@ fn lower_unset_boxed_array_element(
         Op::OffsetUnset.default_effects(),
         Some(expr.span),
     );
-    if let Some(temp) = key_owner {
-        let null = lower_null(ctx, expr);
-        ctx.unset_local(&temp, null, Some(expr.span));
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
     }
 }
 
