@@ -255,6 +255,93 @@ foreach ($alias as $key => $value) {
     assert_eq!(out, "2:2,1:1,0:3,|0:3,1:1,2:2,");
 }
 
+/// Verifies exact `array` parameters, static properties, and stabilized property receivers share
+/// boxed-cell key sorting without exposing mutations through an earlier PHP array copy.
+#[test]
+fn test_key_sorts_exact_declared_array_places_across_storage_shapes() {
+    let out = compile_and_run(
+        r#"<?php
+function printReverseArrayKeys(array $values): void {
+    krsort($values);
+    foreach ($values as $key => $value) { echo $key, ":", $value, ","; }
+}
+function printMaybeReverseArrayKeys(array $values, bool $reverse): void {
+    if ($reverse) { krsort($values); }
+    foreach ($values as $key => $value) { echo $key, ":", $value, ","; }
+}
+function returnArrayAlias(array $values): array {
+    return $values;
+}
+function reverseArrayKeysByReference(array &$values): void {
+    krsort($values);
+}
+
+class ExactKeySortParameterOwner {
+    public function __construct(public array $items) {}
+}
+$parameterOwner = new ExactKeySortParameterOwner([3, 1, 2]);
+$parameterAlias = $parameterOwner->items;
+printReverseArrayKeys($parameterOwner->items);
+echo "|";
+foreach ($parameterOwner->items as $key => $value) { echo $key, ":", $value, ","; }
+echo "|";
+foreach ($parameterAlias as $key => $value) { echo $key, ":", $value, ","; }
+echo "|";
+printMaybeReverseArrayKeys($parameterOwner->items, false);
+echo "|";
+$returned = returnArrayAlias($parameterOwner->items);
+krsort($returned);
+foreach ($returned as $key => $value) { echo $key, ":", $value, ","; }
+echo "|";
+foreach ($parameterOwner->items as $key => $value) { echo $key, ":", $value, ","; }
+echo "|";
+foreach ($parameterAlias as $key => $value) { echo $key, ":", $value, ","; }
+echo "|";
+$byRefOwner = new ExactKeySortParameterOwner([3, 1, 2]);
+$byRefAlias = $byRefOwner->items;
+$byRefValues = $byRefOwner->items;
+reverseArrayKeysByReference($byRefValues);
+foreach ($byRefValues as $key => $value) { echo $key, ":", $value, ","; }
+echo "|";
+foreach ($byRefOwner->items as $key => $value) { echo $key, ":", $value, ","; }
+echo "|";
+foreach ($byRefAlias as $key => $value) { echo $key, ":", $value, ","; }
+echo "|";
+
+class ExactKeySortStatic {
+    public static array $items = ["b" => 2, "a" => 1];
+}
+$staticAlias = ExactKeySortStatic::$items;
+ksort(ExactKeySortStatic::$items);
+foreach (ExactKeySortStatic::$items as $key => $value) { echo $key, $value; }
+echo "|";
+foreach ($staticAlias as $key => $value) { echo $key, $value; }
+echo "|";
+
+class ExactKeySortOwner {
+    public function __construct(public array $items) {}
+}
+$receiverCalls = 0;
+function selectExactKeySortOwner(ExactKeySortOwner $owner): ExactKeySortOwner {
+    global $receiverCalls;
+    $receiverCalls++;
+    return $owner;
+}
+$owner = new ExactKeySortOwner([3, 1, 2]);
+$propertyAlias = $owner->items;
+krsort(selectExactKeySortOwner($owner)->items);
+echo $receiverCalls, "|";
+foreach ($owner->items as $key => $value) { echo $key, ":", $value, ","; }
+echo "|";
+foreach ($propertyAlias as $key => $value) { echo $key, ":", $value, ","; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "2:2,1:1,0:3,|0:3,1:1,2:2,|0:3,1:1,2:2,|0:3,1:1,2:2,|2:2,1:1,0:3,|0:3,1:1,2:2,|0:3,1:1,2:2,|2:2,1:1,0:3,|0:3,1:1,2:2,|0:3,1:1,2:2,|a1b2|b2a1|1|2:2,1:1,0:3,|0:3,1:1,2:2,"
+    );
+}
+
 /// Verifies named `array:` arguments preserve packed-key promotion for locals and nested lvalues.
 #[test]
 fn test_krsort_named_array_argument_promotes_packed_lvalues() {

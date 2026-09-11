@@ -123,8 +123,12 @@ fn run(source: &str, boxed: bool, callbacks: bool, expected: &str) {
 
 /// Selects a child, writes one field, retires its pin, and then propagates any contained PHP throw.
 fn enter_shim() -> String {
+    let done = format!(
+        "{}query_enter_done",
+        target().platform.local_label_prefix()
+    );
     let body = if target().arch == Arch::AArch64 {
-        r#"
+        format!(r#"
     sub sp, sp, #96
     stp x29, x30, [sp, #80]
     mov x1, x0
@@ -170,11 +174,13 @@ fn enter_shim() -> String {
     ldp x29, x30, [sp, #80]
     add sp, sp, #96
     cmp x0, #0
-    b.ne __rt_throw_current
+    b.eq {done}
+    b __rt_throw_current
+{done}:
     ret
-"#
+"#)
     } else {
-        r#"
+        format!(r#"
     push rbp
     mov rbp, rsp
     sub rsp, 80
@@ -210,9 +216,11 @@ fn enter_shim() -> String {
     mov rax, QWORD PTR [rsp + 40]
     leave
     test rax, rax
-    jne __rt_throw_current
+    je {done}
+    jmp __rt_throw_current
+{done}:
     ret
-"#
+"#)
     };
     let address = if target().platform == Platform::Linux {
         "adrp x0, __rt_hash_unpin\n    add x0, x0, :lo12:__rt_hash_unpin"

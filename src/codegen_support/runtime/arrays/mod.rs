@@ -11,6 +11,7 @@
 mod array_chunk;
 mod array_chunk_refcounted;
 mod array_chunk_to_hash;
+mod call_argument_unpack;
 mod array_count_values;
 mod array_column;
 mod array_column_mixed;
@@ -197,6 +198,7 @@ pub use array_chunk::emit_array_chunk;
 pub use array_chunk_refcounted::emit_array_chunk_refcounted;
 /// Emit refcounted array chunk helper.
 pub use array_chunk_to_hash::emit_array_chunk_to_hash;
+pub use call_argument_unpack::emit_call_argument_unpack;
 /// Emit key-preserving array chunk helper (array_chunk preserve_keys).
 pub use array_column::emit_array_column;
 pub use array_count_values::{emit_array_count_values, ARRAY_COUNT_VALUES_SKIPPED_MESSAGES};

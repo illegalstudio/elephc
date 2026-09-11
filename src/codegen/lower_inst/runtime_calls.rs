@@ -37,6 +37,11 @@ pub(super) fn lower(
         RuntimeCallTarget::ExceptionUnguardOwned => super::exception_instructions::lower_unguard_owned(ctx, inst),
         RuntimeCallTarget::ExceptionUpdateArrayGuard | RuntimeCallTarget::ExceptionUpdateHashGuard =>
             super::exception_instructions::lower_update_array_guard(ctx, inst),
+        RuntimeCallTarget::CallArgumentValidateUnpack
+        | RuntimeCallTarget::CallArgumentCollectPositionals
+        | RuntimeCallTarget::CallArgumentCollectNamed => {
+            super::call_argument_unpack::lower(ctx, inst, target)
+        }
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)

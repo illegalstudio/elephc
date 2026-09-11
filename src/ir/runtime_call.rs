@@ -87,6 +87,12 @@ pub enum RuntimeCallTarget {
     ExceptionUpdateArrayGuard,
     /// Refreshes an active associative-array guard after insertion can relocate the hash.
     ExceptionUpdateHashGuard,
+    /// Validates one boxed dynamic call-unpack source before argument accumulation mutates state.
+    CallArgumentValidateUnpack,
+    /// Appends the numeric entries from one validated call-unpack source to a positional hash.
+    CallArgumentCollectPositionals,
+    /// Copies the string entries from one validated call-unpack source to a named hash.
+    CallArgumentCollectNamed,
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
     /// A typed PCNTL process-control operation with target-aware availability.
@@ -146,6 +152,17 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Hash), IrType::I64],
                 result: IrType::Void,
             }),
+            RuntimeCallTarget::CallArgumentValidateUnpack
+            | RuntimeCallTarget::CallArgumentCollectPositionals
+            | RuntimeCallTarget::CallArgumentCollectNamed => {
+                Some(RuntimeCallSignature::Fixed {
+                    parameters: &[
+                        IrType::Heap(IrHeapKind::Hash),
+                        IrType::Heap(IrHeapKind::Mixed),
+                    ],
+                    result: IrType::Void,
+                })
+            }
             RuntimeCallTarget::UnaryString(_) => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
@@ -187,6 +204,11 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ExceptionUnguardOwned => "exception.unguard_owned",
             RuntimeCallTarget::ExceptionUpdateArrayGuard => "exception.update_array_guard",
             RuntimeCallTarget::ExceptionUpdateHashGuard => "exception.update_hash_guard",
+            RuntimeCallTarget::CallArgumentValidateUnpack => "call_argument.validate_unpack",
+            RuntimeCallTarget::CallArgumentCollectPositionals => {
+                "call_argument.collect_positionals"
+            }
+            RuntimeCallTarget::CallArgumentCollectNamed => "call_argument.collect_named",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::Pcntl(target) => target.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),

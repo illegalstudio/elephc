@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Ownership retention and missing-entry fallbacks remain type-aware.
+//! - Global reload publishes the replacement before releasing the prior owner.
 
 use super::*;
 
@@ -76,8 +77,14 @@ pub(super) fn store_mixed_scope_cell_to_global(
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
     match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
-            emit_retain_scope_cell_if_owned(ctx);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
+            let unchanged = ctx.next_label("eval_global_reload_unchanged");
+            emit_branch_if_scope_cell_matches_global(ctx, &symbol, &unchanged);
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+            emit_replace_global_result(ctx, &symbol, &PhpType::Mixed);
+            ctx.emitter.label(&unchanged);
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
@@ -93,7 +100,8 @@ pub(super) fn store_mixed_scope_cell_to_global(
         }
         PhpType::Str => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Str, false);
+            emit_ensure_owned_string_result(ctx);
+            emit_replace_global_result(ctx, &symbol, &PhpType::Str);
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -105,7 +113,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed array payload into the ABI result register
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
+            emit_replace_global_result(ctx, &symbol, &ty);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -117,25 +125,37 @@ pub(super) fn store_mixed_scope_cell_to_global(
     Ok(())
 }
 
-/// Retains a scope-owned Mixed cell before storing it into a native local owner.
-pub(super) fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
-    let flags_reg = abi::secondary_scratch_reg(ctx.emitter);
-    let skip = ctx.next_label("eval_scope_reload_borrowed");
-    abi::emit_load_temporary_stack_slot(ctx.emitter, flags_reg, 8);
+/// Persists a borrowed Mixed-to-string cast before publishing it in durable global storage.
+fn emit_ensure_owned_string_result(ctx: &mut FunctionContext<'_>) {
+    let owned = ctx.next_label("eval_global_reload_string_owned");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("cbnz x15, {}", owned));           // keep a tag-1 cast result that already owns persisted bytes
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("je {}", skip));                   // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction("test r11, r11");                           // inspect the dynamic string-result ownership marker
+            ctx.emitter.instruction(&format!("jnz {}", owned));                 // keep a tag-1 cast result that already owns persisted bytes
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
-    ctx.emitter.label(&skip);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    ctx.emitter.label(&owned);
+}
+
+/// Publishes one new global owner before releasing the value it replaces.
+///
+/// The old owner is staged in one full ABI stack slot. This keeps x86_64 calls aligned and leaves
+/// the replacement reachable from the global if releasing an object graph throws.
+fn emit_replace_global_result(ctx: &mut FunctionContext<'_>, symbol: &str, ty: &PhpType) {
+    let old_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, old_reg, symbol, 0);
+    abi::emit_push_reg(ctx.emitter, old_reg);
+    abi::emit_store_result_to_symbol(ctx.emitter, symbol, ty, false);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if ty.codegen_repr() == PhpType::Str {
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    } else {
+        abi::emit_decref_if_refcounted(ctx.emitter, &ty.codegen_repr());
+    }
 }
 
 /// Stores the local fallback used when eval unsets or removes a synchronized local.
@@ -221,6 +241,30 @@ fn emit_branch_if_scope_cell_matches_local(
     Ok(())
 }
 
+/// Branches when the fetched scope cell already occupies a boxed global slot.
+fn emit_branch_if_scope_cell_matches_global(
+    ctx: &mut FunctionContext<'_>,
+    symbol: &str,
+    label: &str,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scope_cell_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, symbol, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, scope_cell_reg, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, scope_cell_reg)); // compare the current global owner with the fetched scope cell
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // preserve an unchanged owner without another retain
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, scope_cell_reg)); // compare the current global owner with the fetched scope cell
+            ctx.emitter.instruction(&format!("je {}", label));                  // preserve an unchanged owner without another retain
+        }
+    }
+}
+
 /// Stores the program-global fallback for a missing eval global entry.
 pub(super) fn store_missing_scope_entry_to_global(
     ctx: &mut FunctionContext<'_>,
@@ -233,7 +277,7 @@ pub(super) fn store_missing_scope_entry_to_global(
         PhpType::Mixed | PhpType::Union(_) => {
             let symbol_name = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol_name);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
+            emit_replace_global_result(ctx, &symbol, &PhpType::Mixed);
         }
         PhpType::Int => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -252,11 +296,11 @@ pub(super) fn store_missing_scope_entry_to_global(
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Str, false);
+            emit_replace_global_result(ctx, &symbol, &PhpType::Str);
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
+            emit_replace_global_result(ctx, &symbol, &ty);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(

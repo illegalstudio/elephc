@@ -140,9 +140,9 @@ fn nested_array_literal_releases_pushed_hash_temporary() {
     assert!(release > 0, "expected release after array_push in {text}");
 }
 
-/// Verifies property array rewrites acquire the container before in-place mutation.
+/// Verifies declared-array property appends mutate the borrowed property cell in place.
 #[test]
-fn property_array_push_acquires_container_before_rewrite_release() {
+fn property_array_push_borrows_declared_array_cell_for_in_place_mutation() {
     let module = super::lower_source(
         r#"<?php
 class C { public array $a; }
@@ -151,14 +151,48 @@ $x->a = [];
 $x->a[] = 1;
 "#,
     );
-    let text = print_module(&module);
-    let prop_get = text.find("prop_get").expect("expected property load in lowered IR");
-    let tail = &text[prop_get..];
-    let acquire = tail.find("acquire").expect("expected property container acquire");
-    let push = tail.find("array_push").expect("expected property array push");
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("expected main EIR function");
+    let (property_index, property_cell) = function
+        .instructions
+        .iter()
+        .enumerate()
+        .find_map(|(index, inst)| {
+            (inst.op == Op::PropGetForWrite).then_some((index, inst.result?))
+        })
+        .expect("expected declared-array property load for write");
+    assert_eq!(
+        function
+            .value(property_cell)
+            .expect("property cell value metadata")
+            .ownership,
+        Ownership::Borrowed,
+        "the detached cell remains owned by the property slot"
+    );
+    let (append_index, append) = function
+        .instructions
+        .iter()
+        .enumerate()
+        .find(|(_, inst)| inst.op == Op::MixedArrayAppend)
+        .expect("expected declared-array property append");
     assert!(
-        acquire < push,
-        "expected property container acquire before array_push in {text}"
+        property_index < append_index,
+        "expected the property cell before its in-place append"
+    );
+    assert_eq!(
+        append.operands.first().copied(),
+        Some(property_cell),
+        "the append must mutate the exact cell returned by PropGetForWrite"
+    );
+    assert!(
+        function.instructions[property_index + 1..append_index]
+            .iter()
+            .all(|inst| inst.op != Op::Release
+                || inst.operands.first().copied() != Some(property_cell)),
+        "the borrowed property cell must remain live until the append"
     );
 }
 

@@ -33,6 +33,7 @@ use super::{CodegenIrError, Result};
 mod arithmetic;
 mod arrays;
 mod buffers;
+mod call_argument_unpack;
 mod checked_int_to_int;
 mod checked_numeric_chain;
 mod runtime_functions;

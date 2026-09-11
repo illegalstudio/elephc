@@ -142,3 +142,45 @@ echo "after";
 "#;
     assert_eq!(compile_and_run(source), "first\nsecond\ndestructor\nfirst\nsecond\ndestructor\nafter");
 }
+
+/// Releases an owning regular method argument before a variadic child whose destructor throws.
+#[test]
+fn test_method_argument_guards_preserve_variadic_cleanup_order_after_throw() {
+    let source = r#"<?php
+class OrderedMethodArgument {
+    public function __construct(public string $name, public bool $fail) {}
+    public function __destruct() {
+        echo "drop:", $this->name, "|";
+        if ($this->fail) { throw new RuntimeException($this->name); }
+    }
+}
+class ThrowingVariadicMethod {
+    public function invoke(OrderedMethodArgument $regular, OrderedMethodArgument ...$tail): void {
+        echo "body|";
+        throw new RuntimeException("body");
+    }
+}
+$target = new ThrowingVariadicMethod();
+try {
+    $target->invoke(
+        new OrderedMethodArgument("regular", false),
+        new OrderedMethodArgument("tail", true),
+    );
+} catch (Throwable $error) {
+    echo "caught:", $error->getMessage(), "|";
+    $previous = $error->getPrevious();
+    echo "previous:", $previous?->getMessage() ?? "none", "|after";
+}
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "program failed: {}", output.stderr);
+    assert_eq!(
+        output.stdout,
+        "body|drop:regular|drop:tail|caught:tail|previous:body|after"
+    );
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected regular and variadic method argument owners to be released, got: {}",
+        output.stderr
+    );
+}

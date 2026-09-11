@@ -1309,9 +1309,10 @@ fn lower_body_into_function(
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
     // every write in the callee landed in the CALLER's storage. Re-bind each by-value container
     // parameter to an owning shadow slot, which restores the refcount the copy-on-write split
-    // depends on. This one site is the single funnel for free functions, methods, static methods
-    // and closures, so every call flavour — including `call_user_func`, dynamic `$f(...)` and
-    // recursion — is covered without any per-flavour code.
+    // depends on. Exact PHP `array` parameters carry a boxed Mixed cell, so the shadow clones that
+    // wrapper as well as retaining its payload. This one site is the single funnel for free
+    // functions, methods, static methods and closures, so every call flavour, including
+    // `call_user_func`, dynamic `$f(...)` and recursion, is covered without per-flavour code.
     //
     // By-reference parameters are excluded by definition: `array &$a` must alias, not copy.
     // `$this` is excluded because it is an object, never a container.
@@ -1322,10 +1323,12 @@ fn lower_body_into_function(
         if name == "this" {
             continue;
         }
-        if !matches!(
-            php_type.codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. }
-        ) {
+        if !php_type.is_php_array()
+            && !matches!(
+                php_type.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+        {
             continue;
         }
         ctx.privatize_container_param(name, php_type, None);

@@ -304,6 +304,32 @@ pub(super) fn lower_args_with_signature(
     lower_args_with_signature_options(ctx, sig, args, false, false)
 }
 
+/// Guards final owning method-call operands until the callee returns normally.
+///
+/// Argument normalization can create a fresh variadic collector after the source values have
+/// been lowered. The existing normal call cleanup owns that collector, but a throwing callee
+/// bypasses it, so publish the same exceptional owner guard used by captured call arguments.
+pub(super) fn guard_owning_method_call_arguments(
+    ctx: &mut LoweringContext<'_, '_>,
+    arguments: &[crate::ir::ValueId],
+    span: Span,
+) {
+    ctx.begin_argument_guard_scope();
+    for (parameter, &value) in arguments.iter().enumerate() {
+        if ctx.reuse_call_argument_guard_anchor(value, parameter) {
+            continue;
+        }
+        let lowered = LoweredValue {
+            value,
+            ir_type: ctx.builder.value_type(value),
+        };
+        if ctx.value_is_owning_temporary(lowered) {
+            ctx.guard_call_argument(lowered, parameter, span);
+        }
+    }
+    ctx.end_argument_guard_scope();
+}
+
 /// Lowers arguments while preserving omission of trailing default-only parameter slots.
 pub(super) fn lower_args_with_signature_trimming_trailing_defaults(
     ctx: &mut LoweringContext<'_, '_>,

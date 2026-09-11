@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Typed PHP helper bodies are replaced by native test shims using a borrowed hash argument.
+//! - Replaced helpers retain their generated exceptional-cleanup callbacks and owner steps.
 //! - The shim creates descriptors, calls the real store, and propagates a returned pending throwable.
 //! - Compilation, object destruction, deep release, exception handling, and heap checks remain real.
 
@@ -320,7 +321,11 @@ fn function_symbol(assembly: &str, name: &str) -> String {
     assembly[start..].lines().next().unwrap().trim().to_owned()
 }
 
-/// Replaces exactly one marked helper body while preserving all unrelated emitted code and data.
+/// Replaces exactly one marked helper body while preserving its generated cleanup callback.
+///
+/// Executable PHP functions publish the callback symbol from assembly directives outside their
+/// marked body. Keeping the callback suffix, including its owner-step labels, leaves those symbols
+/// defined after the native fixture shim replaces the PHP entry point.
 pub(in crate::codegen::runtime_gc) fn replace_function(assembly: &str, name: &str, body: &str) -> String {
     let marker = format!("@fn name={name} symbol=");
     let marker_start = assembly.find(&marker).expect("typed capture test function was not emitted");
@@ -329,15 +334,29 @@ pub(in crate::codegen::runtime_gc) fn replace_function(assembly: &str, name: &st
     let end_marker = format!("@endfn name={name}");
     let end_start = assembly[marker_start..].find(&end_marker).unwrap() + marker_start;
     let end = assembly[end_start..].find('\n').map_or(assembly.len(), |offset| end_start + offset + 1);
-    format!("{}.text\n.globl {symbol}\n{symbol}:\n{body}{}", &assembly[..start], &assembly[end..])
+    let cleanup_marker = "# exceptional PHP frame cleanup callback";
+    let cleanup_start = assembly[marker_start..end_start]
+        .find(cleanup_marker)
+        .map(|offset| marker_start + offset)
+        .and_then(|offset| assembly[..offset].rfind('\n').map(|line| line + 1));
+    let cleanup = cleanup_start.map_or("", |offset| &assembly[offset..end_start]);
+    format!(
+        "{}.text\n.globl {symbol}\n{symbol}:\n{body}{cleanup}{}",
+        &assembly[..start],
+        &assembly[end..]
+    )
 }
 
 /// Replaces only the marked test function, leaving actual PHP classes and ownership lowering intact.
 fn install_store_shim(assembly: &str) -> String {
     // The frame contains two borrowed descriptors and inline "key"/"captured" bytes.
     // Both variants borrow the PHP hash, then propagate status two after frame teardown.
+    let done = format!(
+        "{}capture_store_done",
+        target().platform.local_label_prefix()
+    );
     let body = if target().arch == Arch::AArch64 {
-        r#"
+        format!(r#"
     sub sp, sp, #80
     stp x29, x30, [sp, #64]
     mov x1, x0
@@ -367,11 +386,13 @@ fn install_store_shim(assembly: &str) -> String {
     ldp x29, x30, [sp, #64]
     add sp, sp, #80
     cmp x0, #2
-    b.eq __rt_throw_current
+    b.ne {done}
+    b __rt_throw_current
+{done}:
     ret
-"#
+"#)
     } else {
-        r#"
+        format!(r#"
     push rbp
     mov rbp, rsp
     sub rsp, 64
@@ -394,9 +415,11 @@ fn install_store_shim(assembly: &str) -> String {
     add rsp, 64
     pop rbp
     cmp eax, 2
-    je __rt_throw_current
+    jne {done}
+    jmp __rt_throw_current
+{done}:
     ret
-"#
+"#)
     };
-    replace_function(assembly, "capture_test_store", body)
+    replace_function(assembly, "capture_test_store", &body)
 }

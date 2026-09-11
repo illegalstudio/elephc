@@ -134,6 +134,7 @@ pub(super) fn lower_method_call(
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    guard_owning_method_call_arguments(ctx, &arg_values, expr.span);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(

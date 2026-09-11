@@ -8,7 +8,7 @@
 //! - Candidate matching, constructor calls, and runtime fallback preserve scratch state.
 
 use super::*;
-use crate::codegen::lower_inst::callable_guards;
+use crate::codegen::lower_inst::{callable_guards, emit_call_arg_temp_cleanups};
 
 /// Materializes the dynamic class name as a string result pair, branching for non-string Mixed.
 pub(super) fn emit_generic_dynamic_new_class_string(
@@ -617,7 +617,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     // keeps the heap cell, exactly like the statically resolved `new X()` path
     // (`objects::property_defaults::emit_constructor_call`). A caller-stack cell would be
     // released the moment this call returns, leaving the promoted property dangling.
-    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+    let call_args = materialize_dynamic_constructor_call_args_with_receiver_reg_and_refs(
         ctx,
         object_reg,
         &object_ty,
@@ -638,6 +638,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     abi::emit_call_label(ctx.emitter, &call_symbol);
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 

@@ -793,8 +793,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Rebinds a by-value array/hash parameter to an owning copy-on-write shadow slot.
     ///
-    /// Call sites pass container pointers as borrows. Acquiring the value into a fresh local makes
-    /// the first callee mutation observe refcount two and split instead of modifying caller storage.
+    /// Call sites pass container pointers as borrows. Concrete containers are retained so their
+    /// first mutation observes refcount two and splits. An exact PHP `array` arrives as a boxed
+    /// Mixed cell, so its wrapper is cloned before the shadow is published; mutating that cell can
+    /// then replace its payload without rewriting caller storage.
     pub(crate) fn privatize_container_param(
         &mut self,
         name: &str,
@@ -802,6 +804,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let borrowed = self.load_local(name, span);
+        let value = if php_type.is_php_array() {
+            self.emit_owned_value(
+                Op::RuntimeCall,
+                vec![borrowed.value],
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::MixedCellClone,
+                )),
+                php_type.clone(),
+                crate::ir_lower::effects_lookup::runtime_effects(),
+                span,
+            )
+        } else {
+            borrowed
+        };
         let shadow = self.builder.add_local(
             Some(format!("{}#cow", name)),
             value_ir_type(php_type),
@@ -811,7 +827,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_slots.insert(name.to_string(), shadow);
         self.local_kinds
             .insert(name.to_string(), LocalKind::PhpLocal);
-        self.store_local(name, borrowed, php_type.clone(), span);
+        self.store_local(name, value, php_type.clone(), span);
     }
 
     /// Marks a local slot as initialized by caller or synthetic setup.
@@ -1408,7 +1424,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// The caller must first retain the incoming value because borrowing operations
     /// can return storage that aliases the previous occupant (for example,
     /// `$value = trim($value)`). When the slot's storage type already needs lifetime
-    /// tracking this emits the eager load+release pair. When it does not, the slot can
+    /// tracking this emits a slot retirement that clears the owner before release.
+    /// This prevents exceptional frame cleanup from revisiting storage freed by a
+    /// throwing destructor. When it does not, the slot can
     /// STILL be widened to refcounted storage by a store lowered later that reaches
     /// this one through a loop back-edge (e.g. an inner `for` counter re-initialized
     /// by the outer body but widened Int→Mixed by its checked-add update). The storage
@@ -1424,18 +1442,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let storage_type = self.builder.local_php_type(slot);
-        if Ownership::php_type_needs_lifetime_tracking(&storage_type) {
-            self.release_stored_local_value(name, slot, span);
+        let tracked = Ownership::php_type_needs_lifetime_tracking(&storage_type);
+        // A ref-bound slot stores an alias, not the payload owner being replaced.
+        if self.is_ref_bound_local(name) {
+            if tracked {
+                self.release_stored_local_value(name, slot, span);
+            }
             return;
         }
-        if self.loop_stack.is_empty() {
+        if !tracked && self.loop_stack.is_empty() {
             // Outside loops no back-edge can execute a later widening store before
             // this one, so the untracked storage type is final for this path.
-            return;
-        }
-        // Ref-bound locals keep a cell pointer in the frame slot and are released
-        // through the ref-cell owner machinery, never through a raw slot release.
-        if self.is_ref_bound_local(name) {
             return;
         }
         self.emit_void(
@@ -3147,6 +3164,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Reports whether construction already registered exceptional ownership for this call operand.
     pub(crate) fn has_call_argument_guard(&self, value: ValueId) -> bool {
         self.argument_guards.contains_key(&value)
+    }
+
+    /// Adds an already active value guard to the current parameter-order insertion chain.
+    pub(crate) fn reuse_call_argument_guard_anchor(
+        &mut self,
+        value: ValueId,
+        parameter: usize,
+    ) -> bool {
+        let Some(&token) = self.argument_guards.get(&value) else {
+            return false;
+        };
+        self.argument_guard_scopes
+            .last_mut()
+            .expect("active call capture scope")
+            .push((parameter, token));
+        true
     }
 
     /// Refreshes an active indexed or associative argument guard after mutation can replace its heap address.

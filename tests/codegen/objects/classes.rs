@@ -195,6 +195,195 @@ echo "|after";
     );
 }
 
+/// Verifies dynamic constructors merge explicit prefixes and multiple declared-array spreads.
+/// The large packed segment forces accumulator growth, while the second construction proves that
+/// positional entries bind before out-of-parameter-order names from a later associative source.
+#[test]
+fn test_dynamic_constructor_merges_multiple_declared_array_spreads() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class MultiSpreadHolder { public array $args = []; }
+class PackedSpreadTarget {
+    public string $value;
+    public function __construct(string $prefix, ...$rest) {
+        $this->value = $prefix . ":" . count($rest) . ":" . $rest[0] . ":" . $rest[19];
+    }
+}
+class OrderedSpreadTarget {
+    public string $value;
+    public function __construct(string $first, string $second, string $third) {
+        $this->value = $first . ":" . $second . ":" . $third;
+    }
+}
+function readSpread(string $marker, MultiSpreadHolder $holder): array {
+    echo $marker;
+    return $holder->args;
+}
+
+$packed = new MultiSpreadHolder();
+$packed->args = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+$class = PackedSpreadTarget::class;
+$large = new $class("prefix", ...readSpread("p", $packed));
+echo "|" . $large->value . "|";
+
+$named = new MultiSpreadHolder();
+$named->args = ["third" => "C", "second" => "B"];
+$positional = new MultiSpreadHolder();
+$positional->args = ["A"];
+$empty = new MultiSpreadHolder();
+$class = OrderedSpreadTarget::class;
+$ordered = new $class(
+    ...readSpread("i", $positional),
+    ...readSpread("n", $named),
+    ...readSpread("e", $empty),
+);
+echo $ordered->value;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "p|prefix:20:0:19|ineA:B:C");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected multi-spread argument owners to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies runtime call unpacking rejects duplicate names and positional entries after a named
+/// entry before evaluating later arguments. Every diagnostic remains a catchable PHP `Error`.
+#[test]
+fn test_dynamic_constructor_rejects_invalid_multiple_spreads_at_source_order_point() {
+    let source = r#"<?php
+class InvalidSpreadHolder { public array $args = []; }
+class InvalidSpreadTarget {
+    public function __construct(...$values) {}
+}
+function invalidSpread(string $marker, InvalidSpreadHolder $holder): array {
+    echo $marker;
+    return $holder->args;
+}
+function skippedSpreadArgument(): string {
+    echo "L";
+    return "later";
+}
+function explicitDuplicateValue(): string {
+    echo "v";
+    return "again";
+}
+
+$first = new InvalidSpreadHolder();
+$first->args = [
+    "n0" => 0, "n1" => 1, "n2" => 2, "n3" => 3, "n4" => 4, "n5" => 5,
+    "n6" => 6, "n7" => 7, "n8" => 8, "n9" => 9, "n10" => 10,
+    "n11" => 11, "n12" => 12, "second" => "B",
+];
+$duplicate = new InvalidSpreadHolder();
+$duplicate->args = ["second" => "again"];
+$class = InvalidSpreadTarget::class;
+try {
+    new $class(
+        ...invalidSpread("a", $first),
+        ...invalidSpread("b", $duplicate),
+        third: skippedSpreadArgument(),
+    );
+} catch (Throwable $error) {
+    echo "|" . get_class($error) . "|" . $error->getMessage();
+}
+
+$longName = "LONG_DYNAMIC_ARGUMENT_NAME";
+$longFirst = new InvalidSpreadHolder();
+$longFirst->args = [$longName => "first"];
+$longDuplicate = new InvalidSpreadHolder();
+$longDuplicate->args = [$longName => "again"];
+try {
+    new $class(
+        ...invalidSpread("|l", $longFirst),
+        ...invalidSpread("m", $longDuplicate),
+        third: skippedSpreadArgument(),
+    );
+} catch (Throwable $error) {
+    echo "|" . get_class($error) . "|" . (strlen($error->getMessage()) > 65536 ? "long" : "short");
+}
+
+$explicit = new InvalidSpreadHolder();
+$explicit->args = ["second" => "B"];
+try {
+    new $class(...invalidSpread("|e", $explicit), second: explicitDuplicateValue());
+} catch (Throwable $error) {
+    echo "|" . get_class($error) . "|" . $error->getMessage();
+}
+
+$namedFirst = new InvalidSpreadHolder();
+$namedFirst->args = ["second" => "B"];
+$numericLater = new InvalidSpreadHolder();
+$numericLater->args = [0 => "A", "second" => "again"];
+try {
+    new $class(
+        ...invalidSpread("|x", $namedFirst),
+        ...invalidSpread("y", $numericLater),
+        third: skippedSpreadArgument(),
+    );
+} catch (Throwable $error) {
+    echo "|" . get_class($error) . "|" . $error->getMessage();
+}
+
+$invalid = new InvalidSpreadHolder();
+$invalid->args = ["second" => "B", 0 => "A"];
+try {
+    new $class(...invalidSpread("|i", $invalid), third: skippedSpreadArgument());
+} catch (Throwable $error) {
+    echo "|" . get_class($error) . "|" . $error->getMessage();
+}
+"#
+    .replace("LONG_DYNAMIC_ARGUMENT_NAME", &"k".repeat(65_537));
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "ab|Error|Named parameter $second overwrites previous argument\
+         |lm|Error|long\
+         |ev|Error|Named parameter $second overwrites previous argument\
+         |xy|Error|elephc does not support positional unpacking after named unpacking in dynamically resolved calls\
+         |i|Error|Cannot use positional argument after named argument during unpacking"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected rejected spread sources and errors to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Releases converted variadic values after normal and throwing dynamic construction.
+#[test]
+fn test_dynamic_constructor_multiple_spreads_release_variadic_tail_on_throw() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class MultiSpreadThrowTarget {
+    public function __construct(string $prefix, bool $shouldThrow, ...$rest) {
+        echo $prefix, ':', count($rest), ':', $rest[0], ':', $rest[2], '|';
+        if ($shouldThrow) {
+            throw new Exception('stop');
+        }
+    }
+}
+$class = 'MultiSpreadThrowTarget';
+new $class('n', false, ...[4, 5], ...[6]);
+try {
+    new $class('p', true, ...[1, 2], ...[3]);
+} catch (Exception $error) {
+    echo $error->getMessage(), '|after';
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "n:3:4:6|p:3:1:3|stop|after");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the exceptional variadic tail owner to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies that dynamic instantiation uses SPL-specific runtime storage initialization.
 #[test]
 fn test_class_dynamic_instantiation_uses_spl_storage() {

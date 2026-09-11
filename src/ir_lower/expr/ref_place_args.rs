@@ -324,10 +324,12 @@ fn static_place_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpTy
 /// Returns `None` for a receiver whose static type is not a single known class — `Mixed`,
 /// a union, or an unresolved local — so the caller leaves the argument on its existing path.
 fn place_object_class_name(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<String> {
-    match static_place_type(ctx, object)?.codegen_repr() {
-        PhpType::Object(class_name) => Some(class_name.trim_start_matches('\\').to_string()),
-        _ => None,
+    if let Some(PhpType::Object(class_name)) =
+        static_place_type(ctx, object).map(|ty| ty.codegen_repr())
+    {
+        return Some(class_name.trim_start_matches('\\').to_string());
     }
+    super::instance_callable_object_class(ctx, object)
 }
 
 /// Rebuilds a place expression so it can be evaluated twice — once to read, once to write.

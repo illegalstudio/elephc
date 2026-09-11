@@ -10,7 +10,8 @@
 //!   explicit unsupported-feature errors for control flow not lowered yet.
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
-//! - Native destructor frames publish local cleanup activations outside library boundaries too.
+//! - Executable and library PHP frames publish local cleanup activations so a throw
+//!   releases abandoned frame owners before control reaches the surviving catch.
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
@@ -245,7 +246,7 @@ fn emit_user_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
     );
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
@@ -282,7 +283,7 @@ pub(super) fn emit_synthetic_function_with_label(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -410,7 +411,7 @@ fn emit_class_method(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary || frame::is_destructor(function),
+        true,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -703,7 +704,7 @@ fn emit_generator_body(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
     );
     let epilogue_label = format!("{}_epilogue", body_label);
     let mut ctx = FunctionContext::new(

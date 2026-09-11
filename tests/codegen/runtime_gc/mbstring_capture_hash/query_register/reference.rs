@@ -109,6 +109,10 @@ fn run_reference(source: &str, expected: &str, remove: bool) {
 fn reference_shim(remove: bool) -> String {
     let count = if remove { 2 } else { 1 };
     let publish = hash_slot_assembly("_capture_test_writer").1;
+    let done = format!(
+        "{}query_reference_done",
+        target().platform.local_label_prefix()
+    );
     if target().arch == Arch::AArch64 {
         let address = |reg: &str, symbol: &str| if target().platform == Platform::Linux {
             format!("adrp {reg}, {symbol}\nadd {reg}, {reg}, :lo12:{symbol}")
@@ -136,7 +140,9 @@ fn reference_shim(remove: bool) -> String {
     ldp x29, x30, [sp, #16]
     add sp, sp, #32
     cmp x0, #2
-    b.eq __rt_throw_current
+    b.ne {done}
+    b __rt_throw_current
+{done}:
     mov x10, #10
     madd x0, x9, x10, x0
     ret
@@ -162,7 +168,9 @@ fn reference_shim(remove: bool) -> String {
     mov r10, QWORD PTR [rsp + 8]
     leave
     cmp eax, 2
-    je __rt_throw_current
+    jne {done}
+    jmp __rt_throw_current
+{done}:
     imul r10, r10, 10
     add rax, r10
     ret

@@ -8,6 +8,11 @@
 //! - The bridge fallback preserves PHP source order and result ownership.
 
 use super::*;
+use crate::codegen::lower_inst::callable_guards;
+use crate::codegen_support::try_handlers::EXCEPTION_GUARD_SLOT_SIZE;
+
+const EVAL_RESULT_GUARD_OFFSET: usize = EVAL_STACK_BYTES;
+const EVAL_GUARDED_STACK_BYTES: usize = EVAL_STACK_BYTES + EXCEPTION_GUARD_SLOT_SIZE;
 
 /// Lowers `eval($code)` through internal EIR AOT or the bridge ABI and leaves its result in registers.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -27,7 +32,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
         )));
     }
 
-    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_GUARDED_STACK_BYTES);
     save_eval_code_string(ctx);
     ensure_eval_context(ctx)?;
     mark_eval_strict_php(ctx, inst);
@@ -55,10 +60,16 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    callable_guards::guard_saved_owner(
+        ctx.emitter,
+        EVAL_TEMP_CELL_OFFSET,
+        EVAL_RESULT_GUARD_OFFSET,
+    );
     reload_eval_scope_locals(ctx, &sync_locals)?;
     reload_eval_global_scope(ctx, &sync_globals)?;
+    callable_guards::unguard_saved_owner(ctx.emitter, EVAL_RESULT_GUARD_OFFSET);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_GUARDED_STACK_BYTES);
     store_if_result(ctx, inst)
 }
 
@@ -138,7 +149,7 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     }
     ctx.emitter
         .comment("eval literal AOT compiled EIR function with eval scope");
-    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_GUARDED_STACK_BYTES);
     ensure_eval_scope(ctx)?;
     let read_names = plan.reads().clone();
     let write_names = plan.writes().clone();
@@ -156,10 +167,16 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    callable_guards::guard_saved_owner(
+        ctx.emitter,
+        EVAL_TEMP_CELL_OFFSET,
+        EVAL_RESULT_GUARD_OFFSET,
+    );
     reload_eval_scope_locals(ctx, &reload_locals)?;
     reload_eval_globals_from_local_scope(ctx, &reload_globals)?;
+    callable_guards::unguard_saved_owner(ctx.emitter, EVAL_RESULT_GUARD_OFFSET);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_GUARDED_STACK_BYTES);
     store_if_result(ctx, inst)?;
     Ok(true)
 }
