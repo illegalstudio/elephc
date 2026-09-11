@@ -9,6 +9,18 @@
 
 use crate::ir::{Effects, Op, RuntimeFnId};
 
+/// Replacement results use independent scratch storage rather than borrowing their inputs.
+#[test]
+fn string_replacement_results_do_not_keep_argument_owners_alive() {
+    for target in [RuntimeFnId::StrReplace, RuntimeFnId::StrIreplace] {
+        assert_eq!(
+            target.result_ownership(),
+            crate::builtins::semantics::BuiltinResultOwnership::Independent,
+            "{target:?}",
+        );
+    }
+}
+
 /// Reference publication checks access borrow state and may allocate a catchable Error.
 #[test]
 fn reference_publication_effects_preserve_borrow_guards_and_local_promotion() {

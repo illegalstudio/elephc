@@ -266,6 +266,23 @@ echo replaceDirectly('a', 'b'), replaceThroughCallable('a', 'b');
             direct_published,
             "{name}: the callable form publishes the same argument owners",
         );
+        for function in [&direct, callable] {
+            let (call_index, call) = function.instructions.iter().enumerate().find(|(_, inst)| {
+                matches!(
+                    inst.immediate,
+                    Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                        crate::ir::RuntimeFnId::StrReplace,
+                    ))),
+                )
+            }).expect("string replacement uses its typed runtime target");
+            let search = call.operands[0];
+            assert!(
+                function.instructions[call_index + 1..].iter().any(|inst| {
+                    inst.op == Op::Release && inst.operands == [search]
+                }),
+                "{name}: {} retires its owned search after copying the result", function.name,
+            );
+        }
         assert_owner_records_are_lifo(callable, name);
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));

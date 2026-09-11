@@ -54,6 +54,27 @@ echo replaceThroughCallable('a', 'b'), ':', replaceThroughFirstClassCallable('a'
     assert_eq!(compile_and_run_tagged(source), "x-y:x-y");
 }
 
+/// Replacement callables release owned search, replacement and subject strings in every branch.
+#[test]
+fn test_core_string_replacement_callables_retire_all_owned_string_arguments() {
+    let source = r#"<?php
+function renderReplacements(string $left, string $right): void {
+    echo str_replace(implode('', [$left, $right]), implode('', ['-', '!']), implode('', ['x', $left, $right, 'y'])), ':';
+    echo call_user_func('str_ireplace', implode('', [$left, $right]), implode('', ['-', '!']), implode('', ['x', 'A', 'B', 'y'])), ':';
+    $callback = str_ireplace(...);
+    echo $callback(implode('', [$left, $right]), implode('', ['-', '!']), implode('', ['x', 'A', 'B', 'y'])), ':';
+    echo call_user_func('str_replace', '', '-', implode('', [$left, $right])), ':';
+    echo $callback(implode('', ['z', 'z']), '-', implode('', [$left, $right]));
+}
+renderReplacements('a', 'b');
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "x-!y:x-!y:x-!y:ab:ab", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "x-!y:x-!y:x-!y:ab:ab");
+}
+
 /// A freshly built descriptor callback is released when an argument expression throws.
 ///
 /// The handler destructor must run while the exception propagates, not at process exit: the

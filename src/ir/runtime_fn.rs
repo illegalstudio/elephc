@@ -2083,6 +2083,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::Decoct
                 | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
+                // Replacement always writes into a separate concat reservation, even
+                // for an empty search or no match. It never returns an argument view,
+                // but scratch-backed results still need ordinary string persistence.
+                | RuntimeFnId::StrReplace
+                | RuntimeFnId::StrIreplace
         ) {
             BuiltinResultOwnership::Independent
         } else {
