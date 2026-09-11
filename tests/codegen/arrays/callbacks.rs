@@ -384,9 +384,9 @@ echo $product;
     assert_eq!(out, "24");
 }
 
-// Tests `array_walk` with a callback that echoes each element, verifying the function
-// walks by reference and mutates the array in place.
-/// Verifies that array walk.
+// Tests `array_walk` with a variable argument, verifying the by-reference lvalue guard keeps
+// accepting writable storage and leaves the walked array available after the call.
+/// Verifies `array_walk` accepts and walks a variable argument.
 #[test]
 fn test_array_walk() {
     let out = compile_and_run(
@@ -394,9 +394,11 @@ fn test_array_walk() {
 function show($x) { echo $x; }
 $a = [10, 20, 30];
 array_walk($a, "show");
+echo "|";
+echo implode(",", $a);
 "#,
     );
-    assert_eq!(out, "102030");
+    assert_eq!(out, "102030|10,20,30");
 }
 
 // Tests `usort` with a comparison callback that sorts an unsorted array in ascending
