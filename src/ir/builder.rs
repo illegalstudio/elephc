@@ -206,12 +206,14 @@ impl<'f> Builder<'f> {
         }
     }
 
-    /// Neutralizes deferred releases for concrete local loads that stayed borrowed.
+    /// Neutralizes deferred releases for local loads that stayed borrowed.
     ///
     /// Lowering cannot know whether a later source-order store will widen a local's
     /// final frame storage to Mixed. It therefore emits releases for concrete heap
-    /// loads provisionally. Once all stores are known, keep those releases only when
-    /// codegen must unbox and retain a concrete payload from a Mixed slot.
+    /// loads provisionally. Once all stores are known, keep releases for owned
+    /// coercions, including concrete-to-Mixed boxing and Mixed-to-concrete unboxing.
+    /// Same-storage Callable and Mixed captures only borrow their local: releasing
+    /// the view would cancel the descriptor's retain and leave a dangling capture.
     pub fn prune_borrowed_local_load_release_ops(&mut self) {
         let mut prune = Vec::new();
         for (index, inst) in self.func.instructions.iter().enumerate() {
@@ -245,10 +247,10 @@ impl<'f> Builder<'f> {
             if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::StaticLocal) {
                 continue;
             }
-            if !local_load_release_is_deferred_candidate(&value.php_type) {
+            if !Ownership::php_type_needs_lifetime_tracking(&value.php_type) {
                 continue;
             }
-            if local_load_requires_owned_mixed_unbox(&local.php_type, &value.php_type) {
+            if local_load_coercion_owns_result(&local.php_type, &value.php_type) {
                 continue;
             }
             prune.push(index);
@@ -599,30 +601,40 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
     }
 }
 
-/// Returns whether lowering emits a provisional release for this concrete local-load type.
-fn local_load_release_is_deferred_candidate(result_type: &PhpType) -> bool {
+/// Returns whether a local load borrows the same physical storage without a coercion.
+///
+/// Codegen consumes this predicate too, so its no-coercion path and EIR release
+/// pruning cannot classify an ordinary borrowed local view differently.
+pub(crate) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> bool {
+    if source_ty == result_ty {
+        return true;
+    }
     matches!(
-        result_type.codegen_repr(),
-        PhpType::Str
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Object(_)
-            | PhpType::Iterable
+        (source_ty, result_ty),
+        (
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
+        ) | (PhpType::Array(_), PhpType::Array(_))
+            | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
     )
 }
 
-/// Returns whether codegen owns a retained payload or detached string extracted from Mixed storage.
-fn local_load_requires_owned_mixed_unbox(storage_type: &PhpType, result_type: &PhpType) -> bool {
-    matches!(storage_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && matches!(
-            result_type.codegen_repr(),
-            PhpType::Str
-                | PhpType::Array(_)
-                | PhpType::AssocArray { .. }
-                | PhpType::Callable
-                | PhpType::Object(_)
-                | PhpType::Iterable
-        )
+/// Keeps releases for owned local-load conversions, not borrowed same-storage views.
+///
+/// Scalar casts produce no heap owner. The remaining accepted conversions either
+/// unbox and retain a Mixed payload, copy a string, or allocate a fresh Mixed box.
+/// Unknown conversions conservatively keep their release and remain codegen errors.
+pub(crate) fn local_load_coercion_owns_result(storage_type: &PhpType, result_type: &PhpType) -> bool {
+    let storage_type = storage_type.codegen_repr();
+    let result_type = result_type.codegen_repr();
+    if local_load_types_share_storage(&storage_type, &result_type) {
+        return false;
+    }
+    !matches!(
+        (&storage_type, &result_type),
+        (PhpType::Mixed, PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Void)
+            | (_, PhpType::TaggedScalar)
+    )
 }
 
 /// Returns true when a local storage shape can represent PHP null as a zero pointer.

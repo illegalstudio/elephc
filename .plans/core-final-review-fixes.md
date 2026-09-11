@@ -322,3 +322,27 @@ below, and checklist items must not imply that unexecuted tests passed.
 - CI `34608929671` on `a219edf0e` completed with failures. The descriptor spread,
   Callable/Mixed capture-release and destructor-aware exception-flow corrections
   remain in progress. The latter is now the sole external write delegation.
+
+### Capture-view ownership correction and current CI
+
+- `c45c18dfdcb1af65c0e58bdf20fbbb8281cc8433` is pushed. CI `34613038369`
+  still fails the known spread, capture and destructor-cleanup regressions.
+  The new user-constant heap test also fails: correct output, 20 live blocks
+  totaling 962 bytes. Claude is diagnosing that ownership failure read-only.
+- The previously timed-out macOS non-codegen shard 2 passed on this head.
+  No timeout-budget or workflow change was made.
+- Reviewed Claude's capture-release proposal and integrated a shared
+  storage-compatibility predicate for EIR finalization and native local loads.
+  Same-storage Callable/Mixed views remain borrowed; owned conversions retain
+  cleanup. Added builder, five-target lowering and heap-debug regression sources.
+- Rejected the proposed extra by-reference array-view release: the existing
+  `box_value_as_mixed` helper already releases its owning input. The structural
+  regression now requires exactly one release, preventing that double cleanup.
+- `cargo check --locked -p elephc --test codegen_tests` passed without warnings
+  in 3.93s. Assembly-comment alignment and `git diff --check` passed. No local
+  tests, PHP/compiler repros or formatters ran. The wider `--tests` check remains
+  blocked by a missing field in the separate, unfinished destructor test draft.
+- Spread normalization is being integrated separately, with published source,
+  key and current-value owners and pre-insertion duplicate checks. Its independent
+  review is pending. The destructor draft is undergoing a bounded correctness
+  refinement; neither draft is included in the capture ownership commit.

@@ -33,6 +33,9 @@ pub use runtime_fn::{
     RuntimeFnTargetSupport,
 };
 pub use builder::Builder;
+pub(crate) use builder::local_load_types_share_storage;
+#[cfg(test)]
+pub(crate) use builder::local_load_coercion_owns_result;
 pub use effects::Effects;
 pub use function::{
     Function, FunctionFlags, FunctionId, FunctionParam, GeneratorSource, LocalKind, LocalSlot,

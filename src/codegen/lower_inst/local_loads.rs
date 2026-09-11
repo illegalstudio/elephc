@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - EIR construction and codegen share the local-storage compatibility predicate.
 
 use super::*;
 
@@ -20,21 +21,25 @@ pub(super) fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instructio
     require_integer_like(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands for the EIR predicate
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // compare signed integer operands for the EIR predicate
+                "cmp {}, {}", result_reg, rhs_reg
+            ));
+            ctx.emitter.instruction(&format!(                                   // materialize the predicate result as 0 or 1
                 "cset {}, {}",
                 result_reg,
                 aarch64_condition(predicate)?
-            ));                                                                 // materialize the predicate result as 0 or 1
+            ));
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands for the EIR predicate
-            ctx.emitter
-                .instruction(&format!("set{} al", x86_64_condition(predicate)?)); // materialize the predicate result in the low byte
-            ctx.emitter
-                .instruction(&format!("movzx {}, al", result_reg)); // widen the predicate byte into the integer result register
+            ctx.emitter.instruction(&format!(                                   // compare signed integer operands for the EIR predicate
+                "cmp {}, {}", result_reg, rhs_reg
+            ));
+            ctx.emitter.instruction(&format!(                                   // materialize the predicate result in the low byte
+                "set{} al", x86_64_condition(predicate)?
+            ));
+            ctx.emitter.instruction(&format!(                                   // widen the predicate byte into the integer result register
+                "movzx {}, al", result_reg
+            ));
         }
     }
     store_if_result(ctx, inst)
@@ -80,14 +85,14 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
     abi::load_at_offset(ctx.emitter, state_reg, state_offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // select the alias representation after runtime promotion
                 &format!("cbnz {}, {}", state_reg, ref_cell)
-            );                                                                  // select the alias representation after runtime promotion
+            );
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // test the slot's runtime representation flag
                 &format!("test {}, {}", state_reg, state_reg)
-            );                                                                  // test the slot's runtime representation flag
+            );
             ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select the alias representation after runtime promotion
         }
     }
@@ -159,7 +164,7 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
 ) -> Result<()> {
     let source_ty = source_ty.codegen_repr();
     let result_ty = result_ty.codegen_repr();
-    if local_load_types_share_storage(&source_ty, &result_ty) {
+    if crate::ir::local_load_types_share_storage(&source_ty, &result_ty) {
         return Ok(());
     }
     match (&source_ty, &result_ty) {
@@ -216,19 +221,3 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
         ))),
     }
 }
-
-/// Returns true when two PHP types use the same local-frame representation.
-pub(super) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> bool {
-    if source_ty == result_ty {
-        return true;
-    }
-    matches!(
-        (source_ty, result_ty),
-        (
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
-        ) | (PhpType::Array(_), PhpType::Array(_))
-            | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
-    )
-}
-
