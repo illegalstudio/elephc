@@ -797,7 +797,7 @@ fn emit_getenv_all_result(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `putenv(assignment)`, dispatching bare names to `unsetenv` and assignments to `putenv`.
+/// Lowers `putenv(assignment)`, rejecting invalid syntax before dispatching to libc.
 pub(crate) fn lower_putenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -805,6 +805,7 @@ pub(crate) fn lower_putenv(
     super::ensure_arg_count(inst, "putenv", 1)?;
     let assignment = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(assignment)?.codegen_repr(), "putenv assignment")?;
+    emit_putenv_syntax_guard(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_putenv_aarch64(ctx),
         Arch::X86_64 => lower_putenv_x86_64(ctx),
@@ -930,6 +931,32 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
             panic!("Windows target is not yet supported (see issue #379)");
         }
     }
+}
+
+/// Raises PHP 8's catchable `ValueError` for an empty assignment or one beginning with `=`.
+fn emit_putenv_syntax_guard(ctx: &mut FunctionContext<'_>) {
+    let invalid = ctx.next_label("putenv_invalid");
+    let valid = ctx.next_label("putenv_valid");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x2, {}", invalid));           // reject an empty assignment before reading its first byte
+            ctx.emitter.instruction("ldrb w3, [x1]");                           // inspect the first assignment byte before any libc call
+            ctx.emitter.instruction("cmp w3, #61");                             // PHP rejects environment names beginning with '='
+            ctx.emitter.instruction(&format!("b.ne {}", valid));                // a nonempty name may proceed to set or unset dispatch
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdx, rdx");                           // reject an empty assignment before reading its first byte
+            ctx.emitter.instruction(&format!("jz {}", invalid));                // an empty assignment has no valid environment name
+            ctx.emitter.instruction("cmp BYTE PTR [rax], 61");                  // PHP rejects environment names beginning with '='
+            ctx.emitter.instruction(&format!("jne {}", valid));                 // a nonempty name may proceed to set or unset dispatch
+        }
+    }
+    ctx.emitter.label(&invalid);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "putenv(): Argument #1 ($assignment) must have a valid syntax",
+    );
+    ctx.emitter.label(&valid);
 }
 
 /// Unsets a bare environment name using an allocated C string, frees the copy,

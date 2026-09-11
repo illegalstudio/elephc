@@ -7565,6 +7565,24 @@ echo function_exists("putenv");');
     assert_eq!(out, "direct:named:named:set:spread:missing:11");
 }
 
+/// Verifies eval `putenv()` raises PHP's exact `ValueError` across direct and callable dispatch.
+#[test]
+fn test_eval_putenv_rejects_invalid_assignment_syntax() {
+    let out = compile_and_run(
+        r#"<?php
+eval('try { putenv(""); } catch (ValueError $error) { echo $error->getMessage(); }
+echo "|";
+try { putenv(assignment: "="); } catch (ValueError $error) { echo $error->getMessage(); }
+echo "|";
+try { call_user_func_array("putenv", ["assignment" => "=value"]); } catch (ValueError $error) { echo $error->getMessage(); }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "putenv(): Argument #1 ($assignment) must have a valid syntax|putenv(): Argument #1 ($assignment) must have a valid syntax|putenv(): Argument #1 ($assignment) must have a valid syntax"
+    );
+}
+
 /// Verifies eval `getenv()` with zero arguments and a null name answers the environment.
 #[test]
 fn test_eval_getenv_whole_environment() {

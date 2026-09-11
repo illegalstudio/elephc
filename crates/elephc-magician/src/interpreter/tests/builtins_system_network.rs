@@ -541,6 +541,31 @@ return function_exists("putenv");"#,
     assert_eq!(values.output, "direct:named:named:set:spread:missing:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval `putenv()` rejects invalid syntax before host environment mutation.
+#[test]
+fn execute_program_putenv_rejects_invalid_assignment_syntax() {
+    let program = parse_fragment(
+        br#"try { putenv(""); } catch (ValueError $error) { echo $error->getMessage(); }
+echo "|";
+try { putenv(assignment: "="); } catch (ValueError $error) { echo $error->getMessage(); }
+echo "|";
+try { call_user_func_array("putenv", ["assignment" => "=value"]); } catch (ValueError $error) { echo $error->getMessage(); }
+return putenv("ELEPHC_EVAL_VALID_EMPTY_VALUE=");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "putenv(): Argument #1 ($assignment) must have a valid syntax|putenv(): Argument #1 ($assignment) must have a valid syntax|putenv(): Argument #1 ($assignment) must have a valid syntax"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `getenv()` with no name, a null name, and `local_only` answers the environment.
 #[test]
 fn execute_program_dispatches_getenv_whole_environment() {
