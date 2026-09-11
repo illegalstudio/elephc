@@ -2,7 +2,7 @@
 title: "fscanf() — internals"
 description: "Compiler internals for fscanf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 325
+  order: 326
 ---
 
 ## `fscanf()` — internals

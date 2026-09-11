@@ -2,7 +2,7 @@
 title: "scandir()"
 description: "Lists files and directories inside the specified path."
 sidebar:
-  order: 299
+  order: 300
 ---
 
 ## scandir()

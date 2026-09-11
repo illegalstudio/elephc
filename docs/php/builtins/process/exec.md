@@ -2,7 +2,7 @@
 title: "exec()"
 description: "Executes an external program and returns the last line of output."
 sidebar:
-  order: 719
+  order: 720
 ---
 
 ## exec()

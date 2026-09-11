@@ -2,7 +2,7 @@
 title: "mktime()"
 description: "Returns the Unix timestamp for a date."
 sidebar:
-  order: 238
+  order: 239
 ---
 
 ## mktime()

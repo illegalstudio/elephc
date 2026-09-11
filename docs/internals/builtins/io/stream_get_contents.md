@@ -2,7 +2,7 @@
 title: "stream_get_contents() — internals"
 description: "Compiler internals for stream_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 369
+  order: 370
 ---
 
 ## `stream_get_contents()` — internals

@@ -2,7 +2,7 @@
 title: "imagesetpixel()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 528
+  order: 529
 ---
 
 ## imagesetpixel()

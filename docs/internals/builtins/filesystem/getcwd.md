@@ -2,7 +2,7 @@
 title: "getcwd() — internals"
 description: "Compiler internals for getcwd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 274
+  order: 275
 ---
 
 ## `getcwd()` — internals

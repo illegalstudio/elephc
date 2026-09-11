@@ -2,7 +2,7 @@
 title: "cairo_transform() — internals"
 description: "Compiler internals for cairo_transform(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 444
+  order: 445
 ---
 
 ## `cairo_transform()` — internals

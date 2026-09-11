@@ -2,7 +2,7 @@
 title: "cairo_set_fill_rule()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 433
+  order: 434
 ---
 
 ## cairo_set_fill_rule()

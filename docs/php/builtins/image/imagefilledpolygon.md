@@ -2,7 +2,7 @@
 title: "imagefilledpolygon()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 502
+  order: 503
 ---
 
 ## imagefilledpolygon()

@@ -2,7 +2,7 @@
 title: "log()"
 description: "Natural logarithm."
 sidebar:
-  order: 584
+  order: 585
 ---
 
 ## log()

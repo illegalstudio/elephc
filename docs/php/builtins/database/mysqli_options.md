@@ -2,7 +2,7 @@
 title: "mysqli_options()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 143
+  order: 144
 ---
 
 ## mysqli_options()

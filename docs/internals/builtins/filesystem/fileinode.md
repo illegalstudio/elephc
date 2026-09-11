@@ -2,7 +2,7 @@
 title: "fileinode() — internals"
 description: "Compiler internals for fileinode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 267
+  order: 268
 ---
 
 ## `fileinode()` — internals

@@ -2,7 +2,7 @@
 title: "mysqli_multi_query()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 139
+  order: 140
 ---
 
 ## mysqli_multi_query()

@@ -2,7 +2,7 @@
 title: "time()"
 description: "Returns the current Unix timestamp."
 sidebar:
-  order: 242
+  order: 243
 ---
 
 ## time()

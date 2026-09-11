@@ -2,7 +2,7 @@
 title: "mysqli_stmt_affected_rows() — internals"
 description: "Compiler internals for mysqli_stmt_affected_rows(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 159
+  order: 160
 ---
 
 ## `mysqli_stmt_affected_rows()` — internals

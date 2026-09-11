@@ -2,7 +2,7 @@
 title: "imagedashedline()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 496
+  order: 497
 ---
 
 ## imagedashedline()

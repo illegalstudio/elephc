@@ -2,7 +2,7 @@
 title: "date_format()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 198
+  order: 199
 ---
 
 ## date_format()

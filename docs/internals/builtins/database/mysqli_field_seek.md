@@ -2,7 +2,7 @@
 title: "mysqli_field_seek() — internals"
 description: "Compiler internals for mysqli_field_seek(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 125
+  order: 126
 ---
 
 ## `mysqli_field_seek()` — internals

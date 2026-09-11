@@ -2,7 +2,7 @@
 title: "imagecreatetruecolor() — internals"
 description: "Compiler internals for imagecreatetruecolor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 493
+  order: 494
 ---
 
 ## `imagecreatetruecolor()` — internals

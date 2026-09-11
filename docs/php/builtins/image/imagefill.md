@@ -2,7 +2,7 @@
 title: "imagefill()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 499
+  order: 500
 ---
 
 ## imagefill()

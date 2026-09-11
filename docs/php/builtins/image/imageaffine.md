@@ -2,7 +2,7 @@
 title: "imageaffine()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 455
+  order: 456
 ---
 
 ## imageaffine()

@@ -2,7 +2,7 @@
 title: "mysqli_stat() — internals"
 description: "Compiler internals for mysqli_stat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 158
+  order: 159
 ---
 
 ## `mysqli_stat()` — internals

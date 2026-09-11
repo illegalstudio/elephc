@@ -2,7 +2,7 @@
 title: "stream_wrapper_register() — internals"
 description: "Compiler internals for stream_wrapper_register(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 394
+  order: 395
 ---
 
 ## `stream_wrapper_register()` — internals

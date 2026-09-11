@@ -2,7 +2,7 @@
 title: "mysqli_fetch_all() — internals"
 description: "Compiler internals for mysqli_fetch_all(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 114
+  order: 115
 ---
 
 ## `mysqli_fetch_all()` — internals

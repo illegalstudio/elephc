@@ -2,7 +2,7 @@
 title: "pcntl_strerror()"
 description: "Returns the system message for a PCNTL errno value."
 sidebar:
-  order: 641
+  order: 642
 ---
 
 ## pcntl_strerror()

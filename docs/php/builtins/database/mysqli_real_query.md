@@ -2,7 +2,7 @@
 title: "mysqli_real_query()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 149
+  order: 150
 ---
 
 ## mysqli_real_query()

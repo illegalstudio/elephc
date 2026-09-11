@@ -2,7 +2,7 @@
 title: "imagesy()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 533
+  order: 534
 ---
 
 ## imagesy()

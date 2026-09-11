@@ -2,7 +2,7 @@
 title: "ob_flush()"
 description: "Flushes (sends) the contents of the active output buffer."
 sidebar:
-  order: 343
+  order: 344
 ---
 
 ## ob_flush()

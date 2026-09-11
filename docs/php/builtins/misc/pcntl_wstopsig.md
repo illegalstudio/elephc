@@ -2,7 +2,7 @@
 title: "pcntl_wstopsig()"
 description: "Returns the stopping signal encoded in a child wait status."
 sidebar:
-  order: 651
+  order: 652
 ---
 
 ## pcntl_wstopsig()

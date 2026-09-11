@@ -2,7 +2,7 @@
 title: "imagecreatefromtga()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 491
+  order: 492
 ---
 
 ## imagecreatefromtga()

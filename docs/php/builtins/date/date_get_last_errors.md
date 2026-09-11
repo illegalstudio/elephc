@@ -2,7 +2,7 @@
 title: "date_get_last_errors()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 199
+  order: 200
 ---
 
 ## date_get_last_errors()

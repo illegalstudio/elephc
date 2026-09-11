@@ -2,7 +2,7 @@
 title: "date_default_timezone_get()"
 description: "Gets the default timezone."
 sidebar:
-  order: 195
+  order: 196
 ---
 
 ## date_default_timezone_get()

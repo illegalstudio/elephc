@@ -2,7 +2,7 @@
 title: "xml_set_object()"
 description: "Binds an object whose methods are looked up for string handler names."
 sidebar:
-  order: 929
+  order: 930
 ---
 
 ## xml_set_object()

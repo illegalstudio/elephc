@@ -2,7 +2,7 @@
 title: "stream_socket_pair() — internals"
 description: "Compiler internals for stream_socket_pair(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 388
+  order: 389
 ---
 
 ## `stream_socket_pair()` — internals

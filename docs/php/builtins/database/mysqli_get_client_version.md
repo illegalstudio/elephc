@@ -2,7 +2,7 @@
 title: "mysqli_get_client_version()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 130
+  order: 131
 ---
 
 ## mysqli_get_client_version()

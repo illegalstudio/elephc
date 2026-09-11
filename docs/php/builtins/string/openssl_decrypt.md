@@ -2,7 +2,7 @@
 title: "openssl_decrypt()"
 description: "Decrypts data with a supported AES cipher."
 sidebar:
-  order: 803
+  order: 804
 ---
 
 ## openssl_decrypt()

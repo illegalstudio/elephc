@@ -2,7 +2,7 @@
 title: "imagepalettetotruecolor() — internals"
 description: "Compiler internals for imagepalettetotruecolor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 519
+  order: 520
 ---
 
 ## `imagepalettetotruecolor()` — internals

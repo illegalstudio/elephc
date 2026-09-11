@@ -2,7 +2,7 @@
 title: "imagecolormatch()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 472
+  order: 473
 ---
 
 ## imagecolormatch()

@@ -2,7 +2,7 @@
 title: "mysqli_fetch_row()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 123
+  order: 124
 ---
 
 ## mysqli_fetch_row()

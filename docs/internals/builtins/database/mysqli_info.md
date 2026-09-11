@@ -2,7 +2,7 @@
 title: "mysqli_info() — internals"
 description: "Compiler internals for mysqli_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 135
+  order: 136
 ---
 
 ## `mysqli_info()` — internals

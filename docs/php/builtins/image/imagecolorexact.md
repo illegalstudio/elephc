@@ -2,7 +2,7 @@
 title: "imagecolorexact()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 470
+  order: 471
 ---
 
 ## imagecolorexact()

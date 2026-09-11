@@ -2,7 +2,7 @@
 title: "fileatime()"
 description: "Gets last access time of file."
 sidebar:
-  order: 264
+  order: 265
 ---
 
 ## fileatime()

@@ -2,7 +2,7 @@
 title: "function_exists() — internals"
 description: "Compiler internals for function_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 82
+  order: 83
 ---
 
 ## `function_exists()` — internals

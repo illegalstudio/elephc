@@ -2,7 +2,7 @@
 title: "getenv() — internals"
 description: "Compiler internals for getenv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 275
+  order: 276
 ---
 
 ## `getenv()` — internals

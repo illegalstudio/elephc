@@ -2,7 +2,7 @@
 title: "imagecopyresampled()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 483
+  order: 484
 ---
 
 ## imagecopyresampled()

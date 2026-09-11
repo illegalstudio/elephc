@@ -2,7 +2,7 @@
 title: "mysqli_ping()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 144
+  order: 145
 ---
 
 ## mysqli_ping()

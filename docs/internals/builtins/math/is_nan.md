@@ -2,7 +2,7 @@
 title: "is_nan() — internals"
 description: "Compiler internals for is_nan(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 583
+  order: 584
 ---
 
 ## `is_nan()` — internals

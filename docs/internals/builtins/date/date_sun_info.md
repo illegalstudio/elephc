@@ -2,7 +2,7 @@
 title: "date_sun_info() — internals"
 description: "Compiler internals for date_sun_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 208
+  order: 209
 ---
 
 ## `date_sun_info()` — internals

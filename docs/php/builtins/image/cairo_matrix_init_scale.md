@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_scale()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 414
+  order: 415
 ---
 
 ## cairo_matrix_init_scale()

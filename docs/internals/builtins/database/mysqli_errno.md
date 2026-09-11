@@ -2,7 +2,7 @@
 title: "mysqli_errno() — internals"
 description: "Compiler internals for mysqli_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 108
+  order: 109
 ---
 
 ## `mysqli_errno()` — internals

@@ -2,7 +2,7 @@
 title: "pcntl_fork() — internals"
 description: "Compiler internals for pcntl_fork(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 625
+  order: 626
 ---
 
 ## `pcntl_fork()` — internals

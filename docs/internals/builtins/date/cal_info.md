@@ -2,7 +2,7 @@
 title: "cal_info() — internals"
 description: "Compiler internals for cal_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 185
+  order: 186
 ---
 
 ## `cal_info()` — internals

@@ -2,7 +2,7 @@
 title: "pcntl_async_signals()"
 description: "Enables or queries automatic dispatch of pending signal callbacks."
 sidebar:
-  order: 621
+  order: 622
 ---
 
 ## pcntl_async_signals()

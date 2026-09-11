@@ -2,7 +2,7 @@
 title: "fflush()"
 description: "Flushes the output to a file."
 sidebar:
-  order: 312
+  order: 313
 ---
 
 ## fflush()

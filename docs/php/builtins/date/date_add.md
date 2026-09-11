@@ -2,7 +2,7 @@
 title: "date_add()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 189
+  order: 190
 ---
 
 ## date_add()

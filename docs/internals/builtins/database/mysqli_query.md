@@ -2,7 +2,7 @@
 title: "mysqli_query() — internals"
 description: "Compiler internals for mysqli_query(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 146
+  order: 147
 ---
 
 ## `mysqli_query()` — internals

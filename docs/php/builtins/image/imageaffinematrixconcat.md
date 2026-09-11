@@ -2,7 +2,7 @@
 title: "imageaffinematrixconcat()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 456
+  order: 457
 ---
 
 ## imageaffinematrixconcat()

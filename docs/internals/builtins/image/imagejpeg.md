@@ -2,7 +2,7 @@
 title: "imagejpeg() — internals"
 description: "Compiler internals for imagejpeg(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 514
+  order: 515
 ---
 
 ## `imagejpeg()` — internals

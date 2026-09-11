@@ -2,7 +2,7 @@
 title: "pcntl_waitpid() — internals"
 description: "Compiler internals for pcntl_waitpid(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 645
+  order: 646
 ---
 
 ## `pcntl_waitpid()` — internals

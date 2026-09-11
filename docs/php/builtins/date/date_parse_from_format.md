@@ -2,7 +2,7 @@
 title: "date_parse_from_format()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 206
+  order: 207
 ---
 
 ## date_parse_from_format()

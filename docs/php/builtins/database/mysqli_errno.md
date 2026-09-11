@@ -2,7 +2,7 @@
 title: "mysqli_errno()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 108
+  order: 109
 ---
 
 ## mysqli_errno()

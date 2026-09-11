@@ -2,7 +2,7 @@
 title: "xmlwriter_text() — internals"
 description: "Compiler internals for xmlwriter_text(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 962
+  order: 963
 ---
 
 ## `xmlwriter_text()` — internals

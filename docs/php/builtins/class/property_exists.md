@@ -2,7 +2,7 @@
 title: "property_exists()"
 description: "Checks whether an object or class has a property."
 sidebar:
-  order: 96
+  order: 97
 ---
 
 ## property_exists()

@@ -102483,6 +102483,151 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Array",
+    "canonical_name": "sizeof",
+    "description": "Alias of count().",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/sizeof.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 639,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.count` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/array/sizeof.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "sizeof",
+    "semantics": {
+      "argument_lowering": "count",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "shared"
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "count"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "count"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "sizeof",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "seconds",
           "optional": false,
           "type": "int"

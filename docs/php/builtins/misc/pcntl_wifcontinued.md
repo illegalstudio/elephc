@@ -2,7 +2,7 @@
 title: "pcntl_wifcontinued()"
 description: "Reports whether a child wait status represents continued execution."
 sidebar:
-  order: 647
+  order: 648
 ---
 
 ## pcntl_wifcontinued()

@@ -2,7 +2,7 @@
 title: "stream_is_local() — internals"
 description: "Compiler internals for stream_is_local(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 375
+  order: 376
 ---
 
 ## `stream_is_local()` — internals

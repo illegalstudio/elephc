@@ -2,7 +2,7 @@
 title: "gmstrftime() — internals"
 description: "Compiler internals for gmstrftime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 223
+  order: 224
 ---
 
 ## `gmstrftime()` — internals

@@ -2,7 +2,7 @@
 title: "filesize()"
 description: "Gets file size."
 sidebar:
-  order: 271
+  order: 272
 ---
 
 ## filesize()

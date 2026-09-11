@@ -2,7 +2,7 @@
 title: "xmlwriter_write_comment() — internals"
 description: "Compiler internals for xmlwriter_write_comment(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 966
+  order: 967
 ---
 
 ## `xmlwriter_write_comment()` — internals

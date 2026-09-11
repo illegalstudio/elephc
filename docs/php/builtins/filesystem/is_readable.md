@@ -2,7 +2,7 @@
 title: "is_readable()"
 description: "Tells whether the filename is readable."
 sidebar:
-  order: 281
+  order: 282
 ---
 
 ## is_readable()

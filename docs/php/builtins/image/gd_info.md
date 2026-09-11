@@ -2,7 +2,7 @@
 title: "gd_info()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 450
+  order: 451
 ---
 
 ## gd_info()

@@ -2,7 +2,7 @@
 title: "imagecreatefrombmp()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 486
+  order: 487
 ---
 
 ## imagecreatefrombmp()

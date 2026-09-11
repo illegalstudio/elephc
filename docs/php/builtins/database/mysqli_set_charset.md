@@ -2,7 +2,7 @@
 title: "mysqli_set_charset()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 155
+  order: 156
 ---
 
 ## mysqli_set_charset()

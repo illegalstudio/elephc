@@ -2,7 +2,7 @@
 title: "mysqli_character_set_name() — internals"
 description: "Compiler internals for mysqli_character_set_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 101
+  order: 102
 ---
 
 ## `mysqli_character_set_name()` — internals

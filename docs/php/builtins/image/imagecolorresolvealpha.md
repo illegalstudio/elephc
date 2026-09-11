@@ -2,7 +2,7 @@
 title: "imagecolorresolvealpha()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 474
+  order: 475
 ---
 
 ## imagecolorresolvealpha()

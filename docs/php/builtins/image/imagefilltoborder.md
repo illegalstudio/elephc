@@ -2,7 +2,7 @@
 title: "imagefilltoborder()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 504
+  order: 505
 ---
 
 ## imagefilltoborder()

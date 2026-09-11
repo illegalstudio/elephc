@@ -2,7 +2,7 @@
 title: "imagefontheight()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 507
+  order: 508
 ---
 
 ## imagefontheight()

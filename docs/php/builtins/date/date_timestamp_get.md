@@ -2,7 +2,7 @@
 title: "date_timestamp_get()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 212
+  order: 213
 ---
 
 ## date_timestamp_get()

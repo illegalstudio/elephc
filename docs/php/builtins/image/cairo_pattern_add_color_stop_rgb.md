@@ -2,7 +2,7 @@
 title: "cairo_pattern_add_color_stop_rgb()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 422
+  order: 423
 ---
 
 ## cairo_pattern_add_color_stop_rgb()

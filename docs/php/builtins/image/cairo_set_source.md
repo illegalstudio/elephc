@@ -2,7 +2,7 @@
 title: "cairo_set_source()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 438
+  order: 439
 ---
 
 ## cairo_set_source()

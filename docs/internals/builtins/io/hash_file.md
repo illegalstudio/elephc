@@ -2,7 +2,7 @@
 title: "hash_file() — internals"
 description: "Compiler internals for hash_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 339
+  order: 340
 ---
 
 ## `hash_file()` — internals

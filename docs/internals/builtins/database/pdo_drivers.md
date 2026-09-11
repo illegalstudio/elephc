@@ -2,7 +2,7 @@
 title: "pdo_drivers() — internals"
 description: "Compiler internals for pdo_drivers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 182
+  order: 183
 ---
 
 ## `pdo_drivers()` — internals

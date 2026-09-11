@@ -2,7 +2,7 @@
 title: "hexdec() — internals"
 description: "Compiler internals for hexdec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 578
+  order: 579
 ---
 
 ## `hexdec()` — internals

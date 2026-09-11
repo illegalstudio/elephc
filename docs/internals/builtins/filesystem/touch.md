@@ -2,7 +2,7 @@
 title: "touch() — internals"
 description: "Compiler internals for touch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 305
+  order: 306
 ---
 
 ## `touch()` — internals

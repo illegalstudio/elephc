@@ -2,7 +2,7 @@
 title: "xml_set_external_entity_ref_handler() — internals"
 description: "Compiler internals for xml_set_external_entity_ref_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 927
+  order: 928
 ---
 
 ## `xml_set_external_entity_ref_handler()` — internals

@@ -2,7 +2,7 @@
 title: "imagecreatefromtga() — internals"
 description: "Compiler internals for imagecreatefromtga(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 491
+  order: 492
 ---
 
 ## `imagecreatefromtga()` — internals

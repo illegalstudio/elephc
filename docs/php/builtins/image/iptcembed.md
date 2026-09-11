@@ -2,7 +2,7 @@
 title: "iptcembed()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 537
+  order: 538
 ---
 
 ## iptcembed()

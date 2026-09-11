@@ -2,7 +2,7 @@
 title: "xmlwriter_end_cdata()"
 description: "Ends the current CDATA section."
 sidebar:
-  order: 934
+  order: 935
 ---
 
 ## xmlwriter_end_cdata()

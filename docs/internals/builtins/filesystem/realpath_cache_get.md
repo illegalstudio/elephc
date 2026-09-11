@@ -2,7 +2,7 @@
 title: "realpath_cache_get() — internals"
 description: "Compiler internals for realpath_cache_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 295
+  order: 296
 ---
 
 ## `realpath_cache_get()` — internals

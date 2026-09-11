@@ -2,7 +2,7 @@
 title: "imagesetthickness()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 529
+  order: 530
 ---
 
 ## imagesetthickness()

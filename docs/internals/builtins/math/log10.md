@@ -2,7 +2,7 @@
 title: "log10() — internals"
 description: "Compiler internals for log10(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 585
+  order: 586
 ---
 
 ## `log10()` — internals
