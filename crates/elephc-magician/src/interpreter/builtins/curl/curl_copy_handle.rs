@@ -5,8 +5,8 @@
 //! - `crate::interpreter::builtins::curl` dispatch.
 //!
 //! Key details:
-//! - Callbacks are re-registered onto the copy rather than inherited, so each callback
-//!   slot points at the copied eval handle and retains the same callable independently.
+//! - Active callbacks are re-registered onto the copy rather than inherited, so their
+//!   slots point at the copied eval handle; all callables are retained independently.
 
 use crate::curl_ffi as ffi;
 
