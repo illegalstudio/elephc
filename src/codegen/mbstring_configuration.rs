@@ -44,6 +44,7 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
     let host = data.add_words(vec![DataWord::U64(1 | (24 << 32)), DataWord::U64(0),
         DataWord::Symbol("__rt_mbstring_startup_diagnostic".into())]);
     let arm = emitter.target.arch == Arch::AArch64;
+    let status_done = local_label(emitter, "mbstring_startup_status_done");
     emit_process_entry(emitter);
     emitter.label_global("__rt_mbstring_startup_status");
     if arm {
@@ -58,10 +59,10 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
         abi::emit_symbol_address(emitter, if arm { "x0" } else { "rdi" }, &provider);
         emitter.bl_c("elephc_mbstring_mime_provider_v1");
         if arm {
-            emitter.instruction("cbnz w0, __rt_mbstring_startup_status_done");  // reject an invalid provider before requesting any bridge result
+            emitter.instruction(&format!("cbnz w0, {status_done}"));            // reject an invalid provider before requesting any bridge result
         } else {
             emitter.instruction("test eax, eax");                               // inspect provider validation before startup state changes
-            emitter.instruction("jnz __rt_mbstring_startup_status_done");       // preserve fatal integration failure without an uninitialized release
+            emitter.instruction(&format!("jnz {status_done}"));                 // preserve fatal integration failure without an uninitialized release
         }
     }
     abi::emit_symbol_address(emitter, if arm { "x0" } else { "rdi" }, &arguments_label);
@@ -73,7 +74,7 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
     emitter.instruction(if arm { "mov x0, sp" } else { "mov rdi, rsp" });       // return all result storage to its owning Rust allocator
     emitter.bl_c("elephc_mbstring_release_v1");
     emitter.instruction(if arm { "ldr w0, [sp, #48]" } else { "mov eax, DWORD PTR [rsp + 48]" }); // recover status after releasing every published bridge buffer
-    emitter.label("__rt_mbstring_startup_status_done");
+    emitter.label(&status_done);
     if arm {
         emitter.instruction("ldp x29, x30, [sp, #64]");                         // restore host linkage after provider validation or result cleanup
         emitter.instruction("add sp, sp, #80");                                 // retire stack-owned initialization metadata
@@ -86,19 +87,20 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
 
 /// Applies executable startup failure policy while libraries use the non-exiting status entry.
 fn emit_process_entry(emitter: &mut Emitter) {
+    let ready = local_label(emitter, "mbstring_startup_ready");
     emitter.label_global("__rt_mbstring_startup");
     abi::emit_frame_prologue(emitter, 16);
     abi::emit_call_label(emitter, "__rt_mbstring_startup_status");
     if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("cbz w0, __rt_mbstring_startup_ready");             // continue only after configuration has been installed
+        emitter.instruction(&format!("cbz w0, {ready}"));                       // continue only after configuration has been installed
         emitter.instruction("mov x0, #1");                                      // report failed executable startup as process failure
     } else {
         emitter.instruction("test eax, eax");                                   // inspect the completed initializer status
-        emitter.instruction("jz __rt_mbstring_startup_ready");                  // return to the request entry after successful installation
+        emitter.instruction(&format!("jz {ready}"));                            // return to the request entry after successful installation
         emitter.instruction("mov edi, 1");                                      // report failed executable startup as process failure
     }
     emitter.bl_c("exit");
-    emitter.label("__rt_mbstring_startup_ready");
+    emitter.label(&ready);
     abi::emit_frame_restore(emitter, 16);
     abi::emit_return(emitter);
 }
@@ -106,6 +108,8 @@ fn emit_process_entry(emitter: &mut Emitter) {
 /// Writes complete startup warnings without allowing PHP callbacks during process configuration.
 fn diagnostic(emitter: &mut Emitter, data: &mut DataSection) {
     let arm = emitter.target.arch == Arch::AArch64;
+    let deprecated_prefix = local_label(emitter, "mbstring_startup_deprecated");
+    let write_prefix = local_label(emitter, "mbstring_startup_prefix");
     let (warning, _) = data.add_string(b"Warning: ");
     let (deprecated, _) = data.add_string(b"Deprecated: ");
     let (newline, _) = data.add_string(b"\n");
@@ -114,7 +118,7 @@ fn diagnostic(emitter: &mut Emitter, data: &mut DataSection) {
         emitter.instruction("stp x29, x30, [sp, #-32]!");                       // preserve C linkage and reserve the original message
         emitter.instruction("stp x2, x3, [sp, #16]");                           // retain binary message bytes and length across prefix output
         emitter.instruction("cmp w1, #8192");                                   // select the PHP diagnostic prefix from the supplied level
-        emitter.instruction("b.eq __rt_mbstring_startup_deprecated");           // route deprecations through their distinct prefix
+        emitter.instruction(&format!("b.eq {deprecated_prefix}"));              // route deprecations through their distinct prefix
     } else {
         emitter.instruction("push rbp");                                        // preserve the C frame and align output calls
         emitter.instruction("mov rbp, rsp");                                    // establish a stable startup diagnostic frame
@@ -122,15 +126,15 @@ fn diagnostic(emitter: &mut Emitter, data: &mut DataSection) {
         emitter.instruction("mov QWORD PTR [rsp], rdx");                        // retain binary message bytes across prefix output
         emitter.instruction("mov QWORD PTR [rsp + 8], rcx");                    // preserve exact length including any embedded NUL
         emitter.instruction("cmp esi, 8192");                                   // distinguish startup warnings from deprecations
-        emitter.instruction("je __rt_mbstring_startup_deprecated");             // select the deprecation prefix before writing any bytes
+        emitter.instruction(&format!("je {deprecated_prefix}"));                // select the deprecation prefix before writing any bytes
     }
     abi::emit_symbol_address(emitter, if arm { "x1" } else { "rdi" }, &warning);
     emitter.instruction(if arm { "mov x2, #9" } else { "mov esi, 9" });         // provide the complete warning prefix length
-    emitter.instruction(if arm { "b __rt_mbstring_startup_prefix" } else { "jmp __rt_mbstring_startup_prefix" }); // share output and message cleanup across levels
-    emitter.label("__rt_mbstring_startup_deprecated");
+    emitter.instruction(&format!("{} {write_prefix}", if arm { "b" } else { "jmp" })); // share output and message cleanup across levels
+    emitter.label(&deprecated_prefix);
     abi::emit_symbol_address(emitter, if arm { "x1" } else { "rdi" }, &deprecated);
     emitter.instruction(if arm { "mov x2, #12" } else { "mov esi, 12" });       // provide the complete deprecation prefix length
-    emitter.label("__rt_mbstring_startup_prefix");
+    emitter.label(&write_prefix);
     abi::emit_call_label(emitter, "__rt_diag_warning");
     if arm {
         emitter.instruction("ldp x1, x2, [sp, #16]");                           // restore the borrowed complete message descriptor
@@ -150,4 +154,9 @@ fn diagnostic(emitter: &mut Emitter, data: &mut DataSection) {
         emitter.instruction("leave");                                           // restore C linkage after non-reentrant diagnostic output
     }
     emitter.instruction("ret");                                                 // resume startup validation without invoking PHP or unwinding Rust
+}
+
+/// Creates an assembler-local label that remains inside its enclosing runtime helper atom.
+fn local_label(emitter: &Emitter, name: &str) -> String {
+    format!("{}{name}", emitter.target.platform.local_label_prefix())
 }

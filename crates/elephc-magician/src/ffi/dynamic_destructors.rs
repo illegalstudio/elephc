@@ -129,7 +129,11 @@ unsafe fn dynamic_object_destruct_inner(
         return 0;
     }
     if context.dynamic_object_class(identity).is_none() {
-        unregister_dynamic_object(identity);
+        // Closure metadata may own a foreign context lease needed by a receiver
+        // destructor. The final owner callback drops it after child release.
+        if context.closure_object_target(identity).is_none() {
+            unregister_dynamic_object(identity);
+        }
         return 0;
     }
 

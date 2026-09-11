@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Stores a borrowed reflection argument under an independent static-property owner.
+/// Same-cell writes preserve the existing owner; replacements release the displaced value.
+pub(in crate::interpreter) fn store_borrowed_static_property(
+    class_name: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if context.static_property(class_name, property_name) == Some(value) {
+        return Ok(());
+    }
+    let retained = values.retain(value)?;
+    if let Some(previous) = context.set_static_property(class_name, property_name, retained) {
+        eval_release_value(context, values, previous)?;
+    }
+    Ok(())
+}
+
 /// Reads one eval-declared static property after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_static_property_get_result(
     class_name: &str,
@@ -776,6 +795,13 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                         values,
                     );
                 }
+                super::instance_property_access::validate_eval_native_array_property_assignment(
+                    &declaring_class,
+                    property_name,
+                    value,
+                    context,
+                    values,
+                )?;
                 if let Some(target) = context
                     .static_property_alias(&declaring_class, property_name)
                     .cloned()
@@ -823,6 +849,13 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
             );
         }
         if is_static {
+            super::instance_property_access::validate_eval_native_array_property_assignment(
+                &declaring_class,
+                property_name,
+                value,
+                context,
+                values,
+            )?;
             if let Some(target) = context
                 .static_property_alias(&declaring_class, property_name)
                 .cloned()

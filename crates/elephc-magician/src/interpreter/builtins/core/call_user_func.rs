@@ -16,6 +16,7 @@ use super::super::registry::{eval_builtin_call_by_value, eval_builtin_uses_owned
 eval_builtin! {
     contract: "call_user_func",
     area: Core,
+    source_arguments: true,
     direct: Core,
     values: Core,
 }

@@ -30,7 +30,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
 fn adopt(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
     let result = if arm { "x0" } else { "rax" };
-    let scratch = if arm { "x9" } else { "r10" };
+    let scratch = if arm { "x10" } else { "r10" };
     emitter.label_global(ADOPT);
     if arm {
         emitter.instruction(&format!("cbz x0, {ADOPT}_done"));                  // null transfers no owner and needs no queue node
@@ -59,8 +59,8 @@ fn adopt(emitter: &mut Emitter) {
     }
     abi::emit_load_symbol_to_reg(emitter, scratch, TAIL, 0);
     if arm {
-        emitter.instruction(&format!("cbz x9, {ADOPT}_first"));                 // initialize the head when no earlier node remains
-        emitter.instruction("str x0, [x9]");                                    // append after every previously adopted owner
+        emitter.instruction(&format!("cbz x10, {ADOPT}_first"));                // initialize the head when no earlier node remains
+        emitter.instruction("str x0, [x10]");                                   // append after every previously adopted owner
         emitter.instruction(&format!("b {ADOPT}_tail"));                        // publish the new tail after linking its predecessor
     } else {
         emitter.instruction("test r10, r10");                                   // inspect the current queue tail
@@ -85,15 +85,15 @@ fn adopt(emitter: &mut Emitter) {
 /// Releases all adopted roots while keeping PHP exceptions contained until the queue is empty.
 fn drain(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
-    let scratch = if arm { "x9" } else { "r10" };
+    let scratch = if arm { "x10" } else { "r10" };
     emitter.label_global(DRAIN);
     abi::emit_load_symbol_to_reg(emitter, scratch, ACTIVE, 0);
     if arm {
-        emitter.instruction(&format!("cbnz x9, {DRAIN}_nested"));               // let the enclosing drain consume owners adopted by reentrant callbacks
+        emitter.instruction(&format!("cbnz x10, {DRAIN}_nested"));              // let the enclosing drain consume owners adopted by reentrant callbacks
         emitter.instruction("sub sp, sp, #64");                                 // reserve detached ownership, cleanup state, and linkage
         emitter.instruction("stp x29, x30, [sp, #48]");                         // preserve linkage across destructor callbacks
         emitter.instruction("add x29, sp, #48");                                // expose the aligned cleanup frame
-        emitter.instruction("mov x9, #1");                                      // publish a single active drain per request
+        emitter.instruction("mov x10, #1");                                     // publish a single active drain per request
     } else {
         emitter.instruction("test r10, r10");                                   // detect request-reset reentry from a destructor
         emitter.instruction(&format!("jnz {DRAIN}_nested"));                    // retain traversal in the already active frame
@@ -107,11 +107,11 @@ fn drain(emitter: &mut Emitter) {
     emitter.label(&format!("{DRAIN}_loop"));
     abi::emit_load_symbol_to_reg(emitter, scratch, HEAD, 0);
     if arm {
-        emitter.instruction(&format!("cbz x9, {DRAIN}_finish"));                // finish only after callback-created entries have also been consumed
-        emitter.instruction("ldr x10, [x9, #8]");                               // retain this node's boxed owner outside the queue
-        emitter.instruction("str x10, [sp]");                                   // preserve the owner while reclaiming the raw node
-        emitter.instruction("mov x0, x9");                                      // pass the detached node to the native allocator
-        emitter.instruction("ldr x9, [x9]");                                    // recover the next node before freeing the current allocation
+        emitter.instruction(&format!("cbz x10, {DRAIN}_finish"));               // finish only after callback-created entries have also been consumed
+        emitter.instruction("ldr x11, [x10, #8]");                              // retain this node's boxed owner outside the queue
+        emitter.instruction("str x11, [sp]");                                   // preserve the owner while reclaiming the raw node
+        emitter.instruction("mov x0, x10");                                     // pass the detached node to the native allocator
+        emitter.instruction("ldr x10, [x10]");                                  // recover the next node before freeing the current allocation
     } else {
         emitter.instruction("test r10, r10");                                   // inspect whether any queued owner remains
         emitter.instruction(&format!("jz {DRAIN}_finish"));                     // leave only after draining reentrant additions
@@ -122,7 +122,7 @@ fn drain(emitter: &mut Emitter) {
     }
     abi::emit_store_reg_to_symbol(emitter, scratch, HEAD, 0);
     if arm {
-        emitter.instruction(&format!("cbnz x9, {DRAIN}_release"));              // preserve the tail of a nonempty queue
+        emitter.instruction(&format!("cbnz x10, {DRAIN}_release"));             // preserve the tail of a nonempty queue
     } else {
         emitter.instruction("test r10, r10");                                   // test the published successor
         emitter.instruction(&format!("jnz {DRAIN}_release"));                   // retain an existing tail when more nodes remain
@@ -146,4 +146,35 @@ fn drain(emitter: &mut Emitter) {
     emitter.label(&format!("{DRAIN}_nested"));
     emitter.instruction(if arm { "mov x0, #0" } else { "xor eax, eax" });       // nested drains leave completion and exceptions to the active owner
     emitter.instruction("ret");                                                 // return without disturbing active traversal or GC suppression
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Ensures queue publication keeps its value outside the AArch64 symbol-address scratch.
+    #[test]
+    fn deferred_capture_queue_uses_distinct_symbol_and_value_registers_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit(&mut emitter);
+            let assembly = emitter.output();
+
+            assert!(assembly.contains(DRAIN), "missing deferred drain for {name}");
+            if target.arch == Arch::AArch64 {
+                assert!(assembly.contains("str x10, [x9]"), "missing safe queue publication for {name}");
+                assert!(!assembly.contains("str x9, [x9]"), "self-clobbering queue publication for {name}");
+            } else {
+                assert!(assembly.contains("r10"), "missing x86 queue scratch for {name}");
+            }
+        }
+    }
 }

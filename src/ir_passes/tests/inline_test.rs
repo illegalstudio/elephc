@@ -10,8 +10,8 @@
 //! - Verifies change flag, Call removal, result flow via continuation block param,
 //!   validator cleanliness, and non-inlining of large/recursive/try/gen cases.
 //! - Also covers the ownership/termination guards: mutual recursion must not hang
-//!   or inline, by-ref callees must be refused, and refcounted local stores must
-//!   remain real calls when their call site is inside a loop.
+//!   or inline, by-ref callees must be refused, mutated string parameters must retain
+//!   their real frame, and refcounted local stores must remain real calls in loops.
 //! - Uses $argc-style "runtime unknown" motivation only at e2e layer.
 
 use crate::ir::{
@@ -881,6 +881,104 @@ fn inliner_inlines_destructor_free_string_helper() {
         !c.instructions.iter().any(|i| i.op == Op::Call),
         "string helper call must be gone after inlining"
     );
+    assert!(validate_module(&module).is_ok());
+}
+
+/// A typed string parameter is retained by the real callee prologue before assignment
+/// releases its old value. The inliner's direct slot binding is only borrowed, so a helper
+/// that replaces its parameter must keep the call boundary until the splice reproduces that
+/// retain and transfers the replacement owner out of the callee frame.
+#[test]
+fn inliner_skips_callee_that_replaces_a_string_parameter() {
+    let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
+    let replacement_data = module.data.intern_string("replacement");
+
+    let mut callee = Function::new("replace_param".to_string(), IrType::Str, PhpType::Str);
+    callee.params.push(FunctionParam {
+        name: "value".to_string(),
+        ir_type: IrType::Str,
+        php_type: PhpType::Str,
+        by_ref: false,
+        variadic: false,
+    });
+    let slot = callee.add_local(
+        Some("value".to_string()),
+        IrType::Str,
+        PhpType::Str,
+        LocalKind::PhpLocal,
+    );
+    {
+        let mut builder = Builder::new(&mut callee);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let old = builder.emit_load_local(slot, IrType::Str, PhpType::Str);
+        builder.emit(
+            Op::Release,
+            vec![old],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        let literal = builder.emit_const_str(replacement_data);
+        let replacement = builder
+            .emit(
+                Op::StrPersist,
+                vec![literal],
+                None,
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Owned,
+            )
+            .unwrap();
+        builder.emit(
+            Op::StoreLocal,
+            vec![replacement],
+            Some(Immediate::LocalSlot(slot)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        let result = builder.emit_load_local(slot, IrType::Str, PhpType::Str);
+        builder.terminate(Terminator::Return {
+            value: Some(result),
+        });
+    }
+    module.add_function(callee);
+
+    let mut caller = Function::new("call_replace_param".to_string(), IrType::Str, PhpType::Str);
+    {
+        let mut builder = Builder::new(&mut caller);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let input_data = module.data.intern_string("input");
+        let input = builder.emit_const_str(input_data);
+        let callee_name = module.data.intern_function_name("replace_param");
+        let result = builder
+            .emit(
+                Op::Call,
+                vec![input],
+                Some(Immediate::Data(callee_name)),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::MaybeOwned,
+            )
+            .unwrap();
+        builder.terminate(Terminator::Return {
+            value: Some(result),
+        });
+    }
+    module.add_function(caller);
+
+    assert!(!inline_small_functions(&mut module));
+    let caller = module
+        .functions
+        .iter()
+        .find(|function| function.name == "call_replace_param")
+        .unwrap();
+    assert!(caller.instructions.iter().any(|instruction| instruction.op == Op::Call));
     assert!(validate_module(&module).is_ok());
 }
 

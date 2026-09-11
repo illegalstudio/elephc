@@ -211,6 +211,12 @@ pub(in crate::interpreter) fn eval_call(
         return eval_builtin_array_mutating_declared_call(name, args, context, scope, values);
     }
     if eval_php_visible_builtin_exists(name) {
+        if eval_call_args_are_plain_positional(args)
+            && eval_declared_builtin_requires_source_arguments(name)
+        {
+            let args = positional_call_arg_exprs(args)?;
+            return eval_positional_expr_call(name, &args, context, scope, values);
+        }
         return eval_builtin_call(name, args, context, scope, values);
     }
 

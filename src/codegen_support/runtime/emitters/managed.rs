@@ -166,6 +166,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_decref_any(emitter);
     arrays::emit_decref_mixed(emitter);
     arrays::emit_gc_note_child_ref(emitter);
+    arrays::emit_gc_eval_object_children(emitter);
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_reference(emitter);

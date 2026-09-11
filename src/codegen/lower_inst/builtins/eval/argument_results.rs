@@ -114,6 +114,33 @@ pub(super) fn store_eval_mixed_operand_at(
     Ok(())
 }
 
+/// Retires metadata-query adapter boxes while preserving the scalar predicate result.
+///
+/// Existing Mixed operands remain borrowed from their EIR owner. Concrete native
+/// payloads receive a temporary Mixed box from `store_eval_mixed_operand_at`, so only
+/// those boxes belong to the metadata query and must be released here.
+pub(super) fn retire_eval_metadata_operand_boxes(
+    ctx: &mut FunctionContext<'_>,
+    operands: &[(ValueId, usize)],
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    for &(value, offset) in operands {
+        if matches!(
+            ctx.value_php_type(value)?.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) {
+            continue;
+        }
+        ctx.emitter
+            .comment("retire temporary eval metadata operand box");
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, offset + 16);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(ctx.emitter, result);
+    }
+    Ok(())
+}
+
 /// Probes whether eval has a late-static called-class override for an AOT frame.
 pub(super) fn emit_eval_native_frame_override_probe(
     ctx: &mut FunctionContext<'_>,

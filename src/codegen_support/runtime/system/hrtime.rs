@@ -13,6 +13,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::{Arch, Platform};
+use crate::types::PhpType;
 
 /// Emits `__rt_hrtime`, returning the monotonic clock as nanoseconds or a `[sec, nsec]` array.
 ///
@@ -89,6 +90,16 @@ pub fn emit_hrtime(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // x2 = high payload word (unused)
     emitter.instruction("mov x0, #5");                                          // x0 = runtime tag 5 (assoc array)
     emitter.instruction("bl __rt_mixed_from_value");                            // → x0 = boxed mixed assoc array
+    emitter.instruction("str x0, [sp, #24]");                                   // preserve the fresh Mixed box while releasing the raw hash owner
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the raw hash reference retained by __rt_mixed_from_value
+    crate::codegen_support::abi::emit_decref_if_refcounted(
+        emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Int),
+        },
+    );
+    emitter.instruction("ldr x0, [sp, #24]");                                   // restore the boxed hrtime array result
 
     emitter.label("__rt_hrtime_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -152,6 +163,16 @@ fn emit_hrtime_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 0");                                          // rsi = high payload word (unused)
     emitter.instruction("mov rax, 5");                                          // rax = runtime tag 5 (assoc array)
     emitter.instruction("call __rt_mixed_from_value");                          // → rax = boxed mixed assoc array
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the fresh Mixed box while releasing the raw hash owner
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the raw hash reference retained by __rt_mixed_from_value
+    crate::codegen_support::abi::emit_decref_if_refcounted(
+        emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Int),
+        },
+    );
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the boxed hrtime array result
 
     emitter.label("__rt_hrtime_done_x86");
     emitter.instruction("add rsp, 48");                                         // deallocate the frame

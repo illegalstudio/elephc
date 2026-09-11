@@ -257,90 +257,100 @@ pub(in crate::interpreter) fn eval_array_callable(
     if values.array_len(callback)? != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let zero = values.int(0)?;
-    let one = match values.int(1) {
-        Ok(one) => one,
-        Err(status) => {
-            values.release(zero)?;
-            return Err(status);
-        }
-    };
-    let receiver = match values.array_get(callback, zero) {
-        Ok(receiver) => receiver,
-        Err(status) => {
-            values.release(zero)?;
-            values.release(one)?;
-            return Err(status);
-        }
-    };
-    let method = match values.array_get(callback, one) {
-        Ok(method) => method,
-        Err(status) => {
-            values.release(zero)?;
-            values.release(one)?;
-            return Err(status);
-        }
-    };
-    values.release(zero)?;
-    values.release(one)?;
-    let method =
-        String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
-    match values.type_tag(receiver)? {
-        EVAL_TAG_OBJECT => {
-            let native_dispatch = context
-                .eval_object_callable_native_dispatch(callback, receiver, &method)
-                .map(|(native_class, bridge_scope, called_class)| {
-                    (
-                        native_class.to_string(),
-                        bridge_scope.to_string(),
-                        called_class.to_string(),
-                    )
-                });
-            let (native_class, bridge_scope, called_class) = native_dispatch
-                .map(|(native_class, bridge_scope, called_class)| {
-                    (Some(native_class), Some(bridge_scope), Some(called_class))
+    let mut temporaries = Vec::with_capacity(4);
+    let result = (|| {
+        let zero = values.int(0)?;
+        temporaries.push(zero);
+        let one = values.int(1)?;
+        temporaries.push(one);
+        let receiver = values.array_get(callback, zero)?;
+        temporaries.push(receiver);
+        let method = values.array_get(callback, one)?;
+        temporaries.push(method);
+        let method = String::from_utf8(values.string_bytes(method)?)
+            .map_err(|_| EvalStatus::RuntimeFatal)?;
+        match values.type_tag(receiver)? {
+            EVAL_TAG_OBJECT => {
+                let native_dispatch = context
+                    .eval_object_callable_native_dispatch(callback, receiver, &method)
+                    .map(|(native_class, bridge_scope, called_class)| {
+                        (
+                            native_class.to_string(),
+                            bridge_scope.to_string(),
+                            called_class.to_string(),
+                        )
+                    });
+                let (native_class, bridge_scope, called_class) = native_dispatch
+                    .map(|(native_class, bridge_scope, called_class)| {
+                        (Some(native_class), Some(bridge_scope), Some(called_class))
+                    })
+                    .unwrap_or((None, None, None));
+                Ok(EvaluatedCallable::ObjectMethod {
+                    object: receiver,
+                    method,
+                    called_class,
+                    native_class,
+                    bridge_scope,
                 })
-                .unwrap_or((None, None, None));
-            Ok(EvaluatedCallable::ObjectMethod {
-                object: receiver,
-                method,
-                called_class,
-                native_class,
-                bridge_scope,
-            })
-        }
-        EVAL_TAG_STRING => {
-            let class_name = String::from_utf8(values.string_bytes(receiver)?)
-                .map_err(|_| EvalStatus::RuntimeFatal)?;
-            if let Some(callable) = eval_special_class_array_callable(
-                &class_name,
-                &method,
-                lexical_scope,
-                context,
-                values,
-            )? {
-                return Ok(callable);
             }
-            let called_class = context
-                .eval_static_callable_called_class(callback, &class_name, &method)
-                .map(str::to_string);
-            let native_dispatch = context
-                .eval_static_callable_native_dispatch(callback, &class_name, &method)
-                .map(|(native_class, bridge_scope)| {
-                    (native_class.to_string(), bridge_scope.to_string())
-                });
-            let (native_class, bridge_scope) = native_dispatch
-                .map(|(native_class, bridge_scope)| (Some(native_class), Some(bridge_scope)))
-                .unwrap_or((None, None));
-            Ok(EvaluatedCallable::StaticMethod {
-                class_name,
-                method,
-                called_class,
-                native_class,
-                bridge_scope,
-            })
+            EVAL_TAG_STRING => {
+                let class_name = String::from_utf8(values.string_bytes(receiver)?)
+                    .map_err(|_| EvalStatus::RuntimeFatal)?;
+                if let Some(callable) = eval_special_class_array_callable(
+                    &class_name,
+                    &method,
+                    lexical_scope,
+                    context,
+                    values,
+                )? {
+                    return Ok(callable);
+                }
+                let called_class = context
+                    .eval_static_callable_called_class(callback, &class_name, &method)
+                    .map(str::to_string);
+                let native_dispatch = context
+                    .eval_static_callable_native_dispatch(callback, &class_name, &method)
+                    .map(|(native_class, bridge_scope)| {
+                        (native_class.to_string(), bridge_scope.to_string())
+                    });
+                let (native_class, bridge_scope) = native_dispatch
+                    .map(|(native_class, bridge_scope)| (Some(native_class), Some(bridge_scope)))
+                    .unwrap_or((None, None));
+                Ok(EvaluatedCallable::StaticMethod {
+                    class_name,
+                    method,
+                    called_class,
+                    native_class,
+                    bridge_scope,
+                })
+            }
+            _ => Err(EvalStatus::UnsupportedConstruct),
         }
-        _ => Err(EvalStatus::UnsupportedConstruct),
+    })();
+    // An object-method result transfers the array read's receiver owner. Special
+    // class strings resolve to a borrowed `$this`, so their temporary is released.
+    let receiver = match &result {
+        Ok(EvaluatedCallable::ObjectMethod { object, .. }) => Some(*object),
+        _ => None,
+    };
+    let mut cleanup = Ok(());
+    for temporary in temporaries {
+        if Some(temporary) != receiver {
+            let released = values.release(temporary);
+            if cleanup.is_ok() {
+                cleanup = released;
+            }
+        }
+    }
+    match (result, cleanup) {
+        (Err(status), _) => Err(status),
+        (Ok(_), Err(status)) => {
+            if let Some(receiver) = receiver.filter(|cell| !cell.is_borrowed()) {
+                let _ = values.release(receiver);
+            }
+            Err(status)
+        }
+        (Ok(callable), Ok(())) => Ok(callable),
     }
 }
 

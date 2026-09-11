@@ -236,7 +236,8 @@ fn emit_runtime_callable_invoker_impl(
 
 /// Boxes the callable target's return value into the invoker's uniform Mixed result.
 ///
-/// String results own the value stabilized by `restore_concat_offset_after_nested_call`.
+/// String results transfer an owned callee result or stabilize a borrowed one in
+/// `restore_concat_offset_after_nested_call`.
 /// By-value typed object returns own either a fresh object or the reference acquired
 /// by source return lowering. Boxing consumes that owner in both cases.
 ///
@@ -703,7 +704,7 @@ fn emit_loaded_indexed_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter, ctx);
     sig.return_type.clone()
 }
 
@@ -819,7 +820,7 @@ fn emit_loaded_assoc_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter, ctx);
     sig.return_type.clone()
 }
 
@@ -2197,12 +2198,18 @@ fn call_target_with_pushed_args(
     arg_types: &[PhpType],
     sig: &FunctionSig,
     emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
 ) {
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
     save_concat_offset_before_nested_call(emitter);
     abi::emit_call_reg(emitter, call_reg);
-    restore_concat_offset_after_nested_call(emitter, &sig.return_type);
+    restore_concat_offset_after_nested_call(
+        emitter,
+        &sig.return_type,
+        sig.by_ref_return,
+        ctx,
+    );
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
 }
 
@@ -2217,9 +2224,21 @@ fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
 }
 
 /// Restores the concat offset after a nested callable target returns.
-fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &PhpType) {
+fn restore_concat_offset_after_nested_call(
+    emitter: &mut Emitter,
+    return_ty: &PhpType,
+    by_ref_return: bool,
+    ctx: &mut InvokerEmitContext,
+) {
     if return_ty.codegen_repr() == PhpType::Str {
-        abi::emit_call_label(emitter, "__rt_str_persist");
+        if by_ref_return {
+            abi::emit_call_label(emitter, "__rt_str_persist");
+        } else {
+            let owned = ctx.next_label("invoker_string_return_owned");
+            crate::codegen::return_ownership::emit_branch_if_owned(emitter, &owned);
+            abi::emit_call_label(emitter, "__rt_str_persist");
+            emitter.label(&owned);
+        }
     }
     let scratch = abi::temp_int_reg(emitter.target);
     match emitter.target.arch {

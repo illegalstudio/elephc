@@ -16,6 +16,8 @@ mod externs;
 #[cfg(not(test))]
 mod ops;
 #[cfg(not(test))]
+mod object_owners;
+#[cfg(not(test))]
 mod tags;
 
 #[cfg(not(test))]
@@ -106,6 +108,10 @@ impl ElephcRuntimeOps {
 pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
     unsafe {
         __elephc_eval_install_dynamic_object_destructor_hook(callback);
+        externs::__elephc_eval_install_object_owner_hooks(
+            object_owners::object_gc_child as *const () as usize,
+            object_owners::release_object_children as *const () as usize,
+        );
     }
 }
 

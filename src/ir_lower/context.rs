@@ -1575,25 +1575,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
         // A loop-carried slot can exist globally without being definitely initialized
-        // on this CFG path. Release the runtime occupant before overwriting it.
+        // on this CFG path. An eval barrier can likewise populate a slot through scope
+        // reload before its first source-level assignment. Release that runtime occupant
+        // before overwriting it.
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && !self.loop_stack.is_empty()
+            && (!self.loop_stack.is_empty() || self.eval_barrier_active)
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
-        // A first syntactic store inside a loop body (main or function) can still
-        // overwrite a prior runtime iteration's value: the slot has no straight-line
-        // predecessor store so it is not in `initialized_slots`, but the loop back-edge
-        // makes it live on iterations 2+. Release the previous occupant so the old value
-        // is freed on reassign. Function cleanup locals (including returned slots) are
-        // zero-initialized in the prologue, so the first iteration safely releases a null
-        // slot; subsequent iterations release the prior value.
+        // A first syntactic store inside a loop body can overwrite a prior iteration's
+        // value. It can also replace a value installed by eval scope reload. In either
+        // case the slot has no straight-line predecessor store, so release its runtime
+        // occupant. Function cleanup locals are zero-initialized, making a path where
+        // neither source ran safe.
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
-            && !self.loop_stack.is_empty()
+            && (!self.loop_stack.is_empty() || self.eval_barrier_active)
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }

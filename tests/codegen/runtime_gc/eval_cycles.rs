@@ -81,6 +81,65 @@ eval($source);
     assert_eq!(residual[0], residual[1], "native pending Throwable owners survived eval catches");
 }
 
+/// Native exceptions caught and rethrown by opaque eval balance both ownership transfers.
+#[test]
+fn test_eval_throwable_native_round_trip_releases_both_box_owners() {
+    let result = compile_and_run_with_heap_debug(r#"<?php
+function throwNativePreviousOwner(): void { throw new RuntimeException("inner", 13); }
+function checkNativeEvalPreviousOwner(string $source): void {
+    try { eval($source); }
+    catch (Exception $outer) {
+        $previous = $outer->getPrevious();
+        unset($outer);
+        if ($previous !== null) { echo $previous->getMessage(), ":", $previous->getCode(), "|"; }
+        else { echo "missing|"; }
+        unset($previous);
+    }
+}
+$source = 'try { throwNativePreviousOwner(); } catch (RuntimeException $inner) { throw new Exception("outer", 7, $inner); } // ' . $argc;
+checkNativeEvalPreviousOwner($source);
+checkNativeEvalPreviousOwner($source);
+unset($source);
+"#);
+    assert!(result.success, "{}", result.stderr);
+    assert_eq!(result.stdout, "inner:13|inner:13|", "{}", result.stderr);
+    assert!(result.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", result.stderr);
+}
+
+/// Dynamic instanceof metadata retires native adapter boxes without consuming borrowed Mixed inputs.
+#[test]
+fn test_eval_dynamic_instanceof_releases_native_boxes_and_preserves_borrowed_target() {
+    let result = compile_and_run_with_heap_debug(r#"<?php
+class EvalDynamicOwnerBase {}
+class EvalDynamicOwnerChild extends EvalDynamicOwnerBase {}
+function inspectEvalDynamicOwner(mixed $borrowedTarget, string $source): void {
+    eval($source);
+    $typedTarget = "EvalDynamicOwnerBase";
+    $first = new EvalDynamicOwnerChild();
+    echo $first instanceof $typedTarget ? "typed|" : "bad|";
+    unset($first);
+    $second = new EvalDynamicOwnerChild();
+    echo $second instanceof $borrowedTarget ? "borrowed|" : "bad|";
+    echo $borrowedTarget, "|";
+    unset($second);
+}
+$source = 'return null; // ' . $argc;
+$borrowedTarget = $argc > 0 ? "EvalDynamicOwnerBase" : 0;
+inspectEvalDynamicOwner($borrowedTarget, $source);
+inspectEvalDynamicOwner($borrowedTarget, $source);
+echo $borrowedTarget;
+unset($borrowedTarget, $source);
+"#);
+    assert!(result.success, "{}", result.stderr);
+    assert_eq!(
+        result.stdout,
+        "typed|borrowed|EvalDynamicOwnerBase|typed|borrowed|EvalDynamicOwnerBase|EvalDynamicOwnerBase",
+        "{}",
+        result.stderr
+    );
+    assert!(result.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", result.stderr);
+}
+
 /// A surviving object alias keeps its dynamic-property cycle readable through mbstring calls.
 #[test]
 fn test_mbstring_eval_cycle_root_survives_conversion() {

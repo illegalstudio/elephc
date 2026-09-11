@@ -9,6 +9,33 @@
 
 use crate::support::*;
 
+/// Verifies every `hrtime` result owns exactly one complete boxed value in direct and
+/// first-class-callable form. The array path first creates a raw hash and then boxes it;
+/// the box retains the hash, so the runtime must release the raw construction reference.
+#[test]
+fn test_hrtime_direct_and_callable_results_release_all_owners() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$clock = hrtime(...);
+$valid = 0;
+for ($i = 0; $i < 10; $i++) {
+    $valid += count(hrtime()) === 2 ? 1 : 0;
+    $valid += count($clock()) === 2 ? 1 : 0;
+    $valid += hrtime(true) > 0 ? 1 : 0;
+    $valid += $clock(true) > 0 ? 1 : 0;
+}
+echo $valid;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "40");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected direct and callable hrtime results to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies fresh disk-space results do not retain owned temporary directory arguments.
 /// Each result is a newly boxed float-or-false cell and therefore cannot alias the `getcwd()`
 /// string passed to the builtin; the old may-alias classification leaked one path per call.

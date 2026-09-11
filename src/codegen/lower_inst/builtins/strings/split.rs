@@ -10,6 +10,9 @@
 use super::*;
 
 use crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_array_values;
+use crate::codegen_support::callable_invoker_args::{
+    emit_clone_indexed_array_for_invoker_with_runtime_tag,
+};
 
 /// Stack cleanup slots for split builtin string coercions that allocate owned temporaries.
 pub(super) struct SplitStringTempCleanups {
@@ -614,8 +617,10 @@ fn implode_hash_value_type(
     array_index: usize,
 ) -> Result<Option<PhpType>> {
     let array = expect_operand(inst, array_index)?;
-    match ctx.value_php_type(array)? {
+    let array_ty = ctx.value_php_type(array)?;
+    match array_ty {
         PhpType::AssocArray { value, .. } => Ok(Some(value.codegen_repr())),
+        PhpType::Mixed | PhpType::Union(_) => Ok(Some(PhpType::Mixed)),
         _ => Ok(None),
     }
 }
@@ -675,13 +680,24 @@ pub(super) fn load_implode_array_aarch64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
 ) -> Result<()> {
-    match ctx.value_php_type(array)?.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_reg(array, "x0")?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed array payload to implode()
-            Ok(())
-        }
+    let array_ty = ctx.value_php_type(array)?;
+    if matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        let assoc_label = ctx.next_label("implode_php_array_assoc");
+        let done_label = ctx.next_label("implode_php_array_done");
+        ctx.load_value_to_reg(array, "x0")?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        ctx.emitter.instruction("cmp x0, #5");                                  // distinguish boxed hash storage from boxed indexed storage
+        ctx.emitter.instruction(&format!("b.eq {}", assoc_label));              // copy hash values into the dense layout consumed by implode
+        ctx.emitter.instruction("mov x0, x1");                                  // pass indexed storage to runtime-tagged clone normalization
+        emit_clone_indexed_array_for_invoker_with_runtime_tag("x0", ctx.emitter);
+        ctx.emitter.instruction(&format!("b {}", done_label));                  // join after materializing an owned indexed payload
+        ctx.emitter.label(&assoc_label);
+        ctx.emitter.instruction("mov x0, x1");                                  // pass the unboxed hash payload to array_values extraction
+        emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)?;
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
+    match array_ty.codegen_repr() {
         // A hash has no dense payload for the renderers to walk, so its values are copied
         // into a fresh indexed array first — the same extraction `array_values()` uses.
         // `lower_implode` releases that copy once the join has read it.
@@ -701,13 +717,24 @@ pub(super) fn load_implode_array_x86_64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
 ) -> Result<()> {
-    match ctx.value_php_type(array)?.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_reg(array, "rax")?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed array payload to implode()
-            Ok(())
-        }
+    let array_ty = ctx.value_php_type(array)?;
+    if matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        let assoc_label = ctx.next_label("implode_php_array_assoc");
+        let done_label = ctx.next_label("implode_php_array_done");
+        ctx.load_value_to_reg(array, "rax")?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        ctx.emitter.instruction("cmp rax, 5");                                  // distinguish boxed hash storage from boxed indexed storage
+        ctx.emitter.instruction(&format!("je {}", assoc_label));                // copy hash values into the dense layout consumed by implode
+        ctx.emitter.instruction("mov rax, rdi");                                // pass indexed storage to runtime-tagged clone normalization
+        emit_clone_indexed_array_for_invoker_with_runtime_tag("rax", ctx.emitter);
+        ctx.emitter.instruction(&format!("jmp {}", done_label));                // join after materializing an owned indexed payload
+        ctx.emitter.label(&assoc_label);
+        ctx.emitter.instruction("mov rax, rdi");                                // pass the unboxed hash payload to array_values extraction
+        emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)?;
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
+    match array_ty.codegen_repr() {
         // See the AArch64 loader: a hash operand is copied into an indexed array first.
         PhpType::AssocArray { value, .. } => {
             ctx.load_value_to_reg(array, "rax")?;

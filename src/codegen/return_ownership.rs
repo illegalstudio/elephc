@@ -10,8 +10,8 @@
 //!   result spills it immediately, before later calls can clobber the caller-saved register.
 //! - Lifetime-tracked block parameters receive one owner on every incoming edge, so joins carry
 //!   a stable owned convention instead of losing heterogeneous path provenance.
-//! - The marker is defined only for non-string by-value lifetime-tracked results and is caller-saved.
-//!   Typed strings use their dedicated persist and ownership-transfer boxing path instead.
+//! - The marker covers by-value lifetime-tracked results, including per-tag Mixed-to-string casts,
+//!   and is caller-saved. Borrowed and scratch strings still cross boundaries through persistence.
 //! - Native C callers never see the marker. Their invoker consumes it and returns one owned cell.
 
 use crate::codegen::abi;
@@ -99,13 +99,12 @@ pub(super) fn classify_return_value(
         }
         Ownership::MaybeOwned => {}
     }
-    if metadata.php_type.codegen_repr() == PhpType::Str {
-        // String return lowering and the native invoker already persist their
-        // scratch or borrowed storage before it crosses either boundary.
-        return Ok(ReturnOwnershipStatus::Static(false));
-    }
     if let Some(offset) = ctx.runtime_return_ownership_offset(value) {
         return Ok(ReturnOwnershipStatus::Dynamic(offset));
+    }
+    let is_string = metadata.php_type.codegen_repr() == PhpType::Str;
+    if is_string && ctx.string_value_can_transfer_ownership_to_consumer(value)? {
+        return Ok(ReturnOwnershipStatus::Static(true));
     }
     match metadata.def {
         ValueDef::BlockParam { .. } => {
@@ -119,7 +118,11 @@ pub(super) fn classify_return_value(
                 .instruction(inst)
                 .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
             match instruction.op {
-                Op::LoadLocal | Op::LoadRefCell | Op::LoadGlobal | Op::LoadStaticLocal => {
+                Op::LoadLocal
+                | Op::LoadRefCell
+                | Op::LoadGlobal
+                | Op::LoadStaticLocal
+                | Op::LoadStaticProperty => {
                     Ok(ReturnOwnershipStatus::Static(false))
                 }
                 Op::Move | Op::Borrow => {
@@ -132,6 +135,7 @@ pub(super) fn classify_return_value(
                     })?;
                     classify_return_value(ctx, source, None)
                 }
+                _ if is_string => Ok(ReturnOwnershipStatus::Static(false)),
                 _ => Err(CodegenIrError::invalid_module(format!(
                     "ambiguous ownership for returned {} value {} produced by {:?}",
                     metadata.php_type,
@@ -156,6 +160,11 @@ pub(super) fn normalize_loaded_block_argument(
         .ok_or_else(|| CodegenIrError::missing_entry("value", param.as_raw()))?;
     if param_metadata.ownership != Ownership::MaybeOwned
         || !Ownership::php_type_needs_lifetime_tracking(&param_metadata.php_type.codegen_repr())
+    {
+        return Ok(());
+    }
+    if ty.codegen_repr() == PhpType::Str
+        && ctx.string_value_can_transfer_ownership_to_consumer(arg)?
     {
         return Ok(());
     }

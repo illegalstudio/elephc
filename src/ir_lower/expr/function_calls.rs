@@ -256,14 +256,6 @@ pub(super) fn emit_builtin_call_value(
             effects_lookup::language_construct_effects(name),
         )
     };
-    let call = ctx.emit_value(
-        op,
-        operands.clone(),
-        immediate,
-        php_type,
-        effects,
-        Some(span),
-    );
     let eval_needs_barrier = match eval_literal {
         Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
         None => true,
@@ -278,9 +270,30 @@ pub(super) fn emit_builtin_call_value(
         {
             ctx.apply_eval_scope_barrier(&write_names);
         }
+        ctx.begin_argument_guard_scope();
+        for (parameter, value) in operands.iter().copied().enumerate() {
+            let source = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            if ctx.value_is_owning_temporary(source)
+                && !ctx.has_call_argument_guard(source.value)
+            {
+                ctx.guard_call_argument(source, parameter, span);
+            }
+        }
+        ctx.end_argument_guard_scope();
     }
+    let call = ctx.emit_value(
+        op,
+        operands.clone(),
+        immediate,
+        php_type,
+        effects,
+        Some(span),
+    );
     // Scope widening can make the already-lowered source load an owned string cast.
-    // Eval returns an independent boxed value, so it never consumes that source owner.
+    // Eval guards that owner through exceptional exits, then releases it normally here.
     release_owned_call_arg_temporaries(
         ctx,
         &operands,

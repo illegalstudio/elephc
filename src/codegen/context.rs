@@ -1170,6 +1170,53 @@ impl<'a> FunctionContext<'a> {
         Ok(!self.value_has_explicit_release(value))
     }
 
+    /// Returns whether a string edge may transfer its current storage without persisting it.
+    ///
+    /// String SSA values deliberately remain `MaybeOwned`, so their metadata alone cannot
+    /// distinguish a fresh heap result from concat scratch or a borrowed local. Reuse the
+    /// same source-provenance check as Mixed boxing, and preserve an existing explicit
+    /// `Release` by requiring the edge to take a separate owner in that case.
+    pub(super) fn string_value_can_transfer_ownership_to_consumer(
+        &self,
+        value: ValueId,
+    ) -> Result<bool> {
+        if self.value_has_explicit_release(value) {
+            return Ok(false);
+        }
+        if self.value_is_heap_owned_string_for_mixed_box(value)? {
+            return Ok(true);
+        }
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let inst = self
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if inst.op != Op::RuntimeCall {
+            return Ok(false);
+        }
+        use crate::builtins::semantics::BuiltinResultOwnership;
+        use crate::ir::RuntimeCallTarget;
+        let fresh = match inst.immediate {
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) => {
+                target.result_ownership() == BuiltinResultOwnership::Fresh
+            }
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                target,
+                ..
+            })) => target.result_ownership() == BuiltinResultOwnership::Fresh,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) => {
+                target.result_ownership() == BuiltinResultOwnership::Fresh
+            }
+            _ => false,
+        };
+        Ok(fresh)
+    }
+
     /// Reports whether EIR cleanup still owns a reference to this exact SSA value.
     fn value_has_explicit_release(&self, value: ValueId) -> bool {
         self.function.instructions.iter().any(|inst| {

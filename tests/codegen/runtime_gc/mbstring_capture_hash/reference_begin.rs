@@ -12,7 +12,7 @@
 use super::*;
 
 #[path = "reference_begin/invoke.rs"]
-mod invoke;
+pub(in crate::codegen::runtime_gc) mod invoke;
 
 /// Observes typed/untyped publication and delayed replacement cleanup even when the old destructor throws.
 #[test]

@@ -6,10 +6,11 @@
 //!
 //! Key details:
 //! - Fixtures inspect both supported ABIs so runtime calls never precede later argument saves.
+//! - Eval fixtures cover implicit process-superglobal ownership across all supported targets.
 
 use super::*;
 use crate::codegen::generate_user_asm_from_ir;
-use crate::codegen::platform::{Arch, Platform, Target};
+use crate::codegen::platform::{AppleVariant, Arch, Platform, Target};
 use crate::ir::{Builder, FunctionParam, IrType, Module, Terminator};
 
 /// Verifies AArch64 saves a later Mixed argument before retaining an earlier string.
@@ -108,6 +109,120 @@ fn borrowed_mixed_parameter_return_publishes_borrowed_status() {
 
         assert!(function_asm.contains(borrowed_status), "{target:?}: {function_asm}");
     }
+}
+
+/// Verifies normal exit releases the implicit eval `$argv` global exactly once.
+#[test]
+fn implicit_eval_argv_global_is_released_on_all_targets() {
+    for target in [
+        Target::new(Platform::Linux, Arch::X86_64),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+    ] {
+        for visible_process_args in [false, true] {
+            let asm = eval_argv_cleanup_asm(target, visible_process_args, false);
+            assert_eq!(
+                asm.matches("build global $argv array from OS argv").count(),
+                1,
+                "{target:?}, visible={visible_process_args}: {asm}"
+            );
+            assert_eq!(
+                asm.matches("epilogue cleanup global $argv").count(),
+                1,
+                "{target:?}, visible={visible_process_args}: {asm}"
+            );
+            assert_eval_argv_cleanup(target, &asm);
+
+            if visible_process_args {
+                assert!(asm.contains("build $argv array from OS argv"), "{target:?}: {asm}");
+                assert!(asm.contains("epilogue cleanup $argv"), "{target:?}: {asm}");
+            }
+        }
+    }
+}
+
+/// Verifies an explicitly interned `$argv` global does not duplicate implicit eval cleanup.
+#[test]
+fn explicit_eval_argv_global_is_released_once() {
+    let asm = eval_argv_cleanup_asm(
+        Target::new(Platform::Linux, Arch::AArch64),
+        true,
+        true,
+    );
+
+    assert_eq!(asm.matches("epilogue cleanup global $argv").count(), 1, "{asm}");
+    assert_eval_argv_cleanup(Target::new(Platform::Linux, Arch::AArch64), &asm);
+}
+
+/// Verifies the global cleanup releases an Array owner and clears its symbol slot.
+fn assert_eval_argv_cleanup(target: Target, asm: &str) {
+    let cleanup = asm
+        .split_once("epilogue cleanup global $argv")
+        .map(|(_, cleanup)| cleanup)
+        .expect("eval argv cleanup marker should be emitted");
+    let cleanup = cleanup
+        .split_once("__rt_mbstring_release_catalog")
+        .map_or(cleanup, |(cleanup, _)| cleanup);
+
+    assert!(cleanup.contains("__rt_decref_array"), "{target:?}: {cleanup}");
+    assert!(!cleanup.contains("__rt_decref_mixed"), "{target:?}: {cleanup}");
+    assert!(cleanup.contains("_eir_global_argv"), "{target:?}: {cleanup}");
+    match target.arch {
+        Arch::AArch64 => assert!(cleanup.contains("str xzr, [x9]"), "{target:?}: {cleanup}"),
+        Arch::X86_64 => assert!(
+            cleanup.contains("mov QWORD PTR [rip + _eir_global_argv], 0"),
+            "{target:?}: {cleanup}"
+        ),
+    }
+}
+
+/// Builds an eval-capable main function with optional PHP-visible process arguments.
+fn eval_argv_cleanup_asm(
+    target: Target,
+    visible_process_args: bool,
+    explicit_argv_global: bool,
+) -> String {
+    let mut module = Module::new(target);
+    module.required_runtime_features.eval_bridge = true;
+    if explicit_argv_global {
+        module.data.intern_global_name("argv");
+    }
+
+    let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+    main.flags.is_main = true;
+    main.add_local(
+        Some("__eir_eval_scope".to_string()),
+        IrType::I64,
+        PhpType::Int,
+        LocalKind::EvalScope,
+    );
+    if visible_process_args {
+        main.add_local(
+            Some("argc".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        main.add_local(
+            Some("argv".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+            LocalKind::PhpLocal,
+        );
+    }
+    {
+        let mut builder = Builder::new(&mut main);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.terminate(Terminator::Return { value: None });
+    }
+    module.add_function(main);
+
+    generate_user_asm_from_ir(&module, false, false)
+        .expect("eval argv cleanup fixture should lower")
 }
 
 /// Builds a callable with an owned string parameter followed by a borrowed Mixed parameter.

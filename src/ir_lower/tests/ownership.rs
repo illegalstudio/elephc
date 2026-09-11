@@ -10,6 +10,72 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Eval-backed static and dynamic instanceof probes retire native adapter boxes on every target.
+#[test]
+fn eval_instanceof_probes_retire_native_metadata_boxes_on_all_targets() {
+    let source = r#"<?php
+function inspectEvalInstanceofOwners(string $source): void {
+    try { eval($source); }
+    catch (LogicException $wrong) { echo "wrong"; }
+    catch (RuntimeException $right) { echo $right->getMessage(); }
+    $box = new RuntimeException("dynamic");
+    $target = "RuntimeException";
+    echo $box instanceof $target ? "yes" : "no";
+}
+inspectEvalInstanceofOwners('throw new RuntimeException("right"); // ' . $argc);
+"#;
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            target,
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let restore = if name == "linux-x86_64" {
+            "add rsp, 96"
+        } else {
+            "add sp, sp, #96"
+        };
+        for (symbol, minimum_probes, minimum_cleanup_boxes) in [
+            (target.extern_symbol("__elephc_eval_object_is_a"), 2, 1),
+            (
+                target.extern_symbol("__elephc_eval_object_is_a_dynamic"),
+                1,
+                2,
+            ),
+        ] {
+            let mut probes = 0;
+            for path in asm.split(&format!("{symbol}\n")).skip(1) {
+                let cleanup = path
+                    .split_once(restore)
+                    .expect("instanceof predicate scratch restoration")
+                    .0;
+                assert!(
+                    cleanup
+                        .matches("retire temporary eval metadata operand box")
+                        .count()
+                        >= minimum_cleanup_boxes,
+                    "{name}: {symbol}: {cleanup}"
+                );
+                assert!(
+                    cleanup.matches("__rt_decref_mixed").count() >= minimum_cleanup_boxes,
+                    "{name}: {symbol}: {cleanup}"
+                );
+                probes += 1;
+            }
+            assert!(probes >= minimum_probes, "{name}: {symbol}: {probes}");
+        }
+    }
+}
+
 /// Returns the printed EIR for `main`, excluding built-in helper and property-init functions.
 fn main_function_text(text: &str) -> &str {
     let start = text.find("function main()").expect("expected lowered main function");

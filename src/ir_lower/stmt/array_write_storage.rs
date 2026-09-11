@@ -218,4 +218,3 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
     normalize_materialized_element_type(item_type)
 }
-

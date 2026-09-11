@@ -42,6 +42,18 @@ pub enum EvalClosureObjectTarget {
     },
 }
 
+impl EvalClosureObjectTarget {
+    /// Returns the receiver edge borrowed by this target, including foreign-context wrappers.
+    pub(crate) fn receiver_mut(&mut self) -> Option<&mut RuntimeCellHandle> {
+        match self {
+            Self::ForeignContext { target, .. } => target.receiver_mut(),
+            Self::BoundNamed { bound_this, .. } => bound_this.as_mut(),
+            Self::InvokableObject { object } | Self::ObjectMethod { object, .. } => Some(object),
+            Self::Named(_) | Self::StaticMethod { .. } => None,
+        }
+    }
+}
+
 #[cfg(not(test))]
 impl EvalClosureObjectTarget {
     /// Returns whether this callable depends on metadata retained by another eval context.

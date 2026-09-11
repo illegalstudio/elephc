@@ -74,6 +74,9 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.label("__rt_object_free_deep_release");
     emitter.instruction("orr w9, w9, #0x80000000");                             // suppress recursive release while dismantling the final object graph
     emitter.instruction("str w9, [x0, #-12]");                                  // keep an in-progress allocation distinct from a free-list block
+    emitter.instruction("ldr x0, [sp]");                                        // pass the final object identity after resurrection was ruled out
+    CLEANUP.call(emitter, "__rt_eval_object_release_children", true);           // detach hidden eval edges and contain receiver destructor throws
+    emitter.instruction("ldr x0, [sp]");                                        // restore the object pointer before property cleanup
 
     // -- incomplete objects own a persisted original class name plus a semantic
     // property hash instead of declared class property slots; release both --
@@ -358,6 +361,9 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("jmp __rt_object_free_deep_finish");                    // preserve resurrected identity while propagating pending exceptions
     emitter.label("__rt_object_free_deep_release");
     emitter.instruction("or DWORD PTR [rax - 12], 0x80000000");                 // suppress recursive final release and preserve heap liveness during cleanup
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the final object identity after resurrection was ruled out
+    CLEANUP.call(emitter, "__rt_eval_object_release_children", true);           // detach hidden eval edges and contain receiver destructor throws
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the object pointer before property cleanup
 
     // -- incomplete objects own a persisted original class name plus a semantic
     // property hash instead of declared class property slots; release both --

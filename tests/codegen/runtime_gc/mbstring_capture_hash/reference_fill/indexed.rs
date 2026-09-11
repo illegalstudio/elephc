@@ -135,6 +135,7 @@ fn assert_indexed_fill(source: &str, expected: &str) {
 
 /// Adapts a native Mixed child-slot address to the retained reference expected by capture filling.
 fn indexed_shim(length: usize) -> String {
+    let done = format!("{}capture_indexed_done", target().platform.local_label_prefix());
     if target().arch == Arch::AArch64 {
         let graph = if target().platform == Platform::Linux {
             "adrp x2, _capture_test_graph\nadd x2, x2, :lo12:_capture_test_graph"
@@ -150,7 +151,9 @@ fn indexed_shim(length: usize) -> String {
     bl __rt_mbstring_capture_reference_fill
     ldp x29, x30, [sp], #16
     cmp x0, #2
-    b.eq __rt_throw_current
+    b.ne {done}
+    b __rt_throw_current
+{done}:
     ret
 "#);
     }
@@ -164,7 +167,9 @@ fn indexed_shim(length: usize) -> String {
     call __rt_mbstring_capture_reference_fill
     pop rbp
     cmp eax, 2
-    je __rt_throw_current
+    jne {done}
+    jmp __rt_throw_current
+{done}:
     ret
 "#)
 }

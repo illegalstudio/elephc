@@ -199,6 +199,9 @@ pub(super) fn lower_cast_to_string(
         }
         PhpType::Mixed | PhpType::Union(_) => {
             emit_mixed_string_context_result(ctx, value)?;
+            if let Some(result) = inst.result {
+                ctx.store_runtime_return_ownership(result);
+            }
             store_if_result(ctx, inst)
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {

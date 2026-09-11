@@ -59,6 +59,15 @@ macro_rules! impl_lifecycle_scalar_ops {
         }))
     }
 
+    /// Attaches one retained receiver cell to the native object's GC graph.
+    fn retain_object_children(
+        &mut self,
+        object: RuntimeCellHandle,
+        children: &[RuntimeCellHandle],
+    ) -> Result<(), EvalStatus> {
+        crate::runtime_hooks::object_owners::retain_object_children(self, object, children)
+    }
+
     /// Uses the runtime's GC-traced persistent reference cells.
     fn supports_persistent_references(&self) -> bool { true }
 

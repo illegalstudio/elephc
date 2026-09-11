@@ -40,16 +40,13 @@ impl ElephcRuntimeOps {
             })
     }
 
-    /// Moves a native pending Throwable owner into one eval box without retaining a second owner.
+    /// Takes the owned Throwable box transferred by a generated native call boundary.
     pub(super) fn take_pending_native_throwable(&self) -> Option<RuntimeCellHandle> {
         let thrown = unsafe { __elephc_eval_value_take_pending_throwable() };
         if thrown.is_null() {
             None
         } else {
-            let boxed = Self::object_from_raw(thrown).ok();
-            // The box retains its payload; consume the raw owner transferred out of `_exc_value`.
-            unsafe { __elephc_eval_value_release_raw_heap_word(thrown as u64); }
-            boxed
+            Some(RuntimeCellHandle::from_raw(thrown))
         }
     }
 

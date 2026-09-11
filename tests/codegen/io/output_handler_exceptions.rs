@@ -30,14 +30,25 @@ fn clean(source: &str, expected: &str) {
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
-/// Generates each public operation and checks the state observed by its catch block.
-fn check_operations(eval: bool, eval_declaration: bool) {
-    for (operation, flush, retained) in [
-        ("ob_clean", false, true), ("ob_flush", true, true),
-        ("ob_end_clean", false, false), ("ob_end_flush", true, false),
-        ("ob_get_clean", false, false), ("ob_get_flush", true, false),
-    ] {
-        let inspect = if retained { r#"
+#[derive(Clone, Copy)]
+struct OutputOperation {
+    name: &'static str,
+    flush: bool,
+    retained: bool,
+}
+
+const OUTPUT_OPERATIONS: [OutputOperation; 6] = [
+    OutputOperation { name: "ob_clean", flush: false, retained: true },
+    OutputOperation { name: "ob_flush", flush: true, retained: true },
+    OutputOperation { name: "ob_end_clean", flush: false, retained: false },
+    OutputOperation { name: "ob_end_flush", flush: true, retained: false },
+    OutputOperation { name: "ob_get_clean", flush: false, retained: false },
+    OutputOperation { name: "ob_get_flush", flush: true, retained: false },
+];
+
+/// Generates one public operation and checks the state observed by its catch block.
+fn check_operation(operation: OutputOperation, eval: bool, eval_declaration: bool) {
+    let inspect = if operation.retained { r#"
     $contents = ob_get_contents();
     $status = ob_get_status();
     $flag_key = "flags";
@@ -45,7 +56,7 @@ fn check_operations(eval: bool, eval_declaration: bool) {
     ob_end_clean();
     echo $caught, ":", $level, ":", $contents, ":", $flags, "\n";
 "# } else { r#"echo $caught, ":", $level, "::-1\n";"# };
-        let body = format!(r#"
+    let body = format!(r#"
 ob_start("throwing_output_handler");
 echo "before";
 try {{ {operation}(); echo "missed"; }} catch (Throwable $error) {{
@@ -57,17 +68,23 @@ ob_start();
 echo "after";
 $after = ob_get_clean();
 echo $after, "\n";
-"#);
-        let source = if eval_declaration {
-            format!("<?php {}", dynamic(&format!("{HANDLER}{body}")))
-        } else if eval {
-            format!("<?php {HANDLER} {}", dynamic(&body))
-        } else {
-            format!("<?php {HANDLER} {body}")
-        };
-        let prefix = if flush { "before" } else { "" };
-        let state = if retained { "1::12401" } else { "0::-1" };
-        clean(&source, &format!("{prefix}handler:{state}\nafter\n"));
+"#, operation = operation.name);
+    let source = if eval_declaration {
+        format!("<?php {}", dynamic(&format!("{HANDLER}{body}")))
+    } else if eval {
+        format!("<?php {HANDLER} {}", dynamic(&body))
+    } else {
+        format!("<?php {HANDLER} {body}")
+    };
+    let prefix = if operation.flush { "before" } else { "" };
+    let state = if operation.retained { "1::12401" } else { "0::-1" };
+    clean(&source, &format!("{prefix}handler:{state}\nafter\n"));
+}
+
+/// Generates each public operation and checks the state observed by its catch block.
+fn check_operations(eval: bool, eval_declaration: bool) {
+    for operation in OUTPUT_OPERATIONS {
+        check_operation(operation, eval, eval_declaration);
     }
 }
 
@@ -77,17 +94,28 @@ fn test_output_handler_exceptions_native_operations() {
     check_operations(false, false);
 }
 
-/// Preserves native callable exceptions through the versioned eval callback and protected output ABI.
-#[test]
-fn test_output_handler_exceptions_eval_native_operations() {
-    check_operations(true, false);
+macro_rules! eval_operation_test {
+    ($name:ident, $index:expr, $eval_declaration:expr) => {
+        /// Checks one bounded eval output operation so the per-test CI timeout covers one compile.
+        #[test]
+        fn $name() {
+            check_operation(OUTPUT_OPERATIONS[$index], true, $eval_declaration);
+        }
+    };
 }
 
-/// Transfers an eval-declared Throwable back to native code and then to the surrounding eval catch.
-#[test]
-fn test_output_handler_exceptions_eval_declared_operations() {
-    check_operations(true, true);
-}
+eval_operation_test!(test_output_handler_exceptions_eval_native_ob_clean, 0, false);
+eval_operation_test!(test_output_handler_exceptions_eval_native_ob_flush, 1, false);
+eval_operation_test!(test_output_handler_exceptions_eval_native_ob_end_clean, 2, false);
+eval_operation_test!(test_output_handler_exceptions_eval_native_ob_end_flush, 3, false);
+eval_operation_test!(test_output_handler_exceptions_eval_native_ob_get_clean, 4, false);
+eval_operation_test!(test_output_handler_exceptions_eval_native_ob_get_flush, 5, false);
+eval_operation_test!(test_output_handler_exceptions_eval_declared_ob_clean, 0, true);
+eval_operation_test!(test_output_handler_exceptions_eval_declared_ob_flush, 1, true);
+eval_operation_test!(test_output_handler_exceptions_eval_declared_ob_end_clean, 2, true);
+eval_operation_test!(test_output_handler_exceptions_eval_declared_ob_end_flush, 3, true);
+eval_operation_test!(test_output_handler_exceptions_eval_declared_ob_get_clean, 4, true);
+eval_operation_test!(test_output_handler_exceptions_eval_declared_ob_get_flush, 5, true);
 
 /// A false-returning callback is disabled and must not process later buffer contents.
 #[test]

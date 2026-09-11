@@ -10,6 +10,8 @@
 //!   or return types, so this bridge is emitted into the user assembly.
 //! - This method-call slice supports public methods plus protected/private
 //!   methods when the active eval class scope satisfies PHP visibility.
+//! - Compiled PHP results consume the private return-ownership marker before any helper call;
+//!   runtime intrinsics retain only the boxed `Mixed` arguments their contracts consume.
 
 use std::collections::BTreeMap;
 
@@ -22,7 +24,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::{Function, LocalKind, Module, Ownership};
 use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -49,8 +51,10 @@ struct EvalMethodSlot {
     ref_params: Vec<bool>,
     return_ty: PhpType,
     return_is_owned: bool,
+    return_uses_marker: bool,
     is_hidden_shadow: bool,
     runtime_helper: Option<&'static str>,
+    consumed_mixed_params: &'static [usize],
 }
 
 /// Static method metadata needed by eval static method-call bridge dispatch.
@@ -66,6 +70,15 @@ struct EvalStaticMethodSlot {
     ref_params: Vec<bool>,
     return_ty: PhpType,
     return_is_owned: bool,
+    return_uses_marker: bool,
+}
+
+/// Origin of a method result crossing the eval bridge.
+#[derive(Clone, Copy)]
+enum EvalMethodResultSource {
+    CompiledInstance,
+    CompiledStatic,
+    RuntimeHelper,
 }
 
 const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
@@ -226,7 +239,8 @@ fn collect_class_method_slots(
             .get(method)
             .map(String::as_str)
             .unwrap_or(class_name);
-        let runtime_helper = eval_runtime_backed_instance_method_helper(class_name, method);
+        let runtime_intrinsic = eval_runtime_backed_instance_method_intrinsic(class_name, method);
+        let runtime_helper = runtime_intrinsic.and_then(IntrinsicCall::runtime_helper);
         if runtime_helper.is_none()
             && !emitted_methods.contains(&(impl_class.to_string(), method.clone(), false))
         {
@@ -244,8 +258,13 @@ fn collect_class_method_slots(
             return_ty: sig.return_type.codegen_repr(),
             return_is_owned: runtime_helper.is_none()
                 && native_method_returns_owned_value(module, impl_class, method, false),
+            return_uses_marker: runtime_helper.is_none()
+                && compiled_method_return_uses_marker(sig),
             is_hidden_shadow: false,
             runtime_helper,
+            consumed_mixed_params: runtime_intrinsic
+                .map(IntrinsicCall::consumed_mixed_params)
+                .unwrap_or(&[]),
         });
     }
 }
@@ -291,25 +310,29 @@ fn collect_hidden_private_ancestor_method_slots(
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
                 return_ty: sig.return_type.codegen_repr(),
                 return_is_owned: native_method_returns_owned_value(module, impl_class, method, false),
+                return_uses_marker: compiled_method_return_uses_marker(sig),
                 is_hidden_shadow: true,
                 runtime_helper: None,
+                consumed_mixed_params: &[],
             });
         }
     }
 }
 
 /// Returns a normal-ABI runtime helper for builtin instance methods that eval can bridge.
-fn eval_runtime_backed_instance_method_helper(
+fn eval_runtime_backed_instance_method_intrinsic(
     class_name: &str,
     method_name: &str,
-) -> Option<&'static str> {
+) -> Option<IntrinsicCall> {
     if !matches!(
         class_name.trim_start_matches('\\'),
         "SplDoublyLinkedList" | "SplStack" | "SplQueue" | "SplFixedArray"
     ) {
         return None;
     }
-    IntrinsicCall::instance_method(class_name, method_name)?.runtime_helper()
+    let intrinsic = IntrinsicCall::instance_method(class_name, method_name)?;
+    intrinsic.runtime_helper()?;
+    Some(intrinsic)
 }
 
 /// Adds bridge-supported static methods for one class.
@@ -349,8 +372,15 @@ fn collect_class_static_method_slots(
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
             return_ty: sig.return_type.codegen_repr(),
             return_is_owned: native_method_returns_owned_value(module, impl_class, method, true),
+            return_uses_marker: compiled_method_return_uses_marker(sig),
         });
     }
+}
+
+/// Returns whether a compiled by-value method publishes the private ownership marker.
+fn compiled_method_return_uses_marker(sig: &crate::types::FunctionSig) -> bool {
+    let return_ty = sig.return_type.codegen_repr();
+    !sig.by_ref_return && Ownership::php_type_needs_lifetime_tracking(&return_ty)
 }
 
 /// Returns the declared instance-method visibility, defaulting to public metadata.
@@ -1305,6 +1335,11 @@ fn emit_aarch64_method_bodies(
                 &prep_fail_label,
                 callable_support,
             );
+        emit_retain_consumed_eval_mixed_args(
+            emitter,
+            &slot.params,
+            slot.consumed_mixed_params,
+        );
         let escape_label = format!("{}_escape", body_label);
         emit_aarch64_method_exception_boundary_push(
             emitter,
@@ -1324,7 +1359,20 @@ fn emit_aarch64_method_bodies(
         abi::emit_call_label(emitter, &callee);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty, slot.return_is_owned);
+        let result_source = if slot.runtime_helper.is_some() {
+            EvalMethodResultSource::RuntimeHelper
+        } else {
+            EvalMethodResultSource::CompiledInstance
+        };
+        emit_box_method_result(
+            module,
+            emitter,
+            &slot.return_ty,
+            slot.return_is_owned,
+            slot.return_uses_marker,
+            result_source,
+            &body_label,
+        );
         preserve_result_and_write_back_aarch64_ref_args(emitter, &ref_slots, &body_label);
         emit_aarch64_method_exception_boundary_pop(emitter, METHOD_HELPER_HANDLER_OFFSET - 48);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native method result
@@ -1364,6 +1412,11 @@ fn emit_x86_64_method_bodies(
                 &prep_fail_label,
                 callable_support,
             );
+        emit_retain_consumed_eval_mixed_args(
+            emitter,
+            &slot.params,
+            slot.consumed_mixed_params,
+        );
         let escape_label = format!("{}_escape_x", body_label);
         emit_x86_64_method_exception_boundary_push(emitter, METHOD_HELPER_FRAME_SIZE, &escape_label);
         let receiver_ty = PhpType::Object(slot.class_name.clone());
@@ -1379,7 +1432,20 @@ fn emit_x86_64_method_bodies(
         abi::emit_call_label(emitter, &callee);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty, slot.return_is_owned);
+        let result_source = if slot.runtime_helper.is_some() {
+            EvalMethodResultSource::RuntimeHelper
+        } else {
+            EvalMethodResultSource::CompiledInstance
+        };
+        emit_box_method_result(
+            module,
+            emitter,
+            &slot.return_ty,
+            slot.return_is_owned,
+            slot.return_uses_marker,
+            result_source,
+            &body_label,
+        );
         preserve_result_and_write_back_x86_64_ref_args(emitter, &ref_slots, &body_label);
         emit_x86_64_method_exception_boundary_pop(emitter, METHOD_HELPER_FRAME_SIZE);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native method result
@@ -1435,7 +1501,15 @@ fn emit_aarch64_static_method_bodies(
         );
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty, slot.return_is_owned);
+        emit_box_method_result(
+            module,
+            emitter,
+            &slot.return_ty,
+            slot.return_is_owned,
+            slot.return_uses_marker,
+            EvalMethodResultSource::CompiledStatic,
+            &body_label,
+        );
         preserve_result_and_write_back_aarch64_ref_args(emitter, &ref_slots, &body_label);
         emit_aarch64_method_exception_boundary_pop(
             emitter,
@@ -1497,7 +1571,15 @@ fn emit_x86_64_static_method_bodies(
         );
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty, slot.return_is_owned);
+        emit_box_method_result(
+            module,
+            emitter,
+            &slot.return_ty,
+            slot.return_is_owned,
+            slot.return_uses_marker,
+            EvalMethodResultSource::CompiledStatic,
+            &body_label,
+        );
         preserve_result_and_write_back_x86_64_ref_args(emitter, &ref_slots, &body_label);
         emit_x86_64_method_exception_boundary_pop(emitter, STATIC_METHOD_HELPER_FRAME_SIZE);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native static method result
@@ -1827,6 +1909,37 @@ fn materialize_static_method_args(
     arg_types.extend(eval_abi_param_types_for_refs(&slot.params, &slot.ref_params));
     let assignments = abi::build_outgoing_arg_assignments_for_target(module.target, &arg_types, 0);
     abi::materialize_outgoing_args(emitter, &assignments)
+}
+
+/// Gives staged boxed `Mixed` arguments the owners a consuming runtime intrinsic requires.
+///
+/// This runs only after every argument has been validated, so a later coercion failure cannot
+/// strand an owner. Temporary argument slots remain authoritative until ABI materialization.
+fn emit_retain_consumed_eval_mixed_args(
+    emitter: &mut Emitter,
+    params: &[PhpType],
+    consumed_params: &[usize],
+) {
+    let mut offsets = vec![0usize; params.len()];
+    let mut offset = 0;
+    for index in (0..params.len()).rev() {
+        offsets[index] = offset;
+        offset += eval_arg_temp_slot_size(&params[index]);
+    }
+    for index in consumed_params {
+        let Some(param) = params.get(*index) else {
+            continue;
+        };
+        if param.codegen_repr() != PhpType::Mixed {
+            continue;
+        }
+        abi::emit_load_temporary_stack_slot(
+            emitter,
+            abi::int_result_reg(emitter),
+            offsets[*index],
+        );
+        abi::emit_call_label(emitter, "__rt_incref");
+    }
 }
 
 /// Prepares ARM64 stack cells for eval-supplied by-reference arguments.
@@ -2294,13 +2407,44 @@ fn emit_x86_64_validate_iterable_object(
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject non-Traversable objects for iterable parameters
 }
 
-/// Boxes the current native method result as the Mixed cell expected by eval.
-fn emit_box_method_result(module: &Module, emitter: &mut Emitter, return_ty: &PhpType, owned: bool) {
+/// Boxes the current native method result as the owned Mixed cell expected by eval.
+fn emit_box_method_result(
+    module: &Module,
+    emitter: &mut Emitter,
+    return_ty: &PhpType,
+    owned: bool,
+    return_uses_marker: bool,
+    source: EvalMethodResultSource,
+    label_prefix: &str,
+) {
     if return_ty.codegen_repr() == PhpType::Void {
         let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
         abi::emit_call_label(emitter, &null_symbol);
+    } else if return_uses_marker
+        && matches!(
+            source,
+            EvalMethodResultSource::CompiledInstance | EvalMethodResultSource::CompiledStatic
+        )
+    {
+        let owned_label = format!("{}_return_owned", label_prefix);
+        let done_label = format!("{}_return_boxed", label_prefix);
+        super::return_ownership::emit_branch_if_owned(emitter, &owned_label);
+        emit_box_borrowed_method_result(emitter, return_ty);
+        abi::emit_jump(emitter, &done_label);
+        emitter.label(&owned_label);
+        emit_box_current_owned_value_as_mixed(emitter, return_ty);
+        emitter.label(&done_label);
     } else if owned {
         emit_box_current_owned_value_as_mixed(emitter, return_ty);
+    } else {
+        emit_box_current_value_as_mixed(emitter, return_ty);
+    }
+}
+
+/// Promotes one borrowed compiled-PHP method result into an owned eval result cell.
+fn emit_box_borrowed_method_result(emitter: &mut Emitter, return_ty: &PhpType) {
+    if matches!(return_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_incref");
     } else {
         emit_box_current_value_as_mixed(emitter, return_ty);
     }
@@ -2452,6 +2596,16 @@ fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
 
 #[cfg(test)]
 mod catalog_tests {
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::{AppleVariant, Arch, Platform, Target};
+    use crate::ir::Module;
+    use crate::types::PhpType;
+
+    use super::{
+        EvalMethodResultSource, emit_box_method_result,
+        emit_retain_consumed_eval_mixed_args,
+    };
+
     /// Every throwable this helper can materialize is a catalogued builtin class.
     #[test]
     fn throwable_list_is_a_subset_of_the_class_catalog() {
@@ -2461,5 +2615,119 @@ mod catalog_tests {
                 "{name} is not in the shared class catalog"
             );
         }
+    }
+
+    /// Verifies compiled instance and static Mixed returns consume the private marker.
+    #[test]
+    fn compiled_method_results_use_the_return_ownership_marker_on_all_targets() {
+        for target in supported_targets() {
+            for return_ty in [PhpType::Mixed, PhpType::Str] {
+                for (source, name) in [
+                    (EvalMethodResultSource::CompiledInstance, "instance"),
+                    (EvalMethodResultSource::CompiledStatic, "static"),
+                ] {
+                    let asm = method_result_asm(target, source, true, name, &return_ty);
+                    match target.arch {
+                        Arch::AArch64 => assert!(asm.contains("cbnz x15"), "{target:?}: {asm}"),
+                        Arch::X86_64 => {
+                            assert!(asm.contains("test r11, r11"), "{target:?}: {asm}")
+                        }
+                    }
+                    match &return_ty {
+                        PhpType::Mixed => {
+                            assert_eq!(
+                                asm.matches("__rt_incref").count(),
+                                1,
+                                "{target:?}: {asm}"
+                            );
+                        }
+                        PhpType::Str => {
+                            assert!(asm.contains("__rt_mixed_from_value"), "{target:?}: {asm}");
+                            assert!(asm.contains("__rt_heap_alloc"), "{target:?}: {asm}");
+                        }
+                        _ => unreachable!(),
+                    }
+                    assert!(
+                        asm.contains(&format!("eval_{name}_return_owned")),
+                        "{target:?}: {asm}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Verifies runtime-backed methods never interpret a caller-saved register as a return marker.
+    #[test]
+    fn runtime_method_results_ignore_the_compiled_return_marker() {
+        for target in supported_targets() {
+            let asm = method_result_asm(
+                target,
+                EvalMethodResultSource::RuntimeHelper,
+                true,
+                "runtime",
+                &PhpType::Mixed,
+            );
+            assert!(!asm.contains("x15"), "{target:?}: {asm}");
+            assert!(!asm.contains("r11"), "{target:?}: {asm}");
+            assert!(!asm.contains("__rt_incref"), "{target:?}: {asm}");
+        }
+    }
+
+    /// Verifies consuming SPL arguments are retained from their final staged stack offsets.
+    #[test]
+    fn consumed_eval_mixed_args_are_retained_after_staging() {
+        for target in supported_targets() {
+            let mut emitter = Emitter::new(target);
+            emit_retain_consumed_eval_mixed_args(
+                &mut emitter,
+                &[PhpType::Mixed, PhpType::Mixed],
+                &[0, 1],
+            );
+            let asm = emitter.output();
+            assert_eq!(asm.matches("__rt_incref").count(), 2, "{target:?}: {asm}");
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(asm.contains("ldr x0, [sp, #16]"), "{target:?}: {asm}");
+                    assert!(asm.contains("ldr x0, [sp]"), "{target:?}: {asm}");
+                }
+                Arch::X86_64 => {
+                    assert!(asm.contains("mov rax, QWORD PTR [rsp + 16]"), "{target:?}: {asm}");
+                    assert!(asm.contains("mov rax, QWORD PTR [rsp]"), "{target:?}: {asm}");
+                }
+            }
+        }
+    }
+
+    /// Emits one isolated method-result boxing sequence for structural ABI assertions.
+    fn method_result_asm(
+        target: Target,
+        source: EvalMethodResultSource,
+        return_uses_marker: bool,
+        name: &str,
+        return_ty: &PhpType,
+    ) -> String {
+        let module = Module::new(target);
+        let mut emitter = Emitter::new(target);
+        emit_box_method_result(
+            &module,
+            &mut emitter,
+            return_ty,
+            false,
+            return_uses_marker,
+            source,
+            &format!("eval_{name}"),
+        );
+        emitter.output()
+    }
+
+    /// Returns every supported target so the private return marker stays target-aware.
+    fn supported_targets() -> [Target; 5] {
+        [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ]
     }
 }

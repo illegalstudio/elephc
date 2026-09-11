@@ -133,7 +133,7 @@ fn collect_class_property_slots(
             property: property.clone(),
             visibility,
             offset: 8 + index * 16,
-            ty: ty.codegen_repr(),
+            ty: super::eval_value_helpers::bridge_storage_type(ty),
             is_declared: class_info.property_slot_is_declared(index, property),
             is_hidden_shadow,
         });
@@ -981,7 +981,11 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
             );
             emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // load the stored Mixed property cell
             emitter.instruction(&format!("cbz x0, {}", null_label));            // null property storage reads as PHP null
-            emitter.instruction("bl __rt_incref");                              // retain the stored Mixed cell for the eval caller
+            if slot.ty.is_php_array() {
+                emitter.instruction("bl __rt_mixed_clone");                     // detach the array zval so eval writes preserve property COW aliases
+            } else {
+                emitter.instruction("bl __rt_incref");                          // retain the stored Mixed cell for the eval caller
+            }
             emitter.instruction(&format!("b {}", done_label));                  // skip null materialization after a retained hit
             emitter.label(&null_label);
             let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
@@ -1029,7 +1033,11 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
             emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)); // load the stored Mixed property cell
             emitter.instruction("test rax, rax");                               // check whether the property storage is initialized
             emitter.instruction(&format!("jz {}", null_label));                 // null property storage reads as PHP null
-            emitter.instruction("call __rt_incref");                            // retain the stored Mixed cell for the eval caller
+            if slot.ty.is_php_array() {
+                emitter.instruction("call __rt_mixed_clone");                   // detach the array zval so eval writes preserve property COW aliases
+            } else {
+                emitter.instruction("call __rt_incref");                        // retain the stored Mixed cell for the eval caller
+            }
             emitter.instruction(&format!("jmp {}", done_label));                // skip null materialization after a retained hit
             emitter.label(&null_label);
             let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
@@ -1051,6 +1059,10 @@ fn emit_aarch64_store_property_slot(
     slot: &EvalPropertySlot,
     fail_label: &str,
 ) {
+    if slot.ty.is_php_array() {
+        emitter.instruction("ldr x0, [sp, #24]");                               // borrow the boxed array assignment before checking its PHP type
+        super::eval_value_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
         PhpType::Bool => {
@@ -1107,6 +1119,10 @@ fn emit_x86_64_store_property_slot(
     slot: &EvalPropertySlot,
     fail_label: &str,
 ) {
+    if slot.ty.is_php_array() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                   // borrow the boxed array assignment before checking its PHP type
+        super::eval_value_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
         PhpType::Bool => {

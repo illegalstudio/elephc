@@ -91,6 +91,31 @@ fn by_ref_invoker_returns_ignore_the_internal_ownership_status() {
     }
 }
 
+/// Consumes a compiled string marker before persistence or concat restoration can clobber it.
+#[test]
+fn by_value_string_returns_persist_only_the_borrowed_path() {
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let mut emitter = Emitter::new(Target::parse(name).unwrap());
+        let mut ctx = InvokerEmitContext::new("string_owner_invoker");
+        restore_concat_offset_after_nested_call(&mut emitter, &PhpType::Str, false, &mut ctx);
+        let arch = emitter.target.arch;
+        let output = emitter.output();
+        let branch = match arch {
+            Arch::AArch64 => output.find("cbnz x15,").expect("AArch64 marker branch"),
+            Arch::X86_64 => output.find("test r11, r11").expect("x86_64 marker branch"),
+        };
+        let persist = output.find("__rt_str_persist").expect("borrowed persistence path");
+        let concat = output.rfind("_concat_off").expect("concat restore");
+        assert!(branch < persist && persist < concat, "{name}: {output}");
+    }
+}
+
 /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
 #[test]
 fn arm64_invoker_boundary_uses_large_offset_frame_helpers() {

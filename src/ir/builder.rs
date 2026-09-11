@@ -312,6 +312,86 @@ impl<'f> Builder<'f> {
         }
     }
 
+    /// Neutralizes exception guards for provisional local owners that stayed borrowed.
+    ///
+    /// Concrete container loads are treated as possible owners until every store has fixed the
+    /// slot representation. If the slot remains concrete, the frame still owns that value and an
+    /// unwind guard would consume the frame's reference. Guard-chain anchors are rewired before
+    /// the matching guard and unguard operations are erased.
+    pub fn prune_borrowed_local_load_guard_ops(&mut self) {
+        let mut prune = Vec::new();
+        for (index, inst) in self.func.instructions.iter().enumerate() {
+            if inst.immediate
+                != Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
+                ))
+            {
+                continue;
+            }
+            let (Some(source), Some(_anchor), Some(token)) = (
+                inst.operands.first().copied(),
+                inst.operands.get(1).copied(),
+                inst.result,
+            ) else {
+                continue;
+            };
+            let Some(value) = self.func.values.get(source.as_raw() as usize) else {
+                continue;
+            };
+            if value.ownership == Ownership::Owned {
+                continue;
+            }
+            let ValueDef::Instruction { inst: source_inst, .. } = value.def else {
+                continue;
+            };
+            let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+                continue;
+            }
+            let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {
+                continue;
+            };
+            let Some(local) = self.func.locals.get(slot.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::StaticLocal)
+                || !local_load_release_is_deferred_candidate(&value.php_type)
+                || local_load_requires_owned_mixed_unbox(&local.php_type, &value.php_type)
+                || !guard_token_has_only_chain_uses(self.func, token)
+            {
+                continue;
+            }
+            prune.push((index, token));
+        }
+
+        for (guard_index, token) in prune {
+            let Some(anchor) = self.func.instructions[guard_index].operands.get(1).copied() else {
+                continue;
+            };
+            for inst in &mut self.func.instructions {
+                if inst.immediate
+                    == Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
+                    ))
+                    && inst.operands.get(1).copied() == Some(token)
+                {
+                    inst.operands[1] = anchor;
+                }
+                if inst.immediate
+                    == Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::ExceptionUnguardOwned,
+                    ))
+                    && inst.operands.first().copied() == Some(token)
+                {
+                    neutralize_instruction(inst);
+                }
+            }
+            neutralize_instruction(&mut self.func.instructions[guard_index]);
+        }
+    }
+
     /// Returns the semantic role of a local slot.
     pub fn local_kind(&self, slot: LocalSlotId) -> LocalKind {
         self.func.locals[slot.as_raw() as usize].kind
@@ -671,6 +751,43 @@ fn local_load_requires_owned_mixed_unbox(storage_type: &PhpType, result_type: &P
                 | PhpType::Object(_)
                 | PhpType::Iterable
         )
+}
+
+/// Returns true when a guard token is used only by its unguard or as the next guard anchor.
+fn guard_token_has_only_chain_uses(function: &Function, token: ValueId) -> bool {
+    for instruction in &function.instructions {
+        for (operand_index, operand) in instruction.operands.iter().enumerate() {
+            if *operand != token {
+                continue;
+            }
+            let allowed = match instruction.immediate {
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionUnguardOwned,
+                )) => operand_index == 0,
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
+                )) => operand_index == 1,
+                _ => false,
+            };
+            if !allowed {
+                return false;
+            }
+        }
+    }
+    !function.blocks.iter().any(|block| {
+        block
+            .terminator
+            .as_ref()
+            .is_some_and(|terminator| terminator_uses_value(terminator, token))
+    })
+}
+
+/// Rewrites one deferred ownership operation to a side-effect-free placeholder.
+fn neutralize_instruction(instruction: &mut Instruction) {
+    instruction.op = Op::Nop;
+    instruction.operands.clear();
+    instruction.immediate = None;
+    instruction.effects = Op::Nop.default_effects();
 }
 
 /// Returns true when one SSA value has exactly one use and that use is a `Release` operand.

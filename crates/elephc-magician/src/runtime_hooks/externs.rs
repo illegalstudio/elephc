@@ -299,6 +299,7 @@ unsafe extern "C" {
         context: *const c_void,
     ) -> u64;
     /// Transfers the pending native Throwable into a boxed eval value.
+    #[link_name = "__elephc_eval_value_take_pending_throwable_v2"]
     pub(super) fn __elephc_eval_value_take_pending_throwable() -> *mut RuntimeCell;
     /// Consumes an owned Mixed value and returns a contained native exception status.
     pub(super) fn __elephc_eval_value_release_protected(value: *mut RuntimeCell) -> u64;
@@ -540,6 +541,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_pcntl_aot_signal_handler(signal: i64) -> *mut RuntimeCell;
     /// Installs the optional eval dynamic object destructor callback.
     pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
+    /// Installs eval-owned object edge enumeration and final-release callbacks.
+    pub(super) fn __elephc_eval_install_object_owner_hooks(child: usize, release: usize);
 }
 
 /// Forwards one installed eval ob-handler callback address to the generated runtime.

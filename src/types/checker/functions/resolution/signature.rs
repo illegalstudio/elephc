@@ -382,14 +382,26 @@ impl Checker {
 
 /// Infers a concrete array type from return info when the declared return type is a generic `array` hint.
 ///
-/// Returns `Some(PhpType)` only when every non-void, non-empty return in
-/// `return_types` is the same array type (including `array<T>` or `assocArray`
-/// shapes). An empty indexed array is neutral because it can be materialized in
-/// either concrete storage family at the return boundary. Returns `None` if
-/// non-empty returns differ, include non-array types, or are all `void`.
+/// Returns the exact packed-or-keyed union when any branch already uses that storage and every
+/// other branch is array-shaped. Otherwise returns a concrete array type only when every
+/// non-void, non-empty return has the same shape. An empty indexed array is neutral because it
+/// can be materialized in either concrete storage family at the return boundary.
 fn inferred_specific_array_type_from_infos(
     return_types: &[super::super::returns::ReturnInfo],
 ) -> Option<PhpType> {
+    let has_php_array = return_types
+        .iter()
+        .any(|return_info| return_info.ty.is_php_array());
+    let all_array_family = return_types.iter().all(|return_info| {
+        return_info.ty.is_php_array()
+            || matches!(
+                return_info.ty,
+                PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+    });
+    if has_php_array && all_array_family {
+        return Some(PhpType::php_array());
+    }
     let mut specific: Option<PhpType> = None;
     let mut empty_array: Option<PhpType> = None;
     for return_info in return_types {
@@ -397,7 +409,9 @@ fn inferred_specific_array_type_from_infos(
         if matches!(return_ty, PhpType::Void) {
             continue;
         }
-        if !matches!(return_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        if !return_ty.is_php_array()
+            && !matches!(return_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
             return None;
         }
         if matches!(return_ty, PhpType::Array(elem) if elem.as_ref() == &PhpType::Never) {

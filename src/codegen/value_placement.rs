@@ -11,7 +11,8 @@
 
 use std::collections::HashMap;
 
-use crate::ir::{Function, IrType, Op, Ownership, ValueDef, ValueId};
+use crate::ir::{Function, Immediate, IrType, Op, Ownership, ValueDef, ValueId};
+use crate::types::PhpType;
 
 const ITERATOR_STATE_BYTES: usize = 72;
 
@@ -48,7 +49,9 @@ pub fn allocate(func: &Function) -> ValuePlacement {
         }
         offset += bytes;
         slot_of.insert(value_id, offset);
-        if value.ownership == Ownership::MaybeOwned && is_direct_php_call_result(func, value_id) {
+        if value.ownership == Ownership::MaybeOwned
+            && publishes_runtime_ownership_status(func, value_id)
+        {
             offset += 8;
             runtime_return_ownership_slot_of.insert(value_id, offset);
         }
@@ -60,16 +63,34 @@ pub fn allocate(func: &Function) -> ValuePlacement {
     }
 }
 
-/// Returns true when a value receives the internal return marker from a PHP function call.
-fn is_direct_php_call_result(func: &Function, value: ValueId) -> bool {
+/// Returns true when a value receives a path-specific runtime ownership marker.
+fn publishes_runtime_ownership_status(func: &Function, value: ValueId) -> bool {
     let Some(value) = func.value(value) else {
         return false;
     };
     let ValueDef::Instruction { inst, .. } = value.def else {
         return false;
     };
-    func.instruction(inst)
-        .is_some_and(|instruction| matches!(instruction.op, Op::Call | Op::FunctionVariantCall))
+    let Some(instruction) = func.instruction(inst) else {
+        return false;
+    };
+    if matches!(instruction.op, Op::Call | Op::FunctionVariantCall) {
+        return true;
+    }
+    if instruction.op != Op::Cast
+        || instruction.immediate != Some(Immediate::CastTarget(IrType::Str))
+    {
+        return false;
+    }
+    let Some(source) = instruction.operands.first().copied() else {
+        return false;
+    };
+    func.value(source).is_some_and(|source| {
+        matches!(
+            source.php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    })
 }
 
 /// Returns the spill-slot size for one function value, including opcode-specific state.
@@ -117,7 +138,7 @@ mod tests {
     //! Key details:
     //! - These tests verify the stack-slot contract before instruction lowering uses it.
 
-    use crate::ir::{Builder, DataId, Function, IrHeapKind, IrType, Op, Ownership};
+    use crate::ir::{Builder, DataId, Function, Immediate, IrHeapKind, IrType, Op, Ownership};
     use crate::types::PhpType;
 
     use super::{allocate, bytes_for};
@@ -225,5 +246,39 @@ mod tests {
         assert_eq!(placement.slot(result), Some(8));
         assert_eq!(placement.runtime_return_ownership_slot(result), Some(16));
         assert_eq!(placement.total_slot_bytes, 16);
+    }
+
+    /// Verifies a Mixed-to-string cast reserves a spill for its per-tag ownership marker.
+    #[test]
+    fn allocates_runtime_ownership_slot_for_mixed_string_cast() {
+        let mut function = Function::new("test".to_string(), IrType::Str, PhpType::Str);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let source = builder
+            .emit(
+                Op::LoadGlobal,
+                Vec::new(),
+                Some(Immediate::GlobalName(DataId::from_raw(0))),
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Borrowed,
+            )
+            .expect("load_global produces a value");
+        let result = builder
+            .emit(
+                Op::Cast,
+                vec![source],
+                Some(Immediate::CastTarget(IrType::Str)),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::MaybeOwned,
+            )
+            .expect("cast produces a value");
+
+        let placement = allocate(&function);
+
+        assert_eq!(placement.runtime_return_ownership_slot(result), Some(32));
     }
 }

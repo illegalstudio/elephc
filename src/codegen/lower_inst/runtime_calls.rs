@@ -27,6 +27,7 @@ pub(super) fn lower(
         RuntimeCallTarget::ArrayFetchForWrite => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
+        RuntimeCallTarget::MixedArraySet => super::lower_mixed_array_runtime_set(ctx, inst),
         RuntimeCallTarget::MixedCellPromoteToHash(sort)
         | RuntimeCallTarget::MixedCellPromoteAttachedToHash(sort) => {
             lower_mixed_cell_promote_to_hash(ctx, inst, sort)

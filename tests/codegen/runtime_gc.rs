@@ -29,6 +29,10 @@ mod eval_constructor;
 mod eval_native_calls;
 #[path = "runtime_gc/eval_cycles.rs"]
 mod eval_cycles;
+#[path = "runtime_gc/eval_closure_receivers.rs"]
+mod eval_closure_receivers;
+#[path = "runtime_gc/eval_declared_array_properties.rs"]
+mod eval_declared_array_properties;
 #[path = "runtime_gc/parse_url.rs"]
 mod parse_url;
 #[path = "runtime_gc/getenv.rs"]

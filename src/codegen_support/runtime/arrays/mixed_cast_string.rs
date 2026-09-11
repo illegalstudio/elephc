@@ -63,42 +63,49 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_cast_string_from_resource");           // resources render as PHP's "Resource id #N"
     emitter.instruction("mov x1, xzr");                                         // unsupported and null payloads produce an empty string pointer
     emitter.instruction("mov x2, xzr");                                         // unsupported and null payloads produce an empty string length
-    emitter.instruction("b __rt_mixed_cast_string_done");                       // return the normalized empty-string result
+    emitter.instruction("b __rt_mixed_cast_string_borrowed");                   // publish borrowed ownership for the normalized empty string
 
     emitter.label("__rt_mixed_cast_string_from_int");
     emitter.instruction("mov x0, x1");                                          // move the integer payload into the itoa argument register
     emitter.instruction("bl __rt_itoa");                                        // convert the integer payload to decimal text
-    emitter.instruction("b __rt_mixed_cast_string_done");                       // return the converted integer string
+    emitter.instruction("b __rt_mixed_cast_string_borrowed");                   // publish borrowed ownership for concat scratch
 
     emitter.label("__rt_mixed_cast_string_from_string");
     emitter.instruction("bl __rt_str_persist");                                 // detach the string payload from the source mixed owner
-    emitter.instruction("b __rt_mixed_cast_string_done");                       // return the persisted string copy
+    emitter.instruction("b __rt_mixed_cast_string_owned");                      // publish the owner returned by string persistence
 
     emitter.label("__rt_mixed_cast_string_from_resource");
     emitter.instruction("mov x0, x1");                                          // move the native resource payload into the formatter argument register
     emitter.instruction("bl __rt_resource_to_string");                          // format the payload as "Resource id #N" in the shared concat scratch
-    emitter.instruction("b __rt_mixed_cast_string_done");                       // return the borrowed resource display string
+    emitter.instruction("b __rt_mixed_cast_string_borrowed");                   // publish borrowed ownership for concat scratch
 
     emitter.label("__rt_mixed_cast_string_from_array");
     emitter.instruction("bl __rt_sprintf_warn_array_to_string");                // emit PHP's array-to-string warning for boxed arrays
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_iterable_array_str");
     emitter.instruction("mov x2, #5");                                          // byte length of the fixed "Array" literal
-    emitter.instruction("b __rt_mixed_cast_string_done");                       // return the borrowed fixed-data string
+    emitter.instruction("b __rt_mixed_cast_string_borrowed");                   // publish borrowed ownership for fixed data
 
     emitter.label("__rt_mixed_cast_string_from_float");
     emitter.instruction("fmov d0, x1");                                         // move the unboxed float bits into the FP register file
     emitter.instruction("bl __rt_ftoa");                                        // convert the float payload to decimal text
-    emitter.instruction("b __rt_mixed_cast_string_done");                       // return the converted float string
+    emitter.instruction("b __rt_mixed_cast_string_borrowed");                   // publish borrowed ownership for concat scratch
 
     emitter.label("__rt_mixed_cast_string_from_bool");
     emitter.instruction("cbz x1, __rt_mixed_cast_string_false");                // false casts to the empty string
     emitter.instruction("mov x0, x1");                                          // move the true payload (1) into the itoa argument register
     emitter.instruction("bl __rt_itoa");                                        // convert true to the string "1"
-    emitter.instruction("b __rt_mixed_cast_string_done");                       // return the converted bool string
+    emitter.instruction("b __rt_mixed_cast_string_borrowed");                   // publish borrowed ownership for concat scratch
 
     emitter.label("__rt_mixed_cast_string_false");
     emitter.instruction("mov x1, xzr");                                         // false produces an empty string pointer
     emitter.instruction("mov x2, xzr");                                         // false produces an empty string length
+
+    emitter.label("__rt_mixed_cast_string_borrowed");
+    emitter.instruction("mov x15, xzr");                                        // publish a borrowed string result to compiled PHP callers
+    emitter.instruction("b __rt_mixed_cast_string_done");                       // rejoin the shared helper epilogue
+
+    emitter.label("__rt_mixed_cast_string_owned");
+    emitter.instruction("mov x15, #1");                                         // publish the persisted string owner to compiled PHP callers
 
     emitter.label("__rt_mixed_cast_string_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -136,44 +143,51 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_cast_string_from_resource");             // resources render as PHP's \"Resource id #N\"
     emitter.instruction("xor rax, rax");                                        // unsupported and null payloads produce an empty string pointer
     emitter.instruction("xor rdx, rdx");                                        // unsupported and null payloads produce an empty string length
-    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the normalized empty-string result
+    emitter.instruction("jmp __rt_mixed_cast_string_borrowed");                 // publish borrowed ownership for the normalized empty string
 
     emitter.label("__rt_mixed_cast_string_from_int");
     emitter.instruction("mov rax, rdi");                                        // move the integer payload into the itoa input register
     emitter.instruction("call __rt_itoa");                                      // convert the integer payload to decimal text
-    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the converted integer string
+    emitter.instruction("jmp __rt_mixed_cast_string_borrowed");                 // publish borrowed ownership for concat scratch
 
     emitter.label("__rt_mixed_cast_string_from_string");
     emitter.instruction("mov rax, rdi");                                        // move the unboxed string pointer into the ABI string result register
     emitter.instruction("call __rt_str_persist");                               // detach the string payload from the source mixed owner
-    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the persisted string copy
+    emitter.instruction("jmp __rt_mixed_cast_string_owned");                    // publish the owner returned by string persistence
 
     emitter.label("__rt_mixed_cast_string_from_resource");
     emitter.instruction("mov rax, rdi");                                        // move the native resource payload into the formatter input register
     emitter.instruction("call __rt_resource_to_string");                        // format the payload as \"Resource id #N\" in the shared concat scratch
-    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the borrowed resource display string
+    emitter.instruction("jmp __rt_mixed_cast_string_borrowed");                 // publish borrowed ownership for concat scratch
 
     emitter.label("__rt_mixed_cast_string_from_array");
     emitter.instruction("call __rt_sprintf_warn_array_to_string_x64");          // emit PHP's array-to-string warning for boxed arrays
     crate::codegen_support::abi::emit_symbol_address(emitter, "rax", "_iterable_array_str");
     emitter.instruction("mov edx, 5");                                          // byte length of the fixed \"Array\" literal
-    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the borrowed fixed-data string
+    emitter.instruction("jmp __rt_mixed_cast_string_borrowed");                 // publish borrowed ownership for fixed data
 
     emitter.label("__rt_mixed_cast_string_from_float");
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float bits into the FP register file
     emitter.instruction("call __rt_ftoa");                                      // convert the float payload to decimal text
-    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the converted float string
+    emitter.instruction("jmp __rt_mixed_cast_string_borrowed");                 // publish borrowed ownership for concat scratch
 
     emitter.label("__rt_mixed_cast_string_from_bool");
     emitter.instruction("test rdi, rdi");                                       // false casts to the empty string
     emitter.instruction("je __rt_mixed_cast_string_false");                     // skip integer conversion when the bool payload is false
     emitter.instruction("mov rax, rdi");                                        // move the true payload (1) into the itoa input register
     emitter.instruction("call __rt_itoa");                                      // convert true to the string \"1\"
-    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the converted bool string
+    emitter.instruction("jmp __rt_mixed_cast_string_borrowed");                 // publish borrowed ownership for concat scratch
 
     emitter.label("__rt_mixed_cast_string_false");
     emitter.instruction("xor rax, rax");                                        // false produces an empty string pointer
     emitter.instruction("xor rdx, rdx");                                        // false produces an empty string length
+
+    emitter.label("__rt_mixed_cast_string_borrowed");
+    emitter.instruction("xor r11d, r11d");                                      // publish a borrowed string result to compiled PHP callers
+    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // rejoin the shared helper epilogue
+
+    emitter.label("__rt_mixed_cast_string_owned");
+    emitter.instruction("mov r11d, 1");                                         // publish the persisted string owner to compiled PHP callers
 
     emitter.label("__rt_mixed_cast_string_done");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
@@ -280,6 +294,39 @@ mod tests {
                 !arm.contains("__rt_heap_alloc") && !arm.contains("__rt_heap_free"),
                 "the resource arm must not touch the heap allocator ({target:?}):\n{arm}"
             );
+        }
+    }
+
+    /// Publishes owned status only for the tag-1 branch that persists a string payload.
+    #[test]
+    fn test_mixed_cast_string_publishes_per_tag_ownership_on_both_targets() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            let string_arm = asm
+                .split("__rt_mixed_cast_string_from_string:\n")
+                .nth(1)
+                .expect("string arm must be emitted")
+                .split("__rt_mixed_cast_string_from_resource:\n")
+                .next()
+                .expect("string arm must precede resource arm");
+            assert!(string_arm.contains("__rt_str_persist"), "{target:?}: {asm}");
+            assert!(
+                string_arm.contains("mixed_cast_string_owned"),
+                "{target:?}: {asm}"
+            );
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(asm.contains("mov x15, xzr"), "{target:?}: {asm}");
+                    assert!(asm.contains("mov x15, #1"), "{target:?}: {asm}");
+                }
+                Arch::X86_64 => {
+                    assert!(asm.contains("xor r11d, r11d"), "{target:?}: {asm}");
+                    assert!(asm.contains("mov r11d, 1"), "{target:?}: {asm}");
+                }
+            }
         }
     }
 }

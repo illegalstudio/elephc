@@ -1344,6 +1344,9 @@ fn lower_body_into_function(
     // Likewise, erase provisional releases for concrete local loads unless a
     // later store widened their final frame slot to Mixed (issue #538).
     ctx.builder.prune_borrowed_local_load_release_ops();
+    // Provisional exception guards obey the same final-storage boundary. A
+    // concrete slot remains the owner and must survive a throwing call.
+    ctx.builder.prune_borrowed_local_load_guard_ops();
     // Publish the lowering-time ownership proof after provisional local-load
     // releases have been pruned, so codegen can consume EIR metadata instead of
     // maintaining a second producer allow-list (issue #595).

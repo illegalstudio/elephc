@@ -63,15 +63,9 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         }
     }
 
-    /// Transfers the raw runtime throwable into an eval-owned boxed object handle.
+    /// Takes the owned Throwable box transferred by the generated runtime boundary.
     fn take_pending_runtime_throwable(&mut self) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-        let raw = unsafe { __elephc_eval_value_take_pending_throwable() };
-        if raw.is_null() { return Ok(None); }
-        let boxed = Self::object_from_raw(raw);
-        // Boxing retains its borrowed input. Consume the owner removed from _exc_value
-        // so the eval result alone keeps the object and its message alive.
-        unsafe { __elephc_eval_value_release_raw_heap_word(raw as u64); }
-        boxed.map(Some)
+        Ok(self.take_pending_native_throwable())
     }
 
     impl_collection_call_ops!();

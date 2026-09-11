@@ -487,6 +487,15 @@ pub trait RuntimeValueOps {
     /// Retains one runtime cell so the eval caller receives an independent owner.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Retains hidden object-owned edges for native GC; arena adapters need no extra owners.
+    fn retain_object_children(
+        &mut self,
+        _object: RuntimeCellHandle,
+        _children: &[RuntimeCellHandle],
+    ) -> Result<(), EvalStatus> {
+        Ok(())
+    }
+
     /// Reports whether this host supports GC-owned references independent of eval scope metadata.
     fn supports_persistent_references(&self) -> bool { false }
 

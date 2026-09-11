@@ -223,10 +223,8 @@ echo mb_convert_case(encoding: selected_encoding($argc > 0), mode: MB_CASE_FOLD,
     assert_eq!(out, "É:É:strasse");
 }
 
-/// Verifies every supported target lowers shared text calls and nullable parameters through the bridge.
-#[test]
-fn test_mbstring_supported_target_lowering() {
-    let source = r#"<?php
+/// Shared source for each supported-target mbstring lowering check.
+const MBSTRING_SUPPORTED_TARGET_SOURCE: &str = r#"<?php
 function selected_encoding(bool $default): ?string {
     if ($default) { return null; }
     return "UTF-8";
@@ -300,24 +298,41 @@ mbstring_mime_callback_fixture($argc);
 $mbstring_dynamic = $argc > 0 ? 'try { mb_ereg_search(options: "Q"); } catch (Throwable $error) { var_dump($error->getPrevious()); }' : '';
 eval($mbstring_dynamic);
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let dir = make_cli_test_dir("elephc_mbstring_target");
-        let php = dir.join("main.php");
-        std::fs::write(&php, source).unwrap();
-        let mut command = elephc_cli_command(&dir);
-        command.args(["--emit-asm", "--target", target]);
-        if target.starts_with("ios-") { command.args(["--emit", "staticlib"]); }
-        let output = command.arg(&php).output().unwrap();
-        assert!(output.status.success(), "{target}: {}", String::from_utf8_lossy(&output.stderr));
-        let assembly = std::fs::read_to_string(php.with_extension("s")).unwrap();
-        assert!(assembly.contains("__rt_mbstring_native"), "{target}");
-        assert!(assembly.contains("mbstring_pointers_ready"), "{target}");
-        assert!(assembly.contains("__elephc_eval_builtin_throwable_getprevious"), "{target}");
-        assert!(assembly.contains("__rt_throwable_previous"), "{target}");
-        if !target.starts_with("ios-") {
-            assert!(assembly.contains("__rt_mbstring_request_reset"), "{target}");
-            assert!(assembly.contains("__rt_mbstring_release_catalog"), "{target}");
-        }
-        std::fs::remove_dir_all(dir).unwrap();
+
+/// Verifies one supported target lowers shared text calls and nullable parameters through the bridge.
+fn check_mbstring_supported_target_lowering(target: &str) {
+    let dir = make_cli_test_dir("elephc_mbstring_target");
+    let php = dir.join("main.php");
+    std::fs::write(&php, MBSTRING_SUPPORTED_TARGET_SOURCE).unwrap();
+    let mut command = elephc_cli_command(&dir);
+    command.args(["--emit-asm", "--target", target]);
+    if target.starts_with("ios-") { command.args(["--emit", "staticlib"]); }
+    let output = command.arg(&php).output().unwrap();
+    assert!(output.status.success(), "{target}: {}", String::from_utf8_lossy(&output.stderr));
+    let assembly = std::fs::read_to_string(php.with_extension("s")).unwrap();
+    assert!(assembly.contains("__rt_mbstring_native"), "{target}");
+    assert!(assembly.contains("mbstring_pointers_ready"), "{target}");
+    assert!(assembly.contains("__elephc_eval_builtin_throwable_getprevious"), "{target}");
+    assert!(assembly.contains("__rt_throwable_previous"), "{target}");
+    if !target.starts_with("ios-") {
+        assert!(assembly.contains("__rt_mbstring_request_reset"), "{target}");
+        assert!(assembly.contains("__rt_mbstring_release_catalog"), "{target}");
     }
+    std::fs::remove_dir_all(dir).unwrap();
 }
+
+macro_rules! supported_target_lowering_test {
+    ($name:ident, $target:literal) => {
+        /// Checks one supported target so its compile has an independent CI timeout.
+        #[test]
+        fn $name() {
+            check_mbstring_supported_target_lowering($target);
+        }
+    };
+}
+
+supported_target_lowering_test!(test_mbstring_supported_target_lowering_macos_aarch64, "macos-aarch64");
+supported_target_lowering_test!(test_mbstring_supported_target_lowering_ios_arm64, "ios-arm64");
+supported_target_lowering_test!(test_mbstring_supported_target_lowering_ios_sim_arm64, "ios-sim-arm64");
+supported_target_lowering_test!(test_mbstring_supported_target_lowering_linux_aarch64, "linux-aarch64");
+supported_target_lowering_test!(test_mbstring_supported_target_lowering_linux_x86_64, "linux-x86_64");

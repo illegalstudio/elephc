@@ -64,6 +64,11 @@ pub(crate) enum LiteralDefaultValue {
         elem_type: PhpType,
         elements: Vec<LiteralArrayElement>,
     },
+    /// An associative-array literal stored in a `mixed`/union slot as a boxed Mixed cell.
+    BoxedAssocArray {
+        value_type: PhpType,
+        entries: Vec<LiteralAssocEntry>,
+    },
 }
 
 /// Literal indexed-array element that can be materialized without evaluating code.
@@ -179,6 +184,27 @@ pub(crate) fn literal_default_value(
                 elements,
             })
         }
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::ArrayLiteralAssoc(items)) => {
+            let value_type = PhpType::Mixed;
+            let entries = items
+                .iter()
+                .map(|(key, value_expr)| {
+                    Ok(LiteralAssocEntry {
+                        key: literal_array_key(context, &key.kind, op_name)?,
+                        value: literal_array_element(
+                            context,
+                            &value_type,
+                            &value_expr.kind,
+                            op_name,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::BoxedAssocArray {
+                value_type,
+                entries,
+            })
+        }
         (PhpType::Void | PhpType::Never, ExprKind::Null) => Ok(LiteralDefaultValue::NullSentinel),
         (PhpType::Void | PhpType::Never, _) => Ok(LiteralDefaultValue::NullSentinel),
         (PhpType::Object(_), ExprKind::Null) => Ok(LiteralDefaultValue::Null),
@@ -289,14 +315,14 @@ pub(crate) fn emit_boxed_float_literal_to_result(ctx: &mut FunctionContext<'_>, 
     abi::emit_symbol_address(ctx.emitter, scratch, &label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the boxed float literal default through the symbol scratch register
                 &format!("ldr {}, [{}]", float_reg, scratch)
-            );                                                                  // load the boxed float literal default through the symbol scratch register
+            );
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // load the boxed float literal default through the symbol scratch register
                 &format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)
-            );                                                                  // load the boxed float literal default through the symbol scratch register
+            );
         }
     }
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);

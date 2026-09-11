@@ -12,6 +12,49 @@
 use super::super::*;
 use super::support::*;
 
+/// Reflection storage retains a borrowed argument and balances replacements and identical writes.
+#[test]
+fn static_property_storage_owns_reflection_arguments() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let first = values.string("first").unwrap();
+    store_borrowed_static_property(
+        "Stored",
+        "value",
+        first.borrowed(),
+        &mut context,
+        &mut values,
+    )
+    .unwrap();
+    values.release(first).unwrap();
+    assert_eq!(context.static_property("Stored", "value"), Some(first));
+    assert_eq!(values.cell_owners[&(first.as_ptr() as usize)], 1);
+
+    store_borrowed_static_property(
+        "Stored",
+        "value",
+        first.borrowed(),
+        &mut context,
+        &mut values,
+    )
+    .unwrap();
+    assert_eq!(values.cell_owners[&(first.as_ptr() as usize)], 1);
+
+    let second = values.int(5).unwrap();
+    store_borrowed_static_property(
+        "Stored",
+        "value",
+        second.borrowed(),
+        &mut context,
+        &mut values,
+    )
+    .unwrap();
+    values.release(second).unwrap();
+    assert_eq!(values.cell_owners[&(first.as_ptr() as usize)], 0);
+    assert_eq!(values.cell_owners[&(second.as_ptr() as usize)], 1);
+    assert_eq!(values.retains, vec![first, second]);
+}
+
 /// An owned constant fetch detaches array storage and preserves side metadata for its copy.
 #[test]
 fn owned_constant_array_fetch_is_independent_from_context_storage() {

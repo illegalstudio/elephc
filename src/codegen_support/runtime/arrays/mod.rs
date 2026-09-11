@@ -109,6 +109,7 @@ mod decref_object;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
 mod gc_cycle_destructors;
+mod gc_eval_object_children;
 mod gc_mark_reachable;
 mod gc_note_child_ref;
 mod hash_count;
@@ -394,6 +395,8 @@ pub use hash_clone_shallow::emit_hash_clone_shallow;
 /// Emit shallow hash clone helper.
 pub use gc_collect_cycles::emit_gc_collect_cycles;
 /// Emit garbage collection cycle collector.
+pub use gc_eval_object_children::emit_gc_eval_object_children;
+/// Emit eval-owned object GC edges and final-release dispatch.
 pub use gc_mark_reachable::emit_gc_mark_reachable;
 /// Emit GC mark reachable helper.
 pub use gc_note_child_ref::emit_gc_note_child_ref;

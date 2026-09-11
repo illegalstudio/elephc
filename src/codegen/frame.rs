@@ -12,6 +12,7 @@
 //!   `_concat_buf` slices that were passed in by the caller.
 //! - Cdylib user frames and native destructors publish exceptional local cleanup activations.
 //! - Destructor cleanup contains each owner release so later owners are consumed after a throw.
+//! - Normal process exit releases implicit eval `$argv` storage through the global cleanup path.
 
 use std::collections::{HashMap, HashSet};
 
@@ -546,12 +547,19 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
-    let globals = ctx.module.data.global_names.clone();
+    let mut globals = ctx.module.data.global_names.clone();
+    if ctx.module.required_runtime_features.eval_bridge
+        && !globals.iter().any(|name| name == "argv")
+    {
+        globals.push("argv".to_string());
+    }
     for name in globals {
         if ctx.module.extern_globals.contains_key(&name) {
             continue;
         }
-        let ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
+        let ty = if name == "argv" {
+            argv_array_type()
+        } else if ctx.module.web && crate::superglobals::is_superglobal(&name) {
             crate::superglobals::superglobal_type().codegen_repr()
         } else {
             PhpType::Mixed

@@ -16,6 +16,7 @@ use super::super::registry::{eval_call_user_func_array_with_values_from_scope,
 eval_builtin! {
     contract: "call_user_func_array",
     area: Core,
+    source_arguments: true,
     direct: Core,
     values: Core,
 }

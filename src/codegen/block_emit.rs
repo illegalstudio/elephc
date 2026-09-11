@@ -1175,6 +1175,19 @@ fn emit_static_property_default_value(
                 &PhpType::Array(Box::new(elem_type.clone())),
             );
         }
+        LiteralDefaultValue::BoxedAssocArray {
+            value_type,
+            entries,
+        } => {
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(value_type.clone()),
+                },
+            );
+        }
     }
     let symbol = static_property_symbol(class_name, property);
     abi::emit_store_result_to_symbol(ctx.emitter, &symbol, php_type, false);

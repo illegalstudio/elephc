@@ -2223,6 +2223,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
+                // These mixed-return helpers always allocate a new result cell. Date
+                // decomposition boxes a newly allocated hash, `strtotime` boxes its scalar
+                // answer, `hrtime` boxes either a scalar or a new hash, and grapheme reversal
+                // boxes both its string and false paths. None can alias an argument.
+                | RuntimeFnId::Getdate
                 // `getcwd()` takes NO arguments, so its result cannot alias one by
                 // construction; `__rt_getcwd` copies the kernel's buffer out through
                 // `__rt_str_persist`. The default `MayAliasArguments` bucket made
@@ -2230,17 +2235,20 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
+                | RuntimeFnId::GraphemeStrrev
                 // `getenv($name)` boxes `false` or an owned copy made by `__rt_str_persist`
                 // in a fresh Mixed cell. `getenv()` boxes a newly built environment hash.
                 // Neither result can alias an argument, so the default `MayAliasArguments`
                 // bucket would keep an owned name temporary — and skip releasing the hash.
                 | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
+                | RuntimeFnId::Hrtime
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
                 // three siblings already documented below.
                 | RuntimeFnId::JsonEncode
+                | RuntimeFnId::Localtime
                 // `microtime()` formats into fresh storage from the clock; it has no string
                 // argument to alias. Its float mode is non-heap and unaffected.
                 | RuntimeFnId::Microtime
@@ -2277,6 +2285,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
+                | RuntimeFnId::Strtotime
                 // Every `str_word_count()` shape allocates its own result: format 0 is a plain
                 // integer, format 1 pushes persisted copies into a brand-new indexed array, and
                 // format 2 persists each word before inserting it into a brand-new hash. Nothing
@@ -2329,6 +2338,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
                 | RuntimeFnId::Implode
+                // Both helpers reserve concat scratch or a kind-4 heap fallback and publish
+                // the resulting slice. The result never aliases an argument, but it is not
+                // uniformly a fresh caller-owned allocation.
+                | RuntimeFnId::StrRepeat
+                | RuntimeFnId::StrReplace
         ) {
             BuiltinResultOwnership::Independent
         } else {
@@ -2968,5 +2982,31 @@ fn set_callable_param_type(
 ) {
     if let Some((_, param_ty)) = sig.params.get_mut(index) {
         *param_ty = php_type;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeFnId;
+    use crate::builtins::semantics::BuiltinResultOwnership;
+
+    /// Pins the contracts used by argument cleanup and synthetic callable wrappers.
+    #[test]
+    fn runtime_result_ownership_distinguishes_fresh_boxes_from_concat_storage() {
+        for target in [
+            RuntimeFnId::Getdate,
+            RuntimeFnId::Localtime,
+            RuntimeFnId::Strtotime,
+            RuntimeFnId::Hrtime,
+            RuntimeFnId::GraphemeStrrev,
+        ] {
+            assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
+        }
+        for target in [RuntimeFnId::StrRepeat, RuntimeFnId::StrReplace] {
+            assert_eq!(
+                target.result_ownership(),
+                BuiltinResultOwnership::Independent
+            );
+        }
     }
 }
