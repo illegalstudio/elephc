@@ -2640,6 +2640,8 @@ impl RuntimeFnId {
 /// Truncates a runtime callable signature while keeping all parameter metadata aligned.
 fn truncate_callable_params(sig: &mut crate::types::FunctionSig, count: usize) {
     sig.params.truncate(count);
+    sig.param_type_exprs.truncate(count);
+    sig.param_attributes.truncate(count);
     sig.defaults.truncate(count);
     sig.ref_params.truncate(count);
     sig.declared_params.truncate(count);

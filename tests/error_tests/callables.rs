@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// An unsupported fourth replacement argument stays rejected through callable syntax.
+#[test]
+fn test_error_capped_string_replace_callable_rejects_fourth_argument() {
+    for name in ["str_replace", "str_ireplace"] {
+        expect_error(
+            &format!("<?php {name}('a', 'b', 'aAa', 0);"),
+            "3 arguments",
+        );
+        expect_error(
+            &format!("<?php $callback = {name}(...); $callback('a', 'b', 'aAa', 0);"),
+            "3 arguments",
+        );
+    }
+}
+
 /// Final-pass callable argument errors remain fatal even beside calls whose metadata stabilized.
 #[test]
 fn test_error_callable_property_metadata_does_not_hide_invalid_arguments() {

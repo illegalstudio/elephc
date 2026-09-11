@@ -305,6 +305,7 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     }
     let sig = function_sig(def.name)?;
     let mut fcc_sig = callable_wrapper_sig(&sig);
+    truncate_callable_sig_to_enforced_arity(def, &mut fcc_sig);
     refine_first_class_callable_sig(def, &mut fcc_sig);
     fcc_sig.declared_return = true;
     // Mark params declared for reflection hasType, but keep by-ref params
@@ -315,6 +316,35 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
         .map(|index| !fcc_sig.ref_params.get(index).copied().unwrap_or(false))
         .collect();
     Some(fcc_sig)
+}
+
+/// Drops declared parameters the builtin's enforced arity contract refuses to accept.
+///
+/// A contract may declare PHP's full parameter list while capping `max_args` below it; how
+/// `str_replace()`/`str_ireplace()` document `$count` without supporting it. A direct call is
+/// rejected by that cap, but a callable wrapper materializes one operand per signature
+/// parameter, so the uncapped signature hands the typed backend an operand it has no lowering
+/// for (`str_replace expected 3 args, got 4`). Keeping the callable ABI at the accepted prefix
+/// makes the descriptor signature, the wrapper body and the direct call describe one arity.
+///
+/// Variadic builtins are left alone: their cap counts ARGUMENTS, not parameters, and truncating
+/// would delete the variadic tail the wrapper collects (`array_map`, `array_diff`, …).
+fn truncate_callable_sig_to_enforced_arity(def: &BuiltinDef, sig: &mut FunctionSig) {
+    if sig.variadic.is_some() {
+        return;
+    }
+    let Some(max) = enforced_arity_bounds_for_def(def).1 else {
+        return;
+    };
+    if sig.params.len() <= max {
+        return;
+    }
+    sig.params.truncate(max);
+    sig.param_type_exprs.truncate(max);
+    sig.param_attributes.truncate(max);
+    sig.defaults.truncate(max);
+    sig.ref_params.truncate(max);
+    sig.declared_params.truncate(max);
 }
 
 /// Returns PHP's diagnostic for a builtin that forbids first-class invocation.
@@ -820,6 +850,54 @@ mod tests {
     #[test]
     fn function_sig_returns_none_for_unknown() {
         assert!(function_sig("__nonexistent_builtin_xyz").is_none());
+    }
+
+    /// Callable wrappers expose only the accepted prefix of a capped builtin declaration.
+    #[test]
+    fn first_class_callable_sig_stops_at_the_enforced_arity_cap() {
+        for name in ["str_replace", "str_ireplace"] {
+            assert_eq!(function_sig(name).unwrap().params.len(), 4, "{name} declaration");
+            assert_eq!(enforced_arity_bounds(name), Some((3, Some(3))), "{name} cap");
+            let sig = first_class_callable_sig(name).expect("callable signature");
+            assert_eq!(sig.params.len(), 3, "{name} callable arity");
+            assert!(sig.variadic.is_none());
+            for field in [
+                sig.defaults.len(), sig.ref_params.len(), sig.declared_params.len(),
+                sig.param_type_exprs.len(), sig.param_attributes.len(),
+            ] {
+                assert_eq!(field, 3, "{name} parameter metadata stays aligned");
+            }
+            assert!(sig.defaults.iter().all(Option::is_none), "{name} prefix is required");
+        }
+    }
+
+    /// A variadic builtin keeps its collector, even when its contract caps argument count.
+    #[test]
+    fn first_class_callable_sig_keeps_capped_variadic_tails() {
+        for name in ["array_map", "array_diff", "array_merge"] {
+            let sig = first_class_callable_sig(name).expect("callable signature");
+            let variadic = sig.variadic.as_deref().expect("variadic collector preserved");
+            assert!(sig.params.iter().any(|(name, _)| name == variadic));
+        }
+    }
+
+    /// Backend-specific callable prefixes keep declaration annotations aligned too.
+    #[test]
+    fn runtime_callable_prefix_keeps_all_parameter_metadata_aligned() {
+        for (name, target, count) in [
+            ("count", crate::ir::RuntimeFnId::Count, 1),
+            ("array_reverse", crate::ir::RuntimeFnId::ArrayReverse, 1),
+            ("array_chunk", crate::ir::RuntimeFnId::ArrayChunk, 2),
+        ] {
+            let mut sig = first_class_callable_sig(name).expect("callable signature");
+            target.refine_runtime_callable_wrapper_sig(&mut sig);
+            for length in [
+                sig.params.len(), sig.defaults.len(), sig.ref_params.len(),
+                sig.declared_params.len(), sig.param_type_exprs.len(), sig.param_attributes.len(),
+            ] {
+                assert_eq!(length, count, "{name} runtime parameter metadata");
+            }
+        }
     }
 
     /// Verifies `arity_bounds` returns None for an unknown builtin.
