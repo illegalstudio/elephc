@@ -39,9 +39,9 @@ pub(crate) const KIND_SHARE: i32 = 7;
 pub(crate) const KIND_CALLBACK: i32 = 8;
 /// The four PHP-STREAM options (`CURLOPT_FILE`, `CURLOPT_INFILE`/`CURLOPT_READDATA`,
 /// `CURLOPT_WRITEHEADER`, `CURLOPT_STDERR`). The AOT build implements them in the curl
-/// prelude by composing its callback slots; `eval()` carries neither the slots nor a PHP
-/// stream it could hand them, so they take the same honest "not supported by this build"
-/// warning + `false` that `KIND_CALLBACK` and `KIND_SHARE` do.
+/// prelude by composing its callback slots; `eval()` carries the callback slots but no PHP
+/// stream it could hand them, so these four still take the honest "not supported by this
+/// build" warning plus `false`.
 pub(crate) const KIND_STREAM: i32 = 9;
 
 // `elephc_curl_easy_str_op`'s `op` codes, copied verbatim from

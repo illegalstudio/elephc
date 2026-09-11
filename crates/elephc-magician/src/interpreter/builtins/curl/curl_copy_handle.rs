@@ -5,9 +5,8 @@
 //! - `crate::interpreter::builtins::curl` dispatch.
 //!
 //! Key details:
-//! - CALLBACKS ARE NOT RE-REGISTERED, unlike `crate::curl_prelude::curl_copy_handle`:
-//!   this family does not implement curl callbacks in `eval()` at all (module doc), so
-//!   there is nothing to re-point at the copy.
+//! - Callbacks are re-registered onto the copy rather than inherited, so each callback
+//!   slot points at the copied eval handle and retains the same callable independently.
 
 use crate::curl_ffi as ffi;
 
