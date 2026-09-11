@@ -338,3 +338,252 @@ echo read_limit();
     );
     assert_eq!(out, "2");
 }
+
+/// Issue #752: `defined('C::K')` must return true for a declared class constant.
+#[test]
+fn test_defined_literal_class_constant_issue_752() {
+    let out = compile_and_run(
+        r#"<?php
+class K { const KEY = 42; }
+var_dump(defined('K::KEY'));
+"#,
+    );
+    assert_eq!(out, "bool(true)\n");
+}
+
+/// Verifies `defined('Class::CONST')` case rules, missing members, and missing classes.
+///
+/// Class-like names are case-insensitive; constant names are case-sensitive.
+/// A missing class or member is `false`, not a compile error. String names are
+/// global, so a leading `\` is accepted and namespace/`use` is not applied.
+#[test]
+fn test_defined_literal_class_constant_case_and_missing() {
+    let out = compile_and_run(
+        r#"<?php
+class KeywordConstants {
+    const Match = 1;
+    const MATCH = 2;
+}
+echo defined('KeywordConstants::Match') ? '1' : '0';
+echo defined('keywordconstants::MATCH') ? '1' : '0';
+echo defined('\\KeywordConstants::Match') ? '1' : '0';
+echo defined('KeywordConstants::match') ? '1' : '0';
+echo defined('KeywordConstants::MISSING') ? '1' : '0';
+echo defined('MissingClass::KEY') ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "111000");
+}
+
+/// Verifies `defined()` sees inherited class constants and implemented-interface constants.
+#[test]
+fn test_defined_literal_inherited_and_interface_constants() {
+    let out = compile_and_run(
+        r#"<?php
+interface Limits {
+    const MAX = 100;
+}
+interface ChildLimits extends Limits {}
+class Base {
+    const VERSION = 7;
+}
+class Bound extends Base implements Limits {}
+echo defined('Base::VERSION') ? '1' : '0';
+echo defined('Bound::VERSION') ? '1' : '0';
+echo defined('Limits::MAX') ? '1' : '0';
+echo defined('ChildLimits::MAX') ? '1' : '0';
+echo defined('Bound::MAX') ? '1' : '0';
+echo defined('Bound::MISSING') ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "111110");
+}
+
+/// Verifies `defined()` reports enum cases and extra enum class constants.
+///
+/// Case names are case-sensitive; the enum type name is case-insensitive.
+/// Extra enum constants follow class-constant visibility (`HIDDEN` is private).
+#[test]
+fn test_defined_literal_enum_cases_and_constants() {
+    let out = compile_and_run(
+        r#"<?php
+enum Suit {
+    case Hearts;
+    case Spades;
+    const COUNT = 2;
+    private const HIDDEN = 1;
+    public static function inside(): string {
+        return defined('Suit::HIDDEN') ? '1' : '0';
+    }
+}
+echo defined('Suit::Hearts') ? '1' : '0';
+echo defined('suit::Spades') ? '1' : '0';
+echo defined('Suit::COUNT') ? '1' : '0';
+echo defined('Suit::hearts') ? '1' : '0';
+echo defined('Suit::Clubs') ? '1' : '0';
+echo defined('Suit::HIDDEN') ? '1' : '0';
+echo Suit::inside();
+"#,
+    );
+    assert_eq!(out, "1110001");
+}
+
+/// Verifies `defined('Class::CONST')` strings are not namespace- or use-resolved.
+///
+/// PHP looks up the string as a global class-like name, so an unqualified
+/// `'K::KEY'` inside `namespace App` does not mean `App\K::KEY`, and a `use`
+/// alias is not applied.
+#[test]
+fn test_defined_literal_class_constant_ignores_namespace_and_use() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App {
+    class K { const KEY = 42; }
+    echo defined('K::KEY') ? '1' : '0';
+    echo defined('App\\K::KEY') ? '1' : '0';
+    echo defined('\\App\\K::KEY') ? '1' : '0';
+}
+namespace {
+    use Real as Alias;
+    class Real { const KEY = 1; }
+    echo defined('Alias::KEY') ? '1' : '0';
+    echo defined('Real::KEY') ? '1' : '0';
+}
+"#,
+    );
+    assert_eq!(out, "01101");
+}
+
+/// Verifies `defined('Class::CONST')` visibility from global scope and related classes.
+///
+/// Public is visible everywhere. Private is only visible from the declaring class.
+/// Protected is visible from the declaring class's inheritance family, so a parent
+/// method can see a child's protected constant (`A::probe()` / `B::BP`). `self::`
+/// and `parent::` use the lexical class; an inaccessible first declaration does not
+/// fall through. Expected stdout was checked against PHP 8.5.
+#[test]
+fn test_defined_literal_class_constant_visibility_and_self_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public const PUB = 1;
+    protected const PROT = 2;
+    private const PRIV = 3;
+    public static function inside(): string {
+        return (defined('Base::PUB') ? '1' : '0')
+            . (defined('Base::PROT') ? '1' : '0')
+            . (defined('Base::PRIV') ? '1' : '0')
+            . (defined('Child::PUB') ? '1' : '0')
+            . (defined('Child::PROT') ? '1' : '0')
+            . (defined('Child::PRIV') ? '1' : '0')
+            . (defined('self::PRIV') ? '1' : '0')
+            . (defined('self::PROT') ? '1' : '0');
+    }
+}
+class Child extends Base {
+    public static function inside(): string {
+        return (defined('Base::PUB') ? '1' : '0')
+            . (defined('Base::PROT') ? '1' : '0')
+            . (defined('Base::PRIV') ? '1' : '0')
+            . (defined('Child::PROT') ? '1' : '0')
+            . (defined('Child::PRIV') ? '1' : '0')
+            . (defined('self::PROT') ? '1' : '0')
+            . (defined('parent::PROT') ? '1' : '0')
+            . (defined('parent::PRIV') ? '1' : '0')
+            . (defined('self::PRIV') ? '1' : '0');
+    }
+    public static function relative(): string {
+        return (defined('SELF::PROT') ? '1' : '0')
+            . (defined('Parent::PROT') ? '1' : '0');
+    }
+}
+class Unrelated {
+    public static function inside(): string {
+        return (defined('Base::PUB') ? '1' : '0')
+            . (defined('Base::PROT') ? '1' : '0')
+            . (defined('Base::PRIV') ? '1' : '0');
+    }
+}
+class A {
+    protected const AP = 4;
+    public static function probe(): string {
+        return (defined('B::BP') ? '1' : '0')
+            . (defined('C::CP') ? '1' : '0')
+            . (defined('B::AP') ? '1' : '0');
+    }
+}
+class B extends A {
+    protected const BP = 2;
+}
+class C extends A {
+    protected const CP = 3;
+    public static function probe(): string {
+        return (defined('B::BP') ? '1' : '0')
+            . (defined('C::AP') ? '1' : '0');
+    }
+}
+class D {
+    private const X = 1;
+    public static function inside(): string {
+        return (defined('D::X') ? '1' : '0')
+            . (defined('E::X') ? '1' : '0');
+    }
+}
+class E extends D {
+    public const X = 2;
+    public static function inside(): string {
+        return (defined('D::X') ? '1' : '0')
+            . (defined('E::X') ? '1' : '0')
+            . (defined('parent::X') ? '1' : '0');
+    }
+}
+echo defined('Base::PUB') ? '1' : '0';
+echo defined('Base::PROT') ? '1' : '0';
+echo defined('Base::PRIV') ? '1' : '0';
+echo defined('Child::PUB') ? '1' : '0';
+echo defined('Child::PROT') ? '1' : '0';
+echo defined('Child::PRIV') ? '1' : '0';
+echo '|';
+echo Child::inside();
+echo '|';
+echo Base::inside();
+echo '|';
+echo Unrelated::inside();
+echo '|';
+echo A::probe();
+echo '|';
+echo C::probe();
+echo '|';
+echo defined('D::X') ? '1' : '0';
+echo defined('E::X') ? '1' : '0';
+echo '|';
+echo D::inside();
+echo '|';
+echo E::inside();
+echo '|';
+echo Child::relative();
+"#,
+    );
+    assert_eq!(out, "100100|110101100|11111011|100|111|01|01|11|010|11");
+}
+
+/// Verifies a nested closure keeps the enclosing method's class scope for `defined()`.
+#[test]
+fn test_defined_literal_class_constant_visibility_in_closure() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    private const PRIV = 3;
+    public static function inside(): string {
+        $fn = function () {
+            return defined('Base::PRIV') ? '1' : '0';
+        };
+        return $fn();
+    }
+}
+echo Base::inside();
+echo defined('Base::PRIV') ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "10");
+}

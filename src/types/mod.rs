@@ -42,6 +42,8 @@ pub(crate) mod iconv_constants;
 pub(crate) mod builtin_classes;
 /// The compiler's view over the shared global-constant catalog.
 pub(crate) mod predefined_constants;
+/// `defined('Class::CONST')` existence lookup over class/interface/enum metadata.
+mod defined;
 /// Type checker diagnostics and warnings.
 mod warnings;
 
@@ -70,6 +72,7 @@ pub use schema::{
     PackedFieldInfo, PropertyHookContract,
 };
 pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
+pub(crate) use defined::class_like_constant_is_defined;
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };

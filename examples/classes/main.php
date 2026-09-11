@@ -39,6 +39,8 @@ $c->inc();
 $c->inc();
 $c->show();
 echo "Triple step: " . Counter::TRIPLE_STEP . "\n";
+echo defined('Counter::STEP') ? "defined STEP\n" : "missing STEP\n";
+echo defined('Counter::MISSING') ? "defined MISSING\n" : "missing MISSING\n";
 
 $c->dec();
 $c->show();
