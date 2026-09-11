@@ -9,9 +9,12 @@ foundations, and concrete product tracks without a major-version release gate.
 Current direction:
 
 - Finish the well-bounded PHP-visible compatibility gaps on the EIR backend.
-- Keep completed historical items in their original version sections.
-- Move optimizer work behind EIR, benchmark evidence, and real-world validation.
-- Treat shared libraries, the PHP extension bridge, and WebAssembly as later 0.x product tracks.
+- Keep completed historical items in their original version sections; everything
+  delivered so far lives under v0.26.x and earlier, and the numbered sections from
+  v0.27.x on hold only work that has not shipped.
+- Close the EIR optimizer work behind benchmark evidence and real-world validation.
+- Treat the PHP extension bridge and WebAssembly as later 0.x product tracks; the
+  web server, shared and static libraries, and the curl extension have shipped.
 - Leave the major-version discussion for the final future-perspective section.
 
 ## v0.1.x — Usable CLI compiler (done)
@@ -933,19 +936,8 @@ runtime helpers are reused and driven through EIR lowering.
 Optimization work should now be driven by benchmarks, generated assembly size,
 and 0.x validation rather than by speculative pass work.
 
-### EIR scalar and loop optimization closure
-
-- [ ] Local-to-SSA promotion (`mem2reg`) for eligible non-aliased scalar PHP locals — replace repeated `load_local` / `store_local` traffic with SSA values and block parameters at CFG joins and loop back edges, while conservatively retaining address-taken, by-reference, global/static, refcounted, and otherwise volatile slots in memory. Re-run register allocation on the promoted graph so loop-carried values such as counters and accumulators can remain in registers across the whole loop.
-- [ ] EIR integer range and induction-variable analysis — propagate intervals through constants, comparisons, loop bounds, masks, shifts, and checked `add` / `sub` / `mul`; prove when PHP integer overflow is impossible and rewrite only those operations to unchecked scalar forms. Keep overflow-to-float behavior on every unproven path and cover all supported targets with optimizer-on/off equivalence tests.
-- [ ] Loop optimization on canonical EIR CFGs — build on natural-loop analysis, LICM, `mem2reg`, and control-flow normalization to recognize basic induction variables, hoist invariant bounds/materializations, simplify loop tests and updates, and keep hot back edges free of redundant intermediary blocks and jumps.
-- [ ] Cost-aware constant rematerialization and immediate operands — materialize scalar constants at their uses instead of assigning spill slots or rebuilding them on every iteration; select target-legal immediate forms for arithmetic, masks, comparisons, and loop bounds on AArch64 and x86_64, falling back to registers only when required by the target encoding or live-range cost.
-- [ ] Concat scratch-state optimization — remove or coalesce statement-boundary `concat_reset` operations when dataflow proves no scratch string can be live or consumed between resets, including arithmetic-only loop bodies, while preserving calls, output, exceptions, `eval`, and every path that can observe or reuse concat storage.
-- [ ] Late target-aware instruction selection and machine peepholes — add strength reduction for profitable constant arithmetic (for example `x * 31` → `(x << 5) - x` when target costs justify it), direct compare-and-branch lowering without materializing temporary booleans, redundant move/jump cleanup, and block layout that keeps cold overflow paths out of hot loop fallthrough. Validate assembly shape and behavior on AArch64 and x86_64.
-
 - [x] Whole-program declaration reachability — drop unreachable functions, unused classes, and unused methods (including compiler preludes such as PDO) after AST DCE, with conservative keep-all behavior for `eval`, dynamic calls, `unserialize`, and Reflection, and `--with-<crate>` force-keep for forced prelude groups
-
 - [x] Curated native dependencies v1: `elephc native add/install/update/remove/list/doctor/prune`, exact comment-preserving manifests and deterministic locks, content-addressed target/ABI/toolchain cache, transactional verified source builds, explicit cache cleanup, and read-only compile-time resolution. The catalog pins PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0, libssh2 1.11.1, and curl 8.21.0, including declared transitive dependencies and fixed static link order. This remains separate from Composer packages, Rust bridge crates, user `extern` linking, and toolchain installation.
-
 - [x] Permissive local retyping and strict opt-in: incompatible straight-line assignments warn and receive fresh storage, branch-divergent locals use boxed Mixed storage, eligible top-level `unset()` kills a binding, and `--strict-locals` restores hard errors
 - [x] Allocation-free checked numeric chains: integer-only `+`, `-`, and `*` expressions remain scalar through intermediate results and promote only on overflow, including loop post-increment lowering
 - [x] Complete `iconv` extension in native compilation and `eval()`: ten functions and four constants through the pay-for-use platform bridge on every supported target
@@ -953,7 +945,6 @@ and 0.x validation rather than by speculative pass work.
 - [x] Production monitoring: exact and sampled profiles, allocation and wait attribution, live process and service capture, authenticated remote collection, per-request web slices, trace stitching, budgets, baselines, and Speedscope, pprof, DOT, HTML, OTLP, and Prometheus exports
 - [x] Monitor attach follow-ups from #794: classify `_method_*` frames as PHP, `FD_CLOEXEC` on the control channel after handshake, launched `--live` visibility into `--web` workers through the shared ring, bounded `waitpid` for uninterruptible tracees, aarch64 PAC stripping on walked return addresses, and `--attach --live` pid-reuse identity via `/proc` starttime
 - [x] Release delivery hardening: immutable retained dated nightlies, a rolling nightly channel, `--print-capabilities`, and packaged-artifact compile/link probes for every advertised optional capability
-
 - [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells.
 - [x] Closure rebinding — `Closure::bind()`, `bindTo()`, and `Closure::call()` rebind a closure to a new receiver; a top-level closure that captures `$this` now binds it correctly instead of losing the receiver, and a by-reference `Closure::bind` stored in a variable and called later is tracked as a static callable so the call carries the bound cell directly (`__rt_closure_bind`) rather than going through the generic descriptor invoker
 - [x] New magic methods `__callStatic`, `__isset`, and `__unset` — a static call to an undeclared method dispatches to `__callStatic`; `isset()`/`empty()` on an undeclared property route through `__isset` (and only read `__get` when `__isset` is truthy, so an unset virtual property is empty without ever being read); and `unset($obj->prop)` on a virtual property calls `__unset`
@@ -975,30 +966,22 @@ and 0.x validation rather than by speculative pass work.
 - [x] Guard reasoning v2 for dead-code elimination — integer interval facts from `$x <op> int` relational branches when `$x` has a proven integer domain from an exact `int` parameter, typed local, or literal guard (intersected across nested paths and discharged for transitive relational / strict-int contradictions and impossible `switch` int cases); cross-variable relational / strict-equality atoms with safe complements, full exact coupling after strict substitution, and pure non-throwing `while` / `for` body-entry strengthening, still under the path-local AST `GuardState` protocol with write invalidation, float/string-domain refusal, NaN-safe false-branch policy, and no general CFG join
 - [x] Exception-aware DCE v2 — exact and constrained thrown-type domains now route source-order handlers through the checker-provided class/interface hierarchy; fixed-point direct-call summaries, exact explicit/operator failures, nested caught-variable rethrows, and type-specific catch guard invalidation remove disjoint paths without closing dynamic dispatch unsafely. Finally invalidation now follows only paths that execute it, excluding unconditional `exit`/`die` branches while retaining conservative fallbacks for unresolved calls, open receivers, external or trait-provided constructors, and complex control flow.
 - [x] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes: negated two-way `if` branches swapped onto the positive test, `for` without an update clause rewritten to `while`, `do ... while (true)` to `while (true)`, leading `if (...) break;` guards folded into the loop test, endless loops ending in a break guard rotated into `do ... while` (unless a `continue` targets the loop), and redundant trailing `continue` / final-`switch`-body `break` / bare function `return;` terminators dropped along the tail path
-- [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
-- [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
 - [x] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
 - [x] Statically-known catchable `Error` conditions (issue #383) — private/protected method access from an inaccessible scope and readonly property writes outside the declaring constructor raise a catchable `Error` at runtime instead of being rejected at compile time, matching PHP
 - [x] PHP 8 numeric-string arithmetic (issue #362) — arithmetic operators (`+ - * / % **`) accept numeric and leading-numeric string operands and coerce them at runtime with PHP's `is_numeric_string` classification (integer-form → int, float-form and out-of-64-bit-range integer-form → float via `__rt_php_num_scan` plus the `ERANGE` probe in the mixed numeric path, leading-numeric → numeric prefix). Fully non-numeric string literals stay a compile error and leading-numeric literals warn with `A non-numeric value encountered`; unary negation, the bitwise operators, and relational compare/spaceship keep rejecting string operands
-- [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
-- [ ] Performance within 2x of C -O0 on compute benchmarks
-- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before release
-- [ ] Real-world CLI tools compiled as validation
 - [x] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes no longer present a selectable fallback
 - [x] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
 - [x] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
 - [x] Rename `src/codegen_ir/` to `src/codegen/`
 - [x] Move historical codegen doc to `docs/internals/legacy-codegen.md` (later retired together with the legacy backend); refresh `docs/internals/the-codegen.md` to describe the IR pipeline
 - [x] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
-- [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [x] Installation / packaging documentation for the supported host platforms — macOS Homebrew, source builds, release artifacts, native toolchain requirements, and managed native dependency prerequisites are covered in `docs/getting-started/installation.md`
+- [x] Complete `pcntl` extension in native compilation and `eval()`: `pcntl_fork()`, child waits and status decoding, `pcntl_exec()` with omitted-vs-explicit-empty environments, priorities, Linux CPU affinity and namespaces, Darwin QoS, `posix_setpgid()` / `posix_setsid()`, and PHP-compatible signal registration, dispatch, masks, alarms, async signals, siginfo, synchronous waits, restart-syscall defaults and Fiber-switch rejection through backend-owned queues, on macOS AArch64 and Linux AArch64/x86_64. Elephc's `pcntl_daemon()` is hidden under `--strict-php`; PCNTL is refused on iOS targets and in reachable `cdylib` / `staticlib` exports
+- [x] Shared symbol catalog for every PHP-visible function, class-like and global constant elephc ships, carrying the owning PHP module and the first PHP minor that ships it. The compiler and Magician derive their constant tables and class-name lists from it instead of private copies, both backends are pinned against it by init-time joins, and the compatibility page counts functions / classes / constants per module against a PHP 8.5.10 baseline with all 68 bundled extensions (compiled function coverage 515/2030 → 789/2169)
+- [x] CLI environment parity: `getenv()` with no argument answers the whole environment (read live through `environ` / `_NSGetEnviron()`), `getenv($name, true)` is accepted, `$_ENV` and `$_SERVER` carry the environment and `$_SERVER['argv']` instead of being seeded empty (pay-for-use, like `auto_globals_jit`), and `putenv()` reaches `getenv()` only — PHP's own asymmetry. `putenv("NAME")` without `=` removes the variable
+- [x] Network telemetry in monitoring: operation counts and measured wait for `curl_exec()`, multi-handle transfers, `curl_multi_select()` and `curl_upkeep()`, with inclusive/exclusive attribution through nested calls, recursion, coroutines and exception resynchronization, automatic W3C `traceparent` propagation during active captures, and network metrics in exact tables, sampled summaries, HTML reports, Graphviz, OTLP spans, Prometheus gauges and `network` / `network_wait_ms` assertions. Every bridge and bridge-backed runtime function declares a reviewed `MonitoringPolicy`, enforced by CI audits
 
-## Later 0.x product tracks
-
-These are valuable product directions that build on the stabilized 0.x compiler
-and runtime foundation.
-
-### Web server (`--web`) — product track
+### Web server (`--web`) — delivered
 
 `elephc --web app.php` compiles a standard PHP file into a standalone prefork
 HTTP server binary. The produced binary uses `SO_REUSEPORT` prefork workers; each
@@ -1085,39 +1068,24 @@ statics, and static class properties all reset between requests). Run it with
   `use_cookies`, and `lazy_write` INI coverage; custom-handler lazy snapshots;
   and `php_binary` plus non-cookie upload-progress IDs.
 
-## v0.27.x — Shared and static libraries (C ABI)
+### Shared and static libraries (C ABI) — delivered
 
 - [x] `--emit cdylib` flag, export PHP functions as C-callable symbols via `#[Export]`
 - [x] `#[Export]` attribute for symbol selection (supersedes the planned `--export` flag spelling)
 - [x] `.dylib` / `.so` output on all supported targets (macOS aarch64, iOS device/simulator aarch64, Linux aarch64, Linux x86_64)
 - [x] `.a` static library output through `--emit staticlib` (`--emit lib` is its alias, not a cdylib spelling)
-- [ ] Multi-file library compilation
 - [x] Symbol visibility control — ELF hidden and Mach-O private-extern directives keep every compiler/runtime/CRT implementation symbol private; the public table contains only `#[Export]` trampolines plus `elephc_abi_version`, `elephc_init`, `elephc_shutdown`, `elephc_last_status`, `elephc_last_error`, and `elephc_free`
 - [x] Binary-safe string return values for the exact `string -> string` export ABI — status/out-parameters, independent caller ownership through `elephc_free`, and recoverable PHP-exception/allocation failures
 - [x] Deterministic auto-generated C header beside each cdylib, including ABI/status constants, resolved prototypes, C++ guards, and ownership/lifetime comments
 - [x] Recoverable scalar export boundary without changing scalar C signatures — zero sentinel plus `elephc_last_status`, stable diagnostics, frame cleanup, and nested boundary-depth/concat restoration
-- [ ] Null-terminated string convention for C interop (owned string results currently include a convenience trailing NUL, but pointer/length remains the authoritative binary-safe ABI)
 - [x] Stateful FFI callback trampolines — generate C-ABI-compatible trampoline symbols for descriptor-backed callables passed to extern `callable` parameters, retaining descriptor/capture/receiver environments for supported scalar/ptr signatures and documenting constraints for C APIs without userdata/context slots
-- [ ] `pkg-config` generation
-- [ ] FFI documentation for C, Rust, Python, Go
 
-## v0.28.x — PHP extension bridge (experimental)
+### PHP extension bridge groundwork — delivered
 
 - [x] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
-- [ ] Link against PHP extension `.so` / `.dylib` shared libraries
 - [x] Bridge for string, int, float, bool, array types
-- [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
-- [ ] `--ext` flag to specify extension libraries at compile time
-- [ ] Documentation: how to bridge a PHP extension
 
-## v0.29.x — WebAssembly target
-
-- [ ] WASM codegen backend
-- [ ] `.wat` / `.wasm` emission
-- [ ] WASI support for I/O
-- [ ] NPM package generation
-
-## v0.30.x — PHP curl extension
+### PHP curl extension — delivered
 
 - [x] `ext/curl` function, class, and constant surface on AOT — all 35 functions, 6 classes and 689 constants, with 260 of PHP's 271 `CURLOPT_*` implemented and the remaining 11 rejected with PHP's own warning (see `docs/php/curl.md`)
 - [x] Managed native `curl` 8.21.0 + OpenSSL TLS backend, nghttp2 HTTP/2 and libssh2 SSH transport (no system fallback)
@@ -1126,15 +1094,57 @@ statics, and static class properties all reset between requests). Run it with
 - [x] libcurl callbacks via the runtime callable invoker — six callback options (`WRITE`/`HEADER`/`READ`/`PROGRESS`/`XFERINFO`/`DEBUG`)
 - [x] The same surface inside `eval()` (magician) — the easy interface, the multi and share interfaces (including the PHP 8.5 `curl_multi_get_handles`/`curl_share_init_persistent` additions and `CURLOPT_SHARE`), `CURLFile`/`CURLStringFile` with `CURLOPT_POSTFIELDS`'s `multipart/form-data` array form, all six callback options (a throw from one is catchable after `curl_exec()` with `curl_errno() === 0`, and never unwinds through libcurl), and the full constant table; only the four PHP-stream options (`CURLOPT_FILE`/`INFILE`/`WRITEHEADER`/`STDERR`) stay out, answering `false` plus the honest unsupported-option warning
 - [x] Portable HTTPS without per-handle configuration — libcurl bakes the build machine's CA path in (and nothing at all when cross-compiling), so the bridge instead resolves a bundle at run time and sets it as `CURLOPT_CAINFO` **and `CURLOPT_PROXY_CAINFO`**, from one resolution: `$CURL_CA_BUNDLE` if set, else nothing when the baked-in path still exists, else the first of seven fixed, root-owned distro root-store locations that does. An explicit `CURLOPT_CAINFO`/`CURLOPT_PROXY_CAINFO` replaces it; a `CURLOPT_CAPATH`/`CURLOPT_PROXY_CAPATH` composes with it, exactly as a capath composes with libcurl's own baked-in bundle in a stock build. Both hops are covered because the baked path's usability is a fact about the machine, not the hop — HTTPS proxies verify against the discovered bundle too. Never relaxes verification (see `docs/php/curl.md`, including the `$CURL_CA_BUNDLE` threat model, which applies to proxy trust identically)
-- [ ] A bundled CA trust store — still the only answer for an image that ships no root store at all (`FROM scratch`, distroless), where runtime discovery finds nothing and `CURLOPT_CAINFO`/`$CURL_CA_BUNDLE` remain required. Not the same thing as discovery: a bundled store is certificate material elephc itself would have to ship, pin, and keep current
 - [x] HTTP/2 and the previously disabled protocol set — the pinned libcurl now reports 25 schemes (`dict file ftp ftps gopher gophers http https imap imaps mqtt mqtts pop3 pop3s rtsp scp sftp smb smbs smtp smtps telnet tftp ws wss`), up from 7: HTTP/2 through a new managed nghttp2 1.70.0, SCP/SFTP through a new managed libssh2 1.11.1 built against elephc's own OpenSSL and zlib, SMB(S) through curl's opt-in `--enable-smb --enable-ntlm`, and DICT/GOPHER(S)/IMAP(S)/MQTT(S)/POP3(S)/RTSP/SMTP(S)/TELNET/TFTP simply by no longer disabling them. `curl_version()['protocols']` is pinned by a fixture; `feature_list['HTTP2']` and `libssh_version` are too
-- [ ] HTTP/3 — pending ngtcp2 + nghttp3 in a future curl pin. curl 8.21.0 removed the standalone `openssl-quic` backend, so the only **non-experimental** QUIC path in this pin is `--with-ngtcp2 --with-nghttp3` (quiche is still EXPERIMENTAL in the tarball's own `docs/EXPERIMENTAL.md`); that is two more pinned packages plus an `ngtcp2_crypto_ossl` build against OpenSSL 3.5's QUIC APIv2, deliberately not taken this round rather than shipping experimental code in a pinned production build
-- [ ] LDAP and LDAPS — pending a way to declare a managed package's system-library needs. Measured on OpenLDAP 2.6.14: a client-only static build against elephc's own OpenSSL configures and compiles (`--disable-slapd --disable-shared --without-cyrus-sasl --with-tls=openssl` — the Cyrus SASL drag is avoidable), but it produces three archives (`liblber.a`, `liblutil.a`, `libldap.a`, ~2.3 MB together, larger than libcurl itself), needs a whole-tree `make depend` and a sub-make order upstream's own partial-build path gets wrong, and still leaves `pthread_*`/resolver symbols for the final link — which the catalog cannot express today (`PackageVersion` has no system-library field and `NativeLock`'s `system_libraries`/`frameworks` are hard-coded empty)
 - [x] The 194 `tests/codegen/curl/*` fixtures running in CI — excluded from the ordinary sharded `codegen-tests-*` jobs (which still self-skip if run standalone) and instead run in dedicated `curl-codegen-tests-<platform>` jobs (4 shards × 3 platforms) that materialize managed native curl/libssh2/nghttp2/openssl/zlib first via `elephc native install --locked`, cached across runs by an `actions/cache` keyed on `examples/curl-get/elephc.lock` and the recipe sources. Those jobs also assert the tests actually ran rather than silently skipping (grep the managed-native skip-gate message out of the shard's `--nocapture` output and fail if it appears) — the exact failure mode that made this line easy to leave unchecked before
 - [x] The 34 PHP-visible `curl_*` contracts as ordinary citizens of the shared builtin catalog — a root `curl` feature relays `elephc-magician/curl` and `elephc-builtin-contract/curl`, so the workspace cross-backend parity suite audits them with the same per-contract assertions as every other builtin: catalog classification, both backends' implementation routes and execution classification, the public name sets each backend must expose, and the existence of a Magician binding for every eval-supported contract. (Eval *signatures* are not compared for drift there, on curl or on anything else: `eval_builtin!` submits only a contract ID and Magician derives its whole signature from the contract, so eval signature drift is unrepresentable rather than detected.) The signature that IS hand-written, and therefore genuinely audited, is the compiler's: a lib test compares every prelude-provided contract with the PHP declaration `src/curl_prelude.rs` (and `src/hash_prelude.rs`) actually injects — parameter names, declared types, by-reference markers and default VALUES — and an inverse audit refuses a prelude-declared PHP function that carries no contract. Both suites run in the always-on `curl-feature-contract` CI job and need no native libcurl
-- [ ] Build the curl prelude in Rust, like every other stdlib prelude — `src/curl_prelude.rs` is the last one that still tokenizes and parses ~2,000 lines of embedded PHP at injection time, on every compile that reaches the curl surface. Every sibling now constructs its declarations directly (`hash_declarations()`, `pdo_prelude::build::pdo_declarations()`, …). The conversion path is the one PDO took and is a piece of work in itself, not a line of another change: transcribe the source with `crate::synthetic_class::transcribe`, keep `CURL_PRELUDE_SRC` as the migration ORACLE, and gate the result on a node-by-node comparison of built AST against parsed PHP (`ELEPHC_ORACLE_PHP` / `ELEPHC_ORACLE_WHICH=curl`) across every PHP-version profile, since the curl surface is version-fenced (`curl_multi_get_handles`, `curl_share_init_persistent`). Cost until then is bounded and pay-for-use: curl-free compiles never parse it, and the parse-based prelude is audited through the same catalog gates the built ones are
 - [x] The curl surface in the generated builtin documentation: `--features curl` is the single canonical documentation configuration for `scripts/docs/builtin_registry.json` and the generated pages (631 rows, `docs/php/builtins/network/`), and the `builtins-docs-sync` drift gate runs in that same configuration; the PHP comparison page's curl coverage row goes from `0 / 33` to `32 / 33`, with `curl_multi_get_handles()`/`curl_share_init_persistent()` reported separately as PHP 8.5 additions the vendored 8.4 baseline cannot count
 
+## v0.27.x — EIR optimization closure and performance validation
+
+Optimization work is driven by benchmarks, generated assembly size, and
+real-world validation rather than by speculative pass work.
+
+- [ ] Local-to-SSA promotion (`mem2reg`) for eligible non-aliased scalar PHP locals — replace repeated `load_local` / `store_local` traffic with SSA values and block parameters at CFG joins and loop back edges, while conservatively retaining address-taken, by-reference, global/static, refcounted, and otherwise volatile slots in memory. Re-run register allocation on the promoted graph so loop-carried values such as counters and accumulators can remain in registers across the whole loop.
+- [ ] EIR integer range and induction-variable analysis — propagate intervals through constants, comparisons, loop bounds, masks, shifts, and checked `add` / `sub` / `mul`; prove when PHP integer overflow is impossible and rewrite only those operations to unchecked scalar forms. Keep overflow-to-float behavior on every unproven path and cover all supported targets with optimizer-on/off equivalence tests.
+- [ ] Loop optimization on canonical EIR CFGs — build on natural-loop analysis, LICM, `mem2reg`, and control-flow normalization to recognize basic induction variables, hoist invariant bounds/materializations, simplify loop tests and updates, and keep hot back edges free of redundant intermediary blocks and jumps.
+- [ ] Cost-aware constant rematerialization and immediate operands — materialize scalar constants at their uses instead of assigning spill slots or rebuilding them on every iteration; select target-legal immediate forms for arithmetic, masks, comparisons, and loop bounds on AArch64 and x86_64, falling back to registers only when required by the target encoding or live-range cost.
+- [ ] Concat scratch-state optimization — remove or coalesce statement-boundary `concat_reset` operations when dataflow proves no scratch string can be live or consumed between resets, including arithmetic-only loop bodies, while preserving calls, output, exceptions, `eval`, and every path that can observe or reuse concat storage.
+- [ ] Late target-aware instruction selection and machine peepholes — add strength reduction for profitable constant arithmetic (for example `x * 31` → `(x << 5) - x` when target costs justify it), direct compare-and-branch lowering without materializing temporary booleans, redundant move/jump cleanup, and block layout that keeps cold overflow paths out of hot loop fallthrough. Validate assembly shape and behavior on AArch64 and x86_64.
+- [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
+- [ ] Performance within 2x of C -O0 on compute benchmarks
+- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before release
+- [ ] Real-world CLI tools compiled as validation
+
+## v0.28.x — Include-graph, library, and native-surface completion
+
+- [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
+- [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
+- [ ] Multi-file library compilation
+- [ ] Null-terminated string convention for C interop (owned string results currently include a convenience trailing NUL, but pointer/length remains the authoritative binary-safe ABI)
+- [ ] `pkg-config` generation
+- [ ] FFI documentation for C, Rust, Python, Go
+- [ ] Apple notarization for direct downloads (codesign + notarytool)
+
+### curl follow-ups
+
+- [ ] A bundled CA trust store — still the only answer for an image that ships no root store at all (`FROM scratch`, distroless), where runtime discovery finds nothing and `CURLOPT_CAINFO`/`$CURL_CA_BUNDLE` remain required. Not the same thing as discovery: a bundled store is certificate material elephc itself would have to ship, pin, and keep current
+- [ ] HTTP/3 — pending ngtcp2 + nghttp3 in a future curl pin. curl 8.21.0 removed the standalone `openssl-quic` backend, so the only **non-experimental** QUIC path in this pin is `--with-ngtcp2 --with-nghttp3` (quiche is still EXPERIMENTAL in the tarball's own `docs/EXPERIMENTAL.md`); that is two more pinned packages plus an `ngtcp2_crypto_ossl` build against OpenSSL 3.5's QUIC APIv2, deliberately not taken this round rather than shipping experimental code in a pinned production build
+- [ ] LDAP and LDAPS — pending a way to declare a managed package's system-library needs. Measured on OpenLDAP 2.6.14: a client-only static build against elephc's own OpenSSL configures and compiles (`--disable-slapd --disable-shared --without-cyrus-sasl --with-tls=openssl` — the Cyrus SASL drag is avoidable), but it produces three archives (`liblber.a`, `liblutil.a`, `libldap.a`, ~2.3 MB together, larger than libcurl itself), needs a whole-tree `make depend` and a sub-make order upstream's own partial-build path gets wrong, and still leaves `pthread_*`/resolver symbols for the final link — which the catalog cannot express today (`PackageVersion` has no system-library field and `NativeLock`'s `system_libraries`/`frameworks` are hard-coded empty)
+- [ ] Build the curl prelude in Rust, like every other stdlib prelude — `src/curl_prelude.rs` is the last one that still tokenizes and parses ~2,000 lines of embedded PHP at injection time, on every compile that reaches the curl surface. Every sibling now constructs its declarations directly (`hash_declarations()`, `pdo_prelude::build::pdo_declarations()`, …). The conversion path is the one PDO took and is a piece of work in itself, not a line of another change: transcribe the source with `crate::synthetic_class::transcribe`, keep `CURL_PRELUDE_SRC` as the migration ORACLE, and gate the result on a node-by-node comparison of built AST against parsed PHP (`ELEPHC_ORACLE_PHP` / `ELEPHC_ORACLE_WHICH=curl`) across every PHP-version profile, since the curl surface is version-fenced (`curl_multi_get_handles`, `curl_share_init_persistent`). Cost until then is bounded and pay-for-use: curl-free compiles never parse it, and the parse-based prelude is audited through the same catalog gates the built ones are
+
+## v0.29.x — PHP extension bridge (experimental)
+
+- [ ] Link against PHP extension `.so` / `.dylib` shared libraries
+- [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
+- [ ] `--ext` flag to specify extension libraries at compile time
+- [ ] Documentation: how to bridge a PHP extension
+
+## v0.30.x — WebAssembly target
+
+- [ ] WASM codegen backend
+- [ ] `.wat` / `.wasm` emission
+- [ ] WASI support for I/O
+- [ ] NPM package generation
 
 ## Deferred ideas
 
