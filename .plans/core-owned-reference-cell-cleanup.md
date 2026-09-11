@@ -2439,3 +2439,22 @@ ownership assertion. Print textual EIR if the call cannot be located again.
 Native Sol confirmed the optimizer path and adjusted the fixture. Cargo check
 --tests --features curl, assembly-comment checks and diff hygiene pass. No local
 test or repro executes. CI must confirm both instances of the retained call.
+
+### Coordinate eval timezone changes with inherited process spawning
+
+The curl-enabled Magician gate on 7dcb370da exposes a separate intermittent
+process-spawn EFAULT. Rust 1.98.1 synchronizes inherited environment access in
+posix_spawn with its standard environment mutation APIs, but date.rs bypassed
+that lock through raw libc setenv/unsetenv. Parallel calendar fixtures could
+replace environ while process fixtures consumed it. Replace only those calendar
+writes with std::env operations, preserving EVAL_TZ_MUTEX, tzset, NUL rejection,
+and owned OsString restoration for absent, empty and non-UTF8 timezone values.
+
+Reject the initially proposed redundant crate-wide mutex after reviewing Rust's
+existing lock. A structural regression prevents raw calendar environment writes
+from returning. Existing parallel calendar/process integration coverage remains
+active in CI. Native Sol traced and repaired this narrow production gap.
+
+Cargo check for curl-enabled Magician tests and root tests, the complete
+update-builtin-docs workflow, assembly-comment checks and diff hygiene pass.
+Generated documentation is unchanged. No local tests or repros execute.
