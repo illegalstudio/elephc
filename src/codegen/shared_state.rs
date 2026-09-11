@@ -8,15 +8,15 @@
 //!
 //! Key details:
 //! - Cached labels are global assembly entries emitted at their first call site.
-//! - Descriptor invoker cache identity includes `InvokerArgMode`, so PublicRaw and
-//!   EvalPrebound wrappers with the same signature cannot alias.
+//! - Descriptor invoker cache identity is the signature, the capture list and the
+//!   string-result owner contract. Every invoker binds the same container layout, so two
+//!   wrappers agreeing on those three can safely share one emitted body.
 //! - Receiver-bearing descriptors cache only immutable templates; each call still captures its object.
 //! - Owns the module-wide assembly label counter. It must not be per function: the readable part
 //!   of a label is a lossy fragment of the PHP function/block name, so only a module-unique
 //!   trailing id keeps two functions with similar names from emitting the same label.
 
 use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethodCallableCase};
-use crate::codegen::runtime_callable_invoker::InvokerArgMode;
 use crate::types::{FunctionSig, PhpType};
 
 /// Module-wide artifacts emitted once and reused by every function lowering context.
@@ -81,7 +81,6 @@ struct RuntimeCallableInvokerCacheEntry {
     signature: FunctionSig,
     captures: Vec<(String, PhpType, bool)>,
     owns_string_return: bool,
-    arg_mode: InvokerArgMode,
     label: String,
 }
 
@@ -268,7 +267,6 @@ impl SharedCodegenState {
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
         owns_string_return: bool,
-        arg_mode: InvokerArgMode,
     ) -> Option<String> {
         self.runtime_callable_invokers
             .iter()
@@ -276,7 +274,6 @@ impl SharedCodegenState {
                 entry.signature == *signature
                     && entry.captures == captures
                     && entry.owns_string_return == owns_string_return
-                    && entry.arg_mode == arg_mode
             })
             .map(|entry| entry.label.clone())
     }
@@ -287,7 +284,6 @@ impl SharedCodegenState {
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
         owns_string_return: bool,
-        arg_mode: InvokerArgMode,
         label: &str,
     ) {
         self.runtime_callable_invokers
@@ -295,7 +291,6 @@ impl SharedCodegenState {
                 signature: signature.clone(),
                 captures: captures.to_vec(),
                 owns_string_return,
-                arg_mode,
                 label: label.to_string(),
             });
     }

@@ -260,6 +260,21 @@ impl ElephcEvalContext {
         self.native_functions.get(name).cloned()
     }
 
+    /// Records the explicit PHP signature shape for an already registered native AOT callback.
+    ///
+    /// Emitted from the AST-level signature, so it states the source arity even when a declared
+    /// default has no representation in the eval default ABI and is therefore never registered.
+    pub fn define_native_function_shape(
+        &mut self,
+        function_name: &str,
+        shape: NativeCallableShape,
+    ) -> bool {
+        self.native_functions
+            .get_mut(function_name)
+            .map(|function| function.set_shape(shape))
+            .is_some()
+    }
+
     /// Records one parameter name for an already registered native AOT callback.
     pub fn define_native_function_param(
         &mut self,

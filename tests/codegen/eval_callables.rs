@@ -8,6 +8,10 @@
 //! Key details:
 //! - Fixtures verify by-reference writeback through string, callable-array, and
 //!   first-class callable forms instead of only direct method/function syntax.
+//! - The argument-frame fixtures pin the two different eval call ABIs apart: a free function is
+//!   reached through a descriptor invoker that synthesizes the hidden `func_args` slots from a
+//!   container of only the supplied arguments, while a method bridge is called directly with one
+//!   argument per physical parameter, hidden slots included.
 
 use crate::support::{compile_and_run, compile_and_run_capture, compile_and_run_with_regex};
 
@@ -2544,4 +2548,185 @@ eval-method:EvalReflectClosureMetaEvalBox:EvalReflectClosureMetaEvalBox:EvalRefl
 aot-invoke:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:s|\
 eval-static:null:EvalReflectClosureMetaEvalBox:EvalReflectClosureMetaEvalBox:S"
     );
+}
+
+/// An eval call into an AOT instance or static method reports the frame the PHP source declares.
+///
+/// A method bridge is called DIRECTLY by eval, one argument per PHYSICAL parameter, so the
+/// registration keeps the hidden slots the generated bridge takes while hiding them from PHP.
+/// This fixture pins all four consequences of that split at once:
+///
+/// - An omitted trailing optional is not counted. `optionalTally(1)` must report one argument,
+///   which is only possible if the hidden actual-argument count reaches the callee correctly.
+/// - A surplus positional argument past the declared list still reaches `func_get_args()`, which
+///   means it landed in the hidden collector rather than being dropped or rejected.
+/// - A source-declared variadic tail still collects, and its hidden count parameter still
+///   reports the real arity next to it.
+/// - A named argument selects a PHP-visible parameter. Hidden slots register the EMPTY name and
+///   a PHP parameter name is never empty, so none of them is reachable by name.
+#[test]
+fn test_eval_aot_method_frames_follow_the_declared_signature() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodFrameShape {
+    public function optionalTally($first, $second = 5) {
+        return func_num_args() . ":" . implode(",", func_get_args());
+    }
+
+    public static function staticTally($first, $second = 5) {
+        return func_num_args() . ":" . implode(",", func_get_args());
+    }
+
+    public function variadicTally($first, $second = 5, ...$rest) {
+        return func_num_args() . ":" . implode(",", func_get_args()) . ":" . implode(",", $rest);
+    }
+}
+
+echo eval('$object = new EvalMethodFrameShape();
+echo $object->optionalTally(1), "|", $object->optionalTally(1, 2), "|";
+echo $object->optionalTally(1, 2, 3), "|";
+echo EvalMethodFrameShape::staticTally(1), "|", EvalMethodFrameShape::staticTally(1, 2), "|";
+echo $object->variadicTally(1), "|", $object->variadicTally(1, 2, 3, 4), "|";
+return $object->optionalTally(first: 1);');
+"#,
+    );
+
+    assert_eq!(out, "1:1|2:1,2|3:1,2,3|1:1|2:1,2|1:1:|4:1,2,3,4:3,4|1:1");
+}
+
+/// An unknown named argument reaches an AOT source variadic with its string key intact.
+///
+/// A free function is NOT called through its bridge directly: eval hands the descriptor invoker
+/// one container holding exactly the supplied arguments, and the invoker synthesizes the hidden
+/// slots itself. That container is indexed until an unknown name appears, at which point it
+/// becomes associative. Ordering is the property under test: every positional entry keeps its own
+/// integer key AHEAD of every string key, which is both what PHP's collected array looks like and
+/// the only order the invoker's one-pass container validation accepts.
+///
+/// The second call also pins the named HOLE: the optional it skips still falls back to its
+/// declared default rather than absorbing the named tail entry.
+#[test]
+fn test_eval_aot_source_variadic_keeps_unknown_named_argument_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_named_tail_collect($first, ...$rest) {
+    return $first . ":" . implode(",", array_keys($rest)) . ":" . implode(",", $rest);
+}
+
+function eval_named_tail_hole($first, $second = 5, ...$rest) {
+    return $first . ":" . $second . ":" . implode(",", array_keys($rest));
+}
+
+echo eval('echo eval_named_tail_collect(1, 2, extra: 3), "|";
+return eval_named_tail_hole(1, extra: 3);');
+"#,
+    );
+
+    assert_eq!(out, "1:0,extra:2,3|1:5:extra");
+}
+
+/// Surplus positional arguments from eval reach an AOT function that declares no variadic.
+///
+/// PHP accepts them and `func_get_args()` still reports them, so the binder appends them to the
+/// container past the declared parameters instead of rejecting the call; the invoker routes them
+/// into the hidden collector. The omitted-optional call in the same fixture is the other half of
+/// the contract: the container must NOT be padded out to the declared parameter count, or the
+/// callee would report an argument the caller never passed.
+#[test]
+fn test_eval_aot_function_container_keeps_only_supplied_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_surplus_tally($first, $second = 5) {
+    return func_num_args() . ":" . implode(",", func_get_args()) . ":" . $second;
+}
+
+echo eval('return eval_surplus_tally(1) . "|" . eval_surplus_tally(1, 2)
+    . "|" . eval_surplus_tally(1, 2, 3, 4);');
+"#,
+    );
+
+    assert_eq!(out, "1:1:5|2:1,2:2|4:1,2,3,4:2");
+}
+
+/// A by-reference variadic tail keeps per-element writeback while the container stays truncated.
+///
+/// This is the intersection of the two contracts that could plausibly have collided: the binder
+/// now truncates the trailing optionals a caller omitted, and it also stages each positional tail
+/// element as its own reference marker. An AOT caller lowers a by-reference variadic tail the
+/// same way, so the collected array legitimately holds marker cells and the descriptor invoker's
+/// verbatim tail copy is exactly what the callee expects.
+///
+/// The fixture also pins the `call_user_func()` degradation next to it: that path warns and binds
+/// by value, so the caller's variable must be UNCHANGED while the callee still sees its value.
+#[test]
+fn test_eval_aot_by_reference_variadic_tail_writes_back_per_element() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_ref_tail_writer(&...$rest): string {
+    $rest[0] = $rest[0] . "-written";
+    return $rest[0];
+}
+
+echo eval('$value = "caller";
+echo eval_ref_tail_writer($value), ":", $value, "|";
+$second = "cuf";
+echo call_user_func("eval_ref_tail_writer", $second), ":";
+return $second;');
+"#,
+    );
+
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "caller-written:caller-written|cuf-written:cuf"
+    );
+    assert!(
+        out.stderr.contains(
+            "call_user_func(): Argument #1 ($rest) must be passed by reference, value given"
+        ),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
+/// An eval call into an AOT method whose optional default has NO eval representation still sees
+/// the optional as optional, and still reports the real argument count.
+///
+/// The eval default ABI can only carry a default whose VALUE it can represent. This one nests
+/// twenty array levels deep, past `MAX_NATIVE_DEFAULT_CONSTANT_DEPTH`, so the bridge registers no
+/// default for `$second` at all; an enum-case default is unrepresentable for the same reason. The
+/// explicit signature shape the bridge registers is what keeps the call working: deriving arity
+/// from the registered defaults would call `$second` MANDATORY here and reject `tally(1)`, and
+/// would also decide the hidden collector carries no count, so `func_num_args()` would answer
+/// the physical parameter count instead of the one the caller passed.
+///
+/// The AOT side is unaffected by that gap: the generated bridge materializes the default from the
+/// expression directly. That asymmetry is exactly why the shape has to be positive metadata.
+/// `count()` stands in for printing the values so the fixture needs no array-to-string coercion.
+#[test]
+fn test_eval_aot_method_optional_default_without_an_eval_representation_stays_optional() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodUnrepresentableDefault {
+    public function tally($first, $second = [[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]) {
+        return func_num_args() . ":" . count(func_get_args()) . ":" . count($second);
+    }
+
+    public static function staticTally($first, $second = [[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]) {
+        return func_num_args() . ":" . count(func_get_args()) . ":" . count($second);
+    }
+}
+
+echo eval('$object = new EvalMethodUnrepresentableDefault();
+echo $object->tally(1), "|", $object->tally(1, [7, 8]), "|";
+echo EvalMethodUnrepresentableDefault::staticTally(1), "|";
+return $object->tally(first: 1);');
+"#,
+    );
+
+    assert_eq!(out, "1:1:1|2:2:2|1:1:1|1:1:1");
 }

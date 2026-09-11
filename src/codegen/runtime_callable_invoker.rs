@@ -10,15 +10,18 @@
 //! - Capture values are loaded from the callable descriptor, not caller frame state.
 //! - Argument materialization supports indexed arrays, associative arrays, defaults, variadics,
 //!   by-reference marker cells, and target-aware ABI calls without depending on `Context`.
-//! - `InvokerArgMode::PublicRaw` binds public containers and synthesizes hidden argc/count
-//!   prefixes; `InvokerArgMode::EvalPrebound` keeps the registered-native physical layout.
+//! - Every descriptor invoker binds ONE container contract: the container holds exactly the
+//!   arguments PHP supplied, and the hidden argc / collector-count prefixes `crate::func_args`
+//!   relies on are synthesized here rather than expected from the caller. Public callers
+//!   (`call_user_func*`, first-class callables) and eval-registered native free functions
+//!   therefore share one physical layout.
 //! - The trampoline preserves the callee-saved registers it scratches (issue #487), including on
 //!   the eval exception-boundary escape path, so allocator-parked caller values survive the invoke.
 //! - Exception-boundary slots use ABI frame helpers because the expanded save area pushes ARM64
 //!   offsets beyond the signed 9-bit `ldur`/`stur` immediate range.
 //! - Reference-returning descriptors copy the pointee into an owned Mixed result before retiring
 //!   the returned cell lease.
-//! - A `PublicRaw` associative container is VALIDATED before a single argument is staged, by one
+//! - An associative container is VALIDATED before a single argument is staged, by one
 //!   walk in container order: a position after a name, a name colliding with a position already
 //!   walked, and a name no parameter can accept are all catchable `Error`s, each reported at the
 //!   entry that causes it so the message matches PHP's precedence. Validating first is what makes
@@ -33,7 +36,6 @@ mod reference_args;
 mod reference_return;
 mod string_return;
 
-pub(crate) use public_args::InvokerArgMode;
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
 
@@ -109,8 +111,6 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
     pub(super) owns_string_return: bool,
-    /// How the boxed argument container maps onto this signature's physical parameters.
-    pub(super) arg_mode: InvokerArgMode,
 }
 
 /// Reports whether regular or variadic callable parameters can require runtime normalization.
@@ -127,7 +127,6 @@ struct InvokerEmitContext {
     label_counter: usize,
     argument_owners: InvokerArgumentOwners,
     owns_string_return: bool,
-    arg_mode: InvokerArgMode,
 }
 
 impl InvokerEmitContext {
@@ -136,14 +135,12 @@ impl InvokerEmitContext {
         invoker_label: &str,
         argument_owners: InvokerArgumentOwners,
         owns_string_return: bool,
-        arg_mode: InvokerArgMode,
     ) -> Self {
         Self {
             label_prefix: local_label_prefix(invoker_label),
             label_counter: 0,
             argument_owners,
             owns_string_return,
-            arg_mode,
         }
     }
 
@@ -198,12 +195,7 @@ fn emit_runtime_callable_invoker_impl(
     let escape_label = format!("{}_eval_escape", invoker.label);
     let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
-    let mut ctx = InvokerEmitContext::new(
-        invoker.label,
-        argument_owners,
-        invoker.owns_string_return,
-        invoker.arg_mode,
-    );
+    let mut ctx = InvokerEmitContext::new(invoker.label, argument_owners, invoker.owns_string_return);
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -580,7 +572,7 @@ fn emit_loaded_indexed_array_callback_call(
         _ => PhpType::Mixed,
     };
     let elem_size = array_element_stride(&elem_ty);
-    let shape = InvokerParamShape::of(sig, ctx.arg_mode);
+    let shape = InvokerParamShape::of(sig);
 
     // -- load the argument array and validate the required argument count --
     emit_loaded_array_source_to_reg(array_source, array_reg, emitter);
@@ -634,7 +626,7 @@ fn emit_loaded_indexed_array_callback_call(
     }
 
     if shape.hidden_argc {
-        // PublicRaw synthesizes argc from the container length; it never consumes a user slot.
+        // The invoker synthesizes argc from the container length; it never consumes a user slot.
         public_args::push_arg_count_from_reg(emitter, len_reg);
         arg_types.push(PhpType::Int);
     }
@@ -777,7 +769,7 @@ fn emit_loaded_assoc_array_callback_call(
     };
     emit_loaded_array_source_to_reg(array_source, hash_reg, emitter);
 
-    let shape = InvokerParamShape::of(sig, ctx.arg_mode);
+    let shape = InvokerParamShape::of(sig);
     let count_reg = public_args::assoc_arg_count_reg(emitter);
     if shape.needs_actual_count() {
         public_args::emit_assoc_actual_arg_count(
@@ -785,9 +777,7 @@ fn emit_loaded_assoc_array_callback_call(
         );
     }
     // -- reject an unbindable container before any argument is staged --
-    if ctx.arg_mode == InvokerArgMode::PublicRaw {
-        emit_reject_invalid_named_arguments(hash_reg, sig, &shape, emitter, ctx, data);
-    }
+    emit_reject_invalid_named_arguments(hash_reg, sig, &shape, emitter, ctx, data);
     let mut arg_types = Vec::new();
 
     // -- marshal each visible regular via hash lookup --
@@ -1476,7 +1466,7 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
     }
 }
 
-/// Rejects a `PublicRaw` argument container no signature binding can accept.
+/// Rejects a raw argument container no signature binding can accept.
 ///
 /// ONE walk, in the container's own insertion order, classifying every entry exactly once. The
 /// order is the whole point: PHP reports the FIRST entry it cannot bind, so a sweep that went
@@ -1903,9 +1893,8 @@ fn emit_named_hash_probe(
 
 /// Looks up a named or numeric associative argument.
 ///
-/// The name wins when both exist, which is only reachable for an `EvalPrebound` container:
-/// `emit_reject_invalid_named_arguments` has already turned that combination into a catchable
-/// `Error` for every public one.
+/// The name is probed first, although validation has already rejected containers that carry
+/// both the matching named key and its positional key as a catchable `Error`.
 fn emit_hash_lookup_for_param_or_index(
     hash_base_reg: &str,
     param_name: Option<&str>,
@@ -3076,34 +3065,16 @@ mod tests {
     fn invoker_cache_separates_owned_and_borrowed_string_returns() {
         let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, InvokerArgMode::PublicRaw, "borrowed_result");
-        assert!(state.runtime_callable_invoker(&sig, &[], true, InvokerArgMode::PublicRaw).is_none());
-        state.cache_runtime_callable_invoker(&sig, &[], true, InvokerArgMode::PublicRaw, "owned_result");
+        state.cache_runtime_callable_invoker(&sig, &[], false, "borrowed_result");
+        assert!(state.runtime_callable_invoker(&sig, &[], true).is_none());
+        state.cache_runtime_callable_invoker(&sig, &[], true, "owned_result");
         assert_eq!(
-            state.runtime_callable_invoker(&sig, &[], false, InvokerArgMode::PublicRaw).as_deref(),
+            state.runtime_callable_invoker(&sig, &[], false).as_deref(),
             Some("borrowed_result")
         );
         assert_eq!(
-            state.runtime_callable_invoker(&sig, &[], true, InvokerArgMode::PublicRaw).as_deref(),
+            state.runtime_callable_invoker(&sig, &[], true).as_deref(),
             Some("owned_result")
-        );
-    }
-
-    /// PublicRaw and EvalPrebound wrappers with the same signature must not alias.
-    #[test]
-    fn invoker_cache_separates_public_raw_from_eval_prebound() {
-        let sig = hidden_argc_signature();
-        let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, InvokerArgMode::PublicRaw, "public_raw");
-        assert!(state.runtime_callable_invoker(&sig, &[], false, InvokerArgMode::EvalPrebound).is_none());
-        state.cache_runtime_callable_invoker(&sig, &[], false, InvokerArgMode::EvalPrebound, "eval_prebound");
-        assert_eq!(
-            state.runtime_callable_invoker(&sig, &[], false, InvokerArgMode::PublicRaw).as_deref(),
-            Some("public_raw")
-        );
-        assert_eq!(
-            state.runtime_callable_invoker(&sig, &[], false, InvokerArgMode::EvalPrebound).as_deref(),
-            Some("eval_prebound")
         );
     }
 
@@ -3189,7 +3160,6 @@ mod tests {
             sig: &sig,
             captures: &[],
             owns_string_return: false,
-            arg_mode: InvokerArgMode::PublicRaw,
         };
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
@@ -3239,7 +3209,7 @@ mod tests {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
-            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false, InvokerArgMode::PublicRaw);
+            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false);
             let (ref_cell_reg, source_tag_reg, branch) = match target.arch {
                 Arch::AArch64 => ("x19", "x20", "b.eq mixed_ref_cell_invoker_ref_mixed_0"),
                 Arch::X86_64 => ("r12", "r13", "je mixed_ref_cell_invoker_ref_mixed_0"),
@@ -3323,26 +3293,25 @@ mod tests {
         }
     }
 
-    /// Emits one indexed invoker body for the given argument mode.
-    fn emit_invoker_asm(target_name: &str, sig: &FunctionSig, mode: InvokerArgMode, label: &str) -> String {
+    /// Emits one indexed invoker body for a signature.
+    fn emit_invoker_asm(target_name: &str, sig: &FunctionSig, label: &str) -> String {
         let mut emitter = Emitter::new(Target::parse(target_name).unwrap());
         let invoker = RuntimeCallableInvoker {
             label,
             sig,
             captures: &[],
             owns_string_return: false,
-            arg_mode: mode,
         };
         emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
         emitter.output()
     }
 
-    /// PublicRaw keeps container slot 0 as the first user argument and synthesizes hidden argc.
+    /// Every invoker keeps container slot 0 as the first user argument and synthesizes hidden argc.
     #[test]
-    fn public_raw_preserves_arg0_and_synthesizes_hidden_argc_on_all_targets() {
+    fn invokers_preserve_arg0_and_synthesize_hidden_argc_on_all_targets() {
         let sig = hidden_argc_signature();
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let asm = emit_invoker_asm(name, &sig, InvokerArgMode::PublicRaw, "public_argc");
+            let asm = emit_invoker_asm(name, &sig, "public_argc");
             let (arg0, argc_slot, count_move) = if name == "linux-x86_64" {
                 (
                     "mov rax, QWORD PTR [r13 + 24]",
@@ -3359,92 +3328,39 @@ mod tests {
             assert!(asm.contains(arg0), "{name}: public arg 0 must stay at container index 0\n{asm}");
             assert!(
                 !asm.contains(argc_slot),
-                "{name}: PublicRaw must not consume container index 1 as hidden argc\n{asm}"
+                "{name}: the invoker must not consume container index 1 as hidden argc\n{asm}"
             );
             assert!(
                 asm.contains(count_move),
-                "{name}: PublicRaw must synthesize argc from the public argument count\n{asm}"
+                "{name}: the invoker must synthesize argc from the public argument count\n{asm}"
             );
         }
     }
 
-    /// EvalPrebound keeps the registered-native physical layout, including a container argc slot.
+    /// Hidden collectors store the synthesized count as their first element, indexed and assoc.
     #[test]
-    fn eval_prebound_still_loads_hidden_argc_from_the_container_on_all_targets() {
-        let sig = hidden_argc_signature();
-        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let asm = emit_invoker_asm(name, &sig, InvokerArgMode::EvalPrebound, "eval_argc");
-            let (arg0, argc_slot, count_move) = if name == "linux-x86_64" {
-                (
-                    "mov rax, QWORD PTR [r13 + 24]",
-                    "mov rax, QWORD PTR [r13 + 32]",
-                    "mov rax, r14",
-                )
-            } else {
-                (
-                    "ldr x0, [x20, #24]",
-                    "ldr x0, [x20, #32]",
-                    "mov x0, x21",
-                )
-            };
-            assert!(asm.contains(arg0), "{name}: eval-prebound still binds container index 0\n{asm}");
-            assert!(
-                asm.contains(argc_slot),
-                "{name}: eval-prebound must keep loading hidden argc from the container\n{asm}"
-            );
-            assert!(
-                !asm.contains(count_move),
-                "{name}: eval-prebound must not synthesize argc from the public count\n{asm}"
-            );
-        }
-    }
-
-    /// PublicRaw hidden collectors store the synthesized count as their first element.
-    #[test]
-    fn public_raw_synthesizes_hidden_collector_count_prefix_on_all_targets() {
+    fn invokers_synthesize_hidden_collector_count_prefix_on_all_targets() {
         let sig = hidden_collector_signature();
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let public_asm = emit_invoker_asm(name, &sig, InvokerArgMode::PublicRaw, "public_collector");
-            let eval_asm = emit_invoker_asm(name, &sig, InvokerArgMode::EvalPrebound, "eval_collector");
+            let asm = emit_invoker_asm(name, &sig, "public_collector");
             assert!(
-                public_asm.contains("invoker_tail_count_ok"),
-                "{name}: PublicRaw collector must clamp and prefix the actual count\n{public_asm}"
-            );
-            assert!(
-                !eval_asm.contains("invoker_tail_count_ok"),
-                "{name}: EvalPrebound collector must keep the previous empty-or-tail layout\n{eval_asm}"
+                asm.contains("invoker_tail_count_ok"),
+                "{name}: the collector must clamp and prefix the actual count\n{asm}"
             );
 
-            let public_assoc = &public_asm[public_asm
+            let assoc = &asm[asm
                 .rfind("cufa_mixed_assoc")
                 .expect("the Mixed invoker emits an associative branch")..];
-            let public_hash_new = public_assoc
+            let hash_new = assoc
                 .find("__rt_hash_new")
                 .expect("the associative variadic collector is allocated");
-            let public_loop = public_assoc
+            let tail_loop = assoc
                 .find("assoc_variadic_loop")
                 .expect("the associative tail walk is emitted");
-            let public_prefix = &public_assoc[public_hash_new..public_loop];
+            let prefix = &assoc[hash_new..tail_loop];
             assert!(
-                public_prefix.contains("__rt_mixed_from_value")
-                    && public_prefix.contains("__rt_hash_set"),
-                "{name}: PublicRaw must box and insert the count before the associative tail\n{public_asm}",
-            );
-
-            let eval_assoc = &eval_asm[eval_asm
-                .rfind("cufa_mixed_assoc")
-                .expect("the Mixed invoker emits an associative branch")..];
-            let eval_hash_new = eval_assoc
-                .find("__rt_hash_new")
-                .expect("the associative variadic collector is allocated");
-            let eval_loop = eval_assoc
-                .find("assoc_variadic_loop")
-                .expect("the associative tail walk is emitted");
-            let eval_prefix = &eval_assoc[eval_hash_new..eval_loop];
-            assert!(
-                !eval_prefix.contains("__rt_mixed_from_value")
-                    && !eval_prefix.contains("__rt_hash_set"),
-                "{name}: EvalPrebound must not synthesize an associative count prefix\n{eval_asm}",
+                prefix.contains("__rt_mixed_from_value") && prefix.contains("__rt_hash_set"),
+                "{name}: the count must be boxed and inserted before the associative tail\n{asm}",
             );
         }
     }

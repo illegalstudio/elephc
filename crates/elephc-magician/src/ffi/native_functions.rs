@@ -16,7 +16,9 @@ use super::native_methods::{
 };
 use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
-use crate::context::{NativeCallableDefault, NativeFunction, NativeFunctionInvoker};
+use crate::context::{
+    NativeCallableDefault, NativeCallableShape, NativeFunction, NativeFunctionInvoker,
+};
 use std::ffi::c_void;
 
 mod public_abi;

@@ -6,6 +6,10 @@
 //!
 //! Key details:
 //! - The registration calls preserve target-aware argument materialization.
+//! - Constructors follow the method contract exactly: the registered parameter COUNT is the
+//!   bridge's PHYSICAL one, because eval calls that bridge directly, while names, declared types
+//!   and defaults describe only the PHP-visible signature. A hidden `func_args` slot keeps an
+//!   empty registered name so it can be neither named nor reflected.
 
 use super::*;
 
@@ -45,15 +49,28 @@ pub(super) fn register_eval_native_constructor(
         class_name_len,
         registration.bridge_supported,
     );
+    // The explicit shape is registered BEFORE the per-slot metadata so nothing downstream can
+    // observe a signature whose visible/hidden partition is still being inferred.
+    register_eval_native_constructor_shape(
+        ctx,
+        context_offset,
+        &class_name_label,
+        class_name_len,
+        &eval_native_signature_shape(&registration.signature),
+    );
     let param_type_specs = eval_native_callable_param_type_specs(&registration.signature);
+    let visible_indexes = source_declared_param_indexes(&registration.signature);
     for (index, (param_name, _)) in registration.signature.params.iter().enumerate() {
+        let visible = visible_indexes.contains(&index);
         register_eval_native_constructor_param(
             ctx,
             context_offset,
             &class_name_label,
             class_name_len,
             index,
-            param_name,
+            // Registering the empty name for a hidden slot is what sizes the name table to the
+            // physical parameter count, which is how Magician tells the two kinds apart.
+            if visible { param_name.as_str() } else { "" },
         );
         register_eval_native_constructor_param_flags(
             ctx,
@@ -67,8 +84,13 @@ pub(super) fn register_eval_native_constructor(
                 .get(index)
                 .copied()
                 .unwrap_or(false),
+            // The variadic flag stays on its PHYSICAL slot so the collected array reaches the
+            // parameter the generated constructor bridge actually declares.
             signature_param_is_variadic(&registration.signature, index, param_name),
         );
+        if !visible {
+            continue;
+        }
         if let Some(type_spec) = param_type_specs.get(index).and_then(Option::as_deref) {
             register_eval_native_constructor_param_type(
                 ctx,
@@ -82,6 +104,25 @@ pub(super) fn register_eval_native_constructor(
     }
     let default_context = EvalNativeDefaultContext::for_class(ctx.module, &registration.class_name);
     for (index, default) in registration.signature.defaults.iter().enumerate() {
+        // The hidden count slot's synthesized `0` is not a PHP default and must not be reported.
+        if !visible_indexes.contains(&index) {
+            continue;
+        }
+        // A source-declared variadic has no PHP default: it always collects, so registering one
+        // would report an optional the source never wrote. Free-function, method and constructor
+        // default registration all skip the variadic slot for that same reason.
+        if signature_param_is_variadic(
+            &registration.signature,
+            index,
+            registration
+                .signature
+                .params
+                .get(index)
+                .map(|(name, _)| name.as_str())
+                .unwrap_or_default(),
+        ) {
+            continue;
+        }
         let Some(default) = default
             .as_ref()
             .and_then(|expr| eval_native_callable_default(expr, &default_context))

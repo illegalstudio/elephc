@@ -224,3 +224,170 @@ pub(super) fn eval_native_php_type_member_specs(members: &[PhpType]) -> Option<S
         .collect::<Option<Vec<_>>>()
         .map(|members| members.join("|"))
 }
+
+/// The explicit PHP signature shape a generated bridge registers alongside its parameter slots.
+///
+/// Every field is read from the AST-level `FunctionSig`, where a declared default is present as
+/// an EXPRESSION whether or not its value can be represented in the eval default ABI. That is the
+/// whole reason this record exists: an enum-case or deeply nested constant default registers no
+/// default at all, so nothing downstream may recover the PHP arity by looking for one.
+pub(super) struct EvalNativeSignatureShape {
+    /// PHP-visible non-variadic parameters, the leading run of registered slots.
+    pub(super) visible_regular_param_count: usize,
+    /// Mandatory PHP-visible parameters, from the source declaration.
+    pub(super) required_param_count: usize,
+    /// Whether the registered variadic slot is one the PHP source declared.
+    pub(super) source_variadic: bool,
+    /// Whether the hidden collector's first element carries the actual PHP argument count.
+    pub(super) collector_carries_count: bool,
+}
+
+/// Shape-flags bit meaning "the registered variadic slot is source-declared".
+///
+/// Mirrors `elephc_magician::context::NATIVE_SHAPE_FLAG_SOURCE_VARIADIC`. Magician is a
+/// dev-dependency of the compiler, not a dependency, so the numbering is spelled on both sides
+/// and the two constants must be changed together.
+const NATIVE_SHAPE_FLAG_SOURCE_VARIADIC: i64 = 1 << 0;
+
+/// Shape-flags bit meaning "the hidden collector's first element is the actual argument count".
+///
+/// Mirrors `elephc_magician::context::NATIVE_SHAPE_FLAG_COLLECTOR_CARRIES_COUNT`.
+const NATIVE_SHAPE_FLAG_COLLECTOR_CARRIES_COUNT: i64 = 1 << 1;
+
+impl EvalNativeSignatureShape {
+    /// Returns the packed flags word this shape registers.
+    pub(super) fn flags(&self) -> i64 {
+        let mut flags = 0;
+        if self.source_variadic {
+            flags |= NATIVE_SHAPE_FLAG_SOURCE_VARIADIC;
+        }
+        if self.collector_carries_count {
+            flags |= NATIVE_SHAPE_FLAG_COLLECTOR_CARRIES_COUNT;
+        }
+        flags
+    }
+}
+
+/// Derives the registered PHP signature shape from one bridge-compatible signature.
+///
+/// `regular_param_count` already excludes both the variadic slot and the hidden
+/// `__elephc_func_argc` parameter, so the required count is meaningful over exactly that prefix.
+pub(super) fn eval_native_signature_shape(sig: &FunctionSig) -> EvalNativeSignatureShape {
+    let visible_regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let required_param_count = (0..visible_regular_param_count)
+        .rfind(|index| sig.defaults.get(*index).is_none_or(Option::is_none))
+        .map_or(0, |index| index + 1);
+    EvalNativeSignatureShape {
+        visible_regular_param_count,
+        required_param_count,
+        source_variadic: sig
+            .variadic
+            .as_deref()
+            .is_some_and(|variadic| variadic != crate::func_args::HIDDEN_ARGS_PARAM),
+        collector_carries_count: crate::func_args::sig_collects_optional_arg_count(sig),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a signature whose hidden slots mirror what `crate::func_args` appends.
+    ///
+    /// `defaults` carries an EXPRESSION per slot, which is what the registration reads. Whether a
+    /// given default has an eval representation is a separate question the shape never asks.
+    fn sig(params: Vec<&str>, defaults: Vec<bool>, variadic: Option<&str>) -> FunctionSig {
+        let count = params.len();
+        FunctionSig {
+            params: params
+                .into_iter()
+                .map(|name| (name.to_string(), PhpType::Mixed))
+                .collect(),
+            param_type_exprs: vec![None; count],
+            param_attributes: vec![Vec::new(); count],
+            defaults: defaults
+                .into_iter()
+                .map(|has_default| {
+                    has_default.then(|| {
+                        crate::parser::ast::Expr::new(
+                            crate::parser::ast::ExprKind::IntLiteral(0),
+                            crate::span::Span::dummy(),
+                        )
+                    })
+                })
+                .collect(),
+            return_type: PhpType::Mixed,
+            declared_return: false,
+            by_ref_return: false,
+            ref_params: vec![false; count],
+            declared_params: vec![false; count],
+            variadic: variadic.map(str::to_string),
+            deprecation: None,
+        }
+    }
+
+    /// A plain signature registers its source arity and no hidden-slot flags.
+    #[test]
+    fn a_plain_signature_registers_its_source_arity() {
+        let shape = eval_native_signature_shape(&sig(vec!["a", "b"], vec![false, true], None));
+        assert_eq!(shape.visible_regular_param_count, 2);
+        assert_eq!(shape.required_param_count, 1);
+        assert!(!shape.source_variadic);
+        assert!(!shape.collector_carries_count);
+        assert_eq!(shape.flags(), 0);
+    }
+
+    /// A source variadic behind a hidden count parameter is reported as source-declared.
+    ///
+    /// The required count must stop at the visible regulars: the hidden count parameter carries a
+    /// synthesized `0` default of its own, and the variadic carries none, so counting over the
+    /// physical list would answer for a signature the PHP source never wrote.
+    #[test]
+    fn a_source_variadic_behind_a_hidden_count_is_flagged_as_source_declared() {
+        let signature = sig(
+            vec!["a", "b", crate::func_args::HIDDEN_ARGC_PARAM, "rest"],
+            vec![false, true, true, false],
+            Some("rest"),
+        );
+        let shape = eval_native_signature_shape(&signature);
+        assert_eq!(shape.visible_regular_param_count, 2);
+        assert_eq!(shape.required_param_count, 1);
+        assert!(shape.source_variadic);
+        assert!(!shape.collector_carries_count);
+        assert_eq!(shape.flags(), NATIVE_SHAPE_FLAG_SOURCE_VARIADIC);
+        // The registration walks exactly the source slots: the hidden count is not among them.
+        assert_eq!(source_declared_param_indexes(&signature), vec![0, 1, 3]);
+    }
+
+    /// A hidden collector next to an optional regular carries the actual argument count.
+    #[test]
+    fn a_hidden_collector_next_to_an_optional_regular_carries_the_count() {
+        let signature = sig(
+            vec!["a", "b", crate::func_args::HIDDEN_ARGS_PARAM],
+            vec![false, true, false],
+            Some(crate::func_args::HIDDEN_ARGS_PARAM),
+        );
+        let shape = eval_native_signature_shape(&signature);
+        assert_eq!(shape.visible_regular_param_count, 2);
+        assert_eq!(shape.required_param_count, 1);
+        assert!(!shape.source_variadic);
+        assert!(shape.collector_carries_count);
+        assert_eq!(shape.flags(), NATIVE_SHAPE_FLAG_COLLECTOR_CARRIES_COUNT);
+        // The collector is compiler-internal, so a free function never registers it at all.
+        assert_eq!(source_declared_param_indexes(&signature), vec![0, 1]);
+    }
+
+    /// A hidden collector with no optional regular needs no count prefix.
+    #[test]
+    fn a_hidden_collector_with_only_mandatory_regulars_needs_no_count() {
+        let shape = eval_native_signature_shape(&sig(
+            vec!["a", crate::func_args::HIDDEN_ARGS_PARAM],
+            vec![false, false],
+            Some(crate::func_args::HIDDEN_ARGS_PARAM),
+        ));
+        assert_eq!(shape.visible_regular_param_count, 1);
+        assert_eq!(shape.required_param_count, 1);
+        assert!(!shape.collector_carries_count);
+        assert_eq!(shape.flags(), 0);
+    }
+}

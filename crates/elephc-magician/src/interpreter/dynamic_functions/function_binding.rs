@@ -6,6 +6,25 @@
 //!
 //! Key details:
 //! - Named, variadic, by-reference, and raw native arguments preserve PHP binding rules.
+//! - A native AOT container carries only what the caller actually supplied. Holes before the
+//!   greatest supplied regular slot are still filled with that parameter's default, exactly as
+//!   PHP does, but the trailing run of untouched optionals is TRUNCATED. The descriptor invoker
+//!   applies those defaults itself and derives `func_num_args()` / `func_get_args()` metadata
+//!   from the container length, so padding the container would report arguments the caller
+//!   never passed.
+//! - PHP accepts surplus positional arguments for a userland function that declares no
+//!   variadic, and `func_get_args()` still reports them. Those arguments are appended to the
+//!   container past the declared parameters instead of being rejected; the invoker routes them
+//!   into the hidden collector, or ignores them when the callee never introspects its frame.
+//! - An unknown NAMED argument is legal only for a source-declared variadic, where PHP keeps its
+//!   string key in the collected array. The binder records that key, which turns the container
+//!   associative; the invoker's associative entry already validates, binds and collects it.
+//! - A by-reference source variadic (`&...$rest`) stages its tail PER ELEMENT, exactly like any
+//!   other by-reference parameter. That is the representation the callee already expects: an AOT
+//!   caller lowers a by-reference variadic tail through `lower_invoker_ref_arg_marker`, so the
+//!   collected array holds reference MARKER cells rather than plain values, and the descriptor
+//!   invoker's tail copy loop moves each container entry into it verbatim. Element writes inside
+//!   the callee therefore reach the eval caller's variables through those markers.
 
 use super::*;
 
@@ -84,6 +103,7 @@ fn bind_evaluated_native_function_args_with_mode(
         );
     }
     let mut bound_args = vec![None; function.param_count()];
+    let mut surplus_args = Vec::new();
     let has_param_names = function.param_names().len() == function.param_count();
     let mut next_positional = 0;
 
@@ -102,7 +122,7 @@ fn bind_evaluated_native_function_args_with_mode(
                 by_ref_mode,
                 values,
             )?;
-        } else {
+        } else if next_positional < bound_args.len() {
             bind_native_function_positional_arg(
                 function,
                 &mut bound_args,
@@ -113,18 +133,110 @@ fn bind_evaluated_native_function_args_with_mode(
                 by_ref_mode,
                 values,
             )?;
+        } else {
+            // Surplus positional arguments are by-value in PHP and bind to no parameter.
+            surplus_args.push(BoundMethodArg {
+                value: arg.value,
+                ref_target: None,
+                variadic_ref_targets: Vec::new(),
+            });
         }
     }
 
-    fill_native_function_defaults(function, &mut bound_args, context, values)?;
-    let bound_args = bound_args
-        .into_iter()
-        .collect::<Option<Vec<_>>>()
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    finish_native_function_binding(function, None, bound_args, by_ref_mode, context, values)
+    let supplied = supplied_regular_len(&bound_args);
+    if supplied < function.required_param_count() {
+        release_partial_native_bindings(&mut bound_args, context, values);
+        release_native_bound_arg_owners(surplus_args, context, values);
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    // Regulars may only shrink when nothing follows them in the container.
+    if surplus_args.is_empty() {
+        truncate_unsupplied_native_tail(&mut bound_args, supplied);
+    }
+    if let Err(status) = fill_native_function_defaults(function, &mut bound_args, context, values) {
+        // `fill_native_function_defaults` already reclaimed the regular slots it held.
+        release_native_bound_arg_owners(surplus_args, context, values);
+        return Err(status);
+    }
+    let Some(mut bound_args) = bound_args.into_iter().collect::<Option<Vec<_>>>() else {
+        release_native_bound_arg_owners(surplus_args, context, values);
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    bound_args.extend(surplus_args);
+    let named_keys = vec![None; bound_args.len()];
+    finish_native_function_binding(
+        function,
+        None,
+        bound_args,
+        named_keys,
+        by_ref_mode,
+        context,
+        values,
+    )
+}
+
+/// Reclaims already bound argument owners when the call fails before staging can transfer them.
+///
+/// Mirrors `release_native_bound_args`: the collected-key owners go back first, then the value.
+/// A `ref_target` is borrowed caller metadata and owns nothing, so it is simply dropped.
+fn release_native_bound_arg_owners(
+    bound_args: impl IntoIterator<Item = BoundMethodArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) {
+    for bound in bound_args {
+        for (key, _) in &bound.variadic_ref_targets {
+            let _ = release_expr_result(*key, context, values);
+        }
+        let _ = release_expr_result(bound.value, context, values);
+    }
+}
+
+/// Returns how many leading regular slots the call actually reaches.
+///
+/// PHP fills the gap before the greatest supplied parameter with defaults and counts that
+/// slot's index plus one, so the answer is the greatest bound index plus one, not the number
+/// of bound slots.
+fn supplied_regular_len(bound_args: &[Option<BoundMethodArg>]) -> usize {
+    bound_args
+        .iter()
+        .rposition(Option::is_some)
+        .map_or(0, |index| index + 1)
+}
+
+/// Drops the trailing regular slots the caller never reached so the container stays sparse.
+///
+/// `supplied` comes from `supplied_regular_len`, which is the greatest BOUND index plus one, so
+/// every entry this removes is unbound by construction and owns nothing. The assertion states
+/// that invariant instead of a release loop that could never run.
+fn truncate_unsupplied_native_tail(bound_args: &mut Vec<Option<BoundMethodArg>>, supplied: usize) {
+    debug_assert!(
+        bound_args[supplied.min(bound_args.len())..]
+            .iter()
+            .all(Option::is_none),
+        "truncating the unsupplied tail must not discard a bound argument owner"
+    );
+    bound_args.truncate(supplied);
+}
+
+/// Reclaims every already bound argument when binding fails before staging can transfer them.
+fn release_partial_native_bindings(
+    bound_args: &mut [Option<BoundMethodArg>],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) {
+    let taken = bound_args
+        .iter_mut()
+        .filter_map(Option::take)
+        .collect::<Vec<_>>();
+    release_native_bound_arg_owners(taken, context, values);
 }
 
 /// Binds a native AOT variadic function while keeping the raw invoker argument layout.
+///
+/// Only a SOURCE-declared variadic reaches here: the hidden `func_args` collector is never
+/// registered as an eval-visible parameter, so a function that merely introspects its frame
+/// takes the non-variadic path above and its surplus arguments are appended there.
 fn bind_evaluated_native_variadic_function_args(
     function: &NativeFunction,
     evaluated_args: Vec<EvaluatedCallArg>,
@@ -135,65 +247,151 @@ fn bind_evaluated_native_variadic_function_args(
     let variadic_index = native_function_variadic_index(function).ok_or(EvalStatus::RuntimeFatal)?;
     let has_param_names = function.param_names().len() == function.param_count();
     let mut regular_args = vec![None; variadic_index];
-    let mut variadic_args = Vec::new();
+    let mut variadic_args: Vec<BoundMethodArg> = Vec::new();
+    let mut named_variadic_args: Vec<(String, BoundMethodArg)> = Vec::new();
     let mut next_positional = 0;
 
-    for arg in evaluated_args {
-        if let Some(name) = arg.name {
-            if !has_param_names {
-                return Err(EvalStatus::RuntimeFatal);
+    let collected = (|| {
+        for arg in evaluated_args {
+            if let Some(name) = arg.name {
+                if !has_param_names {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                if native_function_regular_param_index(function, variadic_index, &name).is_none() {
+                    // An unknown name is a tail ENTRY, keyed by its own string in PHP's collected
+                    // array. Two of the same name would collide on that key, which PHP reports as
+                    // a duplicate argument rather than silently keeping the last one.
+                    if named_variadic_args
+                        .iter()
+                        .any(|(bound_name, _)| *bound_name == name)
+                    {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                    // A tail entry binds the variadic parameter, so a by-reference variadic
+                    // claims the caller's writeback target for this entry exactly as a
+                    // positional tail element does.
+                    let ref_target = native_function_parameter_ref_target(
+                        function,
+                        Some(variadic_index),
+                        arg.ref_target,
+                        by_ref_mode,
+                        values,
+                    )?;
+                    named_variadic_args.push((
+                        name,
+                        BoundMethodArg {
+                            value: arg.value,
+                            ref_target,
+                            variadic_ref_targets: Vec::new(),
+                        },
+                    ));
+                    continue;
+                }
+                bind_native_function_named_arg(
+                    function,
+                    Some(variadic_index),
+                    &mut regular_args,
+                    &name,
+                    arg.value,
+                    arg.ref_target,
+                    by_ref_mode,
+                    values,
+                )?;
+            } else if next_positional < variadic_index {
+                bind_native_function_positional_arg(
+                    function,
+                    &mut regular_args,
+                    Some(variadic_index),
+                    &mut next_positional,
+                    arg.value,
+                    arg.ref_target,
+                    by_ref_mode,
+                    values,
+                )?;
+            } else {
+                // A positional tail element binds the variadic parameter. When the source
+                // declares it by reference, staging turns this entry into a marker cell and the
+                // callee's element writes travel back through `ref_target`.
+                let ref_target = native_function_parameter_ref_target(
+                    function,
+                    Some(variadic_index),
+                    arg.ref_target,
+                    by_ref_mode,
+                    values,
+                )?;
+                variadic_args.push(BoundMethodArg {
+                    value: arg.value,
+                    ref_target,
+                    variadic_ref_targets: Vec::new(),
+                });
             }
-            if native_function_regular_param_index(function, variadic_index, &name).is_none() {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            bind_native_function_named_arg(
-                function,
-                Some(variadic_index),
-                &mut regular_args,
-                &name,
-                arg.value,
-                arg.ref_target,
-                by_ref_mode,
-                values,
-            )?;
-        } else if next_positional < variadic_index {
-            bind_native_function_positional_arg(
-                function,
-                &mut regular_args,
-                Some(variadic_index),
-                &mut next_positional,
-                arg.value,
-                arg.ref_target,
-                by_ref_mode,
-                values,
-            )?;
-        } else {
-            let ref_target = native_function_parameter_ref_target(
-                function,
-                Some(variadic_index),
-                arg.ref_target,
-                by_ref_mode,
-                values,
-            )?;
-            variadic_args.push(BoundMethodArg {
-                value: arg.value,
-                ref_target,
-                variadic_ref_targets: Vec::new(),
-            });
         }
+        Ok(())
+    })();
+    if let Err(status) = collected {
+        release_partial_native_bindings(&mut regular_args, context, values);
+        release_native_bound_arg_owners(variadic_args, context, values);
+        release_native_bound_arg_owners(
+            named_variadic_args.into_iter().map(|(_, bound)| bound),
+            context,
+            values,
+        );
+        return Err(status);
     }
 
-    fill_native_function_defaults(function, &mut regular_args, context, values)?;
+    // Regulars may only shrink when no POSITIONAL tail follows them: a positional tail argument
+    // occupies the container slot right after the regulars, so each one must be materialized to
+    // reach it. Unknown named entries carry their own string keys and impose no such ordering,
+    // which is what keeps `func_num_args()` right for a call that omits a trailing optional and
+    // still passes a named tail entry.
+    if variadic_args.is_empty() {
+        let supplied = supplied_regular_len(&regular_args);
+        // `required_param_count()` already stops at the variadic slot for a variadic signature.
+        if supplied < function.required_param_count() {
+            release_partial_native_bindings(&mut regular_args, context, values);
+            release_native_bound_arg_owners(
+                named_variadic_args.into_iter().map(|(_, bound)| bound),
+                context,
+                values,
+            );
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        truncate_unsupplied_native_tail(&mut regular_args, supplied);
+    }
+    if let Err(status) = fill_native_function_defaults(function, &mut regular_args, context, values)
+    {
+        release_native_bound_arg_owners(variadic_args, context, values);
+        release_native_bound_arg_owners(
+            named_variadic_args.into_iter().map(|(_, bound)| bound),
+            context,
+            values,
+        );
+        return Err(status);
+    }
 
-    let mut bound_args = regular_args
-        .into_iter()
-        .collect::<Option<Vec<_>>>()
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    let Some(mut bound_args) = regular_args.into_iter().collect::<Option<Vec<_>>>() else {
+        release_native_bound_arg_owners(variadic_args, context, values);
+        release_native_bound_arg_owners(
+            named_variadic_args.into_iter().map(|(_, bound)| bound),
+            context,
+            values,
+        );
+        return Err(EvalStatus::RuntimeFatal);
+    };
     bound_args.extend(variadic_args);
+    // Positional entries keep their own container index, so every string key lands after them.
+    // That order is exactly what the invoker's one-pass container validation accepts: an integer
+    // key after a string key is the `Cannot use positional argument after named argument` error.
+    let mut named_keys = vec![None; bound_args.len()];
+    for (name, bound) in named_variadic_args {
+        named_keys.push(Some(name));
+        bound_args.push(bound);
+    }
     finish_native_function_binding(
         function,
         Some(variadic_index),
         bound_args,
+        named_keys,
         by_ref_mode,
         context,
         values,
@@ -233,13 +431,14 @@ fn finish_native_function_binding(
     function: &NativeFunction,
     variadic_index: Option<usize>,
     mut bound_args: Vec<BoundMethodArg>,
+    named_keys: Vec<Option<String>>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
     let result = apply_native_function_arg_types(function, variadic_index, &mut bound_args, context, values)
         .and_then(|()| stage_native_function_invoker_args(
-            function, variadic_index, &mut bound_args, by_ref_mode, context, values,
+            function, variadic_index, &mut bound_args, named_keys, by_ref_mode, context, values,
         ));
     if result.is_err() {
         let _ = release_native_bound_args(&bound_args, context, values);

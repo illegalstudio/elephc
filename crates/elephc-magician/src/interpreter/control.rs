@@ -45,9 +45,17 @@ pub(super) struct BoundMethodArg {
 }
 
 /// One native function argument list prepared for the descriptor invoker ABI.
+#[derive(Default)]
 pub(super) struct BoundNativeFunctionArgs {
     pub(super) values: Vec<RuntimeCellHandle>,
     pub(super) ref_slots: Vec<BoundNativeFunctionRefSlot>,
+    /// Container key of each staged value: `None` is its own position, `Some(name)` a string key.
+    ///
+    /// Only a SOURCE-declared variadic can absorb an unknown named argument, and PHP keeps that
+    /// argument's string key in the collected array. Recording the key here is what lets the
+    /// container become associative instead of losing the name, and it stays index-aligned with
+    /// `values` because staging pushes exactly one value per bound argument, in order.
+    pub(super) named_keys: Vec<Option<String>>,
 }
 
 /// One staged by-reference slot passed to a native function invoker.

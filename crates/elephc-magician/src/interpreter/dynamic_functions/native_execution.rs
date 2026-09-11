@@ -6,6 +6,14 @@
 //!
 //! Key details:
 //! - By-reference writeback and temporary runtime-cell ownership are handled together.
+//! - The container holds exactly what the caller supplied: the binder truncates the trailing
+//!   optionals the caller omitted, and appends surplus positional arguments past the declared
+//!   parameters. The descriptor invoker applies the omitted defaults itself, so the arity gate
+//!   only checks the mandatory prefix.
+//! - The container is INDEXED unless the binder recorded a string key, which only an unknown
+//!   named argument absorbed by a source-declared variadic can produce. Then it is associative,
+//!   with every positional entry keeping its own integer key ahead of every string key, which is
+//!   the order the invoker's container validation requires.
 
 use super::*;
 
@@ -45,16 +53,11 @@ fn invoke_native_function_with_staged_args(
         cleanup_native_function_ref_args(bound_args, values)?;
         return Err(EvalStatus::RuntimeFatal);
     }
-    let variadic_index = native_function_variadic_index(function);
-    if variadic_index.is_none() && bound_args.values.len() != function.param_count() {
+    // `required_param_count()` already stops at the variadic slot for a variadic signature, so
+    // one gate covers both shapes.
+    if bound_args.values.len() < function.required_param_count() {
         cleanup_native_function_ref_args(bound_args, values)?;
         return Err(EvalStatus::RuntimeFatal);
-    }
-    if let Some(variadic_index) = variadic_index {
-        if bound_args.values.len() < function.required_param_count().min(variadic_index) {
-            cleanup_native_function_ref_args(bound_args, values)?;
-            return Err(EvalStatus::RuntimeFatal);
-        }
     }
     let arg_array = match build_native_function_arg_array(bound_args, values) {
         Ok(arg_array) => arg_array,
@@ -79,22 +82,37 @@ fn invoke_native_function_with_staged_args(
     eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
 }
 
-/// Builds the positional runtime array passed to descriptor-compatible native invokers.
+/// Builds the runtime container passed to descriptor-compatible native invokers.
+///
+/// Every staged value is inserted under its own key: its container position when the binder
+/// recorded none, or the argument's PHP name when it is an unknown named argument a
+/// source-declared variadic absorbs. The key cell is a temporary this function owns; `array_set`
+/// only borrows it, and the container retains the value, so the key is released either way and
+/// the staged value keeps the single owner staging gave it.
 fn build_native_function_arg_array(
     bound_args: &BoundNativeFunctionArgs,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let arg_array = values.array_new(bound_args.values.len())?;
+    let named = bound_args.named_keys.iter().any(Option::is_some);
+    let arg_array = if named {
+        values.assoc_new(bound_args.values.len())?
+    } else {
+        values.array_new(bound_args.values.len())?
+    };
     for (index, value) in bound_args.values.iter().copied().enumerate() {
-        let index = match values.int(index as i64) {
-            Ok(index) => index,
+        let key = match bound_args.named_keys.get(index).and_then(Option::as_deref) {
+            Some(name) => values.string(name),
+            None => values.int(index as i64),
+        };
+        let key = match key {
+            Ok(key) => key,
             Err(status) => {
                 values.release(arg_array)?;
                 return Err(status);
             }
         };
-        let inserted = values.array_set(arg_array, index, value);
-        let released = values.release(index);
+        let inserted = values.array_set(arg_array, key, value);
+        let released = values.release(key);
         if let Err(status) = inserted.and(released) {
             values.release(arg_array)?;
             return Err(status);

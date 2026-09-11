@@ -188,48 +188,65 @@ pub(super) fn eval_aot_interface_method_requirement(
 }
 
 /// Converts generated/AOT callable metadata into an eval interface method requirement.
+///
+/// An interface requirement describes the signature PHP declared, so it walks the signature's
+/// PHP-visible slots. The compiler-internal argument-count and collector slots a generated method
+/// bridge physically takes are not part of the contract an eval-declared implementation has to
+/// match, and including them would reject every legal implementation.
 pub(super) fn eval_native_signature_interface_method(
     method_name: &str,
     is_static: bool,
     signature: &NativeCallableSignature,
 ) -> EvalInterfaceMethod {
-    let param_count = signature.param_count();
+    let visible = signature.visible_param_indexes();
     EvalInterfaceMethod::new(
         method_name,
-        (0..param_count)
-            .map(|index| {
+        visible
+            .iter()
+            .enumerate()
+            .map(|(position, index)| {
                 signature
                     .param_names()
-                    .get(index)
+                    .get(*index)
                     .filter(|name| !name.is_empty())
                     .cloned()
-                    .unwrap_or_else(|| format!("arg{index}"))
+                    .unwrap_or_else(|| format!("arg{position}"))
             })
             .collect(),
     )
     .with_static(is_static)
     .with_parameter_types(
-        (0..param_count)
-            .map(|index| signature.param_type(index).cloned())
+        visible
+            .iter()
+            .map(|index| signature.param_type(*index).cloned())
             .collect(),
     )
     .with_parameter_defaults(
-        (0..param_count)
-            .map(|index| {
-                signature
-                    .param_default(index)
-                    .map(|_| EvalExpr::Const(EvalConst::Null))
+        // Only OPTIONALITY matters to a contract check, and optionality comes from the registered
+        // required count rather than from a registered default: a declared default the eval
+        // default ABI cannot represent (an enum case, a deeply nested constant expression)
+        // registers no default at all, and reading that absence as "mandatory" would reject a
+        // legal implementation.
+        visible
+            .iter()
+            .enumerate()
+            .map(|(position, index)| {
+                let optional = position >= signature.required_param_count()
+                    || signature.param_variadic(*index);
+                optional.then(|| EvalExpr::Const(EvalConst::Null))
             })
             .collect(),
     )
     .with_parameter_by_ref_flags(
-        (0..param_count)
-            .map(|index| signature.param_by_ref(index))
+        visible
+            .iter()
+            .map(|index| signature.param_by_ref(*index))
             .collect(),
     )
     .with_parameter_variadic_flags(
-        (0..param_count)
-            .map(|index| signature.param_variadic(index))
+        visible
+            .iter()
+            .map(|index| signature.param_variadic(*index))
             .collect(),
     )
     .with_return_type(signature.return_type().cloned())

@@ -58,6 +58,7 @@ fn native_function_retires_bound_cell_owners_on_every_dispatch_exit() {
         if exit == "array failure" { values.fail_array_set_call(0); }
         let bound = BoundNativeFunctionArgs {
             values: vec![owned, caller.borrowed()], ref_slots: Vec::new(),
+            named_keys: vec![None, None],
         };
         let outcome = eval_native_function_with_values(function, bound, &mut context, &mut values);
         assert_eq!(outcome.is_ok(), exit == "return", "{exit}");
@@ -165,6 +166,7 @@ fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {
         let mixed = values.int(7).unwrap();
         let bound = BoundNativeFunctionArgs {
             values: Vec::new(),
+            named_keys: Vec::new(),
             ref_slots: vec![
                 BoundNativeFunctionRefSlot::RawString {
                     original: [string.as_ptr() as u64, 6],
@@ -207,6 +209,7 @@ fn native_ref_writeback_preserves_published_values_and_finishes_later_slots() {
     scope.set("second", old_second, ScopeCellOwnership::Owned);
     let bound = BoundNativeFunctionArgs {
         values: Vec::new(),
+        named_keys: Vec::new(),
         ref_slots: vec![
             BoundNativeFunctionRefSlot::Mixed {
                 original: old_first, slot: Box::new(first.as_ptr()),
@@ -235,7 +238,7 @@ fn native_function_discards_result_when_argument_cleanup_throws() {
     let mut context = ElephcEvalContext::new();
     let value = values.string("result").unwrap();
     let function = NativeFunction::new(value.as_ptr().cast(), fake_native_return_descriptor, 0);
-    let bound = BoundNativeFunctionArgs { values: Vec::new(), ref_slots: Vec::new() };
+    let bound = BoundNativeFunctionArgs::default();
     values.fail_release_call = Some(0);
     let result = eval_native_function_with_values(function, bound, &mut context, &mut values);
     assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
@@ -256,6 +259,7 @@ fn native_function_discards_result_and_all_slots_when_writeback_fails() {
     let function = NativeFunction::new(value.as_ptr().cast(), fake_native_return_descriptor, 0);
     let bound = BoundNativeFunctionArgs {
         values: Vec::new(),
+        named_keys: Vec::new(),
         ref_slots: vec![
             BoundNativeFunctionRefSlot::Mixed {
                 original, slot: Box::new(first.as_ptr()),
@@ -286,6 +290,7 @@ fn native_ref_writeback_retires_its_owner_after_a_retaining_setter() {
     let mut caller_slot = old.as_ptr();
     let bound = BoundNativeFunctionArgs {
         values: Vec::new(),
+        named_keys: Vec::new(),
         ref_slots: vec![BoundNativeFunctionRefSlot::Mixed {
             original: old, slot: Box::new(value.as_ptr()),
             target: Some(EvalReferenceTarget::InvokerSlot {

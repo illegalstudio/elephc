@@ -8,6 +8,9 @@
 //! - Each staged reference owns its current payload independently of the caller.
 //! - Partial staging releases markers, payload leases, and transferred value arguments.
 //! - PHP array declarations use boxed slots because native callees can change the array layout.
+//! - The caller's container keys ride along untouched: staging replaces a by-reference argument's
+//!   VALUE with a marker cell but never changes how many entries there are or their order, so the
+//!   `named_keys` vector stays index-aligned with `values`.
 
 use super::*;
 
@@ -16,13 +19,20 @@ pub(super) fn stage_native_function_invoker_args(
     function: &NativeFunction,
     variadic_index: Option<usize>,
     bound_args: &mut [BoundMethodArg],
+    named_keys: Vec<Option<String>>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
+    debug_assert_eq!(
+        named_keys.len(),
+        bound_args.len(),
+        "every bound native argument owns exactly one container key"
+    );
     let mut staged = BoundNativeFunctionArgs {
         values: Vec::with_capacity(bound_args.len()),
         ref_slots: Vec::new(),
+        named_keys,
     };
     let prepared = (|| {
         for (position, bound) in bound_args.iter_mut().enumerate() {

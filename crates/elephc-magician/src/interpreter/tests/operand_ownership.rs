@@ -149,7 +149,10 @@ fn native_function_ref_staging_releases_only_its_current_owner() {
                         original: original_word, slot: Box::new(current_word), target: None,
                     }
                 };
-                let bound = BoundNativeFunctionArgs { values: Vec::new(), ref_slots: vec![slot] };
+                let bound = BoundNativeFunctionArgs {
+                    ref_slots: vec![slot],
+                    ..BoundNativeFunctionArgs::default()
+                };
                 if writeback {
                     write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
                 } else {

@@ -559,6 +559,37 @@ echo eval($source);
     assert_eq!(repeated_live, once_live, "eval collection retained per-call storage: {body}");
 }
 
+/// Eval calls into an AOT optional-parameter frame release the hidden argument collector.
+///
+/// The collector is allocated on every call because it must carry the actual argument count
+/// even when the optional was omitted, so both the count prefix and the copied tail have to be
+/// reclaimed with the call.
+#[test]
+fn test_core_eval_optional_parameter_frames_release_argument_collectors() {
+    assert_core_eval_collection_cleanup_with_native(
+        "function nativeOptionalCollector($first, $second = \"pad\") { return count(func_get_args()); }",
+        "$payload = str_repeat(\"p\", 24);",
+        "$result = nativeOptionalCollector($payload); unset($result);
+         $result = nativeOptionalCollector($payload, $payload); unset($result);",
+    );
+}
+
+/// An unknown named argument absorbed by an AOT source variadic leaves nothing behind.
+///
+/// This call shape is the only one that makes the descriptor container ASSOCIATIVE, so it is the
+/// only one that allocates a string key cell per tail entry. The key is a temporary the binder
+/// owns: the container borrows it on insert and the binder releases it immediately, so a leak
+/// here would grow with the call count while the surrounding indexed shapes stayed flat.
+#[test]
+fn test_core_eval_named_variadic_tails_release_container_keys() {
+    assert_core_eval_collection_cleanup_with_native(
+        "function nativeNamedTailCollector($first, ...$rest) { return count($rest); }",
+        "$payload = str_repeat(\"p\", 24);",
+        "$result = nativeNamedTailCollector($payload, extra: $payload); unset($result);
+         $result = nativeNamedTailCollector($payload, $payload); unset($result);",
+    );
+}
+
 /// Repeated typed-property unset releases the old nested payload without releasing it twice.
 #[test]
 fn test_core_eval_native_typed_unset_releases_nested_property_payloads() {

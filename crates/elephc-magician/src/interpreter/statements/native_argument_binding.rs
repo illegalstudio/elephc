@@ -6,6 +6,18 @@
 //!
 //! Key details:
 //! - Named, variadic, typed, and degraded by-value reference modes share one binder.
+//! - A generated method or constructor bridge is called DIRECTLY, with one argument per physical
+//!   parameter, so this binder both binds the PHP-visible signature and materializes the
+//!   compiler-internal slots that bridge takes: the hidden actual-argument count, and the hidden
+//!   surplus collector (whose first element is that same count when a visible regular carries a
+//!   default). Free functions do not come through here: they reach an eval-registered descriptor
+//!   INVOKER, which synthesizes those slots itself from a container of only the supplied
+//!   arguments, so their registration drops the hidden slots entirely.
+//! - Which physical slots are hidden comes from the EXPLICIT `NativeCallableShape` the generated
+//!   bridge registers, not from a spelling convention: the shape states the PHP-visible regular
+//!   count, the true required count, and whether the variadic slot is source-declared. Hidden
+//!   slots additionally register an empty name, which keeps them unreachable by a named argument
+//!   and invisible to Reflection even if a caller reached this code with no shape at all.
 
 use super::*;
 
@@ -159,6 +171,61 @@ fn write_back_native_ref_target(
     Ok(())
 }
 
+/// Returns the argument count PHP reports for this call, which is what `func_num_args()` sees.
+///
+/// PHP fills the gap before the greatest supplied regular parameter with defaults and counts that
+/// slot's index plus one, then adds the surplus positional arguments. An unknown NAMED argument,
+/// which only a source-declared variadic can absorb, is not counted: it is keyed by its name.
+fn native_actual_argument_count(
+    signature: &NativeCallableSignature,
+    variadic_index: Option<usize>,
+    args: &[EvaluatedCallArg],
+) -> usize {
+    let regular_count = signature.visible_regular_param_count();
+    let mut next_positional = 0usize;
+    let mut highest_regular = 0usize;
+    let mut positional_surplus = 0usize;
+    for arg in args {
+        if let Some(name) = arg.name.as_deref() {
+            if let Some(position) = native_regular_param_index(signature, variadic_index, name) {
+                highest_regular = highest_regular.max(position + 1);
+            }
+            continue;
+        }
+        if next_positional < regular_count {
+            highest_regular = highest_regular.max(next_positional + 1);
+            next_positional += 1;
+        } else {
+            positional_surplus += 1;
+        }
+    }
+    highest_regular + positional_surplus
+}
+
+/// Writes the actual argument count into the hidden collector's first element.
+///
+/// `values.int` hands back an owner this binder holds; the collector retains its own on insert,
+/// so the local owner is released immediately and only the collector's survives into the call.
+fn stage_hidden_collector_count(
+    bound_args: &mut [Option<BoundMethodArg>],
+    variadic_index: Option<usize>,
+    actual_count: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let count = values.int(actual_count as i64)?;
+    let key = match values.int(0) {
+        Ok(key) => key,
+        Err(status) => {
+            let _ = values.release(count);
+            return Err(status);
+        }
+    };
+    // `bind_native_variadic_arg` releases the key itself when there is no writeback target.
+    let inserted = bind_native_variadic_arg(bound_args, variadic_index, key, count, None, values);
+    let released = values.release(count);
+    inserted.and(released)
+}
+
 /// Binds native AOT callable args and fills omitted defaults from metadata.
 pub(super) fn bind_native_signature_args(
     signature: &NativeCallableSignature,
@@ -169,6 +236,10 @@ pub(super) fn bind_native_signature_args(
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let mut bound_args = vec![None; signature.param_count()];
     let variadic_index = native_callable_variadic_index(signature);
+    let regular_count = signature.visible_regular_param_count();
+    let collector_needs_count = signature.collector_needs_count();
+    let hidden_argc_index = signature.hidden_argc_index();
+    let actual_count = native_actual_argument_count(signature, variadic_index, &args);
     let mut next_positional = 0;
     let mut next_variadic_index = 0_i64;
 
@@ -177,6 +248,19 @@ pub(super) fn bind_native_signature_args(
             let array = values.array_new(args.len())?;
             bound_args[index] = Some(BoundMethodArg {
                 value: array,
+                ref_target: None,
+                variadic_ref_targets: Vec::new(),
+            });
+            if collector_needs_count {
+                // The hidden collector's element 0 is the count; the surplus starts at 1, which
+                // is exactly what the rewritten `func_get_args()` body slices off.
+                stage_hidden_collector_count(&mut bound_args, variadic_index, actual_count, values)?;
+                next_variadic_index = 1;
+            }
+        }
+        if let Some(index) = hidden_argc_index {
+            bound_args[index] = Some(BoundMethodArg {
+                value: values.int(actual_count as i64)?,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
             });
@@ -199,6 +283,7 @@ pub(super) fn bind_native_signature_args(
                     signature,
                     &mut bound_args,
                     variadic_index,
+                    regular_count,
                     &mut next_positional,
                     &mut next_variadic_index,
                     arg.value,
@@ -215,6 +300,12 @@ pub(super) fn bind_native_signature_args(
             }
             if value.is_some() {
                 continue;
+            }
+            if position >= regular_count {
+                // Every hidden slot was materialized above. Reaching one here would mean the
+                // registered frame shape disagrees with the bridge's physical parameter list,
+                // and calling it with a hole would corrupt the callee's activation.
+                return Err(EvalStatus::RuntimeFatal);
             }
             if position < signature.required_param_count() {
                 return Err(EvalStatus::RuntimeFatal);
@@ -365,10 +456,16 @@ pub(super) fn native_callable_variadic_index(signature: &NativeCallableSignature
 }
 
 /// Binds one positional native AOT argument to a fixed slot or variadic array.
+///
+/// `regular_count` is the number of PHP-visible non-variadic parameters, which is NOT the
+/// variadic slot's physical index whenever a hidden count parameter sits between them. Using the
+/// physical index here is what let a caller's second argument land in the hidden count slot.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn bind_native_positional_signature_arg(
     signature: &NativeCallableSignature,
     bound_args: &mut [Option<BoundMethodArg>],
     variadic_index: Option<usize>,
+    regular_count: usize,
     next_positional: &mut usize,
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
@@ -376,7 +473,7 @@ pub(super) fn bind_native_positional_signature_arg(
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if variadic_index.is_some_and(|index| *next_positional >= index) {
+    if variadic_index.is_some() && *next_positional >= regular_count {
         let key = values.int(*next_variadic_index)?;
         *next_variadic_index = next_variadic_index
             .checked_add(1)
@@ -386,7 +483,10 @@ pub(super) fn bind_native_positional_signature_arg(
         return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, values);
     }
     let param_index = *next_positional;
-    if param_index >= bound_args.len() || bound_args[param_index].is_some() {
+    if param_index >= regular_count
+        || param_index >= bound_args.len()
+        || bound_args[param_index].is_some()
+    {
         return Err(EvalStatus::RuntimeFatal);
     }
     let ref_target =
@@ -400,7 +500,11 @@ pub(super) fn bind_native_positional_signature_arg(
     Ok(())
 }
 
-/// Binds one named native AOT argument to a fixed non-variadic slot.
+/// Binds one named native AOT argument to a fixed slot, or to a source variadic under its name.
+///
+/// A hidden slot can never be selected here: `native_regular_param_index` searches only the
+/// registered PHP-visible regular prefix, and a hidden slot also registers an EMPTY name that no
+/// PHP parameter name can equal.
 pub(super) fn bind_native_named_signature_arg(
     signature: &NativeCallableSignature,
     variadic_index: Option<usize>,
@@ -428,6 +532,15 @@ pub(super) fn bind_native_named_signature_arg(
             variadic_ref_targets: Vec::new(),
         });
         return Ok(());
+    }
+    // PHP absorbs an unknown named argument into a SOURCE-declared variadic, keeping its string
+    // key in the collected array. A frame that only carries the hidden collector declares no
+    // variadic as far as the program is concerned, so it still refuses the name.
+    if signature.source_variadic_index().is_some() {
+        let key = values.string(name)?;
+        let ref_target =
+            native_parameter_ref_target(signature, variadic_index, ref_target, by_ref_mode, values)?;
+        return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, values);
     }
     Err(EvalStatus::RuntimeFatal)
 }
@@ -476,6 +589,10 @@ pub(super) fn native_callable_param_warning_name(
 }
 
 /// Returns the matching non-variadic native parameter index for one named arg.
+///
+/// The search is bounded by the registered PHP-visible regular count, so a compiler-internal slot
+/// can never be selected by name even if it somehow carried one. The empty name a hidden slot
+/// registers is a second, independent guard rather than the mechanism.
 pub(super) fn native_regular_param_index(
     signature: &NativeCallableSignature,
     variadic_index: Option<usize>,
@@ -484,6 +601,7 @@ pub(super) fn native_regular_param_index(
     signature
         .param_names()
         .iter()
+        .take(signature.visible_regular_param_count())
         .enumerate()
         .position(|(index, param)| Some(index) != variadic_index && param == name)
 }

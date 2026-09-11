@@ -7,32 +7,18 @@
 //! - The indexed and associative argument builders in `super`.
 //!
 //! Key details:
-//! - `InvokerArgMode` is a compile-time selector and is independent of the native-throw
-//!   boundary flag. It adds no word to the two-word descriptor invoker ABI.
-//! - `PublicRaw` containers hold exactly the arguments PHP supplied. Visible regulars are
-//!   bound from the container; `__elephc_func_argc` is synthesized; a hidden collector that
-//!   needs optional-count metadata receives that count as its first element.
-//! - `EvalPrebound` keeps the previous physical layout, so eval-registered native free
-//!   functions keep today's binding until their separate metadata task.
+//! - There is ONE container contract, shared by every descriptor invoker: the container holds
+//!   exactly the arguments PHP supplied. Visible regulars are bound from it, omitted trailing
+//!   optionals fall back to their declared defaults, `__elephc_func_argc` is synthesized, and
+//!   a hidden collector that needs optional-count metadata receives that count as its first
+//!   element. Eval-registered native free functions use the same contract, so the physical
+//!   layout can no longer diverge between public and eval callers.
 //! - Receiver and capture values stay on the descriptor capture list; they are not mixed
 //!   into the public argument-shape counters.
 
 use super::{abi, Arch, DataSection, Emitter, FunctionSig, InvokerEmitContext, PhpType};
 
-/// How an invoker must interpret the boxed argument container it receives.
-///
-/// This is a compile-time selector only: it adds no word to the runtime descriptor ABI.
-/// It is deliberately independent of the native-throw boundary flag.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InvokerArgMode {
-    /// Public first-class-callable / `call_user_func` / `call_user_func_array` containers.
-    PublicRaw,
-    /// Eval-registered native free-function descriptors, whose containers are packed against
-    /// physical parameters by Magician before the invoker runs.
-    EvalPrebound,
-}
-
-/// One callable signature's binding layout for a given container mode.
+/// One callable signature's binding layout for a public argument container.
 pub(super) struct InvokerParamShape {
     /// Regular parameters a public caller may bind, positionally or by name.
     pub(super) visible_regular: usize,
@@ -45,27 +31,18 @@ pub(super) struct InvokerParamShape {
 }
 
 impl InvokerParamShape {
-    /// Describes how one signature binds a container of the given mode.
+    /// Describes how one signature binds a public argument container.
     ///
-    /// `EvalPrebound` returns the physical layout used before the public/eval split.
-    /// `PublicRaw` uses `FunctionSig` / `func_args` helpers for the visible prefix and
-    /// hidden slots. A malformed hidden-argc placement does not fall back to treating
-    /// hidden fields as public; the visible prefix from `regular_param_count` still
-    /// governs container binding, and the expected post-visible slot is synthesized.
-    pub(super) fn of(sig: &FunctionSig, mode: InvokerArgMode) -> Self {
+    /// Uses `FunctionSig` / `func_args` helpers for the visible prefix and hidden slots. A
+    /// malformed hidden-argc placement does not fall back to treating hidden fields as
+    /// public; the visible prefix from `regular_param_count` still governs container
+    /// binding, and the expected post-visible slot is synthesized.
+    pub(super) fn of(sig: &FunctionSig) -> Self {
         let physical_regular = if sig.variadic.is_some() {
             sig.params.len().saturating_sub(1)
         } else {
             sig.params.len()
         };
-        if mode == InvokerArgMode::EvalPrebound {
-            return Self {
-                visible_regular: physical_regular,
-                physical_regular,
-                hidden_argc: false,
-                collector_needs_count: false,
-            };
-        }
         let visible_regular = crate::types::call_args::regular_param_count(sig);
         let hidden_argc = crate::func_args::sig_has_hidden_argc_param(sig);
         if hidden_argc {
@@ -346,9 +323,9 @@ mod tests {
         }
     }
 
-    /// A hidden count slot is synthesized for public containers and bound for eval containers.
+    /// A hidden count slot is synthesized after the visible regulars, never bound from the container.
     #[test]
-    fn hidden_argc_slot_is_public_only() {
+    fn hidden_argc_slot_is_synthesized_after_the_visible_regulars() {
         let sig = sig(
             vec![
                 ("a", PhpType::Int),
@@ -358,15 +335,12 @@ mod tests {
             vec![Some(10), Some(0), None],
             Some("rest"),
         );
-        let public = InvokerParamShape::of(&sig, InvokerArgMode::PublicRaw);
+        let public = InvokerParamShape::of(&sig);
         assert_eq!(public.visible_regular, 1);
         assert!(public.hidden_argc);
         assert!(!public.collector_needs_count);
+        // The hidden slot still shifts the physical variadic owner index.
         assert_eq!(public.variadic_owner_index(), 2);
-        let eval = InvokerParamShape::of(&sig, InvokerArgMode::EvalPrebound);
-        assert_eq!(eval.visible_regular, 2);
-        assert!(!eval.hidden_argc);
-        assert_eq!(eval.variadic_owner_index(), 2);
     }
 
     /// An optional-parameter hidden collector reports its mandatory count prefix.
@@ -383,27 +357,24 @@ mod tests {
             vec![Some(10), None],
             Some(crate::func_args::HIDDEN_ARGS_PARAM),
         );
-        let public = InvokerParamShape::of(&sig, InvokerArgMode::PublicRaw);
+        let public = InvokerParamShape::of(&sig);
         assert_eq!(public.visible_regular, 1);
         assert!(public.collector_needs_count);
         assert_eq!(public.collector_prefix(), 1);
-        assert!(!InvokerParamShape::of(&sig, InvokerArgMode::EvalPrebound).collector_needs_count);
     }
 
-    /// A plain signature binds identically in both modes, so ordinary callables cannot regress.
+    /// A signature with no hidden slot needs no synthesized metadata at all.
     #[test]
-    fn ordinary_signatures_are_mode_independent() {
+    fn ordinary_signatures_need_no_synthesized_count() {
         let plain = sig(
             vec![("a", PhpType::Int), ("b", PhpType::Str)],
             vec![None, None],
             None,
         );
-        for mode in [InvokerArgMode::PublicRaw, InvokerArgMode::EvalPrebound] {
-            let shape = InvokerParamShape::of(&plain, mode);
-            assert_eq!(shape.visible_regular, 2);
-            assert!(!shape.needs_actual_count());
-            assert_eq!(shape.collector_prefix(), 0);
-        }
+        let shape = InvokerParamShape::of(&plain);
+        assert_eq!(shape.visible_regular, 2);
+        assert!(!shape.needs_actual_count());
+        assert_eq!(shape.collector_prefix(), 0);
     }
 
 }

@@ -15,7 +15,7 @@ use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey, NativeCallableDefault,
-    NativeCallableObjectDefaultArg, NativeCallableSignature,
+    NativeCallableObjectDefaultArg, NativeCallableShape, NativeCallableSignature,
 };
 use crate::eval_ir::{
     EvalAttribute, EvalAttributeArg, EvalInterfaceProperty, EvalParameterType,

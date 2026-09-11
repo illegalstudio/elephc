@@ -472,7 +472,7 @@ echo unpackInvalidKey(neverBindPair(...)), ':', unpackInvalidKey(neverBindPair(.
 /// the position arrives after the name, so the ordering rule is the one that applies.
 ///
 /// `call_user_func_array` with a variable container is the route: it hands the array to the
-/// descriptor invoker untouched, which is the `PublicRaw` associative entry these rules guard.
+/// descriptor invoker untouched, which is the associative entry these rules guard.
 #[test]
 fn test_core_invoker_reports_the_first_unbindable_container_entry() {
     let source = r#"<?php
