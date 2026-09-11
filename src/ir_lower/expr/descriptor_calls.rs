@@ -70,6 +70,9 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     args: &[Expr],
     span: Span,
 ) -> Option<LoweredValue> {
+    if let Some(container) = lower_single_untyped_descriptor_spread(ctx, args) {
+        return Some(container);
+    }
     if crate::types::call_args::has_named_args(args) {
         return Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span, false));
     }
@@ -80,11 +83,34 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
 pub(super) fn lower_guarded_descriptor_invoker_arg_container(
     ctx: &mut LoweringContext<'_, '_>, args: &[Expr], span: Span,
 ) -> Option<LoweredValue> {
+    if let Some(container) = lower_single_untyped_descriptor_spread(ctx, args) {
+        return Some(container);
+    }
     if crate::types::call_args::has_named_args(args) {
         Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span, true))
     } else {
         Some(lower_untyped_descriptor_invoker_indexed_container(ctx, args, span, true))
     }
+}
+
+/// Reuses a sole spread array as the descriptor argument container.
+///
+/// The descriptor backend already clones indexed and associative containers according to their
+/// runtime shape. Forwarding a borrowed declared-`array` property therefore preserves string keys
+/// without applying indexed-only `ArrayLen`/`ArrayGet` operations to its boxed `Mixed` storage.
+/// The callers guard and release an owning source around invocation, while borrowed sources remain
+/// owned by their original place. In both cases the spread expression is evaluated exactly once.
+fn lower_single_untyped_descriptor_spread(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<LoweredValue> {
+    let [arg] = args else {
+        return None;
+    };
+    let ExprKind::Spread(inner) = &arg.kind else {
+        return None;
+    };
+    Some(lower_expr(ctx, inner))
 }
 
 /// Publishes one container guard without changing a surrounding call's parameter capture group.

@@ -155,29 +155,32 @@ pub(super) fn cleanup_native_function_ref_args(
     cleanup
 }
 
-/// Retires both changed raw payloads even when destruction of the current payload fails.
+/// Exposes native reference-slot cleanup to the focused ownership ledger tests.
+#[cfg(test)]
+pub(in crate::interpreter) fn cleanup_native_function_ref_args_for_test(
+    bound_args: &BoundNativeFunctionArgs,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    cleanup_native_function_ref_args(bound_args, values)
+}
+
+/// Retires the owner currently stored in one native by-reference staging slot.
+///
+/// Generated reference-cell stores consume the staged owner before installing a
+/// replacement. Once the native call returns, `original` is an identity marker
+/// only: the slot's current occupant is the one remaining owner to release.
 fn cleanup_native_function_ref_slot(
     ref_slot: &BoundNativeFunctionRefSlot,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
         match ref_slot {
-            BoundNativeFunctionRefSlot::RawString { original, slot, .. } => {
+            BoundNativeFunctionRefSlot::RawString { slot, .. } => {
                 let words = **slot;
-                let released = values.release_raw_string_words(words[0], words[1]);
-                if words[0] != original[0] {
-                    let original = values.release_raw_string_words(original[0], original[1]);
-                    return released.and(original);
-                }
-                released
+                values.release_raw_string_words(words[0], words[1])
             }
-            BoundNativeFunctionRefSlot::OwnedRawWord { original, slot, .. } => {
+            BoundNativeFunctionRefSlot::OwnedRawWord { slot, .. } => {
                 let word = **slot;
-                let released = values.release_raw_heap_word(word);
-                if word != *original {
-                    let original = values.release_raw_heap_word(*original);
-                    return released.and(original);
-                }
-                released
+                values.release_raw_heap_word(word)
             }
             BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
                 values.release(RuntimeCellHandle::from_raw(**slot))
@@ -276,9 +279,6 @@ fn write_back_native_function_ref_slot(
                 let words = **slot;
                 if target.is_none() {
                     values.release_raw_string_words(words[0], words[1])?;
-                    if words[0] != original[0] {
-                        values.release_raw_string_words(original[0], original[1])?;
-                    }
                     return Ok(());
                 }
                 let Some(target) = target else {
@@ -290,9 +290,6 @@ fn write_back_native_function_ref_slot(
                 }
                 let value = values.raw_string_value(words[0], words[1]);
                 values.release_raw_string_words(words[0], words[1])?;
-                if words[0] != original[0] {
-                    values.release_raw_string_words(original[0], original[1])?;
-                }
                 let value = value?;
                 eval_write_direct_ref_target(
                     target,
@@ -310,9 +307,6 @@ fn write_back_native_function_ref_slot(
                 let word = **slot;
                 if target.is_none() {
                     values.release_raw_heap_word(word)?;
-                    if word != *original {
-                        values.release_raw_heap_word(*original)?;
-                    }
                     return Ok(());
                 }
                 let Some(target) = target else {
@@ -324,7 +318,6 @@ fn write_back_native_function_ref_slot(
                 }
                 let value = values.raw_heap_word_value(word);
                 values.release_raw_heap_word(word)?;
-                values.release_raw_heap_word(*original)?;
                 let value = value?;
                 eval_write_direct_ref_target(
                     target,

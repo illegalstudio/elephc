@@ -26,6 +26,30 @@ fn test_emit_symbol_address_uses_platform_relocations() {
     );
 }
 
+/// Internal PIC labels stay direct on every target instead of requesting a GOT entry.
+#[test]
+fn test_emit_local_symbol_address_stays_direct_in_pic_output() {
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new_pic(target);
+        let register = if target.arch == Arch::AArch64 { "x9" } else { "r10" };
+        emit_local_symbol_address(&mut emitter, register, "__rt_local_callback");
+        let output = emitter.output();
+        assert!(!output.contains("GOT"), "{name}: {output}");
+        assert!(output.contains("__rt_local_callback"), "{name}: {output}");
+        match target.arch {
+            Arch::AArch64 => assert!(output.contains("adrp") && output.contains("add"), "{name}: {output}"),
+            Arch::X86_64 => assert!(output.contains("lea"), "{name}: {output}"),
+        }
+    }
+}
+
 /// Checks that `emit_store_result_to_symbol` stores both registers of a string (ptr in x1,
 /// len in x2) at the symbol address, and that `emit_load_symbol_to_result` reverses the
 /// operation correctly. Verifies str/ldr pair for x1 and x2.

@@ -8,7 +8,7 @@
 //! - All five supported targets exercise both web modes and both mbstring capability states.
 //! - Native execution tests separately cover response ownership and buffered output behavior.
 
-use crate::codegen_support::{emit::Emitter, platform::{Arch, Target}};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform, Target}};
 use std::process::Command;
 
 /// Assembles each response path while proving disabled capabilities do not name their bridge symbols.
@@ -25,7 +25,10 @@ fn mbstring_response_assembles_on_all_supported_targets() {
     ] {
         for web in [false, true] {
             for mbstring in [false, true] {
-                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                let target = Target::parse(name).unwrap();
+                let localize = target.platform == Platform::MacOS;
+                let mut emitter = Emitter::new_pic(target);
+                emitter.dead_strip = localize;
                 if emitter.target.arch == Arch::X86_64 { emitter.raw(".intel_syntax noprefix"); }
                 emitter.raw(".text");
                 super::super::http_response::emit_header(&mut emitter, web, mbstring);
@@ -38,7 +41,16 @@ fn mbstring_response_assembles_on_all_supported_targets() {
                 super::super::ob_buffer::emit_ob_start(&mut emitter);
                 super::super::ob_buffer::emit_ob_pop_free(&mut emitter);
                 super::super::ob_buffer::emit_ob_get_pop_ops(&mut emitter);
+                let internal_labels = emitter.take_internal_labels();
                 let assembly = emitter.output();
+                let assembly = if localize {
+                    crate::codegen_support::emit::localize_internal_labels(
+                        &assembly,
+                        &internal_labels,
+                    )
+                } else {
+                    assembly
+                };
                 assert_eq!(assembly.contains("elephc_mbstring_response_header_v1"), mbstring);
                 assert_eq!(assembly.contains("elephc_mbstring_response_commit_v1"), mbstring);
                 assert_eq!(assembly.contains("elephc_web_header"), web);

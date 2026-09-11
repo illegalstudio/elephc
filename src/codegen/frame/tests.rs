@@ -156,6 +156,43 @@ fn explicit_eval_argv_global_is_released_once() {
     assert_eval_argv_cleanup(Target::new(Platform::Linux, Arch::AArch64), &asm);
 }
 
+/// Verifies widening the local eval `$argv` to Mixed transfers its fresh Array owner.
+#[test]
+fn mixed_eval_argv_transfers_fresh_array_owner_on_all_targets() {
+    for target in [
+        Target::new(Platform::Linux, Arch::X86_64),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+    ] {
+        let asm = eval_argv_ownership_asm(target, PhpType::Mixed);
+        let local_init = asm
+            .split_once("build $argv array from OS argv")
+            .map(|(_, local_init)| local_init)
+            .expect("Mixed eval argv fixture should initialize the local array");
+        let local_init = local_init
+            .split_once("epilogue + exit(0)")
+            .map_or(local_init, |(local_init, _)| local_init);
+        let box_call = match target.arch {
+            Arch::AArch64 => "bl __rt_mixed_from_value",
+            Arch::X86_64 => "call __rt_mixed_from_value",
+        };
+        let release_call = match target.arch {
+            Arch::AArch64 => "bl __rt_decref_array",
+            Arch::X86_64 => "call __rt_decref_array",
+        };
+        let box_at = local_init
+            .find(box_call)
+            .unwrap_or_else(|| panic!("{target:?}: missing Mixed argv box:\n{local_init}"));
+        let release_at = local_init
+            .find(release_call)
+            .unwrap_or_else(|| panic!("{target:?}: missing transferred Array release:\n{local_init}"));
+
+        assert!(box_at < release_at, "{target:?}: {local_init}");
+    }
+}
+
 /// Verifies the global cleanup releases an Array owner and clears its symbol slot.
 fn assert_eval_argv_cleanup(target: Target, asm: &str) {
     let cleanup = asm
@@ -184,6 +221,21 @@ fn eval_argv_cleanup_asm(
     visible_process_args: bool,
     explicit_argv_global: bool,
 ) -> String {
+    let local_ty = visible_process_args.then(|| PhpType::Array(Box::new(PhpType::Str)));
+    eval_argv_cleanup_asm_with_local_type(target, local_ty, explicit_argv_global)
+}
+
+/// Builds an eval-capable main function with a specific local `$argv` storage type.
+fn eval_argv_ownership_asm(target: Target, argv_ty: PhpType) -> String {
+    eval_argv_cleanup_asm_with_local_type(target, Some(argv_ty), false)
+}
+
+/// Builds the shared eval `$argv` assembly fixture.
+fn eval_argv_cleanup_asm_with_local_type(
+    target: Target,
+    argv_ty: Option<PhpType>,
+    explicit_argv_global: bool,
+) -> String {
     let mut module = Module::new(target);
     module.required_runtime_features.eval_bridge = true;
     if explicit_argv_global {
@@ -198,7 +250,7 @@ fn eval_argv_cleanup_asm(
         PhpType::Int,
         LocalKind::EvalScope,
     );
-    if visible_process_args {
+    if let Some(argv_ty) = argv_ty {
         main.add_local(
             Some("argc".to_string()),
             IrType::I64,
@@ -207,8 +259,12 @@ fn eval_argv_cleanup_asm(
         );
         main.add_local(
             Some("argv".to_string()),
-            IrType::Heap(crate::ir::IrHeapKind::Array),
-            PhpType::Array(Box::new(PhpType::Str)),
+            if argv_ty.codegen_repr() == PhpType::Mixed {
+                IrType::Heap(crate::ir::IrHeapKind::Mixed)
+            } else {
+                IrType::Heap(crate::ir::IrHeapKind::Array)
+            },
+            argv_ty,
             LocalKind::PhpLocal,
         );
     }

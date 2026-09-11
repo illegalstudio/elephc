@@ -8,6 +8,7 @@
 //! - Candidate matching, constructor calls, and runtime fallback preserve scratch state.
 
 use super::*;
+use crate::codegen::lower_inst::callable_guards;
 
 /// Materializes the dynamic class name as a string result pair, branching for non-string Mixed.
 pub(super) fn emit_generic_dynamic_new_class_string(
@@ -470,13 +471,19 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
         abi::emit_load_temporary_stack_slot(ctx.emitter, object_base_reg, 0);
         emit_property_default(ctx, object_base_reg, default)?;
     }
+    let construction_guard_bytes = candidate
+        .constructor_impl
+        .as_ref()
+        .map(|_| callable_guards::begin_unconstructed_object(ctx.emitter))
+        .unwrap_or(0);
     if let Some(constructor) = &candidate.constructor_impl {
         if let Some(arg_container) = constructor_arg_container {
-            emit_dynamic_new_mixed_constructor_container_call(
+            emit_dynamic_new_mixed_constructor_container_call_at_offset(
                 ctx,
                 candidate,
                 constructor,
                 arg_container,
+                construction_guard_bytes,
             )?;
         } else {
             emit_dynamic_new_mixed_constructor_call(
@@ -485,8 +492,10 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
                 constructor,
                 constructor_args,
                 dummy_receiver_operand,
+                construction_guard_bytes,
             )?;
         }
+        callable_guards::end_unconstructed_object(ctx.emitter, construction_guard_bytes);
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -588,9 +597,10 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     constructor: &ConstructorCallTarget,
     constructor_args: &[ValueId],
     dummy_receiver_operand: ValueId,
+    object_stack_offset: usize,
 ) -> Result<()> {
     let object_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, object_stack_offset);
     let mut operands = Vec::with_capacity(constructor_args.len() + 1);
     operands.push(dummy_receiver_operand);
     operands.extend(constructor_args.iter().copied());
@@ -639,6 +649,23 @@ pub(super) fn emit_dynamic_new_mixed_constructor_container_call(
     constructor: &ConstructorCallTarget,
     arg_container: ValueId,
 ) -> Result<()> {
+    emit_dynamic_new_mixed_constructor_container_call_at_offset(
+        ctx,
+        candidate,
+        constructor,
+        arg_container,
+        0,
+    )
+}
+
+/// Invokes a dynamic constructor whose raw object may sit below an ownership guard.
+fn emit_dynamic_new_mixed_constructor_container_call_at_offset(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &DynamicNewCandidate,
+    constructor: &ConstructorCallTarget,
+    arg_container: ValueId,
+    object_stack_offset: usize,
+) -> Result<()> {
     let receiver_ty = PhpType::Object(candidate.class_name.clone());
     let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
     let constructor_key = php_symbol_key("__construct");
@@ -669,7 +696,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_container_call(
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     let descriptor_reg = abi::nested_call_reg(ctx.emitter).to_string();
     let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
-    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, object_stack_offset);
     abi::emit_incref_if_refcounted(ctx.emitter, &receiver_ty);
     abi::emit_push_reg(ctx.emitter, &result_reg);
     abi::emit_load_int_immediate(ctx.emitter, &result_reg, total_bytes as i64);
@@ -693,6 +720,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_container_call(
         &descriptor_reg,
         arg_container,
         "dynamic_constructor",
+        true,
         true,
     )?;
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");

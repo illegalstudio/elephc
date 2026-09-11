@@ -188,13 +188,12 @@ pub(super) fn lower_closure_bind_method(
             let call_args = &args[args.len().min(1)..];
             let arg_container =
                 lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span)?;
-            Some(ctx.emit_value(
-                Op::CallableDescriptorInvoke,
-                vec![bound.value, arg_container.value],
-                callable_profile_immediate(),
+            Some(emit_callable_descriptor_invoke(
+                ctx,
+                bound,
+                arg_container,
                 PhpType::Mixed,
-                Op::CallableDescriptorInvoke.default_effects(),
-                Some(expr.span),
+                expr.span,
             ))
         }
         _ => None,

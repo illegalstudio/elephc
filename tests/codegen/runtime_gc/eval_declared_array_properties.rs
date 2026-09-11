@@ -153,6 +153,50 @@ echo ":", implode(",", (new NativeArrayPromotedImplode(["a", "b"]))->items);
     );
 }
 
+/// `array_values()` normalizes both runtime layouts without consuming property storage.
+#[test]
+fn test_core_array_values_accepts_boxed_declared_array_properties() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class NativeArrayValuesProperties {
+    public function __construct(
+        public array $ints,
+        public array $flags,
+        public array $words,
+        public array $sparse,
+    ) {
+    }
+}
+
+$owner = new NativeArrayValuesProperties(
+    [7, 8],
+    [true, false, true],
+    ["a", "b"],
+    [2 => "two", "name" => "Ada", 1000000 => "far"],
+);
+$ints = array_values($owner->ints);
+$flags = array_values($owner->flags);
+$words = array_values($owner->words);
+$sparse = array_values($owner->sparse);
+$owner->ints[0] = 99;
+$owner->sparse[2] = "changed";
+$flagText = "";
+foreach ($flags as $flag) {
+    $flagText .= $flag ? "T" : "F";
+}
+echo implode(",", $ints), "|", $flagText, "|", implode(",", $words), "|";
+echo implode(",", $sparse), "|", $ints[0], "|", implode(",", array_values($owner->sparse));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7,8|TFT|a,b|two,Ada,far|7|changed,Ada,far");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected normalized array_values results to release cleanly, got: {}",
+        out.stderr
+    );
+}
+
 /// Eval reports typed-property errors for non-array replacements and keeps both old values live.
 #[test]
 fn test_core_eval_declared_array_properties_reject_non_array_replacements() {

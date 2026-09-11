@@ -108,9 +108,10 @@ fn expected(destructors: usize) -> String {
 }
 
 /// Calls actual protected root removal and rethrows its pending exception after restoring the test frame.
-fn remove_shim() -> &'static str {
+fn remove_shim() -> String {
+    let done = format!("{}query_remove_done", target().platform.local_label_prefix());
     if target().arch == Arch::AArch64 {
-        r#"
+        return format!(r#"
     sub sp, sp, #48
     stp x29, x30, [sp, #32]
     mov x1, x0
@@ -129,11 +130,13 @@ fn remove_shim() -> &'static str {
     ldp x29, x30, [sp, #32]
     add sp, sp, #48
     cmp x0, #2
-    b.eq __rt_throw_current
+    b.ne {done}
+    b __rt_throw_current
+{done}:
     ret
-"#
-    } else {
-        r#"
+"#);
+    }
+    format!(r#"
     push rbp
     mov rbp, rsp
     sub rsp, 32
@@ -148,10 +151,11 @@ fn remove_shim() -> &'static str {
     call __rt_mbstring_query_hash_remove
     leave
     cmp eax, 2
-    je __rt_throw_current
+    jne {done}
+    jmp __rt_throw_current
+{done}:
     ret
-"#
-    }
+"#)
 }
 
 /// Reports the destructor-visible live count and rejects an absent or extra construction pin.

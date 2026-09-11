@@ -184,11 +184,7 @@ pub(super) fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value = expect_operand(inst, 0)?;
     let source_ty = ctx.load_value_to_result(value)?;
     let raw_source_ty = ctx.raw_value_php_type(value)?;
-    let box_ty = if matches!(raw_source_ty, PhpType::Resource(_)) {
-        raw_source_ty
-    } else {
-        source_ty
-    };
+    let box_ty = mixed_box_payload_type(source_ty, raw_source_ty);
     emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     store_if_result(ctx, inst)
 }
@@ -210,14 +206,27 @@ pub(super) fn lower_mixed_clone(ctx: &mut FunctionContext<'_>, inst: &Instructio
     } else {
         let source_ty = ctx.load_value_to_result(value)?;
         let raw_source_ty = ctx.raw_value_php_type(value)?;
-        let box_ty = if matches!(raw_source_ty, PhpType::Resource(_)) {
-            raw_source_ty
-        } else {
-            source_ty
-        };
+        let box_ty = mixed_box_payload_type(source_ty, raw_source_ty);
         emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
     store_if_result(ctx, inst)
+}
+
+/// Selects the runtime boxing strategy without losing erased array-layout metadata.
+fn mixed_box_payload_type(source_ty: PhpType, raw_source_ty: PhpType) -> PhpType {
+    if matches!(
+        &source_ty,
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    ) {
+        // `Array<Mixed>` is the raw ABI used for PHP arrays whose runtime storage may already
+        // be associative. Reuse the iterable boxer so the owned Mixed cell records tag 4 or 5
+        // from the payload's heap kind instead of stamping every value as indexed storage.
+        PhpType::Iterable
+    } else if matches!(raw_source_ty, PhpType::Resource(_)) {
+        raw_source_ty
+    } else {
+        source_ty
+    }
 }
 
 /// Lowers an invoker-only by-reference argument marker for descriptor calls.

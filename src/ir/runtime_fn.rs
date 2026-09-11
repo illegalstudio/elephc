@@ -830,12 +830,18 @@ impl RuntimeFnId {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 _ => declared.clone(),
             },
-            RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
-                Some(PhpType::Array(element)) => PhpType::Array(element),
-                Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
-                Some(other) => other,
-                None => declared.clone(),
-            },
+            RuntimeFnId::ArrayValues => {
+                if arg_types.first().is_some_and(PhpType::is_php_array) {
+                    PhpType::Array(Box::new(PhpType::Mixed))
+                } else {
+                    match arg_types.first().map(PhpType::codegen_repr) {
+                        Some(PhpType::Array(element)) => PhpType::Array(element),
+                        Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
+                        Some(other) => other,
+                        None => declared.clone(),
+                    }
+                }
+            }
             // Reversing keeps the container shape, so a synthetic or callable-dispatched
             // `array_reverse()` with no checked call-site type still returns concrete array
             // metadata. Without it the broad declared `mixed` reached the backend, which stored a
@@ -2989,6 +2995,19 @@ fn set_callable_param_type(
 mod tests {
     use super::RuntimeFnId;
     use crate::builtins::semantics::BuiltinResultOwnership;
+    use crate::types::PhpType;
+
+    /// The declared-array union is boxed, but `array_values()` always returns dense Mixed slots.
+    #[test]
+    fn array_values_fallback_normalizes_declared_array_union_result() {
+        assert_eq!(
+            RuntimeFnId::ArrayValues.fallback_result_type(
+                &[PhpType::php_array()],
+                &PhpType::Mixed,
+            ),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+    }
 
     /// Pins the contracts used by argument cleanup and synthetic callable wrappers.
     #[test]

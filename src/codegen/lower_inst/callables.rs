@@ -2424,6 +2424,7 @@ fn emit_descriptor_reg_invoker_call_with_mixed_arg(
         arg_mixed,
         op_name,
         release_runtime_descriptor,
+        true,
     )?;
     store_descriptor_invoker_result(ctx, inst)
 }
@@ -2435,9 +2436,11 @@ pub(super) fn emit_descriptor_reg_invoker_mixed_result_with_arg_container(
     arg_mixed: ValueId,
     op_name: &str,
     release_runtime_descriptor: bool,
+    argument_owned_by_eir: bool,
 ) -> Result<()> {
-    // Descriptor EIR owns and releases its input; normalization only owns a private copy.
-    if op_name != "callable_descriptor_invoke" && descriptor_arg_is_prebuilt_mixed_box(ctx, arg_mixed)? {
+    // An EIR owner guards and releases its source around the enclosing call, so the backend only
+    // owns its normalized copy. Legacy runtime-only consumers can still transfer a prebuilt box.
+    if !argument_owned_by_eir && descriptor_arg_is_prebuilt_mixed_box(ctx, arg_mixed)? {
         return emit_descriptor_reg_invoker_mixed_result_with_prebuilt_mixed_arg(
             ctx,
             descriptor_reg,

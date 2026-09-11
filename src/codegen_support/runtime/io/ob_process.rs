@@ -36,7 +36,7 @@ fn aarch64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "x9", "_ob_in_handler", 0);
     emitter.instruction("str x9, [sp, #56]");                                   // preserve the caller's output guard
     emitter.instruction("mov x0, sp");                                          // pass the operation record through the unary boundary
-    SCOPE.call(emitter, "__rt_ob_apply_request", true);
+    SCOPE.call_local(emitter, "__rt_ob_apply_request", true);
     emitter.instruction("ldr x10, [sp, #56]");                                  // recover the guard even when the callback escaped
     abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_in_handler", 0);
     emitter.instruction("ldr x10, [sp]");                                       // recover the processed slot
@@ -62,7 +62,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_ob_process_release");                     // clean operations discard the contents
     abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_level", 0);
     emitter.instruction("mov x0, sp");                                          // pass raw or replacement bytes through the protected parent write
-    SCOPE.call(emitter, "__rt_ob_write_request", true);
+    SCOPE.call_local(emitter, "__rt_ob_write_request", true);
     emitter.instruction("ldr x10, [sp]");                                       // recover the child slot after a possible parent exception
     emitter.instruction("add x10, x10, #1");                                    // restore depth before retiring child ownership
     abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_level", 0);
@@ -104,7 +104,7 @@ fn x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r9", "_ob_in_handler", 0);
     emitter.instruction("mov QWORD PTR [rsp + 56], r9");                        // retain the incoming output guard
     emitter.instruction("mov rdi, rsp");                                        // pass writable request storage through the protected callback
-    SCOPE.call(emitter, "__rt_ob_apply_request", true);
+    SCOPE.call_local(emitter, "__rt_ob_apply_request", true);
     emitter.instruction("mov r9, QWORD PTR [rsp + 56]");                        // recover the guard on successful and exceptional returns
     abi::emit_store_reg_to_symbol(emitter, "r9", "_ob_in_handler", 0);
     emitter.instruction("mov r10, QWORD PTR [rsp]");                            // recover the processed slot
@@ -131,7 +131,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_ob_process_release");                          // cleaning discards every surviving byte
     abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_level", 0);
     emitter.instruction("mov rdi, rsp");                                        // pass the chosen bytes to the protected parent sink
-    SCOPE.call(emitter, "__rt_ob_write_request", true);
+    SCOPE.call_local(emitter, "__rt_ob_write_request", true);
     emitter.instruction("mov r10, QWORD PTR [rsp]");                            // restore the child depth even if its parent handler threw
     emitter.instruction("add r10, 1");                                          // include the still-owned child slot
     abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_level", 0);

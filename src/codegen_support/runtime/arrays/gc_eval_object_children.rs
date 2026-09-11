@@ -109,7 +109,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // align the stack and preserve the native caller frame
     emitter.instruction("mov rbp, rsp");                                        // establish linkage across the Rust C callback
     emitter.instruction("call r10");                                            // detach and release the receiver behind a protected boundary
-    emitter.instruction("leave");                                               // restore the native caller frame before propagation
+    emitter.instruction("pop rbp");                                             // restore the native caller frame before propagation
     emitter.instruction("test rax, rax");                                       // inspect the protected cleanup status
     emitter.instruction("jnz __rt_throw_current");                              // propagate after every Rust frame has returned
     emitter.label("__rt_eval_object_release_children_done");

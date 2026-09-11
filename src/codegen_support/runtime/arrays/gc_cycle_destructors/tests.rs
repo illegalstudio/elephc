@@ -24,6 +24,7 @@ fn native_gc_cycle_destructor_graph_and_cleanup_state() {
     arrays::emit_gc_collect_cycles(&mut emitter);
     arrays::emit_gc_mark_reachable(&mut emitter);
     arrays::emit_gc_note_child_ref(&mut emitter);
+    arrays::emit_gc_eval_object_children(&mut emitter);
     if target.platform == Platform::Linux { emitter.raw(".section .note.GNU-stack,\"\",@progbits"); }
     std::fs::write(directory.join("collector.s"), emitter.output()).unwrap();
     std::fs::write(directory.join("fixture.c"), include_str!("native_graph.c")).unwrap();

@@ -140,6 +140,61 @@ echo $o->x;
     assert_eq!(out, "7");
 }
 
+/// Verifies a dynamic constructor accepts a sole spread from a declared `array` property in
+/// both runtime storage shapes. Associative keys are intentionally reversed relative to the
+/// constructor parameters so the descriptor planner must bind names instead of insertion order.
+#[test]
+fn test_dynamic_constructor_spreads_declared_array_property_by_runtime_shape() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class SpreadTarget {
+    public string $value;
+    public function __construct(string $first, string $second) {
+        $this->value = $first . ":" . $second;
+    }
+}
+class SpreadHolder { public array $args = []; }
+class ThrowSpreadTarget {
+    public function __construct(string $value) {
+        global $escaped;
+        $escaped = $this;
+        throw new RuntimeException($value);
+    }
+    public function __destruct() { echo "|unexpected-destructor"; }
+}
+function runtimeArgs(): array {
+    echo "|source";
+    return ["value" => "caught"];
+}
+
+$class = SpreadTarget::class;
+$holder = new SpreadHolder();
+$holder->args = ["left", "right"];
+$indexed = new $class(...$holder->args);
+$holder->args = ["second" => "B", "first" => "A"];
+$assoc = new $class(...$holder->args);
+echo $indexed->value . "|" . $assoc->value;
+$class = ThrowSpreadTarget::class;
+$escaped = null;
+try {
+    new $class(...runtimeArgs());
+} catch (Throwable $error) {
+    echo "|" . $error->getMessage();
+}
+echo $escaped instanceof ThrowSpreadTarget ? "|escaped" : "|missing-escape";
+$escaped = null;
+echo "|after";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "left:right|A:B|source|caught|escaped|after");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected spread argument containers to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies that dynamic instantiation uses SPL-specific runtime storage initialization.
 #[test]
 fn test_class_dynamic_instantiation_uses_spl_storage() {
