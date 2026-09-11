@@ -1,11 +1,11 @@
 ---
-title: "mysqli_fetch_object() — internals"
+title: "mysqli_fetch_object() - internals"
 description: "Compiler internals for mysqli_fetch_object(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 122
 ---
 
-## `mysqli_fetch_object()` — internals
+## `mysqli_fetch_object()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_fetch_object(mixed $result, string $class = 'stdClass', array $c
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

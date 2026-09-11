@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_execute() — internals"
+title: "mysqli_stmt_execute() - internals"
 description: "Compiler internals for mysqli_stmt_execute(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 165
 ---
 
-## `mysqli_stmt_execute()` — internals
+## `mysqli_stmt_execute()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_stmt_execute(mixed $statement, ?array $params = null): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

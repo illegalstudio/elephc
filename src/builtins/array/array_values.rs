@@ -9,6 +9,8 @@
 //!   `Array` whose element type is the input array's value type (the element type
 //!   for an indexed array, the value type for an associative array). A check hook
 //!   is required because the return type depends on the inferred argument type.
+//! - The exact packed-or-keyed union used by declared `array` properties produces
+//!   `Array<Mixed>` because the backend normalizes either runtime layout.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 
@@ -31,6 +33,9 @@ builtin! {
 /// inferred it once for side effects, and arity is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if ty.is_php_array() {
+        return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+    }
     match ty {
         PhpType::Array(elem_ty) => Ok(PhpType::Array(elem_ty)),
         PhpType::AssocArray { value, .. } => Ok(PhpType::Array(value)),

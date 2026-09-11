@@ -8,6 +8,7 @@
 //! Key details:
 //! - GC helpers must honor cycle-collection suppression, mark bits, and parent/child references without double-releasing values.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
@@ -150,9 +151,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_gc_mark_reachable_return");                  // finish once all slots have been scanned
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the hash pointer
     emitter.instruction("mov x11, #64");                                        // each hash entry occupies 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x11, x9, x11");                                    // compute the byte offset for this entry
-    emitter.instruction("add x11, x10, x11");                                   // advance from the table base to the entry
-    emitter.instruction("add x11, x11, #40");                                   // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x11", "x10", "x9");
     emitter.instruction("ldr x12, [x11]");                                      // load the occupied flag for this slot
     emitter.instruction("cmp x12, #1");                                         // is this hash slot occupied?
     emitter.instruction("b.ne __rt_gc_mark_reachable_hash_next");               // skip empty or tombstone slots
@@ -183,6 +182,10 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
 
     // -- object traversal: consult the emitted per-class property descriptor table --
     emitter.label("__rt_gc_mark_reachable_object");
+    emitter.instruction("mov x1, xzr");                                         // marking does not select one candidate node
+    emitter.instruction("mov x2, #1");                                          // select recursive reachability traversal
+    emitter.instruction("bl __rt_gc_eval_object_children");                     // visit retained receiver cells after marking their parent
+    emitter.instruction("ldr x0, [sp]");                                        // restore the owning object before property traversal
     emitter.instruction("ldr x10, [x0]");                                       // load the runtime class_id from the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_count");
     emitter.instruction("ldr x11, [x11]");                                      // load the number of emitted class descriptors
@@ -205,7 +208,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the current property index
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the property count
     emitter.instruction("cmp x9, x10");                                         // have we scanned every property?
-    emitter.instruction("b.ge __rt_gc_mark_reachable_return");                  // finish once every property slot has been visited
+    emitter.instruction("b.ge __rt_gc_mark_reachable_object_dynamic");          // mark the dynamic-property hash after declared slots
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the object pointer
     emitter.instruction("mov x11, #16");                                        // each property slot occupies 16 bytes
     emitter.instruction("mul x11, x9, x11");                                    // compute the byte offset for this property slot
@@ -235,6 +238,18 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // advance to the next property slot
     emitter.instruction("str x9, [sp, #24]");                                   // save the updated property index
     emitter.instruction("b __rt_gc_mark_reachable_object_loop");                // continue traversing object properties
+
+    emitter.label("__rt_gc_mark_reachable_object_dynamic");
+    emitter.instruction("ldr x0, [sp]");                                        // reload the rooted object before visiting its dynamic properties
+    emitter.instruction("ldr x10, [x0]");                                       // recover the class id already validated by object traversal
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // check whether the rooted object owns a property hash
+    emitter.instruction("cbz x11, __rt_gc_mark_reachable_return");              // finish objects that have only fixed property slots
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_payload_sizes");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // load the authoritative layout size for the final pointer slot
+    emitter.instruction("sub x11, x11, #8");                                    // address the dynamic-property tail within that layout
+    emitter.instruction("ldr x0, [x0, x11]");                                   // follow the object-owned hash without changing reference counts
+    emitter.instruction("bl __rt_gc_mark_reachable");                           // keep every dynamically stored child reachable from this root
 
     emitter.label("__rt_gc_mark_reachable_return");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
@@ -354,10 +369,8 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // have we scanned every hash entry slot?
     emitter.instruction("jae __rt_gc_mark_reachable_return");                   // yes — finish once the hash child scan is exhausted
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the current hash pointer before computing the entry address
-    emitter.instruction("mov r8, rcx");                                         // preserve the logical slot index while scaling it into an entry byte offset
-    emitter.instruction("imul r8, 64");                                         // scale the slot index by 64 bytes per hash entry
-    emitter.instruction("add r8, 40");                                          // skip the 40-byte hash header to reach the selected entry
-    emitter.instruction("add rdx, r8");                                         // compute the address of the selected hash entry
+    hash_layout::emit_entry_address(emitter, "r8", "rdx", "rcx");
+    emitter.instruction("mov rdx, r8");                                         // retain the entry address across tag inspection
     emitter.instruction("cmp QWORD PTR [rdx], 1");                              // is this hash entry occupied?
     emitter.instruction("jne __rt_gc_mark_reachable_hash_next");                // skip empty or tombstone slots that carry no outgoing graph edge
     emitter.instruction("mov r8, QWORD PTR [rdx + 40]");                        // load the runtime value_tag stored for this hash entry
@@ -387,6 +400,10 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
 
     // -- object traversal: consult the emitted per-class property descriptor table --
     emitter.label("__rt_gc_mark_reachable_object");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the already marked owning object through the C ABI
+    emitter.instruction("xor esi, esi");                                        // marking does not select one candidate node
+    emitter.instruction("mov edx, 1");                                          // select recursive reachability traversal
+    emitter.instruction("call __rt_gc_eval_object_children");                   // visit retained receiver cells before property traversal
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the current object pointer before computing its property count
     emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // load the runtime class_id stored at the start of the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_class_gc_desc_count");
@@ -409,7 +426,7 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_mark_reachable_object_loop");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the current property index after any recursive child traversal
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // have we visited every object property slot?
-    emitter.instruction("jae __rt_gc_mark_reachable_return");                   // yes — finish once the object property scan is exhausted
+    emitter.instruction("jae __rt_gc_mark_reachable_object_dynamic");           // visit the dynamic-property hash after fixed slots
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the current object pointer before computing the selected property slot address
     emitter.instruction("mov r8, rcx");                                         // preserve the logical property index while scaling it into a byte offset
     emitter.instruction("imul r8, 16");                                         // scale the property index by 16 bytes per object property slot
@@ -437,6 +454,17 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, 1");                                          // advance to the next object property slot in this heap node
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // persist the updated object property index for the next traversal iteration
     emitter.instruction("jmp __rt_gc_mark_reachable_object_loop");              // continue traversing object property child pointers
+
+    emitter.label("__rt_gc_mark_reachable_object_dynamic");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the rooted object after fixed-property traversal
+    emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // recover the class id already checked against the descriptor table
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_class_object_dynamic_prop_flags");
+    emitter.instruction("cmp QWORD PTR [r8 + rcx * 8], 0");                     // check whether this object owns a dynamic-property hash
+    emitter.instruction("je __rt_gc_mark_reachable_return");                    // objects without the optional tail have no further children
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_class_object_payload_sizes");
+    emitter.instruction("mov r9, QWORD PTR [r8 + rcx * 8]");                    // locate the final pointer using the declared object layout
+    emitter.instruction("mov rax, QWORD PTR [rdx + r9 - 8]");                   // load the rooted dynamic-property hash without retaining it
+    emitter.instruction("call __rt_gc_mark_reachable");                         // preserve the complete graph reachable through dynamic properties
 
     emitter.label("__rt_gc_mark_reachable_return");
     emitter.instruction("leave");                                               // tear down the recursive traversal frame before returning to the caller

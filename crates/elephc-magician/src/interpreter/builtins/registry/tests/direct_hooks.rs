@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Verifies source-sensitive behavior is declared by each builtin binding.
+#[test]
+fn source_argument_bindings_are_explicit_and_have_direct_hooks() {
+    let mut source_arguments = eval_declared_builtin_function_names()
+        .iter()
+        .copied()
+        .filter(|name| eval_declared_builtin_requires_source_arguments(name))
+        .collect::<Vec<_>>();
+    source_arguments.sort_unstable();
+    assert_eq!(
+        source_arguments,
+        ["buffer_free", "call_user_func", "call_user_func_array"]
+    );
+    for name in source_arguments {
+        assert!(
+            eval_declared_builtin_spec(name).is_some_and(|spec| spec.direct.is_some()),
+            "{name} must retain its direct hook"
+        );
+    }
+}
+
 /// Verifies non-runtime direct-call fallback is limited to source-sensitive pre-dispatch.
 #[test]
 fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_hooks() {
@@ -58,12 +79,18 @@ fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_h
         );
 }
 
-/// Verifies shared runtime bindings removed hooks except for deliberate arity adapters.
+/// Verifies implemented runtime bindings use shared dispatch and unsupported contracts stay absent.
 #[test]
 fn runtime_builtin_bindings_keep_only_intval_and_round_adapters() {
     for runtime_id in elephc_builtin_contract::RuntimeBuiltinId::ALL {
         let contract = elephc_builtin_contract::lookup_id(runtime_id.builtin_id())
             .expect("runtime builtin contract must exist");
+        if !matches!(elephc_builtin_contract::eval_support(contract),
+            elephc_builtin_contract::BackendSupport::Implemented(_)) {
+            assert!(eval_raw_declared_builtin_spec(contract.name).is_none(),
+                "{} must remain unavailable until its declared adapter is implemented", contract.name);
+            continue;
+        }
         let spec = eval_raw_declared_builtin_spec(contract.name)
             .expect("runtime builtin must have an eval binding");
         assert_eq!(spec.runtime_builtin, Some(runtime_id));

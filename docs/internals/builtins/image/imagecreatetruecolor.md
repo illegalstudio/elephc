@@ -1,11 +1,11 @@
 ---
-title: "imagecreatetruecolor() — internals"
+title: "imagecreatetruecolor() - internals"
 description: "Compiler internals for imagecreatetruecolor(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 493
 ---
 
-## `imagecreatetruecolor()` — internals
+## `imagecreatetruecolor()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecreatetruecolor(int $width, int $height): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

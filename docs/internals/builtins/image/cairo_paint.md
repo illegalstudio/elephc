@@ -1,11 +1,11 @@
 ---
-title: "cairo_paint() — internals"
+title: "cairo_paint() - internals"
 description: "Compiler internals for cairo_paint(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 421
 ---
 
-## `cairo_paint()` — internals
+## `cairo_paint()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_paint(mixed $context): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

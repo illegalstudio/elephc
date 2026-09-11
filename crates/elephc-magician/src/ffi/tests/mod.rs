@@ -106,6 +106,11 @@ fn native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &EvalAttributeArg
             record.push(3);
             native_member_attribute_push_string(record, value);
         }
+        EvalAttributeArg::Bytes(value) => {
+            record.push(3);
+            record.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            record.extend_from_slice(value);
+        }
         EvalAttributeArg::Named { name, value } => {
             record.push(4);
             native_member_attribute_push_string(record, name);

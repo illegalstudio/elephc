@@ -7,14 +7,30 @@
 //!   assignment, call, and cleanup boundaries.
 //!
 //! Key details:
-//! - Ownership is represented by explicit EIR opcodes even though the legacy
-//!   backend is still the production path.
+//! - Explicit EIR ownership operations preserve distinct value boxes across PHP assignments.
 
 #![allow(dead_code)]
 
 use crate::ir::{Op, Ownership};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::span::Span;
+
+/// Detaches a mutable Mixed value box for a by-value assignment and consumes an owned RHS.
+/// Array payloads retain COW sharing, while objects and resources preserve their PHP identity.
+pub(crate) fn copy_assignment_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> LoweredValue {
+    let php_type = ctx.builder.value_php_type(value.value);
+    if !matches!(php_type.codegen_repr(), crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)) {
+        return value;
+    }
+    let copied = ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, php_type,
+        Op::MixedClone.default_effects(), span);
+    if ctx.value_is_owning_temporary(value) { release_if_owned(ctx, value, span); }
+    copied
+}
 
 /// Emits an acquire operation when the value can carry runtime lifetime state.
 pub(crate) fn acquire_if_refcounted(

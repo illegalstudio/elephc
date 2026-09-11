@@ -2,9 +2,51 @@
 schema = 1
 
 [[package]]
+name = "oniguruma"
+version = "6.9.10"
+recipe = 3
+dependencies = []
+provides = ["oniguruma"]
+
+[package.source]
+url = "https://github.com/kkos/oniguruma/releases/download/v6.9.10/onig-6.9.10.tar.gz"
+sha256 = "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05"
+size = 979159
+
+[[package.target]]
+name = "macos-aarch64"
+archives = ["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "ios-arm64"
+archives = ["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "ios-sim-arm64"
+archives = ["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "linux-aarch64"
+archives = ["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "linux-x86_64"
+archives = ["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"]
+system_libraries = []
+frameworks = []
+
+[[package]]
 name = "pcre2"
 version = "10.47"
-recipe = 2
+recipe = 3
 dependencies = []
 provides = ["pcre2"]
 

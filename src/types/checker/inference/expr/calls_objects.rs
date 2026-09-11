@@ -171,6 +171,7 @@ impl Checker {
                 match ty {
                     PhpType::Array(elem_ty) => Ok(*elem_ty),
                     PhpType::AssocArray { value, .. } => Ok(*value),
+                    ty if ty.is_php_array() => Ok(PhpType::Mixed),
                     _ => Err(CompileError::new(
                         expr.span,
                         "Spread operator requires an array",

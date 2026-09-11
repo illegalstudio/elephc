@@ -47,6 +47,23 @@ pub enum PhpType {
 }
 
 impl PhpType {
+    /// Represents PHP's unrestricted array contract with a boxed packed-or-hash payload.
+    /// Unlike a concrete storage type, this declaration cannot narrow to one call site's layout.
+    pub(crate) fn php_array() -> Self {
+        Self::Union(vec![
+            Self::Array(Box::new(Self::Mixed)),
+            Self::AssocArray { key: Box::new(Self::Mixed), value: Box::new(Self::Mixed) },
+        ])
+    }
+
+    /// Identifies the exact non-null PHP array contract, not a union that also permits scalars.
+    pub(crate) fn is_php_array(&self) -> bool {
+        matches!(self, Self::Union(members) if members.len() == 2
+            && members.iter().any(|member| matches!(member, Self::Array(value) if **value == Self::Mixed))
+            && members.iter().any(|member| matches!(member, Self::AssocArray { key, value }
+                if **key == Self::Mixed && **value == Self::Mixed)))
+    }
+
     /// Returns a `PhpType::Resource(Some("stream"))` representing a stream resource.
     pub fn stream_resource() -> PhpType {
         PhpType::Resource(Some("stream".to_string()))
@@ -279,6 +296,9 @@ impl fmt::Display for PhpType {
     /// Formats the type as a human-readable string using PHP-style syntax (e.g., `int`, `array<int>`,
     /// `resource<stream>`, `ptr<MyClass>`). Used for error messages and debug output.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_php_array() {
+            return write!(f, "array");
+        }
         match self {
             PhpType::Int => write!(f, "int"),
             PhpType::Float => write!(f, "float"),

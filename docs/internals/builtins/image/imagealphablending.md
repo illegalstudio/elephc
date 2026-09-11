@@ -1,11 +1,11 @@
 ---
-title: "imagealphablending() — internals"
+title: "imagealphablending() - internals"
 description: "Compiler internals for imagealphablending(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 457
 ---
 
-## `imagealphablending()` — internals
+## `imagealphablending()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagealphablending(mixed $image, bool $enable): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

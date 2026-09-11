@@ -8,9 +8,12 @@
 //! Key details:
 //! - Deep free helpers recursively release owned child storage and must match the heap kind/tag layout exactly.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 use crate::codegen_support::platform::Arch;
 
+const CLEANUP: Scope = Scope { arm: 32, x86: 48 };
 
 /// Frees a hash table and all owned key/value payloads recursively.
 ///
@@ -26,11 +29,11 @@ use crate::codegen_support::platform::Arch;
 /// - `x0`-`x7`: clobbered; `x29`/`x30` restored; stack frame deallocated
 ///
 /// # ABI / invariants
-/// - Hash entries are 64 bytes: 40-byte header + 24-byte payload (occupied flag at +0,
+/// - Hash entries are 64 bytes in separately owned storage (occupied flag at +0,
 ///   key pointer at +8, key_hi at +16, value_tag at +40, value pointer at +24)
 /// - Integer keys are inline payloads (key_hi == -1) and carry no heap ownership
 /// - Heap-backed values (tags 1/4/5/6/7) are released through `__rt_decref_any`
-/// - `_gc_release_suppressed` is set to 1 before the scan and cleared before freeing the struct
+/// - `_gc_release_suppressed` is set to 1 before the scan and restored after freeing the struct
 pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_free_deep_linux_x86_64(emitter);
@@ -58,15 +61,13 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     //   [sp, #8]  = capacity
     //   [sp, #16] = scratch
     //   [sp, #24] = loop index
-    //   [sp, #32] = saved x29
-    //   [sp, #40] = saved x30
-    emitter.instruction("sub sp, sp, #48");                                     // allocate stack frame
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // set up frame pointer
+    //   [sp, #32] = pending flag; [sp, #40] = saved GC suppression
+    //   [sp, #48] = saved x29; [sp, #56] = saved x30
+    emitter.instruction("sub sp, sp, #64");                                     // allocate stack frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // set up frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save hash table pointer
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
-    emitter.instruction("mov x10, #1");                                         // ordinary deep-free walks suppress nested collector runs
-    emitter.instruction("str x10, [x9]");                                       // store release-suppressed = 1 for child cleanup
+    CLEANUP.begin(emitter);
     emitter.instruction("ldr x9, [x0, #8]");                                    // load table capacity
     emitter.instruction("str x9, [sp, #8]");                                    // save capacity for the loop
     emitter.instruction("str xzr, [sp, #24]");                                  // loop index = 0
@@ -80,9 +81,7 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer
     emitter.instruction("mov x12, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x13, x11, x12");                                   // compute byte offset for this slot
-    emitter.instruction("add x13, x9, x13");                                    // advance from table base to slot
-    emitter.instruction("add x13, x13, #40");                                   // skip hash header to entry storage
+    hash_layout::emit_entry_address(emitter, "x13", "x9", "x11");
     emitter.instruction("ldr x14, [x13]");                                      // load occupied flag
     emitter.instruction("cmp x14, #1");                                         // is this slot occupied?
     emitter.instruction("b.ne __rt_hash_free_deep_next");                       // skip empty or tombstone slots
@@ -106,9 +105,7 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.label("__rt_hash_free_deep_after_key");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer after helper call
     emitter.instruction("mov x12, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x13, x11, x12");                                   // recompute byte offset for this slot
-    emitter.instruction("add x13, x9, x13");                                    // advance from table base to slot
-    emitter.instruction("add x13, x13, #40");                                   // skip hash header to entry storage
+    hash_layout::emit_entry_address(emitter, "x13", "x9", "x11");
     emitter.instruction("ldr x14, [x13, #40]");                                 // reload this entry's runtime value_tag
     emitter.instruction("cmp x14, #1");                                         // is the entry value heap-backed at all?
     emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // strings release through the uniform dispatch helper
@@ -127,14 +124,14 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.label("__rt_hash_free_deep_value_any");
     emitter.instruction("ldr x0, [x13, #24]");                                  // load the heap-backed value pointer from the entry payload
     emitter.instruction("str x11, [sp, #24]");                                  // preserve loop index across helper call
-    emitter.instruction("bl __rt_decref_any");                                  // release the heap-backed value through the uniform dispatcher
+    CLEANUP.call(emitter, "__rt_decref_any", false);                            // release the heap-backed value through the uniform dispatcher
     emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after helper call
     emitter.instruction("b __rt_hash_free_deep_next");                          // continue after releasing the heap-backed hash value
 
     emitter.label("__rt_hash_free_deep_value_callable");
     emitter.instruction("ldr x0, [x13, #24]");                                  // load the callable descriptor pointer from the entry payload
     emitter.instruction("str x11, [sp, #24]");                                  // preserve loop index across descriptor release
-    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the callable descriptor owned by the hash entry
+    CLEANUP.call(emitter, "__rt_callable_descriptor_release", false);           // release the callable descriptor owned by the hash entry
     emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after descriptor release
 
     emitter.label("__rt_hash_free_deep_next");
@@ -144,13 +141,16 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
 
     // -- free the hash table struct itself --
     emitter.label("__rt_hash_free_deep_struct");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
-    emitter.instruction("str xzr, [x9]");                                       // clear release suppression before freeing the container storage
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash table pointer
+    emitter.instruction("ldr x0, [x0, #40]");                                   // load the sole-owned raw entry allocation
+    emitter.instruction("bl __rt_heap_free");                                   // release entry storage after all nested values
+    emitter.instruction("ldr x0, [sp, #0]");                                    // recover the stable hash header for final release
     emitter.instruction("bl __rt_heap_free");                                   // free the hash table storage
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
+    CLEANUP.finish(emitter);
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_hash_free_deep_done");
     emitter.instruction("ret");                                                 // return to caller
 }
@@ -168,8 +168,8 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
 /// - `rax`, `rcx`, `rdx`, `r8`-`r11`: clobbered; `rbp` restored; `rsp` adjusted
 ///
 /// # ABI / invariants
-/// - Entry size is 64 bytes: 40-byte header + 24-byte payload (same layout as ARM64)
-/// - `_gc_release_suppressed` is set to 1 before the scan and cleared before freeing the struct
+/// - Entries are 64 bytes in separately owned storage, matching AArch64.
+/// - `_gc_release_suppressed` is set to 1 before the scan and restored after freeing the struct
 /// - Recursive child cleanup routes through `__rt_decref_array`, `__rt_decref_hash`,
 ///   `__rt_decref_object`, `__rt_decref_mixed`, and `__rt_heap_free` as appropriate
 fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
@@ -185,10 +185,9 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_hash_free_deep_done");                        // only elephc-owned hash tables participate in x86_64 deep-free bookkeeping
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-free spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved hash pointer, capacity, and loop index
-    emitter.instruction("sub rsp, 32");                                         // reserve local storage for the hash pointer, capacity, loop index, and entry scratch state
+    emitter.instruction("sub rsp, 48");                                         // reserve local storage for the hash pointer, capacity, loop index, and entry scratch state
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the hash-table pointer across nested helper calls while freeing entries
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
-    emitter.instruction("mov QWORD PTR [r10], 1");                              // suppress nested collector runs while this hash deep-free walk releases entry payloads
+    CLEANUP.begin(emitter);
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the table capacity before entering the entry-scan loop
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the table capacity so the entry-scan loop can survive nested helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the entry-scan loop index to zero
@@ -198,10 +197,7 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 16]");                       // stop once every slot up to the stored capacity has been inspected
     emitter.instruction("jae __rt_hash_free_deep_struct");                      // exit the loop when the entry-scan index reaches the table capacity
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after any nested helper call
-    emitter.instruction("mov rcx, r10");                                        // copy the current entry-scan index before scaling it into a byte offset
-    emitter.instruction("shl rcx, 6");                                          // convert the entry index into a 64-byte entry offset
-    emitter.instruction("add rcx, r11");                                        // advance from the hash-table base pointer to the selected entry block
-    emitter.instruction("add rcx, 40");                                         // skip the fixed 40-byte hash header to land on the selected entry
+    hash_layout::emit_entry_address(emitter, "rcx", "r11", "r10");
     emitter.instruction("mov r8, QWORD PTR [rcx]");                             // load the occupied marker for the current hash-entry slot
     emitter.instruction("cmp r8, 1");                                           // only fully occupied hash-entry slots own key/value payloads that need cleanup
     emitter.instruction("jne __rt_hash_free_deep_next");                        // skip empty or tombstone slots during the deep-free scan
@@ -223,10 +219,7 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_free_deep_value");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current entry-scan index after the optional key-release helper call
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the optional key-release helper call
-    emitter.instruction("mov rcx, r10");                                        // copy the current entry-scan index before recomputing the entry address
-    emitter.instruction("shl rcx, 6");                                          // convert the entry index into a 64-byte entry offset again after helper calls
-    emitter.instruction("add rcx, r11");                                        // advance from the hash-table base pointer back to the selected entry block
-    emitter.instruction("add rcx, 40");                                         // skip the fixed 40-byte hash header to land on the selected entry again
+    hash_layout::emit_entry_address(emitter, "rcx", "r11", "r10");
     emitter.instruction("mov r8, QWORD PTR [rcx + 40]");                        // load the runtime value tag to decide whether the entry payload owns heap storage
     emitter.instruction("cmp r8, 1");                                           // detect string entry payloads that may now be shared across multiple hash owners
     emitter.instruction("je __rt_hash_free_deep_value_string");                 // release persisted string values through refcount-aware teardown rather than raw free
@@ -259,27 +252,27 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_free_deep_value_array");
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the nested indexed-array pointer stored in the current hash-entry payload
-    emitter.instruction("call __rt_decref_array");                              // release the nested indexed-array payload through the x86_64 array decref helper
+    CLEANUP.call(emitter, "__rt_decref_array", false);                          // release the nested indexed-array payload through the x86_64 array decref helper
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the current string payload
 
     emitter.label("__rt_hash_free_deep_value_hash");
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the nested associative-array pointer stored in the current hash-entry payload
-    emitter.instruction("call __rt_decref_hash");                               // release the nested associative-array payload through the x86_64 hash decref helper
+    CLEANUP.call(emitter, "__rt_decref_hash", false);                           // release the nested associative-array payload through the x86_64 hash decref helper
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the nested associative-array payload
 
     emitter.label("__rt_hash_free_deep_value_object");
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the nested object pointer stored in the current hash-entry payload
-    emitter.instruction("call __rt_decref_object");                             // release the nested object payload through the x86_64 object decref helper
+    CLEANUP.call(emitter, "__rt_decref_object", false);                         // release the nested object payload through the x86_64 object decref helper
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the nested object payload
 
     emitter.label("__rt_hash_free_deep_value_mixed");
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the boxed mixed pointer stored in the current hash-entry payload
-    emitter.instruction("call __rt_decref_mixed");                              // release the boxed mixed payload through the x86_64 mixed decref helper
+    CLEANUP.call(emitter, "__rt_decref_mixed", false);                          // release the boxed mixed payload through the x86_64 mixed decref helper
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the boxed mixed payload
 
     emitter.label("__rt_hash_free_deep_value_callable");
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the callable descriptor pointer stored in the current hash-entry payload
-    emitter.instruction("call __rt_callable_descriptor_release");               // release the callable descriptor owned by the hash entry
+    CLEANUP.call(emitter, "__rt_callable_descriptor_release", false);           // release the callable descriptor owned by the hash entry
 
     emitter.label("__rt_hash_free_deep_next");
     emitter.instruction("add QWORD PTR [rbp - 24], 1");                         // advance the entry-scan index to the next hash slot
@@ -287,11 +280,14 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_free_deep_struct");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after finishing the deep-free scan
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
-    emitter.instruction("mov QWORD PTR [r10], 0");                              // re-enable targeted collector runs now that the hash deep-free walk is complete
+    emitter.instruction("mov rax, QWORD PTR [rax + 40]");                       // load the sole-owned raw entry allocation
+    emitter.instruction("call __rt_heap_free");                                 // release entry storage after all nested values
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover the stable hash header for final release
     emitter.instruction("call __rt_heap_free");                                 // release the hash-table storage itself through the x86_64 heap wrapper
-    emitter.instruction("add rsp, 32");                                         // release the spill slots reserved for the hash-free scan state
+    CLEANUP.finish(emitter);
+    emitter.instruction("add rsp, 48");                                         // release the spill slots reserved for the hash-free scan state
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_hash_free_deep_done");
     emitter.instruction("ret");                                                 // return to the caller after releasing the hash table and its owned entries
 }

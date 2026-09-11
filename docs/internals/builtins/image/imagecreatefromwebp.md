@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefromwebp() — internals"
+title: "imagecreatefromwebp() - internals"
 description: "Compiler internals for imagecreatefromwebp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 492
 ---
 
-## `imagecreatefromwebp()` — internals
+## `imagecreatefromwebp()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecreatefromwebp(string $filename): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

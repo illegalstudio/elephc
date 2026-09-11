@@ -342,6 +342,8 @@ pub(crate) struct Checker {
     /// be authoritative rather than merely initial. Per-body, like every other field in
     /// [`SavedLocalBindingScope`].
     pub mixed_storage_locals: HashSet<String>,
+    /// Union storage contracts retained while guards narrow reads of a local in the current body.
+    pub guarded_union_types: HashMap<String, PhpType>,
     /// Every statement-form assignment to a mixed-storage local, as span -> the SET of local names
     /// boxed at that position, so EIR lowering can declare the slot boxed BEFORE the first store
     /// instead of inferring it from the first stored value. Cumulative across bodies, and keyed
@@ -406,6 +408,7 @@ pub(crate) struct SavedLocalBindingScope {
     statics: HashSet<String>,
     typed: HashSet<String>,
     mixed_storage: HashSet<String>,
+    guarded_unions: HashMap<String, PhpType>,
     contains_eval: bool,
 }
 
@@ -538,6 +541,7 @@ impl Checker {
             // nothing about a same-named local in the callee, and leaking the set inward would
             // box a callee local the pre-scan never marked.
             mixed_storage: std::mem::take(&mut self.mixed_storage_locals),
+            guarded_unions: std::mem::take(&mut self.guarded_union_types),
             contains_eval: self.body_contains_eval,
         };
         self.local_conditional_depth = 0;
@@ -560,6 +564,7 @@ impl Checker {
         self.static_local_names = saved.statics;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
+        self.guarded_union_types = saved.guarded_unions;
         self.body_contains_eval = saved.contains_eval;
     }
 
@@ -570,6 +575,7 @@ impl Checker {
     /// captures, or reflected class of the binding that is gone — that is how a stale
     /// `$f()` signature would survive an `unset($f)`.
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
+        self.guarded_union_types.remove(name);
         self.closure_return_types.remove(name);
         self.callable_sigs.remove(name);
         self.callable_captures.remove(name);

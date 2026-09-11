@@ -1,11 +1,11 @@
 ---
-title: "imagefilltoborder() — internals"
+title: "imagefilltoborder() - internals"
 description: "Compiler internals for imagefilltoborder(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 504
 ---
 
-## `imagefilltoborder()` — internals
+## `imagefilltoborder()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagefilltoborder(mixed $image, int $x, int $y, int $border_color, int 
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "mysqli_real_escape_string() — internals"
+title: "mysqli_real_escape_string() - internals"
 description: "Compiler internals for mysqli_real_escape_string(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 148
 ---
 
-## `mysqli_real_escape_string()` — internals
+## `mysqli_real_escape_string()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_real_escape_string(mixed $mysql, string $string): string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

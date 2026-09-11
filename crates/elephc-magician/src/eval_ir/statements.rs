@@ -262,6 +262,8 @@ pub enum EvalStmt {
     UnsetVar {
         name: String,
     },
+    /// Collects cycles after every operand of one source-level unset has been removed.
+    GcCollect,
     While {
         condition: EvalExpr,
         body: Vec<EvalStmt>,

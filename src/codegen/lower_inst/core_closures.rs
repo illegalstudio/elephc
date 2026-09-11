@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Tracked Mixed locals expose the child slot of a managed reference; capture-only cells retain their native layout.
 
 use super::*;
 
@@ -173,16 +174,16 @@ pub(super) fn promote_local_slot_for_ref_capture(
         abi::load_at_offset(ctx.emitter, state_reg, state_offset);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // create the fallback cell only on the first runtime promotion
                     &format!("cbz {}, {}", state_reg, promote)
-                );                                                              // create the fallback cell only on the first runtime promotion
+                );
                 ctx.emitter
                     .instruction(&format!("b {}", done));                         // reuse the existing cell on later loop iterations
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // test whether this slot already stores a fallback cell
                     &format!("test {}, {}", state_reg, state_reg)
-                );                                                              // test whether this slot already stores a fallback cell
+                );
                 ctx.emitter
                     .instruction(&format!("je {}", promote));                       // create the fallback cell only on the first runtime promotion
                 ctx.emitter
@@ -221,18 +222,34 @@ pub(super) fn promote_local_slot_for_ref_capture_unchecked(
     let local_ty = ctx.local_php_type(slot)?;
     let offset = ctx.local_offset(slot)?;
     abi::emit_load(ctx.emitter, &local_ty, offset);
-    retain_promoted_ref_cell_value(ctx, &local_ty);
-    abi::emit_push_result_value(ctx.emitter, &local_ty);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
     let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!(
-        "mov {}, {}",
-        cell_reg,
-        abi::int_result_reg(ctx.emitter)
-    ));                                                                         // keep the promoted closure capture cell while restoring its value
-    pop_result_value(ctx, &local_ty);
-    store_current_result_to_ref_cell(ctx, cell_reg, &local_ty);
+    if owner_slot.is_some() && local_ty.codegen_repr() == PhpType::Mixed {
+        // A tracked Mixed owner holds the interior child slot of the shared reference
+        // layout. Existing native loads and stores keep their raw-cell convention;
+        // retaining the enclosing wrapper pins identity without retaining its old value.
+        let arm = ctx.emitter.target.arch == Arch::AArch64;
+        ctx.emitter.instruction(if arm { "mov x1, x0" } else { "mov rdi, rax" }); // borrow the current boxed value for the reference's child owner
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 7);
+        abi::emit_load_int_immediate(ctx.emitter, if arm { "x2" } else { "rsi" }, 1);
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        if arm {
+            ctx.emitter.instruction(&format!("add {cell_reg}, x0, #8"));        // expose the managed reference's child slot through the native reference ABI
+        } else {
+            ctx.emitter.instruction(&format!("lea {cell_reg}, [rax + 8]"));     // expose the managed reference's child slot through the native reference ABI
+        }
+    } else {
+        retain_promoted_ref_cell_value(ctx, &local_ty);
+        abi::emit_push_result_value(ctx.emitter, &local_ty);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+        ctx.emitter.instruction(&format!(                                       // keep the promoted closure capture cell while restoring its value
+            "mov {}, {}",
+            cell_reg,
+            abi::int_result_reg(ctx.emitter)
+        ));
+        pop_result_value(ctx, &local_ty);
+        store_current_result_to_ref_cell(ctx, cell_reg, &local_ty);
+    }
     if release_replaced_value {
         release_replaced_promoted_local_value(ctx, &local_ty, offset, cell_reg);
     }
@@ -472,4 +489,3 @@ pub(super) fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     signature.declared_params.push(variadic_declared);
     signature.param_type_exprs.push(variadic_type_expr);
 }
-

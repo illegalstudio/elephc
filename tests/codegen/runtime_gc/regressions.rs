@@ -9,6 +9,33 @@
 
 use crate::support::*;
 
+/// Verifies every `hrtime` result owns exactly one complete boxed value in direct and
+/// first-class-callable form. The array path first creates a raw hash and then boxes it;
+/// the box retains the hash, so the runtime must release the raw construction reference.
+#[test]
+fn test_hrtime_direct_and_callable_results_release_all_owners() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$clock = hrtime(...);
+$valid = 0;
+for ($i = 0; $i < 10; $i++) {
+    $valid += count(hrtime()) === 2 ? 1 : 0;
+    $valid += count($clock()) === 2 ? 1 : 0;
+    $valid += hrtime(true) > 0 ? 1 : 0;
+    $valid += $clock(true) > 0 ? 1 : 0;
+}
+echo $valid;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "40");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected direct and callable hrtime results to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies fresh disk-space results do not retain owned temporary directory arguments.
 /// Each result is a newly boxed float-or-false cell and therefore cannot alias the `getcwd()`
 /// string passed to the builtin; the old may-alias classification leaked one path per call.
@@ -890,14 +917,14 @@ echo count($x->a);
 
 /// Regression test: overwriting a static array must release the payloads appended
 /// to the old array. The scalar is boxed into Mixed and retained by
-/// `__rt_array_push_refcounted`; only the replacement static array should remain
-/// live at exit. Asserts exactly one live block (the current static array).
+/// `__rt_array_push_refcounted`; only the replacement static array and its declared-array
+/// Mixed cell should remain live at exit. Asserts exactly two live blocks and 112 bytes.
 #[test]
 fn test_regression_static_property_array_push_scalar_releases_old_payload() {
     // Static storage itself is process-lifetime state, but an overwritten
     // static array must release the payloads appended to the old array. The
     // scalar is boxed into Mixed and then retained by `__rt_array_push_refcounted`;
-    // only the replacement static array should remain live at exit.
+    // only the replacement static array and its declared-array Mixed cell should remain live.
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class C { public static array $a; }
@@ -911,8 +938,8 @@ echo count(C::$a);
     assert_eq!(out.stdout, "0");
     assert!(
         out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
-        "expected only the current static array to remain live, got: {}",
+            .contains("HEAP DEBUG: leak summary: live_blocks=2 live_bytes=112"),
+        "expected only the current static array and its Mixed cell to remain live, got: {}",
         out.stderr
     );
 }
@@ -920,14 +947,14 @@ echo count(C::$a);
 /// Regression test: pushing an owned array literal into a Mixed-element static
 /// property array needs both the container-aware boxer and the post-push release.
 /// After the static property is overwritten the old array and appended literal
-/// should be gone; only the replacement static array remains live. Asserts exactly
-/// one live block.
+/// should be gone; only the replacement static array and its declared-array Mixed
+/// cell remain live. Asserts exactly two live blocks and 112 bytes.
 #[test]
 fn test_regression_static_property_array_push_array_value_releases_old_payload() {
     // Pushing an owned array literal into a Mixed-element static property array
     // needs both the container-aware boxer and the post-push release. After the
     // static property is overwritten, the old array and appended literal should
-    // be gone; only the replacement static array remains live by design.
+    // be gone; only the replacement static array and its Mixed cell remain live by design.
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class C { public static array $a; }
@@ -941,8 +968,8 @@ echo count(C::$a);
     assert_eq!(out.stdout, "0");
     assert!(
         out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
-        "expected only the current static array to remain live, got: {}",
+            .contains("HEAP DEBUG: leak summary: live_blocks=2 live_bytes=112"),
+        "expected only the current static array and its Mixed cell to remain live, got: {}",
         out.stderr
     );
 }

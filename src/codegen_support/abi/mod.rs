@@ -52,8 +52,9 @@ pub use registers::{
 pub use symbols::{
     emit_cmp_reg_to_symbol, emit_dec_symbol, emit_extern_symbol_address,
     emit_load_extern_symbol_to_reg, emit_load_symbol_to_reg, emit_load_symbol_to_result,
-    emit_store_imm_to_symbol, emit_store_reg_to_extern_symbol, emit_store_reg_to_symbol,
-    emit_store_result_to_symbol, emit_store_zero_to_symbol, emit_symbol_address,
+    emit_local_symbol_address, emit_store_imm_to_symbol, emit_store_reg_to_extern_symbol,
+    emit_store_reg_to_symbol, emit_store_result_to_symbol, emit_store_zero_to_symbol,
+    emit_symbol_address,
 };
 #[cfg(test)]
 pub use symbols::{emit_load_symbol_to_local_slot, emit_store_local_slot_to_symbol};

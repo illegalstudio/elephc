@@ -940,10 +940,10 @@ fn emit_alloc_reflection_owner_object_x86_64(
     let payload_size = 8 + layout.property_count * 16;
     emitter.instruction(&format!("mov rax, {}", payload_size));                 // request Reflection owner object payload storage
     abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // materialize the x86_64 object heap kind word
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    ));                                                                         // materialize the x86_64 object heap kind word
+    ));
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object heap header before the payload
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the Reflection owner class id
@@ -2516,7 +2516,7 @@ fn emit_set_owner_backing_value_property_x86_64(
     abi::emit_store_zero_to_address(emitter, "r10", high);
 }
 
-/// Stores a retained ARM64 attribute-array payload into the owner private slot.
+/// Stores a retained ARM64 boxed attribute array into the owner private slot.
 fn emit_set_owner_attrs_property_aarch64(
     emitter: &mut Emitter,
     layout: &ReflectionOwnerLayout,
@@ -2527,17 +2527,15 @@ fn emit_set_owner_attrs_property_aarch64(
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the attribute array tag and payload pointer
     emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array attribute metadata
-    emitter.instruction("str x1, [sp, #40]");                                   // save the unboxed attribute array across incref
-    emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
-    emitter.instruction("bl __rt_incref");                                      // retain the attribute array for Reflection owner storage
-    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained attribute array payload
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed attribute array for object ownership
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed array for Reflection owner storage
+    emitter.instruction("ldr x1, [sp, #24]");                                   // reload the retained boxed attribute array
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", layout.attrs_lo);
-    abi::emit_load_int_immediate(emitter, "x10", 4);
-    abi::emit_store_to_address(emitter, "x10", "x9", layout.attrs_hi);
+    abi::emit_store_zero_to_address(emitter, "x9", layout.attrs_hi);
 }
 
-/// Stores a retained x86_64 attribute-array payload into the owner private slot.
+/// Stores a retained x86_64 boxed attribute array into the owner private slot.
 fn emit_set_owner_attrs_property_x86_64(
     emitter: &mut Emitter,
     layout: &ReflectionOwnerLayout,
@@ -2549,14 +2547,12 @@ fn emit_set_owner_attrs_property_x86_64(
     emitter.instruction("call __rt_mixed_unbox");                               // expose the attribute array tag and payload pointer
     emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
     emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array attribute metadata
-    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the unboxed attribute array across incref
-    emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
-    emitter.instruction("call __rt_incref");                                    // retain the attribute array for Reflection owner storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained attribute array payload
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed attribute array for object ownership
+    emitter.instruction("call __rt_incref");                                    // retain the boxed array for Reflection owner storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the retained boxed attribute array
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", layout.attrs_lo);
-    abi::emit_load_int_immediate(emitter, "r11", 4);
-    abi::emit_store_to_address(emitter, "r11", "r10", layout.attrs_hi);
+    abi::emit_store_zero_to_address(emitter, "r10", layout.attrs_hi);
 }
 
 /// Emits a C-visible global label with target-specific symbol mangling.

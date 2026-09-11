@@ -1,11 +1,11 @@
 ---
-title: "cairo_matrix_init_translate() — internals"
+title: "cairo_matrix_init_translate() - internals"
 description: "Compiler internals for cairo_matrix_init_translate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 415
 ---
 
-## `cairo_matrix_init_translate()` — internals
+## `cairo_matrix_init_translate()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_matrix_init_translate(float $tx, float $ty): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

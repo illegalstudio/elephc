@@ -1,11 +1,11 @@
 ---
-title: "imagecolormatch() — internals"
+title: "imagecolormatch() - internals"
 description: "Compiler internals for imagecolormatch(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 472
 ---
 
-## `imagecolormatch()` — internals
+## `imagecolormatch()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolormatch(mixed $image1, mixed $image2): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

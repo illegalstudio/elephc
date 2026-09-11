@@ -1,16 +1,16 @@
 ---
-title: "getcwd() — internals"
+title: "getcwd() - internals"
 description: "Compiler internals for getcwd(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 274
 ---
 
-## `getcwd()` — internals
+## `getcwd()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/getcwd.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getcwd.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

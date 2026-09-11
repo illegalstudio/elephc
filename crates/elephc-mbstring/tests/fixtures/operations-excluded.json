@@ -1,0 +1,86 @@
+[
+    {
+        "function": "mb_substr",
+        "encoding": "SJIS-mac",
+        "arguments": [
+            {
+                "bytes": ""
+            },
+            1,
+            null
+        ],
+        "reason": "PHP 8.5.10 mb_get_substr_slow allocation underflow terminates the oracle process"
+    },
+    {
+        "function": "mb_substr",
+        "encoding": "SJIS-mac",
+        "arguments": [
+            {
+                "bytes": ""
+            },
+            5,
+            null
+        ],
+        "reason": "PHP 8.5.10 mb_get_substr_slow allocation underflow terminates the oracle process"
+    },
+    {
+        "function": "mb_substr",
+        "encoding": "SJIS-mac",
+        "arguments": [
+            {
+                "bytes": ""
+            },
+            100,
+            null
+        ],
+        "reason": "PHP 8.5.10 mb_get_substr_slow allocation underflow terminates the oracle process"
+    },
+    {
+        "function": "mb_substr",
+        "encoding": "SJIS-mac",
+        "arguments": [
+            {
+                "bytes": "683f6c6c6f83b093fa967b"
+            },
+            100,
+            null
+        ],
+        "reason": "PHP 8.5.10 mb_get_substr_slow allocation underflow terminates the oracle process"
+    },
+    {
+        "function": "mb_substr",
+        "encoding": "SJIS-mac",
+        "arguments": [
+            {
+                "bytes": "c3280080"
+            },
+            5,
+            null
+        ],
+        "reason": "PHP 8.5.10 mb_get_substr_slow allocation underflow terminates the oracle process"
+    },
+    {
+        "function": "mb_substr",
+        "encoding": "SJIS-mac",
+        "arguments": [
+            {
+                "bytes": "c3280080"
+            },
+            100,
+            null
+        ],
+        "reason": "PHP 8.5.10 mb_get_substr_slow allocation underflow terminates the oracle process"
+    },
+    {
+        "function": "mb_substr",
+        "encoding": "SJIS-mac",
+        "arguments": [
+            {
+                "bytes": "2081404142433f20"
+            },
+            100,
+            null
+        ],
+        "reason": "PHP 8.5.10 mb_get_substr_slow allocation underflow terminates the oracle process"
+    }
+]

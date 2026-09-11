@@ -1,11 +1,11 @@
 ---
-title: "mysqli_close() — internals"
+title: "mysqli_close() - internals"
 description: "Compiler internals for mysqli_close(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 102
 ---
 
-## `mysqli_close()` — internals
+## `mysqli_close()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_close(mixed $mysql): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_bind_param() — internals"
+title: "mysqli_stmt_bind_param() - internals"
 description: "Compiler internals for mysqli_stmt_bind_param(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 160
 ---
 
-## `mysqli_stmt_bind_param()` — internals
+## `mysqli_stmt_bind_param()` - internals
 
 ## Where it lives
 
@@ -39,7 +39,7 @@ function mysqli_stmt_bind_param(mixed $statement, string $types, ...$vars): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

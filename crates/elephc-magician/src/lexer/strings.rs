@@ -10,6 +10,7 @@
 //! Key details:
 //! - Escape handling covers PHP's simple, hexadecimal, and octal forms; `\$` still
 //!   yields a literal `$` and never interpolates.
+//! - Shared literal markers preserve escaped bytes and avoid collisions with private-use source text.
 //! - Every synthetic token carries the line of the opening quote, keeping `__LINE__`
 //!   stable across multi-line literals.
 //! - PHP simple syntax allows exactly one `[offset]` or `->prop` after `$name`; anything
@@ -20,6 +21,7 @@
 use super::scan::{is_ident_start, tokenize, Lexer};
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
+use elephc_builtin_contract::string_literal::{push_escaped_byte, push_literal_char};
 
 impl Lexer<'_> {
     /// Reads a double-quoted string literal starting at the opening quote.
@@ -89,7 +91,7 @@ impl Lexer<'_> {
                     push_interp_part(&mut tokens, &mut current, part, line);
                 }
                 _ => {
-                    current.push(ch);
+                    push_literal_char(ch, &mut current);
                     self.bump_char();
                 }
             }
@@ -188,7 +190,9 @@ impl Lexer<'_> {
                 if key.is_empty() {
                     return Err(EvalParseError::UnexpectedToken);
                 }
-                part.push(Token::new(TokenKind::String(key), line));
+                let mut literal = String::new();
+                for ch in key.chars() { push_literal_char(ch, &mut literal); }
+                part.push(Token::new(TokenKind::String(literal), line));
             }
         }
         part.push(Token::new(TokenKind::RBracket, line));
@@ -283,7 +287,7 @@ impl Lexer<'_> {
                 } else {
                     let byte = u8::from_str_radix(&digits, 16)
                         .expect("one or two checked hexadecimal digits must parse");
-                    out.push(char::from(byte));
+                    push_escaped_byte(byte, out);
                 }
             }
             first @ '0'..='7' => {
@@ -296,11 +300,11 @@ impl Lexer<'_> {
                 }
                 let byte = u16::from_str_radix(&digits, 8)
                     .expect("checked octal digits must parse") as u8;
-                out.push(char::from(byte));
+                push_escaped_byte(byte, out);
             }
             other => {
                 out.push('\\');
-                out.push(other);
+                push_literal_char(other, out);
             }
         }
     }

@@ -103,6 +103,8 @@ pub(in crate::interpreter) struct EvalBuiltinBinding {
     pub(in crate::interpreter) id: BuiltinId,
     /// Builtin family used by the file layout.
     pub(in crate::interpreter) area: EvalArea,
+    /// Whether direct syntax must preserve the original source expressions.
+    pub(in crate::interpreter) source_arguments: bool,
     /// Direct expression-level dispatch hook.
     pub(in crate::interpreter) direct: Option<EvalDirectHook>,
     /// Evaluated-argument dispatch hook.
@@ -127,6 +129,8 @@ pub(in crate::interpreter) struct EvalBuiltinSpec {
     pub(in crate::interpreter) by_ref_params: Box<[&'static str]>,
     /// Explicit required parameter count for non-trailing default shapes.
     pub(in crate::interpreter) required_param_count: Option<usize>,
+    /// Whether direct syntax must preserve the original source expressions.
+    pub(in crate::interpreter) source_arguments: bool,
     /// Direct expression-level dispatch hook.
     pub(in crate::interpreter) direct: Option<EvalDirectHook>,
     /// Evaluated-argument dispatch hook.
@@ -185,6 +189,7 @@ impl EvalBuiltinSpec {
             variadic: signature.variadic,
             by_ref_params,
             required_param_count: signature.required_param_count,
+            source_arguments: binding.source_arguments,
             direct: binding.direct,
             values: binding.values,
             home_file: binding.home_file,

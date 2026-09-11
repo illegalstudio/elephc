@@ -191,6 +191,9 @@ pub(super) fn eval_native_type_expr_member_specs(members: &[TypeExpr], separator
 
 /// Formats one checked PHP type for eval native metadata registration.
 pub(super) fn eval_native_php_type_spec(php_type: &PhpType, allow_return_atoms: bool) -> Option<String> {
+    if php_type.is_php_array() {
+        return Some("array".to_string());
+    }
     match php_type {
         PhpType::Int => Some("int".to_string()),
         PhpType::Float => Some("float".to_string()),

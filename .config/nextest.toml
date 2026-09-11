@@ -34,6 +34,9 @@ relative-to = "target"
 path = "debug/libelephc_bcmath.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_mbstring.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_iconv.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
@@ -69,6 +72,23 @@ relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_magician_curl.a"
 relative-to = "target"
+
+# Native fingerprints include the worker environment. Preserve the verified source
+# as well as built outputs so a relocated shard can materialize its exact key offline.
+[[profile.ci.archive.include]]
+path = "debug/elephc-oniguruma"
+relative-to = "target"
+depth = "infinite"
+on-missing = "error"
+
+# A cold shard may rebuild the small C package from its bundled source before linking.
+[[profile.default.overrides]]
+filter = 'test(mbstring_regex) or test(mb_ereg_) or test(mbstring_catalog_forced_runtime_callable)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(mbstring_regex) or test(mb_ereg_) or test(mbstring_catalog_forced_runtime_callable)'
+slow-timeout = { period = "60s", terminate-after = 3 }
 
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.

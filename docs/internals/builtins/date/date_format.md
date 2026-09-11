@@ -1,11 +1,11 @@
 ---
-title: "date_format() — internals"
+title: "date_format() - internals"
 description: "Compiler internals for date_format(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 198
 ---
 
-## `date_format()` — internals
+## `date_format()` - internals
 
 ## Where it lives
 

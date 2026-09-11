@@ -1,11 +1,11 @@
 ---
-title: "opcache_jit_blacklist() — internals"
+title: "opcache_jit_blacklist() - internals"
 description: "Compiler internals for opcache_jit_blacklist(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 618
 ---
 
-## `opcache_jit_blacklist()` — internals
+## `opcache_jit_blacklist()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function opcache_jit_blacklist(mixed $closure): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

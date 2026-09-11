@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_reset() — internals"
+title: "mysqli_stmt_reset() - internals"
 description: "Compiler internals for mysqli_stmt_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 174
 ---
 
-## `mysqli_stmt_reset()` — internals
+## `mysqli_stmt_reset()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_stmt_reset(mixed $statement): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

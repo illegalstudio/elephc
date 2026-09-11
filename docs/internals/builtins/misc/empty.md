@@ -1,11 +1,11 @@
 ---
-title: "empty() — internals"
+title: "empty() - internals"
 description: "Compiler internals for empty(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 605
 ---
 
-## `empty()` — internals
+## `empty()` - internals
 
 ## Where it lives
 

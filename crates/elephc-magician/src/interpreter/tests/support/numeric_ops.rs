@@ -309,24 +309,24 @@ impl FakeOps {
         let order = match (&left, &right) {
             (FakeKey::Int(left), FakeKey::Int(right)) => left.cmp(right),
             (FakeKey::String(left), FakeKey::String(right)) => {
-                match (left.parse::<f64>(), right.parse::<f64>()) {
-                    (Ok(left), Ok(right)) => left
+                match (std::str::from_utf8(left).ok().and_then(|value| value.parse::<f64>().ok()), std::str::from_utf8(right).ok().and_then(|value| value.parse::<f64>().ok())) {
+                    (Some(left), Some(right)) => left
                         .partial_cmp(&right)
                         .unwrap_or(std::cmp::Ordering::Equal),
                     _ => left.cmp(right),
                 }
             }
-            (FakeKey::Int(left), FakeKey::String(right)) => match right.parse::<f64>() {
-                Ok(right) => (*left as f64)
+            (FakeKey::Int(left), FakeKey::String(right)) => match std::str::from_utf8(right).ok().and_then(|value| value.parse::<f64>().ok()) {
+                Some(right) => (*left as f64)
                     .partial_cmp(&right)
                     .unwrap_or(std::cmp::Ordering::Equal),
-                Err(_) => left.to_string().cmp(right),
+                None => left.to_string().as_bytes().cmp(right),
             },
-            (FakeKey::String(left), FakeKey::Int(right)) => match left.parse::<f64>() {
-                Ok(left) => left
+            (FakeKey::String(left), FakeKey::Int(right)) => match std::str::from_utf8(left).ok().and_then(|value| value.parse::<f64>().ok()) {
+                Some(left) => left
                     .partial_cmp(&(*right as f64))
                     .unwrap_or(std::cmp::Ordering::Equal),
-                Err(_) => left.cmp(&right.to_string()),
+                None => left.as_slice().cmp(right.to_string().as_bytes()),
             },
         };
         Ok(match order {

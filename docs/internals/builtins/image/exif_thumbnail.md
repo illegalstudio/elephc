@@ -1,11 +1,11 @@
 ---
-title: "exif_thumbnail() — internals"
+title: "exif_thumbnail() - internals"
 description: "Compiler internals for exif_thumbnail(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 449
 ---
 
-## `exif_thumbnail()` — internals
+## `exif_thumbnail()` - internals
 
 ## Where it lives
 
@@ -39,7 +39,7 @@ function exif_thumbnail(string $filename, mixed $width = 0, mixed $height = 0, m
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

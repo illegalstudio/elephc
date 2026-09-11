@@ -115,7 +115,7 @@ eval($code);
     )
     .unwrap();
 
-    let compile = elephc_cli_command(&dir)
+    let compile = elephc_cli_command_with_managed_pcre2(&dir)
         .args(["--quiet", "main.php"])
         .output()
         .expect("failed to invoke elephc CLI");
@@ -4401,7 +4401,7 @@ echo STRLEN("abcd");
 echo ":";
 echo \strlen("xy");
 echo ":";
-echo ChOp("value\f");
+echo ChOp("value\v");
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);

@@ -1,11 +1,11 @@
 ---
-title: "mysqli_set_opt() — internals"
+title: "mysqli_set_opt() - internals"
 description: "Compiler internals for mysqli_set_opt(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 156
 ---
 
-## `mysqli_set_opt()` — internals
+## `mysqli_set_opt()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_set_opt(mixed $mysql, int $option, mixed $value): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

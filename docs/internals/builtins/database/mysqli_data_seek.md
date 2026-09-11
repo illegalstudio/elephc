@@ -1,11 +1,11 @@
 ---
-title: "mysqli_data_seek() — internals"
+title: "mysqli_data_seek() - internals"
 description: "Compiler internals for mysqli_data_seek(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 107
 ---
 
-## `mysqli_data_seek()` — internals
+## `mysqli_data_seek()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_data_seek(mixed $result, int $offset): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

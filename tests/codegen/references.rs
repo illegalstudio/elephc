@@ -411,3 +411,22 @@ fn test_ref_alias_array_element_nonzero_index() {
     );
     assert_eq!(out, "99");
 }
+
+/// Keeps a captured reference and its originally typed array on the same boxed storage representation.
+#[test]
+fn test_ref_alias_array_element_capture_retyping() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2];
+$copy = $a;
+$b =& $a[0];
+$set = function (mixed $value) use (&$b): void { $b = $value; };
+$set(9);
+echo $a[0], ":", $b, "\n";
+$set("updated");
+echo $a[0], ":", $b, "\n";
+$set(null);
+echo is_null($a[0]) ? "null" : "wrong", ":", is_null($b) ? "null" : "wrong", "\n";
+echo $copy[0], ":", $copy[1], "\n";
+"#);
+    assert_eq!(out, "9:9\nupdated:updated\nnull:null\n1:2\n");
+}

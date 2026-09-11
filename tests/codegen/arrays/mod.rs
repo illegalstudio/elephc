@@ -10,6 +10,7 @@
 mod allocation_guards;
 mod size_bounds;
 mod assoc;
+mod append_history;
 mod closure_literal_returns;
 mod by_ref_params;
 mod by_ref_places;

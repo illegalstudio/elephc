@@ -28,11 +28,12 @@ pub(in crate::interpreter) fn eval_array_map_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_map` array builtin.
 pub(in crate::interpreter) fn eval_array_map_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some((callback, arrays)) = evaluated_args.split_first() else { return Err(EvalStatus::RuntimeFatal); };
-    eval_array_map_result(*callback, arrays, context, values)
+    eval_array_map_result_from_scope(*callback, arrays, lexical_scope, context, values)
 }
 
 /// Evaluates PHP `array_map()` for one or more arrays and an optional callback.
@@ -51,16 +52,6 @@ pub(in crate::interpreter) fn eval_builtin_array_map(
         evaluated_arrays.push(eval_expr(array, context, scope, values)?);
     }
     eval_array_map_result_from_scope(callback, &evaluated_arrays, Some(scope), context, values)
-}
-
-/// Maps one eval array with PHP key preservation for the one-array form.
-pub(in crate::interpreter) fn eval_array_map_result(
-    callback: RuntimeCellHandle,
-    arrays: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_array_map_result_from_scope(callback, arrays, None, context, values)
 }
 
 /// Maps one or more eval arrays with optional lexical scope for callback names.

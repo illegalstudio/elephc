@@ -1,11 +1,11 @@
 ---
-title: "mysqli_field_tell() — internals"
+title: "mysqli_field_tell() - internals"
 description: "Compiler internals for mysqli_field_tell(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 126
 ---
 
-## `mysqli_field_tell()` — internals
+## `mysqli_field_tell()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_field_tell(mixed $result): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -38,6 +38,7 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         | EvalStmt::EnumDecl(_)
         | EvalStmt::FunctionDecl { .. }
         | EvalStmt::Global { .. }
+        | EvalStmt::GcCollect
         | EvalStmt::InterfaceDecl(_)
         | EvalStmt::ReferenceAssign { .. }
         | EvalStmt::TraitDecl(_)

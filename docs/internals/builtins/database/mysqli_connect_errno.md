@@ -1,11 +1,11 @@
 ---
-title: "mysqli_connect_errno() — internals"
+title: "mysqli_connect_errno() - internals"
 description: "Compiler internals for mysqli_connect_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 105
 ---
 
-## `mysqli_connect_errno()` — internals
+## `mysqli_connect_errno()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_connect_errno(): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

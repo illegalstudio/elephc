@@ -1,0 +1,18 @@
+[package]
+name = "elephc-mbstring"
+version = "0.1.0"
+edition = "2021"
+license = "MIT AND Unicode-3.0 AND PHP-3.01"
+description = "Shared PHP mbstring engine for elephc AOT and Magician"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+elephc-builtin-contract = { path = "../elephc-builtin-contract" }
+
+[dev-dependencies]
+flate2 = "1"
+sha2 = "0.10"
+serde_json = "1"

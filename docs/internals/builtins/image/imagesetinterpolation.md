@@ -1,11 +1,11 @@
 ---
-title: "imagesetinterpolation() — internals"
+title: "imagesetinterpolation() - internals"
 description: "Compiler internals for imagesetinterpolation(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 527
 ---
 
-## `imagesetinterpolation()` — internals
+## `imagesetinterpolation()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagesetinterpolation(mixed $image, int $method = IMG_BILINEAR_FIXED): 
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

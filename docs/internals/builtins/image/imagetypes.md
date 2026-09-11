@@ -1,11 +1,11 @@
 ---
-title: "imagetypes() — internals"
+title: "imagetypes() - internals"
 description: "Compiler internals for imagetypes(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 535
 ---
 
-## `imagetypes()` — internals
+## `imagetypes()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagetypes(): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

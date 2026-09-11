@@ -1,11 +1,11 @@
 ---
-title: "mysqli_sqlstate() — internals"
+title: "mysqli_sqlstate() - internals"
 description: "Compiler internals for mysqli_sqlstate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 157
 ---
 
-## `mysqli_sqlstate()` — internals
+## `mysqli_sqlstate()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_sqlstate(mixed $mysql): string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

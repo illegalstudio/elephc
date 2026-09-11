@@ -17,3 +17,9 @@ pub(crate) const TRY_HANDLER_DIAG_DEPTH_OFFSET: usize = 16;
 
 /// Offset within the try handler slot for the `jmp_buf` field.
 pub(crate) const TRY_HANDLER_JMP_BUF_OFFSET: usize = 24;
+
+/// Bytes in an owned-value cleanup activation, including its standard three-word prefix.
+pub(crate) const EXCEPTION_GUARD_SLOT_SIZE: usize = 32;
+
+/// Offset of the transferred heap owner after the cleanup activation prefix.
+pub(crate) const EXCEPTION_GUARD_OWNER_OFFSET: usize = 24;

@@ -280,6 +280,8 @@ pub enum EvalConst {
     Int(i64),
     Float(f64),
     String(String),
+    /// A literal containing bytes that cannot be stored in a Rust UTF-8 string.
+    Bytes(Vec<u8>),
 }
 
 /// PHP magic constants supported by runtime eval fragments.

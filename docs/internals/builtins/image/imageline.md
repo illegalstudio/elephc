@@ -1,11 +1,11 @@
 ---
-title: "imageline() — internals"
+title: "imageline() - internals"
 description: "Compiler internals for imageline(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 516
 ---
 
-## `imageline()` — internals
+## `imageline()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imageline(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color)
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

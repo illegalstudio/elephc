@@ -1,11 +1,11 @@
 ---
-title: "cairo_close_path() — internals"
+title: "cairo_close_path() - internals"
 description: "Compiler internals for cairo_close_path(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 400
 ---
 
-## `cairo_close_path()` — internals
+## `cairo_close_path()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_close_path(mixed $context): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

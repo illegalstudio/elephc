@@ -172,3 +172,42 @@ echo count($set);
         );
     }
 }
+
+/// Verifies an in-loop unset widens cleanup loads to the final boxed local representation.
+#[test]
+fn test_unset_loop_retype_cleanup_uses_final_mixed_slot_type_in_both_modes() {
+    let source = r#"<?php
+function identity(mixed $value): mixed { return $value; }
+$descriptor = identity(...);
+for ($i = 0; $i < 8; $i++) {
+    $string = "borrowed";
+    $result = $descriptor($string);
+    unset($result, $string);
+}
+echo "ok";
+"#;
+
+    for ir_opt in [false, true] {
+        let ir = emit_release_ir(source, ir_opt);
+        let cleanup = ir.lines().find(|line| {
+            line.contains("php=mixed own=owned = load_local") && line.contains("span: 5:5")
+        });
+        assert!(
+            cleanup.is_some(),
+            "assignment cleanup must load the final Mixed slot with ir_opt={ir_opt}:\n{ir}"
+        );
+        assert!(
+            !ir.lines().any(|line| {
+                line.contains("php=string own=owned = load_local") && line.contains("span: 5:5")
+            }),
+            "assignment cleanup must not retain the stale String type with ir_opt={ir_opt}:\n{ir}"
+        );
+
+        let (stdout, stderr) = run_release_fixture(source, ir_opt);
+        assert_eq!(stdout, "ok");
+        assert!(
+            stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected unset/retype loop to leave a clean heap with ir_opt={ir_opt}, got: {stderr}"
+        );
+    }
+}

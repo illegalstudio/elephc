@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_end_attribute() — internals"
+title: "xmlwriter_end_attribute() - internals"
 description: "Compiler internals for xmlwriter_end_attribute(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 933
+  order: 994
 ---
 
-## `xmlwriter_end_attribute()` — internals
+## `xmlwriter_end_attribute()` - internals
 
 ## Where it lives
 

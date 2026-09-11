@@ -1,11 +1,11 @@
 ---
-title: "cairo_rectangle() — internals"
+title: "cairo_rectangle() - internals"
 description: "Compiler internals for cairo_rectangle(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 428
 ---
 
-## `cairo_rectangle()` — internals
+## `cairo_rectangle()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_rectangle(mixed $context, float $x, float $y, float $width, float
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

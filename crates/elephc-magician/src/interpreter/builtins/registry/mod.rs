@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use elephc_builtin_contract::{
-    contracts, eval_support, BackendImplementation, BackendSupport, EvalExecution,
+    contracts, eval_support, BackendImplementation, BackendSupport, EvalExecution, RuntimeBuiltinId,
 };
 
 use super::super::*;
@@ -25,6 +25,7 @@ mod callable_validation;
 mod dispatch;
 mod dynamic_mutation;
 mod names;
+mod owned_arguments;
 mod signature;
 
 pub(in crate::interpreter) use binding::*;
@@ -33,6 +34,7 @@ pub(in crate::interpreter) use callable_validation::*;
 pub(in crate::interpreter) use dispatch::*;
 pub(in crate::interpreter) use dynamic_mutation::*;
 pub(in crate::interpreter) use names::*;
+pub(in crate::interpreter) use owned_arguments::*;
 pub(in crate::interpreter) use signature::*;
 
 /// Lazy registry of builtins migrated to declarative eval specs.
@@ -104,6 +106,11 @@ fn validate_shared_eval_coverage(by_name: &HashMap<String, usize>) {
 
 /// Validates static spec invariants before the registry is exposed.
 fn validate_declared_builtin_spec(spec: &EvalBuiltinSpec) {
+    assert!(
+        !spec.source_arguments || spec.direct.is_some(),
+        "eval builtin {} requires source arguments but has no direct hook",
+        spec.name
+    );
     let expected_param_names = spec.params.len() + usize::from(spec.variadic.is_some());
     assert_eq!(
         expected_param_names,
@@ -207,6 +214,7 @@ pub(in crate::interpreter) fn eval_declared_builtin_spec(
         spec,
         crate::strict_php_mode::strict_php_mode(),
         crate::regex_provider::regex_provider_available(),
+        crate::mbregex_provider::available(),
     )
     .then_some(spec)
 }
@@ -216,9 +224,11 @@ fn builtin_is_available(
     spec: &EvalBuiltinSpec,
     strict_php: bool,
     regex_available: bool,
+    mbregex_available: bool,
 ) -> bool {
     !(strict_php && spec.is_extension())
         && (!matches!(spec.area(), EvalArea::Regex) || regex_available)
+        && (!spec.runtime_builtin.is_some_and(RuntimeBuiltinId::is_mbregex) || mbregex_available)
         && (!matches!(spec.area(), EvalArea::Pcntl)
             || eval_pcntl_builtin_is_available(spec.name))
 }
@@ -240,6 +250,13 @@ pub(in crate::interpreter) fn eval_raw_declared_builtin_spec(
 /// Returns whether a PHP-visible builtin has migrated into the declarative registry.
 pub(in crate::interpreter) fn eval_declared_builtin_exists(name: &str) -> bool {
     eval_declared_builtin_spec(name).is_some()
+}
+
+/// Returns whether direct syntax must preserve this builtin's source expressions.
+pub(in crate::interpreter) fn eval_declared_builtin_requires_source_arguments(
+    name: &str,
+) -> bool {
+    eval_declared_builtin_spec(name).is_some_and(|spec| spec.source_arguments)
 }
 
 /// Returns stable canonical names for builtins in the declarative registry.
@@ -274,12 +291,15 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
         return Ok(None);
     };
     if let Some(runtime_builtin) = spec.runtime_builtin {
-        if runtime_builtin.supports_arity(args.len()) {
+        if runtime_builtin.supports_arity(args.len()) || RuntimeBuiltinId::MBSTRING.contains(&runtime_builtin) {
+            if runtime_builtin.is_mbstring() {
+                return call_shared_mbstring_direct(runtime_builtin, args, context, scope, values);
+            }
             let mut evaluated_args = Vec::with_capacity(args.len());
             for arg in args {
                 evaluated_args.push(eval_expr(arg, context, scope, values)?);
             }
-            if let Some(result) = values.runtime_builtin_call(runtime_builtin, &evaluated_args)? {
+            if let Some(result) = call_shared_runtime_builtin(runtime_builtin, &evaluated_args, context, values)? {
                 return Ok(Some(result));
             }
         } else if spec.direct.is_none() {
@@ -292,10 +312,11 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
     hook.call(spec.name, args, context, scope, values).map(Some)
 }
 
-/// Dispatches a declaratively migrated builtin from already evaluated argument cells.
-pub(in crate::interpreter) fn eval_declared_builtin_values_call(
+/// Dispatches evaluated builtin cells with optional lexical scope for callback resolution.
+pub(in crate::interpreter) fn eval_declared_builtin_values_call_from_scope(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
@@ -303,8 +324,8 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call(
         return Ok(None);
     };
     if let Some(runtime_builtin) = spec.runtime_builtin {
-        if runtime_builtin.supports_arity(evaluated_args.len()) {
-            if let Some(result) = values.runtime_builtin_call(runtime_builtin, evaluated_args)? {
+        if runtime_builtin.supports_arity(evaluated_args.len()) || RuntimeBuiltinId::MBSTRING.contains(&runtime_builtin) {
+            if let Some(result) = call_shared_runtime_builtin(runtime_builtin, evaluated_args, context, values)? {
                 return Ok(Some(result));
             }
         } else if spec.values.is_none() {
@@ -314,9 +335,45 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call(
     let Some(hook) = spec.values else {
         return Ok(None);
     };
-    hook.call(spec.name, evaluated_args, context, values)
+    hook.call(spec.name, evaluated_args, lexical_scope, context, values)
         .map(Some)
 }
 
 #[cfg(test)]
 mod tests;
+
+/// Transfers pending native builtin exceptions into the context consumed by eval catch clauses.
+fn call_shared_runtime_builtin(
+    id: elephc_builtin_contract::RuntimeBuiltinId,
+    args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if id.is_mbstring() {
+        let contract = elephc_builtin_contract::lookup_id(id.builtin_id()).expect("shared mbstring contract");
+        for (parameter, value) in contract.params.iter().zip(args) {
+            if parameter.by_ref && !values.is_reference(*value)? {
+                return Err(EvalStatus::UnsupportedConstruct);
+            }
+        }
+    }
+    match values.runtime_builtin_call(id, args) {
+        Err(EvalStatus::UncaughtThrowable) => {
+            if let Some(thrown) = values.take_pending_runtime_throwable()? {
+                context.set_pending_throw(thrown);
+            }
+            Err(EvalStatus::UncaughtThrowable)
+        }
+        result => result,
+    }
+}
+
+/// Sends positional mbstring expressions through the same owner-aware builtin argument boundary.
+fn call_shared_mbstring_direct(
+    id: RuntimeBuiltinId, args: &[EvalExpr], context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let arguments = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+    let contract = elephc_builtin_contract::lookup_id(id.builtin_id()).expect("shared mbstring contract");
+    eval_builtin_call(contract.name, &arguments, context, scope, values).map(Some)
+}

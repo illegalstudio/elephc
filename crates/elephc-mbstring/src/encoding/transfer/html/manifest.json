@@ -1,0 +1,8 @@
+{
+  "php_version": "8.5.10",
+  "name_inventory": "Python standard library html.entities.html5",
+  "decoder_names": 252,
+  "encoder_names": 248,
+  "generated_sha256": "487c0b3d1e8756f546a7781f02a0754cb70acb77501780394a9794f382a33dd1",
+  "encoder_hash": "b804b72e5b20d32d9eb6275eb67a8e3c05c8cc85cd0906ad1c5bf372657a300c"
+}

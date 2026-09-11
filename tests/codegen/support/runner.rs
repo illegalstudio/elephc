@@ -98,6 +98,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["bcmath"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_mbstring",
+        package: "elephc-mbstring",
+        php_extensions: &["mbstring"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_iconv",
         package: "elephc-iconv",
         php_extensions: &["iconv"],
@@ -585,9 +590,8 @@ fn magician_curl_aware_plan(
     elephc::link_plan::LinkPlan::from_items(items)
 }
 
-/// Reports whether a bridge staticlib is missing or older than its package
-/// sources. This keeps codegen tests from linking stale bridge archives after a
-/// bridge crate changes inside the same worktree. Archived CI runs can declare
+/// Reports whether a bridge staticlib is missing or older than its local build inputs.
+/// Shares dependency-aware freshness with the CLI. Archived CI runs can declare
 /// existing build-job artifacts authoritative through `ELEPHC_TEST_PREBUILT_BRIDGES`.
 fn bridge_staticlib_needs_build(archive_path: &Path, package: &str) -> bool {
     let archive_mtime = match archive_path.metadata().and_then(|meta| meta.modified()) {
@@ -597,17 +601,11 @@ fn bridge_staticlib_needs_build(archive_path: &Path, package: &str) -> bool {
     if prebuilt_bridge_staticlibs_are_trusted() {
         return false;
     }
-    let package_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("crates")
-        .join(package);
-
-    source_path_newer_than(&package_dir.join("Cargo.toml"), archive_mtime)
-        || source_path_newer_than(&package_dir.join("build.rs"), archive_mtime)
-        || source_tree_newer_than(&package_dir.join("src"), archive_mtime)
+    elephc::bridge_sources::local_inputs_newer_than(Path::new(env!("CARGO_MANIFEST_DIR")), package, archive_mtime)
 }
 
 /// Returns whether this test process should trust existing bridge archives without mtime checks.
-fn prebuilt_bridge_staticlibs_are_trusted() -> bool {
+pub(crate) fn prebuilt_bridge_staticlibs_are_trusted() -> bool {
     std::env::var("ELEPHC_TEST_PREBUILT_BRIDGES").is_ok_and(|value| {
         value == "1" || value.eq_ignore_ascii_case("true")
     })
@@ -968,44 +966,6 @@ mod bridge_staticlib_dir_tests {
     }
 }
 
-/// Reports whether an existing source path was modified after `archive_mtime`.
-/// Missing optional files such as `build.rs` do not force a rebuild.
-fn source_path_newer_than(path: &Path, archive_mtime: std::time::SystemTime) -> bool {
-    match path.metadata().and_then(|meta| meta.modified()) {
-        Ok(source_mtime) => source_mtime > archive_mtime,
-        Err(_) => false,
-    }
-}
-
-/// Recursively scans a bridge package source directory for files newer than the
-/// compiled staticlib. Directory-read failures are treated as stale so tests do
-/// not silently link an archive whose source state could not be inspected.
-fn source_tree_newer_than(dir: &Path, archive_mtime: std::time::SystemTime) -> bool {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return true,
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => return true,
-        };
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(_) => return true,
-        };
-        if file_type.is_dir() {
-            if source_tree_newer_than(&path, archive_mtime) {
-                return true;
-            }
-        } else if file_type.is_file() && source_path_newer_than(&path, archive_mtime) {
-            return true;
-        }
-    }
-    false
-}
-
 /// Links a user object file and a runtime object into a final native binary.
 /// On macOS uses `ld` with SDK/platform_version flags; on Linux uses `gcc` with
 /// static linking when no extra libs are needed. Linux links each selected PDO
@@ -1207,6 +1167,11 @@ fn test_link_plan(
                     if named.insert(library.to_string()) {
                         plan.push(LinkItem::named_runtime(library));
                     }
+                }
+            }
+            elephc::codegen::LinkRequirement::NativePackage("oniguruma") => {
+                for archive in test_oniguruma_archives() {
+                    plan.push(LinkItem::managed_archive(archive, "oniguruma"));
                 }
             }
             elephc::codegen::LinkRequirement::NativePackage("libxml2") => {

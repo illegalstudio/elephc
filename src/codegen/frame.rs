@@ -10,8 +10,9 @@
 //! - Main currently exits through the process syscall used by normal executable output.
 //! - Each frame stores the inherited concat-buffer offset so statement resets do not clobber
 //!   `_concat_buf` slices that were passed in by the caller.
-//! - Cdylib user frames publish cleanup activations so boundary-caught exceptions release
-//!   owned locals before control returns to the native host.
+//! - Executable and library PHP frames publish exceptional local cleanup activations.
+//! - Exceptional cleanup contains each owner release so later owners are consumed after a throw.
+//! - Normal process exit releases implicit eval `$argv` storage through the global cleanup path.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,10 +20,11 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
-    emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
+    emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::data_section::DataWord;
-use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
+use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
@@ -33,7 +35,12 @@ use super::local_analysis::LocalSlotAnalysis;
 use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
 
+mod destructor_cleanup;
+pub(super) use destructor_cleanup::is_destructor;
+
 const FRAME_FOOTER_BYTES: usize = 16;
+// Keep reader and line fields addressable even when this activation is hidden from backtraces.
+const EXCEPTION_ACTIVATION_BYTES: usize = 40;
 
 /// Symbol name for the C-callable `--web` top-level handler.
 ///
@@ -50,6 +57,7 @@ pub(super) struct FrameLayout {
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
+    pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
     pub(super) frame_size: usize,
@@ -112,6 +120,14 @@ pub(super) fn layout_for_function(
         offset += TRY_HANDLER_SLOT_SIZE;
         try_handler_offsets.insert(token, offset);
     }
+    let mut exception_guard_offsets = HashMap::new();
+    for inst in &function.instructions {
+        if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionGuardOwned))) {
+            let token = inst.result.expect("owned-value guard produces its stack token");
+            offset += EXCEPTION_GUARD_SLOT_SIZE;
+            exception_guard_offsets.insert(token, offset);
+        }
+    }
     let mut callee_saved_offsets = Vec::new();
     for reg in allocation.used_callee_saved() {
         offset += 8;
@@ -131,7 +147,7 @@ pub(super) fn layout_for_function(
     offset += 8;
     let concat_base_offset = offset;
     let exception_activation_offset = if exception_activations {
-        offset += 24;
+        offset += EXCEPTION_ACTIVATION_BYTES;
         Some(offset)
     } else {
         None
@@ -142,6 +158,7 @@ pub(super) fn layout_for_function(
         local_offsets,
         ref_cell_state_offsets,
         try_handler_offsets,
+        exception_guard_offsets,
         concat_base_offset,
         exception_activation_offset,
         frame_size,
@@ -349,13 +366,13 @@ pub(super) fn emit_function_prologue_with_label(
     Ok(())
 }
 
-/// Publishes one cleanup activation for a cdylib-callable PHP frame.
+/// Publishes one cleanup activation for an executable or library PHP frame.
 fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &str) {
     let Some(offset) = ctx.exception_activation_offset else {
         return;
     };
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
-    ctx.emitter.comment("publish cdylib exception cleanup activation");
+    ctx.emitter.comment("publish PHP exception cleanup activation");
     let scratch = match ctx.emitter.target.arch {
         Arch::AArch64 => "x10",
         Arch::X86_64 => "r10",
@@ -369,6 +386,9 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
         Arch::X86_64 => "rbp",
     };
     abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    abi::store_at_offset(ctx.emitter, scratch, offset - 24);
+    abi::store_at_offset(ctx.emitter, scratch, offset - 32);
     abi::emit_frame_slot_address(ctx.emitter, scratch, offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
 }
@@ -386,7 +406,7 @@ fn emit_exception_activation_pop(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
 }
 
-/// Emits the cleanup callback referenced by a cdylib PHP activation record.
+/// Emits the protected owner cleanup callback referenced by a PHP activation record.
 pub(super) fn emit_exception_cleanup_callback(
     ctx: &mut FunctionContext<'_>,
     entry_label: &str,
@@ -394,39 +414,9 @@ pub(super) fn emit_exception_cleanup_callback(
     if ctx.exception_activation_offset.is_none() {
         return;
     }
-    let callback = format!("{entry_label}__cdylib_exception_cleanup");
     ctx.emitter.blank();
-    ctx.emitter.comment("cdylib exceptional frame cleanup callback");
-    ctx.emitter.label_global(&callback);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve an aligned callback frame
-            ctx.emitter.instruction("stp x29, x30, [sp, #16]");                 // preserve the callback frame chain and return address
-            ctx.emitter.instruction("str x19, [sp, #8]");                       // preserve the scratch stack-base register
-            ctx.emitter.instruction("mov x19, sp");                             // remember the callback stack before cleanup switches frames
-            ctx.emitter.instruction("mov x29, x0");                             // select the abandoned PHP frame passed by the unwinder
-            emit_function_local_epilogue_cleanup(ctx, None);
-            ctx.emitter.instruction("mov sp, x19");                             // restore the callback stack after frame-relative cleanup
-            ctx.emitter.instruction("ldr x19, [sp, #8]");                       // restore the caller's scratch stack-base register
-            ctx.emitter.instruction("ldp x29, x30, [sp, #16]");                 // restore the callback frame chain and return address
-            ctx.emitter.instruction("add sp, sp, #32");                         // release the aligned callback frame
-            ctx.emitter.instruction("ret");                                     // return to the exception frame walker
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("push rbp");                                // preserve the callback caller's frame pointer
-            ctx.emitter.instruction("mov rbp, rsp");                            // establish the callback frame pointer
-            ctx.emitter.instruction("push r12");                                // preserve the stack-base register used across cleanup calls
-            ctx.emitter.instruction("sub rsp, 8");                              // keep the callback stack aligned for nested cleanup calls
-            ctx.emitter.instruction("mov r12, rbp");                            // remember the callback frame before selecting the PHP frame
-            ctx.emitter.instruction("mov rbp, rdi");                            // select the abandoned PHP frame passed by the unwinder
-            emit_function_local_epilogue_cleanup(ctx, None);
-            ctx.emitter.instruction("mov rbp, r12");                            // restore the callback frame after PHP-local cleanup
-            ctx.emitter.instruction("lea rsp, [rbp - 8]");                      // discard cleanup-call stack temporaries and padding
-            ctx.emitter.instruction("pop r12");                                 // restore the caller's preserved stack-base register
-            ctx.emitter.instruction("pop rbp");                                 // restore the caller's frame pointer
-            ctx.emitter.instruction("ret");                                     // return to the exception frame walker
-        }
-    }
+    ctx.emitter.comment("exceptional PHP frame cleanup callback");
+    destructor_cleanup::emit_callback(ctx, entry_label);
 }
 
 /// Retains a mutable by-value parameter so its frame slot has one callee-owned reference.
@@ -469,6 +459,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_release_catalog");
+    }
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and
@@ -526,12 +519,19 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
-    let globals = ctx.module.data.global_names.clone();
+    let mut globals = ctx.module.data.global_names.clone();
+    if ctx.module.required_runtime_features.eval_bridge
+        && !globals.iter().any(|name| name == "argv")
+    {
+        globals.push("argv".to_string());
+    }
     for name in globals {
         if ctx.module.extern_globals.contains_key(&name) {
             continue;
         }
-        let ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
+        let ty = if name == "argv" {
+            argv_array_type()
+        } else if ctx.module.web && crate::superglobals::is_superglobal(&name) {
             crate::superglobals::superglobal_type().codegen_repr()
         } else {
             PhpType::Mixed
@@ -821,22 +821,23 @@ fn emit_ref_cell_owner_epilogue_cleanup_for(
     }
 }
 
-/// Releases the owner slot's ref-cell pointer when it is non-null, then clears the owner.
+/// Detaches a non-null ref-cell owner before releasing its potentially throwing payload.
 fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
     let done = ctx.next_label("ref_cell_owner_cleanup_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", offset, "x11");
             ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip released or never-created fallback ref-cells
-            abi::emit_release_local_ref_cell(ctx.emitter, "x9", ty);
+            abi::emit_reg_move(ctx.emitter, "x0", "x9");
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            abi::emit_release_local_ref_cell(ctx.emitter, "x0", ty);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", offset, "r10");
             ctx.emitter.instruction("test r11, r11");                           // check whether this owner still holds a fallback ref-cell
             ctx.emitter.instruction(&format!("je {}", done));                   // skip released or never-created fallback ref-cells
-            abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
         }
     }
     ctx.emitter.label(&done);
@@ -898,6 +899,7 @@ fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let done = ctx.next_label("eval_scope_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     if arg_reg != result_reg {
         ctx.emitter
@@ -905,7 +907,6 @@ fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     }
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_free");
     abi::emit_call_label(ctx.emitter, &symbol);
-    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     ctx.emitter.label(&done);
 }
 
@@ -915,13 +916,13 @@ fn emit_eval_context_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let done = ctx.next_label("eval_context_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     if arg_reg != result_reg {
         ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));   // pass the persistent eval context handle to the free helper
     }
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_free");
     abi::emit_call_label(ctx.emitter, &symbol);
-    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     ctx.emitter.label(&done);
 }
 
@@ -983,6 +984,8 @@ pub(super) fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: us
     let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, ptr_reg, offset);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset - 8);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -1015,6 +1018,7 @@ pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset
             ctx.emitter.instruction(&format!("je {}", done));                   // skip uninitialized refcounted locals
         }
     }
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     abi::emit_decref_if_refcounted(ctx.emitter, ty);
     ctx.emitter.label(&done);
 }
@@ -1042,6 +1046,10 @@ fn emit_function_local_epilogue_cleanup(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
 ) {
+    if ctx.exception_activation_offset.is_some() && is_destructor(ctx.function) {
+        destructor_cleanup::emit_call(ctx);
+        return;
+    }
     // Instrument exit runs FIRST — before the early return for cleanup-free
     // functions — so every return path records the exit. It preserves the
     // return value across its own call.
@@ -1130,6 +1138,21 @@ fn function_cleanup_locals(
     locals
 }
 
+/// Returns whether the frame epilogue owns the refcounted value in a local slot.
+pub(super) fn local_slot_has_epilogue_owner(
+    ctx: &FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> bool {
+    let cleanup_locals = if ctx.is_main {
+        main_cleanup_locals(ctx)
+    } else {
+        function_cleanup_locals(ctx, None)
+    };
+    cleanup_locals
+        .iter()
+        .any(|(_, cleanup_slot, _, _)| *cleanup_slot == slot)
+}
+
 /// Returns whether a local slot belongs to a function parameter.
 fn local_slot_is_parameter(function: &Function, slot: LocalSlotId) -> bool {
     function.params.get(slot.as_raw() as usize).is_some()
@@ -1186,11 +1209,24 @@ fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
 }
 
 /// Returns the local slot whose cleanup this return path must skip, if ownership is transferred.
-pub(super) fn return_cleanup_skip_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
-    let result_ty = function.value(value)?.php_type.codegen_repr();
-    let return_ty = function.return_php_type.codegen_repr();
+pub(super) fn return_cleanup_skip_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Option<LocalSlotId> {
+    let result_ty = ctx.function.value(value)?.php_type.codegen_repr();
+    let return_ty = ctx.function.return_php_type.codegen_repr();
     let mut visited = HashSet::new();
-    return_cleanup_skip_slot_inner(function, value, &result_ty, &return_ty, &mut visited)
+    let slot = return_cleanup_skip_slot_inner(
+        ctx.function,
+        value,
+        &result_ty,
+        &return_ty,
+        &mut visited,
+    )?;
+    function_cleanup_locals(ctx, None)
+        .iter()
+        .any(|(_, owned_slot, _, _)| *owned_slot == slot)
+        .then_some(slot)
 }
 
 /// Recursively traces forwarding return values back to the owned local they transfer.
@@ -1889,10 +1925,19 @@ fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_function_return_epilogue(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
+    return_ownership: super::return_ownership::ReturnOwnershipStatus,
 ) {
     emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
+    match return_ownership {
+        super::return_ownership::ReturnOwnershipStatus::Static(owned) => {
+            super::return_ownership::emit_status(ctx.emitter, owned);
+        }
+        super::return_ownership::ReturnOwnershipStatus::Dynamic(offset) => {
+            super::return_ownership::emit_load_status(ctx.emitter, offset);
+        }
+    }
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
 }
@@ -1910,6 +1955,7 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_function_local_epilogue_cleanup(ctx, None);
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
+    super::return_ownership::emit_status(ctx.emitter, true);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
     ctx.epilogue_emitted = true;
@@ -1960,7 +2006,7 @@ fn store_argv_local_if_present(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.comment("build $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
     if matches!(argv_ty, PhpType::Mixed | PhpType::Union(_)) {
-        emit_box_current_value_as_mixed(ctx.emitter, &array_ty);
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &array_ty);
     }
     abi::emit_store(ctx.emitter, &argv_ty, offset);
 }

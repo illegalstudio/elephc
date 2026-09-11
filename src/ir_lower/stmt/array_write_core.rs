@@ -265,4 +265,3 @@ pub(super) fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) 
         value: Box::new(assoc_value_ty),
     }
 }
-

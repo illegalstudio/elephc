@@ -43,5 +43,6 @@ libc = "0.2"
 unicode-segmentation = "1"
 
 [dev-dependencies]
+elephc-mbstring = { path = "../elephc-mbstring" }
 elephc-bcmath = { path = "../elephc-bcmath" }
 serde_json = "1"

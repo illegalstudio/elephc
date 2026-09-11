@@ -8,18 +8,19 @@
 //! Key details:
 //! - GC helpers must honor cycle-collection suppression, mark bits, and parent/child references without double-releasing values.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
+
+const CLEANUP: Scope = Scope { arm: 80, x86: 64 };
 
 /// Emits the `__rt_gc_collect_cycles` and `__rt_gc_collect_cycles_done` runtime helpers for Linux x86_64.
 ///
-/// This is a three-pass mark-sweep collector tailored to PHP array/hash/object storage on the managed heap:
-/// - **Pass 1 (clear):** clears the transient reachable bit on every live heap block while preserving kind, value_type, and heap marker bits.
-/// - **Pass 2 (root scan):** finds externally rooted nodes by recounting incoming heap edges for each candidate; nodes whose refcount exceeds incoming edges are marked reachable via `__rt_gc_mark_reachable`.
-/// - **Pass 3 (free):** frees every still-unreachable live refcounted node by dispatching to `__rt_array_free_deep`, `__rt_hash_free_deep`, `__rt_mixed_free_deep`, or `__rt_object_free_deep`.
-///
-/// Re-entry is guarded by the `_gc_collecting` flag — nested collection attempts are silently skipped.
-///
-/// Uses cdecl calling convention; all registers are caller-saved except the frame pointer.
+/// Clears transient marks, recounts incoming edges to find roots, runs destructors,
+/// then frees the original unreachable set through resumable cleanup calls.
+/// The candidate bit excludes newly allocated destructor values, including reused slots.
+/// Collection is deferred while another collector or container release is active.
+/// Pending destructor exceptions propagate only after the collector restores its state.
 pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: gc_collect_cycles ---");
@@ -30,7 +31,11 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current collector-active flag before starting a new x86_64 collection pass
     emitter.instruction("test r9, r9");                                         // is the collector already running?
     emitter.instruction("jnz __rt_gc_collect_cycles_done");                     // nested collection attempts are ignored to avoid recursive frees
-    emitter.instruction("mov QWORD PTR [r8], 1");                               // mark the collector active for the duration of this x86_64 cycle pass
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r9", "_gc_release_suppressed", 0);
+    emitter.instruction("test r9, r9");                                         // inspect whether an enclosing release is still processing children
+    emitter.instruction("jnz __rt_gc_collect_cycles_done");                     // defer collection until partially released containers are gone
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collecting");
+    emitter.instruction("mov QWORD PTR [r8], 1");                               // guard nested collection before invoking PHP destructors
 
     // -- set up a collector frame --
     // Stack layout:
@@ -40,9 +45,13 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 32] = current target user pointer
     //   [rbp - 40] = scratch / saved next header
     //   [rbp - 48] = incoming heap-edge count for the current target
+    //   [rbp - 64] = pending exception flag; [rbp - 56] = saved release suppression
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving x86_64 collector locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the x86_64 collector locals
-    emitter.instruction("sub rsp, 48");                                         // reserve collector locals for heap bounds, scan pointers, and incoming counts
+    emitter.instruction("sub rsp, 80");                                         // reserve collector locals for heap bounds, scan pointers, and incoming counts
+
+    CLEANUP.begin(emitter);
+    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // start with the original root scan before PHP destructors run
 
     // -- capture heap bounds once for the current collection pass --
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
@@ -65,6 +74,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the full kind word with any stale x86_64 reachable metadata
     emitter.instruction("mov rcx, 0xffffffff0000ffff");                         // preserve the high-word heap marker and low 16 bits while clearing the transient x86_64 mark range
     emitter.instruction("and r11, rcx");                                        // clear the x86_64 transient reachable metadata while preserving kind and value_type bits
+    emitter.instruction("or r11, 0x20000");                                     // record membership in the current collection before any destructor allocation
     emitter.instruction("mov QWORD PTR [r8 + 8], r11");                         // persist the cleared x86_64 kind word back into the heap header
     emitter.label("__rt_gc_collect_cycles_clear_next");
     emitter.instruction("add r8, r9");                                          // advance by the current block payload size
@@ -79,7 +89,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_root_loop");
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the current candidate heap header for the x86_64 root scan
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // have we scanned every block in the initial heap window?
-    emitter.instruction("jae __rt_gc_collect_cycles_free_init");                // yes — move on to freeing the still-unreachable graph nodes
+    emitter.instruction("jae __rt_gc_collect_cycles_destruct_init");            // begin destruction of the still-unreachable graph nodes
     emitter.instruction("mov r9d, DWORD PTR [r8]");                             // load this candidate block payload size before any nested rescans
     emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // load this candidate block refcount from the heap header
     emitter.instruction("test r10d, r10d");                                     // is this candidate block live?
@@ -164,10 +174,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_count_hash_loop");
     emitter.instruction("cmp r11, r10");                                        // have we inspected every hash entry slot?
     emitter.instruction("jae __rt_gc_collect_cycles_count_next");               // yes — move on to the next source block in the rescan
-    emitter.instruction("mov r8, r11");                                         // preserve the logical hash slot index while scaling it into an entry byte offset
-    emitter.instruction("imul r8, 64");                                         // scale the slot index by 64 bytes per hash entry
-    emitter.instruction("add r8, 40");                                          // skip the 40-byte hash header to reach the selected entry
-    emitter.instruction("lea r8, [r9 + r8]");                                   // compute the address of the selected hash entry inside the source hash table
+    hash_layout::emit_entry_address(emitter, "r8", "r9", "r11");
     emitter.instruction("cmp QWORD PTR [r8], 1");                               // is this hash entry occupied?
     emitter.instruction("jne __rt_gc_collect_cycles_count_hash_next");          // skip empty and tombstone entries that carry no outgoing edge
     emitter.instruction("mov rax, QWORD PTR [r8 + 40]");                        // load the runtime value_tag stored for this hash entry
@@ -195,6 +202,15 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gc_collect_cycles_count_next");               // boxed mixed-child comparison is complete for this source block
 
     emitter.label("__rt_gc_collect_cycles_count_object");
+    emitter.instruction("push rdi");                                            // preserve source payload size for heap iteration
+    emitter.instruction("push rsi");                                            // preserve the candidate and C-call stack alignment
+    emitter.instruction("lea rdi, [rdx + 16]");                                 // pass the owning raw object through the C ABI
+    emitter.instruction("xor edx, edx");                                        // select incoming-edge counting rather than marking
+    emitter.instruction("call __rt_gc_eval_object_children");                   // recount retained receiver edges to the current candidate
+    emitter.instruction("add QWORD PTR [rbp - 48], rax");                       // add callback-owned edges to the candidate total
+    emitter.instruction("pop rsi");                                             // restore the candidate used by the property scan
+    emitter.instruction("pop rdi");                                             // restore source payload size used by count_next
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // recover the current source header after callback clobbers
     emitter.instruction("lea r9, [rdx + 16]");                                  // compute the source object user pointer from its heap header
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the runtime class_id stored at the start of the source object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_count");
@@ -214,7 +230,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r10, r10");                                        // initialize the source object property index to zero for the incoming-edge scan
     emitter.label("__rt_gc_collect_cycles_count_object_loop");
     emitter.instruction("cmp r10, rax");                                        // have we inspected every property slot in this source object?
-    emitter.instruction("jae __rt_gc_collect_cycles_count_next");               // yes — move on to the next source block in the rescan
+    emitter.instruction("jae __rt_gc_collect_cycles_count_object_dynamic");     // include the dynamic-property hash after declared slots
     emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // load the compile-time property tag for the selected source object property
     emitter.instruction("mov r8, r10");                                         // preserve the logical property index while scaling it into a byte offset
     emitter.instruction("imul r8, 16");                                         // scale the property index by 16 bytes per object property slot
@@ -240,6 +256,17 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 1");                                          // advance to the next object property slot in the source object
     emitter.instruction("jmp __rt_gc_collect_cycles_count_object_loop");        // continue comparing source object property children against the candidate
 
+    emitter.label("__rt_gc_collect_cycles_count_object_dynamic");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // reload the validated class id of the source object
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("cmp QWORD PTR [r11 + r10 * 8], 0");                    // check whether the declared layout includes a dynamic-property hash
+    emitter.instruction("je __rt_gc_collect_cycles_count_next");                // objects without a tail contribute no additional heap edge
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes");
+    emitter.instruction("mov rcx, QWORD PTR [r11 + r10 * 8]");                  // locate the dynamic tail within the declared object payload
+    emitter.instruction("cmp QWORD PTR [r9 + rcx - 8], rsi");                   // compare the owned property hash with the current candidate
+    emitter.instruction("jne __rt_gc_collect_cycles_count_next");               // ignore a different or uninitialized property hash
+    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // count the object-to-hash edge in the current candidate total
+
     emitter.label("__rt_gc_collect_cycles_count_next");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the current source heap header after any nested child scans
     emitter.instruction("add rdx, rdi");                                        // advance by the preserved source block payload size to reach the next header candidate
@@ -250,6 +277,12 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_root_compare");
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the current candidate heap header after the nested incoming-edge rescan clobbered caller-saved registers
     emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // reload the candidate refcount after the nested full-heap incoming-edge recount
+    emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // inspect the candidate kind after incoming-edge traversal
+    emitter.instruction("and r11d, 0xff");                                      // separate object state from array or Mixed ownership
+    emitter.instruction("cmp r11d, 4");                                         // only object refcounts carry the destructor guard bit
+    emitter.instruction("jne __rt_gc_collect_cycles_root_count_ready");         // preserve ordinary containers' complete owner counts
+    emitter.instruction("and r10d, 0x7fffffff");                                // completed destruction alone cannot keep an unreachable graph alive
+    emitter.label("__rt_gc_collect_cycles_root_count_ready");
     emitter.instruction("cmp r10, QWORD PTR [rbp - 48]");                       // does this candidate still have an external reference beyond heap-internal edges?
     emitter.instruction("jbe __rt_gc_collect_cycles_root_next");                // no — refcount less than or equal to incoming edges means the node is only heap-rooted
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the candidate user pointer before marking it reachable from an external root
@@ -263,7 +296,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // persist the next candidate heap header for the outer root scan
     emitter.instruction("jmp __rt_gc_collect_cycles_root_loop");                // continue looking for externally rooted graph nodes
 
-    // -- pass 3: free every still-unreachable live refcounted node --
+    // -- passes 3 and 4: run destructors, then release captured unreachable nodes --
+    super::gc_cycle_destructors::emit(emitter, CLEANUP);
     emitter.label("__rt_gc_collect_cycles_free_init");
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the heap base before starting the unreachable-node free scan
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // restart the outer scan pointer at the heap base for the free pass
@@ -296,7 +330,9 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_free_candidate_ready");
     emitter.instruction("test r11, 0x10000");                                   // was this live block marked reachable from an external root during the root pass?
     emitter.instruction("jnz __rt_gc_collect_cycles_free_next");                // yes — reachable graph nodes remain live
-    emitter.instruction("mov DWORD PTR [r8 + 4], 0");                           // pre-clear the doomed node refcount so back-edges released during deep-free cannot recursively reclaim it again
+    emitter.instruction("test r11, 0x20000");                                   // distinguish preexisting nodes from newly allocated destructor values
+    emitter.instruction("jz __rt_gc_collect_cycles_free_next");                 // defer new or reused allocations until a future root scan
+    emitter.instruction("and DWORD PTR [r8 + 4], 0x80000000");                  // suppress cyclic reentry while preserving the completed destructor guard
     emitter.instruction("lea rax, [r8 + 16]");                                  // compute the current user pointer before dispatching to the deep-free helper
     emitter.instruction("cmp rcx, 2");                                          // is this unreachable node an indexed array?
     emitter.instruction("je __rt_gc_collect_cycles_free_array");                // yes — deep-free the unreachable array and its child payloads
@@ -304,16 +340,16 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_gc_collect_cycles_free_hash");                 // yes — deep-free the unreachable hash and its owned entries
     emitter.instruction("cmp rcx, 5");                                          // is this unreachable node a boxed mixed cell?
     emitter.instruction("je __rt_gc_collect_cycles_free_mixed");                // yes — deep-free the unreachable mixed box and its boxed child
-    emitter.instruction("call __rt_object_free_deep");                          // deep-free the remaining unreachable object node and its properties
+    CLEANUP.call(emitter, "__rt_object_free_deep", false);                          // deep-free the remaining unreachable object node and its properties
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the object node
     emitter.label("__rt_gc_collect_cycles_free_array");
-    emitter.instruction("call __rt_array_free_deep");                           // deep-free the unreachable array node and its nested payloads
+    CLEANUP.call(emitter, "__rt_array_free_deep", false);                           // deep-free the unreachable array node and its nested payloads
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the array node
     emitter.label("__rt_gc_collect_cycles_free_hash");
-    emitter.instruction("call __rt_hash_free_deep");                            // deep-free the unreachable hash node and its owned entries
+    CLEANUP.call(emitter, "__rt_hash_free_deep", false);                            // deep-free the unreachable hash node and its owned entries
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the hash node
     emitter.label("__rt_gc_collect_cycles_free_mixed");
-    emitter.instruction("call __rt_mixed_free_deep");                           // deep-free the unreachable mixed box and its boxed child
+    CLEANUP.call(emitter, "__rt_mixed_free_deep", false);                           // deep-free the unreachable mixed box and its boxed child
 
     emitter.label("__rt_gc_collect_cycles_free_next");
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // reload the next saved heap header after any deep free mutated allocator state
@@ -323,7 +359,11 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_finish");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collecting");
     emitter.instruction("mov QWORD PTR [r8], 0");                               // clear the collector-active flag now that the x86_64 cycle pass is complete
-    emitter.instruction("leave");                                               // tear down the x86_64 collector frame before returning to generated code
+    CLEANUP.finish(emitter);
+    emitter.instruction("leave");                                               // restore the native caller after releasing all unreachable graph nodes
+    emitter.instruction("test rax, rax");                                       // inspect whether any destructor escaped during collection
+    emitter.instruction("jz __rt_gc_collect_cycles_done");                      // return normally after successful cleanup
+    emitter.instruction("jmp __rt_throw_current");                              // propagate the pending exception after clearing collector state
 
     emitter.label("__rt_gc_collect_cycles_done");
     emitter.instruction("ret");                                                 // return immediately when collection is skipped or after a full x86_64 cycle pass

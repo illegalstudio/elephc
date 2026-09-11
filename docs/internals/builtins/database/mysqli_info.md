@@ -1,11 +1,11 @@
 ---
-title: "mysqli_info() — internals"
+title: "mysqli_info() - internals"
 description: "Compiler internals for mysqli_info(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 135
 ---
 
-## `mysqli_info()` — internals
+## `mysqli_info()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_info(mixed $mysql): ?string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

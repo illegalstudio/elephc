@@ -1,16 +1,16 @@
 ---
-title: "array_replace() — internals"
+title: "array_replace() - internals"
 description: "Compiler internals for array_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 33
 ---
 
-## `array_replace()` — internals
+## `array_replace()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_replace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,7 +48,7 @@ function array_replace(array $array, array $replacements): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

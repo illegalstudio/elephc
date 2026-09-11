@@ -48,13 +48,15 @@ pub(super) struct BoundMethodArg {
 pub(super) struct BoundNativeFunctionArgs {
     pub(super) values: Vec<RuntimeCellHandle>,
     pub(super) ref_slots: Vec<BoundNativeFunctionRefSlot>,
+    /// Defaults, scalar coercions, and marker cells retained through native writeback.
+    pub(super) owners: Vec<RuntimeCellHandle>,
 }
 
 /// One staged by-reference slot passed to a native function invoker.
 pub(super) enum BoundNativeFunctionRefSlot {
     Mixed {
         original: RuntimeCellHandle,
-        slot: Box<RuntimeCellHandle>,
+        slot: Box<*mut crate::value::RuntimeCell>,
         target: Option<EvalReferenceTarget>,
     },
     RawWord {

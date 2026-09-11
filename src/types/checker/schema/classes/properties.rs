@@ -777,7 +777,7 @@ where
 /// splits the single PHP `array` hint into integer-keyed `Array` (list) and `AssocArray` (hash)
 /// storage; both correspond to the same PHP-visible `array` type.
 fn is_php_array_family(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+    ty.is_php_array() || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
 /// Checks PHP property-type invariance between a parent and child redeclaration. Property types

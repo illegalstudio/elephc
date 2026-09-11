@@ -1,174 +1,128 @@
 //! Purpose:
-//! Emits the `__rt_hash_new`, `__rt_heap_alloc` runtime helper assembly for hash new.
-//! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
+//! Allocates stable associative-array headers and independently owned entry storage.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
+//! - Shared hash constructors and growth helpers on every supported target.
 //!
 //! Key details:
-//! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
-//! - `capacity * 64` is validated before the allocation request. `array_fill()` with a non-zero start
-//!   routes a caller-supplied count straight into this capacity, and an unchecked product wraps to a
-//!   tiny block whose entry-zeroing loop then runs off the heap.
+//! - The header owns a raw heap allocation at offset 40; entries are 64 bytes each.
+//! - Capacity is nonnegative and checked before multiplication or allocation.
 
-use crate::codegen_support::abi;
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
-use crate::codegen_support::runtime::data::ARRAY_ALLOC_SIZE_MSG;
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::runtime::{arrays::hash_layout, data::ARRAY_ALLOC_SIZE_MSG};
 
-
-/// hash_new: create a new hash table on the heap.
-/// Input:  x0=initial_capacity, x1=value_type_tag
-///         (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed, 8=null)
-/// Output: x0=pointer to hash table
-/// Layout: [count:8][capacity:8][value_type:8][head:8][tail:8][entries...]
-///         where each entry is 64 bytes:
-///         [occupied:8][key_ptr:8][key_len:8][value_lo:8][value_hi:8][value_tag:8][prev:8][next:8]
-///
-/// # Size validation
-/// Negative capacities are clamped to an empty entries region, and any `capacity * 64 + 40` that
-/// does not fit in a non-negative machine word terminates the process through
-/// `__rt_hash_cap_overflow`.
+/// Allocates an empty hash from capacity and value type, returning its stable header.
+/// AArch64 uses x0/x1 and returns x0; x86_64 uses rdi/rsi and returns rax.
 pub fn emit_hash_new(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_hash_new_linux_x86_64(emitter);
+        emit_x86_64(emitter);
         return;
     }
-
     emitter.blank();
     emitter.comment("--- runtime: hash_new ---");
     emitter.label_global("__rt_hash_new");
-
-    // -- validate the requested allocation size before touching the heap --
-    emitter.instruction("cmp x0, #0");                                          // is the requested capacity negative?
-    emitter.instruction("csel x10, x0, xzr, ge");                               // clamp negative capacities to an empty entries region
-    emitter.instruction("mov x9, #64");                                         // entry size = 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("umulh x11, x10, x9");                                  // x11 = high 64 bits of capacity * 64
-    emitter.instruction("cbnz x11, __rt_hash_cap_overflow");                    // reject entry regions that do not fit in one machine word
-    emitter.instruction("mul x10, x10, x9");                                    // x10 = low 64 bits of capacity * 64 = entries region size
-    emitter.instruction("adds x10, x10, #40");                                  // x10 = entries region plus the 40-byte hash header
-    emitter.instruction("b.hs __rt_hash_cap_overflow");                         // reject totals that carried out of the machine word
-    emitter.instruction("tbnz x10, #63, __rt_hash_cap_overflow");               // reject totals the signed heap-size check would read as negative
-
-    // -- set up stack frame, save arguments --
-    emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // set up new frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save capacity to stack
-    emitter.instruction("str x1, [sp, #8]");                                    // save value_type to stack
-
-    // -- allocate the validated total size: 40-byte header + capacity * 64 --
-    emitter.instruction("mov x0, x10");                                         // x0 = validated total size (40-byte header + entries)
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate memory, x0 = pointer to hash table
-    emitter.instruction("mov x9, #3");                                          // heap kind 3 = associative array / hash table
-    emitter.instruction("mov x10, #0x8000");                                    // bit 15 marks heap containers that participate in copy-on-write
-    emitter.instruction("orr x9, x9, x10");                                     // preserve the persistent copy-on-write container flag in the kind word
-    emitter.instruction("str x9, [x0, #-8]");                                   // store hash-table kind in the uniform heap header
-
-    // -- initialize header fields --
-    emitter.instruction("str xzr, [x0]");                                       // header[0]: count = 0
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload capacity from stack
-    emitter.instruction("str x9, [x0, #8]");                                    // header[8]: capacity
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload value_type from stack
-    emitter.instruction("str x10, [x0, #16]");                                  // header[16]: value_type
-    emitter.instruction("mov x15, #-1");                                        // sentinel index for an empty insertion-order chain
-    emitter.instruction("str x15, [x0, #24]");                                  // header[24]: head = none
-    emitter.instruction("str x15, [x0, #32]");                                  // header[32]: tail = none
-
-    // -- zero all entry slots (set occupied=0 for each entry) --
-    emitter.instruction("add x11, x0, #40");                                    // x11 = base of entries region after the extended header
-    emitter.instruction("mov x12, #64");                                        // x12 = entry size
-    emitter.instruction("mul x13, x9, x12");                                    // x13 = total bytes in entries region
-    emitter.instruction("add x14, x11, x13");                                   // x14 = end of entries region
-
+    emitter.instruction("cmp x0, #0");                                          // normalize negative capacities before saving metadata
+    emitter.instruction("csel x0, x0, xzr, ge");                                // use zero for an empty entry allocation
+    emitter.instruction("lsr x9, x0, #57");                                     // check that capacity times 64 fits a signed word
+    emitter.instruction("cbnz x9, __rt_hash_cap_overflow");                     // reject unrepresentable entry storage
+    emitter.instruction("sub sp, sp, #48");                                     // reserve constructor state and linkage
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve caller linkage
+    emitter.instruction("add x29, sp, #32");                                    // establish the constructor frame
+    emitter.instruction("str x0, [sp]");                                        // preserve normalized capacity
+    emitter.instruction("str x1, [sp, #8]");                                    // preserve table-wide value metadata
+    emitter.instruction("lsl x0, x0, #6");                                      // request 64 bytes per entry
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate raw entry storage with no independent child ownership
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve the entry allocation across header allocation
+    emitter.instruction(&format!("mov x0, #{}", hash_layout::HEADER_SIZE));     // request the stable header size
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the stable associative-array identity
+    emitter.instruction("mov x9, #0x8003");                                     // mark a copy-on-write associative-array owner
+    emitter.instruction("str x9, [x0, #-8]");                                   // publish the typed heap kind
+    emitter.instruction("str xzr, [x0]");                                       // initialize the live-entry count
+    emitter.instruction("ldr x9, [sp]");                                        // recover normalized capacity
+    emitter.instruction("str x9, [x0, #8]");                                    // publish the entry capacity
+    emitter.instruction("ldr x10, [sp, #8]");                                   // recover the table-wide value type
+    emitter.instruction("str x10, [x0, #16]");                                  // publish value metadata
+    emitter.instruction("mov x10, #-1");                                        // represent an empty insertion-order chain
+    emitter.instruction("str x10, [x0, #24]");                                  // initialize the head index
+    emitter.instruction("str x10, [x0, #32]");                                  // initialize the tail index
+    emitter.instruction("ldr x11, [sp, #16]");                                  // recover the independently owned entry allocation
+    emitter.instruction("str x11, [x0, #40]");                                  // publish entry ownership in the stable header
+    emitter.instruction(&format!("str xzr, [x0, #{}]", hash_layout::PINS_OFFSET)); // new arrays have no internal lifetime pins
+    abi::emit_load_int_immediate(emitter, "x10", i64::MIN);
+    emitter.instruction(&format!("str x10, [x0, #{}]", hash_layout::NEXT_INDEX_OFFSET)); // no integer key has advanced the append counter
     emitter.label("__rt_hash_new_zero");
-    emitter.instruction("cmp x11, x14");                                        // check if we've reached end of entries
-    emitter.instruction("b.ge __rt_hash_new_done");                             // if past end, zeroing is complete
-    emitter.instruction("str xzr, [x11]");                                      // set occupied field to 0 (empty)
-    emitter.instruction("add x11, x11, #64");                                   // advance to next entry
-    emitter.instruction("b __rt_hash_new_zero");                                // continue zeroing
-
-    // -- tear down stack frame and return --
+    emitter.instruction("cbz x9, __rt_hash_new_done");                          // finish after clearing every occupied marker
+    emitter.instruction("str xzr, [x11]");                                      // initialize an empty entry
+    emitter.instruction("add x11, x11, #64");                                   // advance to the next entry
+    emitter.instruction("sub x9, x9, #1");                                      // count the remaining entries
+    emitter.instruction("b __rt_hash_new_zero");                                // continue entry initialization
     emitter.label("__rt_hash_new_done");
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // deallocate stack frame
-    emitter.instruction("ret");                                                 // return with x0 = hash table pointer
-
-    // -- fatal error: requested hash size cannot be represented --
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore caller linkage
+    emitter.instruction("add sp, sp, #48");                                     // release constructor state
+    emitter.instruction("ret");                                                 // return the stable hash header
     emitter.label("__rt_hash_cap_overflow");
-    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction("mov x0, #2");                                          // send the allocation diagnostic to stderr
     abi::emit_symbol_address(emitter, "x1", "_arr_cap_err_msg");
-    emitter.instruction(&format!("mov x2, #{}", ARRAY_ALLOC_SIZE_MSG.len()));   // pass the exact array-size diagnostic byte count
+    emitter.instruction(&format!("mov x2, #{}", ARRAY_ALLOC_SIZE_MSG.len()));   // provide the exact diagnostic length
     emitter.syscall(4);
     abi::emit_cdylib_exit_escape(emitter);
-    emitter.instruction("mov x0, #1");                                          // exit code 1
+    emitter.instruction("mov x0, #1");                                          // report allocation failure
     emitter.syscall(1);
 }
 
-/// x86_64 Linux variant of `emit_hash_new` using the System V AMD64 ABI.
-/// Input:  rdi=initial_capacity, rsi=value_type_tag
-///         (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed, 8=null)
-/// Output: rax=pointer to hash table
-/// Layout: [count:8][capacity:8][value_type:8][head:8][tail:8][entries...] — identical to ARM64.
-///
-/// # Size validation
-/// Mirrors the ARM64 guard: negative capacities are clamped to an empty entries region and any
-/// `capacity * 64 + 40` that does not fit in a non-negative machine word terminates the process
-/// through `__rt_hash_cap_overflow`.
-fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
+/// Allocates and initializes the stable hash representation using the x86_64 heap ABI.
+fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_new ---");
     emitter.label_global("__rt_hash_new");
-
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-construction spill slots
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved capacity and value-type metadata
-    emitter.instruction("sub rsp, 16");                                         // reserve local slots for capacity and value_type across the malloc call
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested hash capacity across the allocator call
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested runtime value_type across the allocator call
-    emitter.instruction("xor rax, rax");                                        // default the sizing operand to an empty entries region
-    emitter.instruction("test rdi, rdi");                                       // is the requested capacity strictly positive?
-    emitter.instruction("cmovg rax, rdi");                                      // clamp negative capacities to an empty entries region
-    emitter.instruction("imul rax, 64");                                        // compute the total bytes needed for the 64-byte hash entry array
-    emitter.instruction("jo __rt_hash_cap_overflow");                           // reject entry regions that do not fit in one machine word
-    emitter.instruction("add rax, 40");                                         // include the fixed 40-byte hash header in the allocation size
-    emitter.instruction("jo __rt_hash_cap_overflow");                           // reject totals the signed heap-size accounting would read as negative
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the hash-table storage through the shared x86_64 heap wrapper
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0x8003))); // materialize the copy-on-write hash-table heap kind word with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as an associative-array heap object in the uniform header
-    emitter.instruction("mov QWORD PTR [rax], 0");                              // header[0]: initialize the live-entry count to zero
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the requested capacity after heap_alloc clobbered caller-saved registers
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // header[8]: store the chosen table capacity
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the runtime value_type tag after heap_alloc returns
-    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // header[16]: store the table-wide value_type tag
-    emitter.instruction("mov r10, -1");                                         // materialize the empty-list sentinel for the insertion-order head and tail
-    emitter.instruction("mov QWORD PTR [rax + 24], r10");                       // header[24]: head = none for a newly allocated empty hash table
-    emitter.instruction("mov QWORD PTR [rax + 32], r10");                       // header[32]: tail = none for a newly allocated empty hash table
-    emitter.instruction("mov r10, rax");                                        // seed the entry-region cursor from the hash-table base pointer
-    emitter.instruction("add r10, 40");                                         // advance the cursor to the first hash entry after the fixed header
-    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the requested capacity to determine how many entry headers to clear
-
+    emitter.instruction("push rbp");                                            // preserve caller linkage
+    emitter.instruction("mov rbp, rsp");                                        // establish the constructor frame
+    emitter.instruction("sub rsp, 32");                                         // reserve capacity, value type, and entry allocation
+    emitter.instruction("xor eax, eax");                                        // default to an empty entry region
+    emitter.instruction("test rdi, rdi");                                       // classify the requested capacity
+    emitter.instruction("cmovg rax, rdi");                                      // normalize negative capacities to zero
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve normalized capacity
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve table-wide value metadata
+    emitter.instruction("imul rax, 64");                                        // request 64 bytes per entry
+    emitter.instruction("jo __rt_hash_cap_overflow");                           // reject an unrepresentable entry allocation
+    emitter.instruction("call __rt_heap_alloc");                                // allocate raw entry storage
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve its sole owner before header allocation
+    emitter.instruction(&format!("mov eax, {}", hash_layout::HEADER_SIZE));     // request the stable header size
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the stable associative-array identity
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0x8003))); // identify a copy-on-write hash owner
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // publish the typed heap kind
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // initialize the live-entry count
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover normalized capacity
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // publish the entry capacity
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // recover the table-wide value type
+    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // publish value metadata
+    emitter.instruction("mov QWORD PTR [rax + 24], -1");                        // initialize the empty head index
+    emitter.instruction("mov QWORD PTR [rax + 32], -1");                        // initialize the empty tail index
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // recover the independently owned entry allocation
+    emitter.instruction("mov QWORD PTR [rax + 40], r10");                       // publish entry ownership in the stable header
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", hash_layout::PINS_OFFSET)); // new arrays have no internal lifetime pins
+    abi::emit_load_int_immediate(emitter, "r11", i64::MIN);
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], r11", hash_layout::NEXT_INDEX_OFFSET)); // no integer key has advanced the append counter
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // recover the number of occupied markers to clear
     emitter.label("__rt_hash_new_zero");
-    emitter.instruction("cmp r11, 0");                                          // stop clearing once every entry slot in the requested capacity has been visited
-    emitter.instruction("jle __rt_hash_new_done");                              // skip the zeroing loop for empty and negative capacities, matching the signed ARM64 guard
-    emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the occupied/tombstone marker for the current hash entry slot
-    emitter.instruction("add r10, 64");                                         // advance the entry cursor to the next hash slot in the entries region
-    emitter.instruction("sub r11, 1");                                          // decrement the number of remaining hash entry headers to clear
-    emitter.instruction("jmp __rt_hash_new_zero");                              // continue clearing occupied markers until the entries region is initialized
-
+    emitter.instruction("test r11, r11");                                       // check the remaining entry count
+    emitter.instruction("jz __rt_hash_new_done");                               // finish after clearing every occupied marker
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // initialize an empty entry
+    emitter.instruction("add r10, 64");                                         // advance to the next entry
+    emitter.instruction("sub r11, 1");                                          // count the remaining entries
+    emitter.instruction("jmp __rt_hash_new_zero");                              // continue entry initialization
     emitter.label("__rt_hash_new_done");
-    emitter.instruction("add rsp, 16");                                         // release the temporary capacity and value-type spill slots
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the hash-table pointer
-    emitter.instruction("ret");                                                 // return the newly allocated hash-table pointer in rax
-
-    // -- fatal error: requested hash size cannot be represented --
+    emitter.instruction("add rsp, 32");                                         // release constructor state
+    emitter.instruction("pop rbp");                                             // restore caller linkage
+    emitter.instruction("ret");                                                 // return the stable hash header
     emitter.label("__rt_hash_cap_overflow");
-    emitter.instruction("mov edi, 2");                                          // fd = stderr for the hash-size fatal error message
+    emitter.instruction("mov edi, 2");                                          // send the allocation diagnostic to stderr
     abi::emit_symbol_address(emitter, "rsi", "_arr_cap_err_msg");
-    emitter.instruction(&format!("mov edx, {}", ARRAY_ALLOC_SIZE_MSG.len()));   // pass the exact array-size diagnostic byte count
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // print the fatal hash-size message to stderr
+    emitter.instruction(&format!("mov edx, {}", ARRAY_ALLOC_SIZE_MSG.len()));   // provide the exact diagnostic length
+    emitter.instruction("mov eax, 1");                                          // select the Linux write syscall
+    emitter.instruction("syscall");                                             // write the allocation diagnostic
     abi::emit_cdylib_exit_escape(emitter);
-    emitter.instruction("mov edi, 1");                                          // exit code 1 for an unrepresentable hash size
-    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
-    emitter.instruction("syscall");                                             // terminate the process after reporting the hash-size failure
+    emitter.instruction("mov edi, 1");                                          // report allocation failure
+    emitter.instruction("mov eax, 60");                                         // select the Linux exit syscall
+    emitter.instruction("syscall");                                             // terminate after reporting allocation failure
 }

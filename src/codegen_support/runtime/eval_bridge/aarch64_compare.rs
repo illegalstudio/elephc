@@ -12,24 +12,7 @@ use super::*;
 
 /// Emits AArch64 concat, comparison, and spaceship wrappers.
 pub(super) fn emit_aarch64_compare(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_value_concat");
-    emitter.instruction("sub sp, sp, #64");                                     // allocate wrapper frame for the right operand and string pairs
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address across helper calls
-    emitter.instruction("add x29, sp, #48");                                    // establish a stable wrapper frame pointer
-    emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while casting the left operand
-    emitter.instruction("bl __rt_mixed_cast_string");                           // cast the left boxed operand to a PHP string pair
-    emitter.instruction("stp x1, x2, [sp, #8]");                                // save the left string pointer and length
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for string casting
-    emitter.instruction("bl __rt_mixed_cast_string");                           // cast the right boxed operand to a PHP string pair
-    emitter.instruction("mov x3, x1");                                          // move the right string pointer into concat's right pointer register
-    emitter.instruction("mov x4, x2");                                          // move the right string length into concat's right length register
-    emitter.instruction("ldp x1, x2, [sp, #8]");                                // reload the left string pair for concat
-    emitter.instruction("bl __rt_concat");                                      // concatenate the two PHP string pairs
-    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string for boxing the concat result
-    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the concatenated string
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the concat wrapper frame
-    emitter.instruction("ret");                                                 // return the boxed concat result to Rust
+    super::concat::emit(emitter);
 
     label_c_global(emitter, "__elephc_eval_value_compare");
     emitter.instruction("sub sp, sp, #64");                                     // allocate a wrapper frame for comparison operands and opcode

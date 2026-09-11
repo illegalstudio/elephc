@@ -8,13 +8,15 @@
 //! - Callable normalization and invocation stay in `registry::callable` because
 //!   the callable engine is shared beyond this builtin.
 
-use super::call_user_func::eval_call_user_func_callback_expr_is_temporary;
+use super::call_user_func::release_callback_result;
 use super::super::super::*;
-use super::super::registry::eval_call_user_func_array_with_values_from_scope;
+use super::super::registry::{eval_call_user_func_array_with_values_from_scope,
+    eval_builtin_call_array_expr, eval_builtin_uses_owned_arguments};
 
 eval_builtin! {
     contract: "call_user_func_array",
     area: Core,
+    source_arguments: true,
     direct: Core,
     values: Core,
 }
@@ -29,32 +31,29 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     let [callback, arg_array] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let release_callback = eval_call_user_func_callback_expr_is_temporary(callback);
-    let release_arg_array = matches!(arg_array, EvalExpr::Array(_));
-    let callback = eval_expr(callback, context, scope, values)?;
-    let arg_array = match eval_expr(arg_array, context, scope, values) {
-        Ok(arg_array) => arg_array,
-        Err(status) => {
-            if release_callback {
-                values.release(callback)?;
-            }
-            return Err(status);
+    let callback = eval_owned_expr(callback, context, scope, values)?;
+    if let Ok(EvaluatedCallable::Named { name, .. }) = eval_callable_from_scope(callback, context, scope, values) {
+        if eval_builtin_uses_owned_arguments(&name) {
+            let result = eval_builtin_call_array_expr(&name, arg_array, context, scope, values);
+            return release_callback_result(callback, result, context, values);
         }
-    };
-    let result = eval_call_user_func_array_with_values_from_scope(
-        callback,
-        arg_array,
-        Some(scope),
+    }
+    let result = with_eval_operands(
+        &[arg_array],
         context,
+        scope,
         values,
+        |arguments, context, scope, values| {
+            eval_call_user_func_array_with_values_from_scope(
+                callback,
+                arguments[0],
+                Some(scope),
+                context,
+                values,
+            )
+        },
     );
-    if release_arg_array {
-        values.release(arg_array)?;
-    }
-    if release_callback {
-        values.release(callback)?;
-    }
-    result
+    release_callback_result(callback, result, context, values)
 }
 
 /// Dispatches `call_user_func_array` after callback and array arguments are evaluated.

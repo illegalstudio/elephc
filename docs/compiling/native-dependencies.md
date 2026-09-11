@@ -11,9 +11,13 @@ records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
 The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
-libssh2 1.11.1, curl 8.21.0, and libxml2 2.15.3.
-Programs using `preg_*`, `mb_ereg_match()`, `RegexIterator`, or
-`RecursiveRegexIterator` require PCRE2 at final link time. zlib is the second
+libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, and libxml2 2.15.3.
+Programs using `preg_*`, `RegexIterator`, or `RecursiveRegexIterator` require
+PCRE2 at final link time. Mbstring uses the same managed package only when a
+program selects its custom output MIME-pattern provider. The contract-owned
+default MIME expression is matched internally and does not make ordinary
+mbstring or opaque eval depend on PCRE2. This dependency does not enable
+`preg_*` inside opaque eval. zlib is the second
 pure-C recipe and proves the manager is not PCRE2-specific; declaring it makes
 its verified static artifact available for future runtime/builtin integrations
 but does not by itself add `libz.a` to every program. curl has the largest
@@ -33,6 +37,14 @@ built with the platform's iconv (built into glibc; `-liconv` on Apple targets)
 and without zlib, ICU, Python, readline, or dynamic modules, so it has no
 catalog dependencies of its own. Its complete public header set is retained
 so later XML extensions can compile against the same artifact.
+
+`elephc native add oniguruma` installs the pinned Oniguruma library and the
+versioned mbregex provider, with the provider archive before `libonig.a` in link
+order. The package supports all five compiler targets. The shared mbregex engine
+uses this provider for `mb_ereg*` and `mb_split`, including `mb_ereg_match()`.
+`--with-mbstring` enables this regex capability for opaque eval and therefore
+requires both Oniguruma and PCRE2. Declaring Oniguruma alone does not change a
+program's selected runtime.
 
 ## Quick start
 
@@ -207,8 +219,8 @@ libpcre2-8.a
 
 There is no production fallback to a system PCRE2 installation and raw
 `--link pcre2-posix` flags do not satisfy the managed requirement. A program
-that does not use regex does not link PCRE2 merely because the project declares
-it. `--check`, `--emit-ir`, and `--emit-asm` do not perform the final link and
+without regex or custom mbstring MIME selection does not link PCRE2 merely
+because the project declares it. `--check`, `--emit-ir`, and `--emit-asm` do not perform the final link and
 therefore do not require an installed artifact.
 
 Every missing/stale/corrupt state uses the same diagnostic tail. It reports the

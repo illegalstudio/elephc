@@ -215,7 +215,7 @@ unsafe fn eval_new_object_inner(
     } else {
         slice::from_raw_parts(args, arg_count)
             .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
             .collect()
     };
     clear_result(out);
@@ -260,7 +260,7 @@ unsafe fn eval_try_new_object_inner(
     } else {
         slice::from_raw_parts(args, arg_count)
             .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
             .collect()
     };
     clear_result(out);
@@ -307,7 +307,7 @@ unsafe fn eval_static_method_call_inner(
     } else {
         slice::from_raw_parts(arg_ptrs, arg_count)
             .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
             .collect()
     };
     clear_result(out);
@@ -360,7 +360,7 @@ unsafe fn eval_native_frame_static_method_call_inner(
     } else {
         slice::from_raw_parts(arg_ptrs, arg_count)
             .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
             .collect()
     };
     clear_result(out);
@@ -410,14 +410,14 @@ unsafe fn eval_method_call_inner(
     } else {
         slice::from_raw_parts(arg_ptrs, arg_count)
             .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
             .collect()
     };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_method_call_outcome(
         context,
-        RuntimeCellHandle::from_raw(object),
+        RuntimeCellHandle::from_raw(object).borrowed(),
         &method,
         args,
         &mut values,
@@ -442,7 +442,7 @@ unsafe fn eval_string_context_inner(
     if value.is_null() {
         return EvalStatus::RuntimeFatal.code();
     }
-    let value = RuntimeCellHandle::from_raw(value);
+    let value = RuntimeCellHandle::from_raw(value).borrowed();
     let mut probe = ElephcRuntimeOps::new();
     let owner = probe.object_identity(value).ok().and_then(|identity| {
         crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)

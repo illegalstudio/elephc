@@ -1,11 +1,11 @@
 ---
-title: "exif_imagetype() — internals"
+title: "exif_imagetype() - internals"
 description: "Compiler internals for exif_imagetype(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 446
 ---
 
-## `exif_imagetype()` — internals
+## `exif_imagetype()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function exif_imagetype(string $filename): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

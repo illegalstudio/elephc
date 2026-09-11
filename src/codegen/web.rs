@@ -112,6 +112,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // per-request arena at once. This is coupled to `--web` full-reset semantics; a
     // future persistent-statics worker-script mode (`--web-worker`, PR #456) must NOT
     // route through this routine, or its surviving statics would be freed underneath it.
+    if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(emitter, "__rt_mbstring_release_catalog");
+    }
     emit_heap_arena_reset(emitter);
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);

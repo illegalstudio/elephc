@@ -101,7 +101,7 @@ pub(in crate::interpreter) fn eval_function_exists_declared_values_result(
     }
 }
 
-/// Evaluates `function_exists()` inside an eval fragment.
+/// Owns the direct function-name argument through probing and releases it on success or failure.
 pub(in crate::interpreter) fn eval_builtin_function_exists(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -111,8 +111,17 @@ pub(in crate::interpreter) fn eval_builtin_function_exists(
     let [value] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let value = eval_expr(value, context, scope, values)?;
-    eval_function_exists_result(value, context, values)
+    let value = eval_owned_expr(value, context, scope, values)?;
+    let result = eval_function_exists_result(value, context, values);
+    let cleanup = eval_release_value(context, values, value);
+    match (result, cleanup) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Err(status), _) => Err(status),
+        (Ok(result), Err(status)) => {
+            let _ = eval_release_value(context, values, result);
+            Err(status)
+        }
+    }
 }
 
 /// Evaluates `function_exists()` from one materialized function-name argument.

@@ -1,11 +1,11 @@
 ---
-title: "mysqli_more_results() — internals"
+title: "mysqli_more_results() - internals"
 description: "Compiler internals for mysqli_more_results(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 138
 ---
 
-## `mysqli_more_results()` — internals
+## `mysqli_more_results()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_more_results(mixed $mysql): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

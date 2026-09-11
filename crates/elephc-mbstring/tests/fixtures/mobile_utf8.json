@@ -1,0 +1,21 @@
+{
+    "php_version": "8.5.10",
+    "encodings": {
+        "UTF-8-Mobile#DOCOMO": {
+            "decode": "fc7626dbe5658fea8d367f2930d4b31fb3ae8aee9ec2705e1b5ca8943e4c5a99",
+            "encode": "41ab74c01567ac7b7a11ae442c12fcb4619b444ba65a2185bacc5fd1fe4b7fc4"
+        },
+        "UTF-8-Mobile#KDDI-A": {
+            "decode": "471b51bba38b6030a96c69198e8da206ca7795962ddcbdbc99f40b0fbd61dfe9",
+            "encode": "1ebfe7c9282cac723e18e56da66df32311d76319e37b4e1421277ed774943d5f"
+        },
+        "UTF-8-Mobile#KDDI-B": {
+            "decode": "df9ddb9f851997c5a85f88bd2c6e14cadc67fca2cfc2d641e4b7615c8f150541",
+            "encode": "3420aab8270f08c7f535844c97a4133f9ce34cdc3e9bebcc647553ee02cc9fc6"
+        },
+        "UTF-8-Mobile#SOFTBANK": {
+            "decode": "a1ac500cef120ca2c20089ad3d93c0579eb442482d3adb37ced73fb16faad477",
+            "encode": "647912991268601e02e6dfb70f00f75651d03aa965a86f9dcb61715ca635991c"
+        }
+    }
+}

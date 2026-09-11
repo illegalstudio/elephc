@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::{curl, libssh2, libxml2, nghttp2, openssl, pcre2, zlib};
+use super::recipes::{curl, libssh2, libxml2, nghttp2, oniguruma, openssl, pcre2, zlib};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -42,6 +42,7 @@ pub struct CuratedRecipes;
 
 /// Identifies one reviewed package recipe compiled into Elephc.
 enum BuiltInRecipe {
+    Oniguruma,
     Pcre2,
     Zlib,
     Openssl,
@@ -54,7 +55,8 @@ enum BuiltInRecipe {
 /// Resolves a package and immutable recipe revision to its built-in executor.
 fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
-        ("pcre2", 2) => Some(BuiltInRecipe::Pcre2),
+        ("oniguruma", 3) => Some(BuiltInRecipe::Oniguruma),
+        ("pcre2", 3) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
@@ -69,6 +71,7 @@ impl RecipeRunner for CuratedRecipes {
     /// Dispatches by catalog package name and recipe revision.
     fn build(&self, request: &RecipeRequest<'_>) -> Result<(), NativeError> {
         match built_in_recipe(request.package, request.version.recipe_revision) {
+            Some(BuiltInRecipe::Oniguruma) => oniguruma::build(request),
             Some(BuiltInRecipe::Pcre2) => pcre2::build(request),
             Some(BuiltInRecipe::Zlib) => zlib::build(request),
             Some(BuiltInRecipe::Openssl) => openssl::build(request),
@@ -110,6 +113,7 @@ mod tests {
     #[test]
     fn previous_pcre2_recipe_revision_is_not_dispatched() {
         assert!(built_in_recipe("pcre2", 1).is_none());
+        assert!(built_in_recipe("pcre2", 2).is_none());
     }
 
     /// Verifies the dispatcher recognizes curl and every library it links by exact catalog

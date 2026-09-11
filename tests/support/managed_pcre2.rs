@@ -24,7 +24,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 const PCRE2_VERSION: &str = "10.47";
-const PCRE2_RECIPE: u32 = 2;
+const PCRE2_RECIPE: u32 = 3;
 // This catalog identity and the project files embedded below are canonicalized by
 // `examples/date-json-regex/elephc.toml` and `examples/date-json-regex/elephc.lock`.
 const PCRE2_SOURCE_SHA256: &str =
@@ -236,8 +236,14 @@ pub(crate) fn prepare_managed_pcre2_cli_project(dir: &Path, target: Target) -> P
     )
     .expect("failed to write managed-PCRE2 test lock");
 
-    let toolchain = resolve_test_native_toolchain(target);
     let cache = dir.join("managed-native-cache");
+    populate_managed_pcre2_cache(&cache, target);
+    cache
+}
+
+/// Populates an existing managed-native cache with the target-aligned PCRE2 fixture.
+pub(crate) fn populate_managed_pcre2_cache(cache: &Path, target: Target) {
+    let toolchain = resolve_test_native_toolchain(target);
     let artifact = cache
         .join("artifacts")
         .join("pcre2")
@@ -321,7 +327,6 @@ pub(crate) fn prepare_managed_pcre2_cli_project(dir: &Path, target: Target) -> P
     encoded.push(b'\n');
     fs::write(artifact.join("receipt.json"), encoded)
         .expect("failed to write managed-PCRE2 receipt");
-    cache
 }
 
 /// Resolves target tools and reproduces the production fingerprint payload.
@@ -507,6 +512,18 @@ fn copy_nonempty(source: &Path, destination: &Path) {
         "native test provider '{}' must be a non-empty file",
         source.display()
     );
+    // `fs::copy` preserves the provider's mode. Homebrew archives are read-only, so a second
+    // compile in the same isolated project cannot truncate the first cache copy. Removing only
+    // this known fixture destination makes population repeatable without changing the provider
+    // or production cache permissions.
+    if let Err(error) = fs::remove_file(destination) {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "failed to replace native test provider destination '{}': {error}",
+            destination.display()
+        );
+    }
     fs::copy(source, destination).unwrap_or_else(|error| {
         panic!(
             "failed to copy native test provider '{}' to '{}': {error}",

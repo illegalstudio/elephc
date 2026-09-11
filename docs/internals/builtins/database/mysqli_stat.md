@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stat() — internals"
+title: "mysqli_stat() - internals"
 description: "Compiler internals for mysqli_stat(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 158
 ---
 
-## `mysqli_stat()` — internals
+## `mysqli_stat()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_stat(mixed $mysql): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

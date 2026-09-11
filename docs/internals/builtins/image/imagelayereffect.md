@@ -1,11 +1,11 @@
 ---
-title: "imagelayereffect() — internals"
+title: "imagelayereffect() - internals"
 description: "Compiler internals for imagelayereffect(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 515
 ---
 
-## `imagelayereffect()` — internals
+## `imagelayereffect()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagelayereffect(mixed $image, int $effect): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

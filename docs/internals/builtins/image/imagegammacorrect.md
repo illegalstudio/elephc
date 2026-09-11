@@ -1,11 +1,11 @@
 ---
-title: "imagegammacorrect() — internals"
+title: "imagegammacorrect() - internals"
 description: "Compiler internals for imagegammacorrect(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 509
 ---
 
-## `imagegammacorrect()` — internals
+## `imagegammacorrect()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagegammacorrect(mixed $image, float $input_gamma, float $output_gamma
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

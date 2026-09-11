@@ -27,6 +27,7 @@ pub fn emit_mixed_clone(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #32");                                     // reserve the source cell and saved frame registers
     emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve the caller frame and return address
     emitter.instruction("add x29, sp, #16");                                    // establish a stable helper frame
+    emitter.instruction("bl __rt_mixed_deref");                                 // detach reference wrappers before selecting the resource owner
     emitter.instruction("str x0, [sp]");                                        // preserve the borrowed source cell across unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the concrete tag and payload for value cloning
     emitter.instruction("cmp x0, #9");                                          // does the value carry PHP resource identity?
@@ -52,6 +53,7 @@ fn emit_mixed_clone_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame
     emitter.instruction("sub rsp, 16");                                         // reserve one aligned source-cell spill slot
+    emitter.instruction("call __rt_mixed_deref");                               // preserve the concrete resource cell independently from any reference wrapper
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the borrowed source cell across unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // expose the concrete tag and payload for value cloning
     emitter.instruction("cmp rax, 9");                                          // does the value carry PHP resource identity?

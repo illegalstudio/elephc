@@ -1,11 +1,11 @@
 ---
-title: "imagepalettecopy() — internals"
+title: "imagepalettecopy() - internals"
 description: "Compiler internals for imagepalettecopy(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 518
 ---
 
-## `imagepalettecopy()` — internals
+## `imagepalettecopy()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagepalettecopy(mixed $dst, mixed $src): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

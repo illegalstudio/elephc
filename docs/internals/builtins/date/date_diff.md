@@ -1,11 +1,11 @@
 ---
-title: "date_diff() — internals"
+title: "date_diff() - internals"
 description: "Compiler internals for date_diff(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 197
 ---
 
-## `date_diff()` — internals
+## `date_diff()` - internals
 
 ## Where it lives
 

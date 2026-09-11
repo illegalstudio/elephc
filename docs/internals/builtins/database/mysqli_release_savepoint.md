@@ -1,11 +1,11 @@
 ---
-title: "mysqli_release_savepoint() — internals"
+title: "mysqli_release_savepoint() - internals"
 description: "Compiler internals for mysqli_release_savepoint(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 150
 ---
 
-## `mysqli_release_savepoint()` — internals
+## `mysqli_release_savepoint()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_release_savepoint(mixed $mysql, string $name): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

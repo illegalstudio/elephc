@@ -26,6 +26,29 @@ return call_user_func_array("dyn", [4, 5]);"#,
 
     assert_eq!(values.get(result), FakeValue::Int(9));
 }
+
+/// Verifies a missing required parameter raises a catchable `ArgumentCountError`.
+#[test]
+fn execute_program_call_user_func_array_missing_required_parameter_is_catchable() {
+    let program = parse_fragment(
+        br#"function dyn($value, $missing) { return $value; }
+try { call_user_func_array("dyn", [1]); }
+catch (ArgumentCountError $error) { return get_class($error); }
+return "missed";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("catch missing required parameter");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("ArgumentCountError".to_string())
+    );
+}
+
 /// Verifies `call_user_func_array` string keys bind eval-declared parameters by name.
 #[test]
 fn execute_program_call_user_func_array_binds_declared_named_args() {

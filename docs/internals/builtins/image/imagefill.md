@@ -1,11 +1,11 @@
 ---
-title: "imagefill() — internals"
+title: "imagefill() - internals"
 description: "Compiler internals for imagefill(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 499
 ---
 
-## `imagefill()` — internals
+## `imagefill()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagefill(mixed $image, int $x, int $y, int $color): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

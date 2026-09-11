@@ -7,6 +7,7 @@
 //! Key details:
 //! - Scalar consumers and independent builtin results must balance read stabilizations.
 //! - Constructor argument conversions and proven-independent call results release caller temporaries.
+//! - Constant-folded checked arithmetic must rebox assignment values without aliasing or leaks.
 
 use super::*;
 
@@ -101,4 +102,17 @@ echo $arraySum . '|' . $metadataSum . '|' . $joinedSum;
             "expected a clean heap with ir_opt={ir_opt}, got: {stderr}"
         );
     }
+}
+
+/// Keeps an optimized checked-arithmetic assignment boxed, independent, and heap-clean.
+#[test]
+fn test_constant_folded_checked_assignment_is_independent_and_heap_clean() {
+    let source =
+        "<?php $value = null; $value += 10; $copy = $value; $copy += 5; echo $value . '|' . $copy;";
+    let (stdout, stderr) = run_read_result_cleanup_fixture(source, true);
+    assert_eq!(stdout, "10|15");
+    assert!(
+        stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {stderr}"
+    );
 }

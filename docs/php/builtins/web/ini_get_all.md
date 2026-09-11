@@ -2,13 +2,13 @@
 title: "ini_get_all()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 883
+  order: 944
 ---
 
 ## ini_get_all()
 
 ```php
-function ini_get_all(?string $extension = null, bool $details = true): mixed
+function ini_get_all(?string $extension = null, bool $details = true): array|false
 ```
 
 Implemented by the compiler-injected web prelude.
@@ -17,14 +17,14 @@ Implemented by the compiler-injected web prelude.
 - `$extension` (`?string`), default `null`, optional
 - `$details` (`bool`), default `true`, optional
 
-**Returns**: `mixed`
+**Returns**: `array|false`
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected shared_ini prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

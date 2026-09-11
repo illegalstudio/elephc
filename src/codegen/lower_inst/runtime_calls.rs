@@ -27,11 +27,21 @@ pub(super) fn lower(
         RuntimeCallTarget::ArrayFetchForWrite => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
+        RuntimeCallTarget::MixedArraySet => super::lower_mixed_array_runtime_set(ctx, inst),
         RuntimeCallTarget::MixedCellPromoteToHash(sort)
         | RuntimeCallTarget::MixedCellPromoteAttachedToHash(sort) => {
             lower_mixed_cell_promote_to_hash(ctx, inst, sort)
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
+        RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),
+        RuntimeCallTarget::ExceptionUnguardOwned => super::exception_instructions::lower_unguard_owned(ctx, inst),
+        RuntimeCallTarget::ExceptionUpdateArrayGuard | RuntimeCallTarget::ExceptionUpdateHashGuard =>
+            super::exception_instructions::lower_update_array_guard(ctx, inst),
+        RuntimeCallTarget::CallArgumentValidateUnpack
+        | RuntimeCallTarget::CallArgumentCollectPositionals
+        | RuntimeCallTarget::CallArgumentCollectNamed => {
+            super::call_argument_unpack::lower(ctx, inst, target)
+        }
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)

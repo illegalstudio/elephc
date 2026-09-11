@@ -26,11 +26,14 @@ pub(in crate::interpreter) fn eval_builtin_max(
     if args.len() < 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated_args.push(eval_expr(arg, context, scope, values)?);
-    }
-    eval_max_result(&evaluated_args, values)
+    let operands = args.iter().collect::<Vec<_>>();
+    with_eval_operands(
+        &operands,
+        context,
+        scope,
+        values,
+        |args, _, _, values| eval_max_result(args, values),
+    )
 }
 
 /// Applies PHP `max()` to already evaluated values.

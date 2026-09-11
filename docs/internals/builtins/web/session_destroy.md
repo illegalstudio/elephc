@@ -1,11 +1,11 @@
 ---
-title: "session_destroy() — internals"
+title: "session_destroy() - internals"
 description: "Compiler internals for session_destroy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 891
+  order: 952
 ---
 
-## `session_destroy()` — internals
+## `session_destroy()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_destroy(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

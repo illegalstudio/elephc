@@ -1,11 +1,11 @@
 ---
-title: "imagestring() — internals"
+title: "imagestring() - internals"
 description: "Compiler internals for imagestring(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 530
 ---
 
-## `imagestring()` — internals
+## `imagestring()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagestring(mixed $image, int $font, int $x, int $y, string $string, in
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,16 +1,16 @@
 ---
-title: "crc32() — internals"
+title: "crc32() - internals"
 description: "Compiler internals for crc32(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 761
 ---
 
-## `crc32()` — internals
+## `crc32()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/crc32.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/crc32.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

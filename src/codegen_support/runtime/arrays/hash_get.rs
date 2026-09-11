@@ -10,7 +10,10 @@
 //! - Besides the borrowed payload, the lookup returns the matching entry's ADDRESS
 //!   (`x4` / `r8`, null on a miss) so callers that must write the slot back can reach
 //!   it; the probe already computes that address (issue #580).
+//! - Empty option maps can use indexed-array storage, so an empty container must miss
+//!   before the hash-specific entry-storage pointer is read.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -60,6 +63,8 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     );
     emitter.instruction("cmp x0, x5");                                          // does the receiver carry the in-band null-container sentinel?
     emitter.instruction("b.eq __rt_hash_get_not_found");                        // sentinel-null receivers from missed reads cannot contain the key
+    emitter.instruction("ldr x5, [x0]");                                        // load the logical entry count before reading hash-specific fields
+    emitter.instruction("cbz x5, __rt_hash_get_not_found");                     // empty option maps may use indexed storage and always miss safely
     emitter.instruction("ldr x5, [x0, #8]");                                    // load capacity before hashing to avoid division by zero on empty tables
     emitter.instruction("cbz x5, __rt_hash_get_not_found");                     // zero-capacity tables cannot contain the requested key
 
@@ -82,12 +87,10 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x6");                                         // check if we've probed all slots
     emitter.instruction("b.ge __rt_hash_get_not_found");                        // if probed all, key not found
 
-    // -- compute entry address: base + 40 + index * 64 --
+    // -- compute entry address: entries + index * 64 --
     emitter.instruction("ldr x9, [sp, #24]");                                   // load current probe index
     emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 64
-    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 64
-    emitter.instruction("add x12, x12, #40");                                   // x12 = entry address (skip header)
+    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
 
     // -- check occupied field --
     emitter.instruction("ldr x13, [x12]");                                      // x13 = occupied flag
@@ -124,9 +127,7 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload probe index
     emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 64
-    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 64
-    emitter.instruction("add x12, x12, #40");                                   // x12 = entry address
+    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
 
     emitter.instruction("mov x0, #1");                                          // found = 1
     emitter.instruction("ldr x1, [x12, #24]");                                  // x1 = value_lo
@@ -175,6 +176,9 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     );
     emitter.instruction("cmp rdi, r11");                                        // does the receiver carry the in-band null-container sentinel?
     emitter.instruction("je __rt_hash_get_not_found");                          // sentinel-null receivers from missed reads cannot contain the key
+    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the logical entry count before reading hash-specific fields
+    emitter.instruction("test r11, r11");                                       // determine whether the container has any live entries
+    emitter.instruction("jz __rt_hash_get_not_found");                          // empty option maps may use indexed storage and always miss safely
     emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                        // load capacity before hashing to avoid division by zero on empty tables
     emitter.instruction("test r11, r11");                                       // zero capacity means there are no live entries to probe
     emitter.instruction("jz __rt_hash_get_not_found");                          // return a miss for empty hash tables
@@ -197,10 +201,7 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, r11");                                        // check whether the probe has inspected the whole hash table
     emitter.instruction("jae __rt_hash_get_not_found");                         // stop lookup when a full table does not contain the requested key
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the current probe index before deriving the slot address
-    emitter.instruction("mov r8, r11");                                         // copy the probe index before scaling it into a byte offset
-    emitter.instruction("shl r8, 6");                                           // convert the probe index into a 64-byte entry offset
-    emitter.instruction("add r8, r10");                                         // advance from the hash-table base pointer to the selected entry block
-    emitter.instruction("add r8, 40");                                          // skip the fixed 40-byte hash header to land on the selected entry
+    hash_layout::emit_entry_address(emitter, "r8", "r10", "r11");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the occupied marker for the probed hash-entry slot
     emitter.instruction("test r9, r9");                                         // detect an empty slot that terminates the failed lookup path immediately
     emitter.instruction("jz __rt_hash_get_not_found");                          // empty slots mean the requested key does not exist in the hash table
@@ -233,10 +234,7 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_get_found");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer because the string-equality helper clobbered caller-saved registers
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the matching probe index before rebuilding the entry address
-    emitter.instruction("mov r8, r11");                                         // copy the matching probe index before scaling it into a byte offset
-    emitter.instruction("shl r8, 6");                                           // convert the matching probe index into a 64-byte entry offset
-    emitter.instruction("add r8, r10");                                         // advance from the hash-table base pointer to the matching entry block
-    emitter.instruction("add r8, 40");                                          // skip the fixed 40-byte hash header to land on the matching entry, kept as the entry-address result
+    hash_layout::emit_entry_address(emitter, "r8", "r10", "r11");
     emitter.instruction("mov rdi, QWORD PTR [r8 + 24]");                        // return the low payload word in the first borrowed-value result register
     emitter.instruction("mov rsi, QWORD PTR [r8 + 32]");                        // return the high payload word in the second borrowed-value result register
     emitter.instruction("mov rcx, QWORD PTR [r8 + 40]");                        // return the runtime value tag in the borrowed-value tag result register

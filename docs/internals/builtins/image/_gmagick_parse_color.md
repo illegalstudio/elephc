@@ -1,11 +1,11 @@
 ---
-title: "_gmagick_parse_color() — internals"
+title: "_gmagick_parse_color() - internals"
 description: "Compiler internals for _gmagick_parse_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1063
+  order: 1125
 ---
 
-## `_gmagick_parse_color()` — internals
+## `_gmagick_parse_color()` - internals
 
 ## Where it lives
 
@@ -38,8 +38,8 @@ function _gmagick_parse_color(string $c): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

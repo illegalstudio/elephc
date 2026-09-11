@@ -1,11 +1,11 @@
 ---
-title: "imagejpeg() — internals"
+title: "imagejpeg() - internals"
 description: "Compiler internals for imagejpeg(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 514
 ---
 
-## `imagejpeg()` — internals
+## `imagejpeg()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagejpeg(mixed $image, ?string $file = null, int $quality = -1): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

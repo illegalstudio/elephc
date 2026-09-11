@@ -1,11 +1,11 @@
 ---
-title: "date_interval_create_from_date_string() — internals"
+title: "date_interval_create_from_date_string() - internals"
 description: "Compiler internals for date_interval_create_from_date_string(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 200
 ---
 
-## `date_interval_create_from_date_string()` — internals
+## `date_interval_create_from_date_string()` - internals
 
 ## Where it lives
 

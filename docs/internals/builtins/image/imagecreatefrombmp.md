@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefrombmp() — internals"
+title: "imagecreatefrombmp() - internals"
 description: "Compiler internals for imagecreatefrombmp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 486
 ---
 
-## `imagecreatefrombmp()` — internals
+## `imagecreatefrombmp()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecreatefrombmp(string $filename): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

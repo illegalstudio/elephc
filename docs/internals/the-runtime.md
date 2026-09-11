@@ -197,7 +197,15 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_ltrim_mask` / `__rt_rtrim_mask` | Strip custom mask from left/right | `x1`/`x2` + mask | `x1`/`x2` |
 | `__rt_strrev` | Reverse string (byte-wise) | `x1`/`x2` | `x1`/`x2` |
 | `__rt_grapheme_strrev` | Reverse a UTF-8 string by grapheme cluster for PHP 8.6 `grapheme_strrev()`; returns false on malformed UTF-8 | `x1`/`x2` | `x1`/`x2` |
-| `__rt_mb_strlen` | Multibyte-aware string length for `mb_strlen()` (emitted only for programs that use it) | `x1`/`x2` | `x0` |
+| `__rt_mbstring_native` | Shared invocation adapter that propagates failures through ordinary exception unwinding | C ABI operation ID, extended descriptor-pointer array, count, caller strictness, optional eval context | Primary value, status, byte length, result kind |
+| `__rt_mbstring_status` | Same owned results and errors, with pending exceptions returned to eval without unwinding | C ABI operation ID, argument pointer, count | AArch64 `x0`/`x1`/`x2`/`x3`; x86_64 `rax`/`rdx`/`rcx`/`r8` |
+| `__rt_mbstring_string_array` | Validates packed binary strings and transfers copied elements into an owned indexed array of Mixed cells | C ABI packed pointer, byte length, element count | Owned array pointer, or zero for invalid framing |
+| `__rt_mbstring_array_next` | Borrows one ordered native array entry and normalizes concrete value tags without allocation or mutation | C ABI context, array descriptor, cursor, key output, value output | Entry, end, or failure status |
+| `__rt_mbstring_array_argument` | Snapshots a borrowed native graph and copies its wire buffer into one owned runtime string | Concrete array tag and native payload identity | AArch64 `x1`/`x2`; x86_64 `rax`/`rdx` owned wire bytes |
+| `__rt_mbstring_release_array_arguments` | Consumes packed-array argument owners and clears their byte pointers before diagnostics or exception handling | C ABI mutable argument slots and count | Released array slots; ordinary strings retain caller ownership |
+| `__rt_mbstring_box_result` | Boxes integer, boolean, string, or array results and releases intermediate heap ownership | Successful value/status/length/kind tuple | Fresh Mixed cell shared by AOT and eval |
+| `__rt_mbstring_stringable` | Protects native/eval string conversion with a PHP exception boundary | C ABI eval context, borrowed boxed object, `MbHostStringV1` output | Runtime status and native string owner; zero output on failure |
+| `__rt_mbstring_capture_hash_store` | Internal construction primitive: persist one capture, protect old-value release, track reentrant hash set/unset, and finish the selected write without COW | C ABI unused context, selected managed hash, validated borrowed key/value descriptors | Status `0` or pending throwable `2` |
 | `__rt_strpos` | Find substring | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
 | `__rt_strrpos` | Find last occurrence | `x1`/`x2` + `x3`/`x4` | `x0` |
 | `__rt_stripos` | Find substring, ASCII case-insensitive | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
@@ -253,6 +261,351 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_vsprintf` | `vsprintf()` formatting with an argument array | format + array + optional eval context | `x1`/`x2` |
 | `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |
 
+The mbstring engine borrows string arguments and validated, pointer-free array
+graphs through `elephc_mbstring_call_v1`. The separate
+`elephc_mbstring_snapshot_v1` entry copies host arrays before request-state dispatch.
+Its nonmutating C reader runs outside the Rust request-state borrow, retains array
+identity for cycles and aliases, and copies binary keys and values before the next
+reader invocation. Rust does not interpret native array layouts. The target-aware
+reader owns indexed strides, hash iteration, Mixed unboxing, and nullable-container
+normalization.
+
+AOT and production eval calls use the shared invocation coordinator for argument
+preparation and delayed array snapshots. AOT supplies stack-local borrowed invoker
+descriptors containing each value's concrete tag and raw payload. The separate
+`__rt_mbstring_status` wire adapter still consumes owned runtime strings staged in
+`ARG_ARRAY` slots and clears those slots after dispatch, including on failure.
+The raw Rust C API
+continues to borrow every input buffer and release only its own result buffers;
+external C callers must keep their argument storage alive themselves.
+`mb_check_encoding` uses this graph path for recursive validation and the same
+request counter as `mb_scrub` for deprecated null/omitted-input checks.
+`mb_substitute_character` preserves integer codepoints separately from string modes
+through the same union-argument staging. Null/omitted input reads the current mode;
+named modes retain the remembered replacement codepoint. A failed setter leaves
+that request state unchanged.
+
+Optional mbstring runtime emission also follows callable references. First-class
+callable requirements and finite names proven at dynamic invocation sites enable
+the same bridge as direct calls. Generic callback dispatch emits mbstring wrappers
+only when that runtime is active, including through eval or `--with-mbstring`.
+Opaque runtime names can use the explicit flag; unrelated callbacks do not force
+mbstring into their runtime object or link.
+Native eval scopes also omit mbstring dispatcher arms unless mbstring or the full
+eval bridge is enabled, preserving links that need only native scope helpers.
+
+The preparatory bridge entries `elephc_mbstring_arity_v1` and
+`elephc_mbstring_prepare_v1` validate the outer call before request-state dispatch.
+They derive arity, types, and parameter names from the shared contract. Preparation
+receives a concrete host-value descriptor and caller strictness, then returns a
+ready scalar, a TypeError, or a deferred host action for a borrowed string, array,
+float formatter, or Stringable callback. It never traverses host arrays/objects
+or borrows request state. Its result buffers use `elephc_mbstring_release_v1`.
+Unlike ordinary operation diagnostics, preparation diagnostics are binary records
+containing a little-endian level, byte length, and complete message. Hosts deliver
+them in order before performing deferred actions and stop if a handler throws.
+Production AOT and eval calls consume this preparation protocol through the shared
+coordinator. Direct AOT calls supply physical-source strictness; dynamic callable
+wrappers and eval fragment strictness still need complete propagation.
+
+`elephc_mbstring_invoke_v1` now provides the shared invocation coordinator for
+this migration. Its original 72-byte V1 callback table supplies by-value copying,
+concrete description, Stringable execution, float formatting, diagnostic delivery,
+owner release, and nonmutating array iteration. The generated native/eval host
+uses the 96-byte V3 extension. V2 adds an independently owned array-entry reader;
+V3 adds graph identity reads and reference pinning without a by-value copy.
+V1 callers remain supported for operations that need no incremental array-element
+coercion. Encoding-list arrays and numeric-entity maps require the V2 reader. Arity is checked before reading
+host inputs. All argument values are copied before coercion, each parameter's
+metadata and diagnostics are consumed in order, and arrays are snapshotted only
+after all outer conversions finish. Only operation dispatch borrows request state.
+Every acquired host owner is recorded before result validation; explicit cleanup
+runs after success, failure, or a contained Rust panic, continuing after release
+errors. Callbacks must contain PHP exceptions, and release callbacks must consume
+owners even when destructors throw. The generated `__rt_mbstring_invoke` installs
+real native callbacks, and all 58 shared AOT/eval operations use it with the
+available caller context. `__rt_mbstring_materialize` transfers Rust result ownership into the
+existing PHP result/error path, including ArgumentCountError for invalid arity.
+The eval registry allows these calls to reach shared arity validation after
+evaluating the supplied argument expressions.
+
+The V5 host contract extends the V4 prefix with `mb_parse_str` configuration,
+optional SAPI filtering, and ordered live query writes. Shared operation 82
+copies and coerces the source, pins the required output independently, initializes
+it, then snapshots mbstring encoding settings. Core configuration reads are
+phased: entry reads separators and the whole-query variable limit, field reads
+the nesting limit after filtering, and diagnostic reads `display_errors` after
+the write and its destructors. The name planner supplies normalized enter,
+store, and root-removal instructions; the host owns array storage, append
+counters, nested COW, and protected destructor execution.
+
+Pending exceptions do not prevent subsequent query writes or the final aggregate
+input identification update. Diagnostics stop reaching user handlers while a
+throwable is pending. The common arena releases filter/configuration leases,
+writer ownership, argument copies, and reference pins on every exit. Independent
+ABI tests compare parser results and live callback traces with PHP. Native/eval
+query storage callbacks and public bindings remain pending, so both backend
+contracts explicitly report `ReferenceAdaptersPending` for `mb_parse_str`.
+
+The V4 capture-output contract now has direct AOT bindings for `mb_ereg` and
+`mb_eregi`. Calls may omit the output or pass a managed Mixed local or alias.
+Shared argument planning promotes the output at its source-order evaluation
+point, including named arguments and conditional predecessor paths. The backend
+requires proven tracked storage before recovering the reference wrapper; raw
+by-reference parameters, property aliases, and dynamic spread references remain
+unsupported in AOT. Its runtime-selected callable wrappers remain pending.
+
+Eval bindings use the same V4 coordinator with persistent reference-wrapper
+owners acquired during source-order argument evaluation. Local variables,
+aliases, eval reference parameters, named dynamic calls, and explicitly
+referenced unpacked elements retain the caller's cell identity. Ordinary
+arguments keep their independent value copies. Shared call-boundary cleanup
+releases reference pins, argument owners, and inserted defaults on success or
+failure. Direct `call_user_func` syntax evaluates independent values, warns
+for the supplied output, and transfers its owner into a temporary wrapper.
+Capture initialization can release the previous temporary value immediately,
+including destructor reentry or a pending exception, without changing the
+caller's variable. The common owned-argument boundary also handles
+`call_user_func_array`, nested callback wrappers, `array_map`, and reflected
+builtin invocation. Explicit call-array references retain their live output
+identity; ordinary output values warn and receive temporary reference cells.
+Reflected `invoke` arguments use independent values, while `invokeArgs` can
+carry persistent references. Native ReflectionFunction construction registers
+the builtin name so invocation reaches its shared eval binding.
+
+Direct `call_user_func_array` syntax consumes its temporary source array after
+capturing argument owners and before invoking the callee. A caller's variable
+still keeps its own array owner. Dynamic callback wrappers instead keep their
+ordinary argument owners until the outer call returns. This difference can
+change a capture result: a temporary old object's destructor may update regex
+options during direct capture initialization, whereas the dynamic wrapper's
+array keeps that old object alive until matching has finished.
+
+Computed callback expressions and dynamic callees own their selected values
+through invocation. Owned concatenation releases its source operands and
+Stringable conversions, and a full ternary releases its condition before
+evaluating the selected branch. The native concat wrapper persists each
+converted byte range before converting the next operand, then releases both
+conversion buffers after boxing the result. Numeric scratch buffers therefore
+cannot overwrite an earlier operand, and existing string casts do not leak.
+Property and direct array output destinations, non-reference unpacked outputs,
+and legacy native reference-slot adapters still need integration.
+The boxed dispatcher emits the capture coordinator call only when the managed
+regex runtime is active; it reports unsupported otherwise.
+
+Validation-error cleanup currently releases a temporary callback output at
+the call boundary. PHP can retain that object through exception trace arguments
+when `zend.exception_ignore_args=0`, delaying its destructor until the throwable
+is released. The callback cleanup regression uses PHP's non-retaining trace
+configuration (`zend.exception_ignore_args=1`) as its oracle. Retaining trace
+arguments requires shared throwable ownership support and remains unverified.
+
+`__rt_mbstring_capture_native` shares ordinary native mbstring exception
+propagation and passes the live output identity to `__rt_mbstring_capture_invoke`.
+Initialization and publication use the existing protected V4 coordinator.
+During untyped initialization the reference can temporarily contain a null
+child pointer. Eval replacement materializes that previous PHP null for its
+owned-result cleanup contract, allowing a destructor to finish its assignment
+and continue to later side effects or an exception. Eval closure parameter
+checks also use the shared dynamic-object class relation, so an observer
+closure satisfies its declared Closure constructor parameter.
+The shared `elephc_mbstring_capture_apply_v1` entry validates an
+entire flat graph before invoking ordered per-entry callbacks, and continues
+after pending destructor exceptions. The native `__rt_mbstring_capture_hash_store`
+primitive takes an already selected hash, pins its lifetime without adding a PHP
+COW owner, persists captured bytes, protects old-value release, and looks the key
+up again after callbacks may have grown the entry allocation. It completes the
+write before unpinning, including when that final release destroys the selected
+array. Real PHP destructor/exception and heap-debug tests cover this path through
+internal test shims for capture construction and reentrant hash mutations.
+
+While releasing an overwritten value, the construction helper links a five-word
+record (next, selected hash, key low/high, changed) through `_hash_write_guard_top`.
+The hash pin and borrowed capture descriptor keep its hash and key identity valid.
+Ordinary `__rt_hash_set`, `__rt_hash_unset`, and nested capture construction claim
+the selected entry owner before releasing it. A matching active record with no
+previous mutation marks the old payload as already owned by the outer release;
+the writer skips that release and marks every matching record changed. The old
+entry remains observable until a callback actually writes or removes it. After
+protected destruction returns, construction unlinks its exact record, looks up
+the key again, and consumes any callback-installed replacement before publishing
+the final capture. Key comparison is binary-safe and separated hash identities
+have independent records. No guard remains linked after an ordinary or pending
+throwable return from this primitive.
+
+`__rt_hash_to_mixed` participates in the same ownership protocol after COW.
+Raw entries transfer their existing owner into a box, or acquire a new payload
+owner when protected destruction already borrowed the old one. For an existing
+Mixed entry, `__rt_hash_write_guard_owns` inspects the guard without changing it.
+An owned box stays unchanged; a borrowed box is replaced with a cloned PHP value
+through `__rt_mixed_clone`, including unwrapping nested reference cells. The old
+boxes still belong to the suspended release, while the new box owns its retained
+object payload. Repeated conversion leaves that new owner intact. Construction
+then consumes any surviving replacement before publishing the final capture.
+Native fixtures cover numeric/binary keys and raw, boxed, and nested-reference
+receivers. PHP destructor tests cover raw and preboxed receivers, conversion
+alone or followed by set/unset/nested capture, pending throws, and clean heaps.
+
+Shallow hash copies use `__rt_reference_array_copy` for Mixed entries before
+conversion. If the source box has zero owners because its protected child
+release is active, this helper clones the PHP value rather than retaining the
+old box. The independent hash keeps a valid object owner while the original
+capture write completes, without changing the original hash's release guard.
+Tests release copies both inside the destructor and after reading retained
+object properties from PHP, including pending exceptions and nested references.
+
+Native request teardown now owns values displaced by reentrant initialization
+and releases them through protected cleanup. Its FIFO order follows adoption
+order, which can differ from PHP's object creation order for nested captures;
+that shutdown ordering still needs integration. Direct slot writers, shared
+indexed destinations, nested containers with partially released children, and
+general resource/callable teardown also remain incomplete. Focused public AOT
+tests cover output identity, named inputs, conditional promotion, initialization
+errors, and alias-observing destructors with pending exceptions and clean heaps.
+Opaque eval tests cover the same initialization ordering and pending exception
+behavior, plus explicit unpacked references and stable retained allocation
+counts after repeated successful and failing calls. They do not establish
+the remaining reference forms or nested shutdown ordering.
+
+Encoding-list arrays for `mb_detect_order` are read and converted one entry at a
+time. Every entry is copied before its cast, so callbacks cannot invalidate that
+owned value. Later reference values are read after earlier callbacks, and `auto`
+uses the language defaults active at that entry. No request-state borrow spans a
+host callback or owner release. Invalid names stop iteration before later casts;
+the request detection order changes only after the entire list validates. Native
+raw iteration preserves existing Mixed cells so resource casts retain the original
+resource owner. The ordinary snapshot reader keeps its normalized graph tags.
+`MbArraySourceV2` pairs the retained array with its original boxed-handle identity.
+The eval adapter uses that original token to resolve reference metadata at each
+entry read, then copies the current referenced value. Variable, nested-array,
+instance-property, static-property, and invoker-slot references use explicit
+ownership. Borrowed property values are retained; intermediate owners are released
+through protected native callbacks after the eval context borrow ends. Pending
+eval Throwables are published into native ownership before intermediate cleanup,
+and native unwinding resumes only after the Rust adapter returns. The previously
+ignored reference regression is active again.
+Native global-to-array-element binding and eval methods reading an array global
+created earlier in the same opaque fragment still have separate storage issues.
+Native references to local indexed-array elements now normalize the array to
+boxed Mixed slots and separate existing COW copies before binding. A captured
+reference can then change type without writing a box pointer into a raw integer
+element. This does not change the existing nonowning lifetime of element aliases.
+Their reproducers and remaining lifetime/cleanup work are recorded in the mbstring
+implementation ledger.
+
+`mb_encode_numericentity` and `mb_decode_numericentity` share the same protected
+array reader for conversion maps. Encoding resolution occurs before map-length
+validation, and only complete groups of four elements are accepted. Map keys are
+ignored. Integer conversion uses PHP arithmetic rules independently of caller
+strictness: numeric prefixes may warn, finite float overflow wraps, and numeric
+string overflow saturates. Ordered warnings are delivered before the next
+referenced map element is read. The chosen encoding remains fixed across these
+callbacks; substitution settings are read after map preparation. Empty input
+still validates the encoding and every map element. Ordinary objects, arrays,
+and resources are rejected without attempting Stringable conversion.
+
+Production callbacks support native/eval Stringable methods and metadata,
+reference-value copying, binary diagnostic messages, and native float formatting.
+Current float formatting uses the runtime's fixed precision. Preparation warnings
+use the existing native diagnostic sink; PHP error-handler dispatch remains
+pending. Operation diagnostics keep their existing result-buffer protocol.
+Protected release restores handler and GC suppression state after a PHP throw.
+Native array, hash, Mixed-cell, object, and callable-descriptor destruction now
+protects each potentially throwing child release. Each enclosing cleanup frame
+retains a pending flag and its incoming collector suppression state, finishes
+later children and its own storage, then propagates the latest exception.
+Nested destructor catches run with the outer pending exception suspended.
+Escaping exceptions consume that suspended owner into their previous chain;
+intersection checks avoid duplicate links and cycles. Shared previous access
+recognizes compact raw Throwable slots and ordinary subclass nullable boxes,
+including PDOException. Native and eval object destructors now preserve receivers
+retained by their callbacks, even when a callback throws. Persistent object
+kind-word bit 14 prevents a second destructor invocation; temporary refcount bit
+31 protects only active teardown. The cycle collector recomputes roots after
+destructor callbacks while retaining its original candidate set. General
+function-local cleanup callbacks and copying values during active deep release
+still require separate work. These boundaries are not yet full cleanup parity.
+
+Direct mbstring EIR calls now retain the physical file's `strict_types` state,
+including included functions and arrow functions. Generated callable wrappers
+mark this state as inherited from the invoking caller. This parameter-coercion
+profile is independent of `--strict-php` extension visibility and is visible in
+textual EIR. Direct AOT adapters consume it when invoking the shared parameter
+planner. Callable wrappers still apply their existing descriptor validation and
+pass weak mode when this inherited profile has not been resolved.
+
+The registry's `PreserveValues` argument strategy keeps nullable/concrete source
+types and disables generic scalar binding before mbstring. It reuses shared
+named/spread planning, captures by-value sources before later argument expressions,
+and leaves reference parameters attached to their original storage. Mixed cells
+are cloned; concrete heap values are retained for the call. Typed EIR
+`exception.guard_owned` calls register captured owners immediately, before later
+argument expressions execute. Each 32-byte stack record contains the existing
+activation prefix plus the owner, and selects either ordinary heap release or
+callable-descriptor release from its concrete PHP type. Guards form parameter-order
+cleanup groups while argument expressions retain PHP source evaluation order.
+Successful invocations remove guards with `exception.unguard_owned` and use ordinary
+EIR temporary cleanup. Failed argument evaluation and failed invocations both use
+the common exception walker. Protected callbacks continue to later guards after a
+destructor throws; scoped native deep release also finishes the interrupted
+container's remaining children and storage before propagating the exception.
+Nested handlers save the current activation head so an inner catch preserves the
+caller's earlier captures. Mbstring effects include global writes because parameter
+conversion can invoke PHP methods. Dynamic spread temporary ownership and other
+call surfaces still require their separate ownership audits.
+
+Positional indexed spreads use `RuntimeArgumentLayout::IndexedArray` on the same
+profiled runtime target. Shared call planning supplies source order, and EIR builds
+an owned `array<mixed>` containing every supplied value. Each element is copied
+before evaluating the next source expression. Native heap arrays do not guarantee
+pointer alignment, so the adapter copies their borrowed cell pointers into aligned
+stack storage sized from the contract's maximum arity. It passes the actual count
+to the existing coordinator. Missing and excess argument counts therefore
+produce catchable ArgumentCountError, including zero-parameter functions. Static
+checking still evaluates every spread source and rejects non-array or undefined
+inputs. `exception.update_array_guard` refreshes exceptional ownership after an
+append relocates the array. Ordinary returns and both pre-entry/invocation failures
+release the container and copied values, including when a native child destructor
+throws during deep release. Dynamic named/associative spread handling remains
+separate unfinished work.
+
+`__rt_mbstring_stringable` provides the protected host action for Stringable
+preparation results. It reuses the existing native/eval string-context dispatcher,
+installs a complete native exception-handler record, and returns a pending-throwable
+status after an escaping PHP exception. Handler, activation-frame, and suppression
+state are restored before returning to a Rust caller. Successful `MbHostStringV1`
+results carry bytes, length, and a separate native owner. That owner is released
+by the native GC helper, never by `elephc_mbstring_release_v1`.
+
+`__rt_mbstring_input` describes an actual boxed value without coercing it. It
+preserves scalar bits, binary strings, opaque array identities, nullable containers,
+resources, and Closure identity. Native class tables supply borrowed class names
+and Stringable capability; eval class lookup first resolves the object's owning
+context, falling back to the active caller context, and
+returns a separately owned metadata string. The caller must retain argument values,
+copy any preparation output that borrows this metadata, and release the metadata
+owner before invoking PHP callbacks. This helper performs no array traversal or
+Stringable execution. Production AOT and eval consume it through the same
+coordinator.
+
+The eval string-view ABI borrows bytes from an existing string cell, avoiding an
+unowned copy during metadata lookup. String-context exceptions transfer their
+raw Throwable owner before releasing the temporary boxed cell. Native constructor
+bridges borrow normalized argument cells from their private array, release key
+temporaries and replaced Throwable defaults, and release materialized parameter
+defaults after writeback. Mutable Mixed constructor reference slots own their
+staging cell, and an unchanged slot releases that owner after the call. Dynamic
+property assignment retains its borrowed cell for the property hash.
+Eval new-object expressions also release their directly
+allocated literal arguments after construction or failure. Ownership of other
+eval expression temporaries remains a separate, unfinished audit.
+
+`EncodingListBuilder` resolves array-valued encoding lists incrementally: the host
+converts one element, the engine resolves it using the currently active language,
+and only then does the host advance. The builder retains the first `auto` expansion
+and rejects finalization after a failed entry. This allows callbacks between
+elements without retaining a Rust request-state borrow across PHP execution.
+
 ## Callable routines
 
 **Source:** `src/codegen_support/runtime/callables/` (5 files including `mod.rs`)
@@ -264,6 +617,13 @@ Dynamic invocation builtins use generated callable descriptors rather than these
 The signature side record stores visible, required, and regular parameter counts; variadic index; return type and return register count; declared-return flags; parameter names and types; defaults; by-reference flags; and declared-parameter flags. The environment record stores capture and hidden wrapper-parameter bindings. The invocation record stores the callable shape (`string`, callable array, closure, first-class callable, object `__invoke`, static method, instance method, builtin, extern, or user function) plus receiver, method, and auxiliary names where applicable.
 
 `call_user_func()`, `call_user_func_array()`, direct string-variable calls, direct callable-array variable and literal calls, direct invokable-object calls, method first-class callable variable calls, and `iterator_apply()` compare runtime string names or descriptor-selected callable entries against generated cases. Runtime string callback names now materialize the matched descriptor and invoke its uniform invoker slot for user functions, extern wrappers, builtins, and public static methods, so signature defaults, named arguments, by-reference flags, variadics, and return boxing live behind the descriptor rather than in each string-dispatch callsite. `iterator_apply()` can also retain a branch-selected captured descriptor or runtime-selected callable-array descriptor and call that descriptor's invoker directly for each loop iteration. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, and `preg_replace_callback()` retain descriptor-valued callable variables and `callable` parameters in descriptor callback environments, so by-value closure captures, method receivers, and late-static binding state are read from descriptor storage instead of current source locals. These callback runtimes also match runtime callable-array variables such as `[$object, $method]` or `[$class, $method]` against public method descriptor cases before invoking the shared descriptor callback wrapper. `usort()`, `uksort()`, and `uasort()` use descriptor comparator environments for branch-selected captured descriptors. `CallbackFilterIterator` and `RecursiveCallbackFilterIterator` store branch-selected captured descriptors and runtime-selected callable-array variable or literal descriptors in persistent callback environments, then call the same descriptor invoker from `accept()`. `call_user_func()` and direct callable-variable invocations build boxed indexed argument containers for descriptor-backed calls; named direct calls build associative hashes. Variable arguments in either shape can be encoded as internal reference-cell markers, including boxed markers inside named hash entries, so the generated invoker can either pass the original storage to by-reference parameters or dereference it for by-value parameters after reading the descriptor signature. `call_user_func_array()` clones the provided indexed array or hash, widens the clone to boxed `Mixed`, and passes one boxed container to the descriptor invoker. The invoker inspects the boxed container tag at runtime, dispatches to indexed-array or associative-hash argument materialization, unboxes boxed array/hash payloads for declared array parameters, and is keyed by callable signature rather than by caller array shape. Closure and first-class-callable descriptors with `use (...)`, receiver, or late-static-binding context allocate runtime descriptor copies whose fixed header is followed by capture value slots; descriptor invokers reload those slots as hidden arguments, including by-reference captures. Method first-class callable variables use this descriptor path even when the original receiver variable still has static metadata, so reassignment of that source local cannot change the stored receiver. Callable variables and array elements whose descriptor was selected by an earlier runtime expression use the descriptor invoker when the local callsite no longer has static signature or capture metadata. Compile-time static-method callable arrays now materialize static-method descriptors for direct variable and literal calls, `call_user_func()` calls, and `call_user_func_array()` calls, including associative argument containers whose leftover string keys are forwarded into user-defined variadic method tails. Direct instance-method callable-array variable calls read the receiver from slot zero of the stored callable array, while direct instance-method callable-array literal calls evaluate the receiver before visible call arguments; both prepend it as descriptor argument zero and then let the descriptor signature normalize visible named/default/variadic/by-reference arguments. Direct invokable-object calls prepend the object as descriptor argument zero and use the object-invoke descriptor shape for the same named/default/variadic/by-reference handling, including non-local receiver expressions such as `(new Runner())(...)`. Compile-time instance-method callable arrays and invokable objects use instance/object descriptor shapes for direct `call_user_func()` calls and for `call_user_func_array()` calls whose argument container is literal indexed, literal associative, dynamic indexed, dynamic associative, or runtime-opaque mixed/union; the receiver is prepended as a synthetic descriptor argument before the visible callback arguments. Receiver-bound runtime-opaque containers branch on their boxed payload tag, clone and widen the payload to Mixed entries, then build a receiver-prefixed indexed array or associative hash for the descriptor invoker.
+
+Multiple runtime unpack sources in a dynamically resolved call are validated and copied in source
+order, including named-key duplication and the rule against a numeric key after a named key within
+one source. A non-empty positional source after an earlier named source needs segment-aware
+parameter binding, which the boxed descriptor container does not encode yet. Elephc raises a
+catchable `Error` with an explicit unsupported diagnostic for that shape instead of lowering it to
+a different argument list.
 
 Extern callback trampolines use the same descriptor invoker from a C-facing entry point. Each extern callable callsite has a generated descriptor slot and trampoline symbol; the trampoline reloads the current descriptor, boxes incoming scalar/pointer C callback arguments as a temporary indexed `Mixed` array, invokes the descriptor, casts the boxed result to `int`, `float`, `bool`, `ptr`, or `void`, and returns through the target C ABI.
 
@@ -335,8 +695,11 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 | `__rt_hash_key_eq` | Compare normalized int/string array keys | `x1`/`x2`, `x3`/`x4` = keys | `x0` = equal flag |
 | `__rt_hash_new` | Create hash table | `x0` = capacity, `x1` = coarse value-type summary | `x0` = hash ptr |
 | `__rt_hash_clone_shallow` | Clone hash storage for copy-on-write splitting, re-persisting keys and retaining nested heap values as needed | `x0` = hash | `x0` = new hash |
-| `__rt_hash_ensure_unique` | Split a shared hash table before mutation | `x0` = hash | `x0` = unique hash |
-| `__rt_hash_grow` | Double hash table capacity, rehash all entries | `x0` = hash | `x0` = new hash |
+| `__rt_hash_ensure_unique` | Split a hash shared by PHP value owners, excluding internal lifetime pins | `x0` = hash | `x0` = unique hash |
+| `__rt_hash_pin` | Retain a lifetime root without adding a PHP value owner | `x0` = nonnull managed hash | `x0` = same hash |
+| `__rt_hash_unpin` | Remove one pin and release its physical root through ordinary deep cleanup, which may invoke destructors | `x0` = pinned hash | None |
+| `__rt_hash_grow` | Separate shared values, then replace entry storage at twice the capacity | `x0` = hash | `x0` = possibly separated hash |
+| `__rt_hash_grow_owned` | Rehash an internal construction array while preserving its header and aliases, without copy-on-write separation | `x0` = hash | `x0` = same hash |
 | `__rt_hash_set` | Insert/update (grows at 75% load) | `x0`=hash, `x1`/`x2`=normalized key, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
 | `__rt_hash_append` | Append with PHP's next automatic integer key (largest existing int key + 1, or 0), then delegate to `__rt_hash_set` | `x0`=hash, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
 | `__rt_hash_insert_owned` | Reinsert an already-owned key/value pair during hash growth | `x0`=hash, `x1`/`x2`=normalized key, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
@@ -517,6 +880,8 @@ elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_exception_cleanup_frames` | Walk the activation-record stack, run per-frame cleanup callbacks, and stop at the frame that should survive the catch | `x0` = surviving activation record | — |
+| `__rt_exception_guard_owned` / `__rt_exception_unguard_owned` | Insert or unlink a stack-local argument owner while preserving parameter cleanup order | C ABI guard pointer and optional insertion anchor | Guard token or no value |
+| `__rt_exception_release_owned` / `__rt_exception_release_callable` | Clear captured ownership and run its typed release behind a protected PHP callback | C ABI guard pointer | Success or pending throwable status |
 | `__rt_exception_matches` | Check whether the active exception matches a catch target by class id or interface id | `x0` = exception object, `x1` = target id, `x2` = 0 for class / 1 for interface | `x0` = 1 if it matches, 0 otherwise |
 | `__rt_instanceof_lookup` | Resolve a dynamic class-string `instanceof` target through emitted case-insensitive class/interface metadata | `x1`/`x2` = target string | `x0` = found flag, `x1` = target id, `x2` = 0 class / 1 interface |
 | `__rt_instanceof_invalid_target` | Abort when a dynamic `instanceof` target is neither a string nor an object | — | does not return |
@@ -950,14 +1315,14 @@ These helpers implement PHP 8.1-style cooperative coroutines. They are emitted b
 
 **File:** `src/codegen_support/runtime/emitters.rs`
 
-The `emit_runtime()` function calls the target-aware routine emitters in a fixed order. Each runtime module owns the shared helper surface and dispatches internally when AArch64 and Linux `x86_64` need different instruction sequences or ABI setup. A `RuntimeFeatures` argument gates the optional groups: the regex family and `__rt_mb_strlen` are emitted only for programs that use them, the eval bridge/scope helpers only when the final EIR module requires them, and the `--web` flag selects the web-aware bodies of `__rt_stdout_write`, `__rt_php_input`, `__rt_http_response_code`, and `__rt_header`.
+The `emit_runtime()` function calls the target-aware routine emitters in a fixed order. Each runtime module owns the shared helper surface and dispatches internally when AArch64 and Linux `x86_64` need different instruction sequences or ABI setup. A `RuntimeFeatures` argument gates the optional groups: the regex family is emitted when selected, and mbstring helpers are emitted for direct mbstring use or dynamic eval, the eval bridge/scope helpers only when the final EIR module requires them, and the `--web` flag selects the web-aware bodies of `__rt_stdout_write`, `__rt_php_input`, `__rt_http_response_code`, and `__rt_header`.
 
 ```rust
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // diagnostics: runtime warning emission and @ suppression state
     // numeric: PHP float-to-int coercion and shared rounding-mode decoding
     // strings: itoa, resource display/stdout, ftoa, concat, atoi, equality, formatting, trim/mask,
-    // search/replace, explode/implode, hashing, encoding, sscanf, mb_strlen (gated), ...
+    // search/replace, explode/implode, hashing, encoding, sscanf, mbstring (gated), ...
     // bcmath: exact-decimal bridge marshalling and catchable error translation
     // callables: dynamic is_callable() fallback, callable-descriptor release, Closure::bind
     // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, serialize/unserialize, regex (gated)

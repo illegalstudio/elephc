@@ -60,3 +60,48 @@ return true;"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Dropping one options result must leave the stream-context table owner available to later gets.
+#[test]
+fn stream_context_get_options_preserves_the_table_owner() {
+    let drop_result = parse_fragment(
+        br#"stream_context_get_options($ctx);
+return true;"#,
+    )
+    .expect("parse first options fetch");
+    let get_again = parse_fragment(br#"return stream_context_get_options($ctx);"#)
+        .expect("parse second options fetch");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let options = values.assoc_new(0).expect("options array");
+    let options_identity = options.as_ptr() as usize;
+    let resource_id = context
+        .stream_resources_mut()
+        .open_stream_context(Some(options));
+    let resource = values.resource(resource_id).expect("context resource");
+    scope.set("ctx", resource, ScopeCellOwnership::Owned);
+
+    let first = execute_program_with_context(
+        &mut context,
+        &drop_result,
+        &mut scope,
+        &mut values,
+    )
+    .expect("drop first options result");
+    values.release(first).expect("release first program result");
+    assert_eq!(values.cell_owners.get(&options_identity), Some(&1));
+
+    let second = execute_program_with_context(
+        &mut context,
+        &get_again,
+        &mut scope,
+        &mut values,
+    )
+    .expect("fetch options again");
+    assert_eq!(second.as_ptr(), options.as_ptr());
+    assert!(!second.is_borrowed());
+    assert_eq!(values.cell_owners.get(&options_identity), Some(&2));
+    values.release(second).expect("release second options result");
+    assert_eq!(values.cell_owners.get(&options_identity), Some(&1));
+}

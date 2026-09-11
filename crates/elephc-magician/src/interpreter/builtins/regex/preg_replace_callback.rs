@@ -35,17 +35,6 @@ pub(in crate::interpreter) fn eval_builtin_preg_replace_callback(
     eval_preg_replace_callback_result_from_scope(pattern, callback, subject, Some(scope), context, values)
 }
 
-/// Replaces every regex match by invoking an eval-supported callback with `$matches`.
-pub(in crate::interpreter) fn eval_preg_replace_callback_result(
-    pattern: RuntimeCellHandle,
-    callback: RuntimeCellHandle,
-    subject: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_preg_replace_callback_result_from_scope(pattern, callback, subject, None, context, values)
-}
-
 /// Replaces regex matches with optional lexical scope for callback names.
 fn eval_preg_replace_callback_result_from_scope(
     pattern: RuntimeCellHandle,
@@ -81,11 +70,19 @@ fn eval_preg_replace_callback_result_from_scope(
 /// Dispatches by-value `preg_replace_callback()` calls after argument binding.
 pub(in crate::interpreter) fn eval_preg_replace_callback_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [pattern, callback, subject] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    eval_preg_replace_callback_result(*pattern, *callback, *subject, context, values)
+    eval_preg_replace_callback_result_from_scope(
+        *pattern,
+        *callback,
+        *subject,
+        lexical_scope,
+        context,
+        values,
+    )
 }

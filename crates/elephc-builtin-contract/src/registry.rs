@@ -36,12 +36,14 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let curl_capacity = 0;
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
+                    + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
                     + curl_capacity,
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
@@ -106,6 +108,12 @@ fn build_registry() -> Registry {
             "builtin contract ID does not match canonical name: {}",
             contract.name
         );
+        contract.returns.validate().unwrap_or_else(|error|
+            panic!("invalid return type for {}: {error}", contract.name));
+        for parameter in contract.params {
+            parameter.ty.validate().unwrap_or_else(|error|
+                panic!("invalid parameter type for {}::${}: {error}", contract.name, parameter.name));
+        }
         let mut callback_names = HashSet::new();
         for callback_name in contract.callback_parameter_names() {
             assert!(
@@ -148,7 +156,7 @@ mod tests {
         // The PHP-visible `curl_*` surface is published only with the `curl`
         // feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(contracts().len(), 1039 + curl_surface);
+        assert_eq!(contracts().len(), 1101 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

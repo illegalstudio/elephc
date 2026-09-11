@@ -17,9 +17,17 @@ pub(in crate::interpreter) fn eval_native_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args =
-        eval_native_function_call_args(&function, args, context, caller_scope, values)?;
-    eval_native_function_with_values(function, evaluated_args, context, values)
+    with_eval_call_arguments(
+        args,
+        context,
+        caller_scope,
+        values,
+        |arguments, context, _, values| {
+            let bound =
+                bind_evaluated_native_function_args(&function, arguments, context, values)?;
+            eval_native_function_with_values(function, bound, context, values)
+        },
+    )
 }
 
 /// Invokes a registered AOT function after its arguments have been bound and staged.
@@ -29,34 +37,82 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = invoke_bound_native_function(&function, &bound_args, context, values);
+    finish_native_argument_cleanup(result, bound_args.owners, values)
+}
+
+/// Releases binding temporaries even on failure, discarding a successful result if cleanup fails.
+fn finish_native_argument_cleanup(
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    owners: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let cleanup = release_native_argument_owners(owners, values);
+    match (result, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = values.release(value);
+            Err(status)
+        }
+    }
+}
+
+/// Retires every binding owner in reverse acquisition order despite individual release failures.
+pub(super) fn release_native_argument_owners(
+    owners: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut cleanup = Ok(());
+    for value in owners.into_iter().rev() {
+        if let Err(status) = values.release(value) { cleanup = Err(status); }
+    }
+    cleanup
+}
+
+/// Calls a native entry while borrowing the binding ledger and completing reference writeback.
+fn invoke_bound_native_function(
+    function: &NativeFunction,
+    bound_args: &BoundNativeFunctionArgs,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if !function.bridge_supported() {
+        let _ = cleanup_native_function_ref_args(bound_args, values);
         return Err(EvalStatus::RuntimeFatal);
     }
     let variadic_index = native_function_variadic_index(&function);
     if variadic_index.is_none() && bound_args.values.len() != function.param_count() {
+        let _ = cleanup_native_function_ref_args(bound_args, values);
         return Err(EvalStatus::RuntimeFatal);
     }
     if let Some(variadic_index) = variadic_index {
         if bound_args.values.len() < function.required_param_count().min(variadic_index) {
+            let _ = cleanup_native_function_ref_args(bound_args, values);
             return Err(EvalStatus::RuntimeFatal);
         }
     }
-    let arg_array = match build_native_function_arg_array(&bound_args, values) {
+    let arg_array = match build_native_function_arg_array(bound_args, values) {
         Ok(arg_array) => arg_array,
         Err(status) => {
-            cleanup_native_function_ref_args(&bound_args, values)?;
+            let _ = cleanup_native_function_ref_args(bound_args, values);
             return Err(status);
         }
     };
-    let result = unsafe { function.call(arg_array) };
+    let raw_result = unsafe { function.call(arg_array) };
+    let result = values.native_call_result(raw_result);
     if let Err(status) = values.release(arg_array) {
-        cleanup_native_function_ref_args(&bound_args, values)?;
+        let _ = cleanup_native_function_ref_args(bound_args, values);
+        if let Ok(result) = result { let _ = values.release(result); }
         return Err(status);
     }
-    let result = values.native_call_result(result);
-    let writeback = write_back_native_function_ref_args(&bound_args, context, values);
+    let writeback = write_back_native_function_ref_args(bound_args, context, values);
     match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Err(status), _) => Err(status),
+        (Ok(result), Err(status)) => {
+            let _ = values.release(result);
+            Err(status)
+        }
         (Ok(result), Ok(())) => {
             eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
         }
@@ -77,7 +133,9 @@ fn build_native_function_arg_array(
                 return Err(status);
             }
         };
-        if let Err(status) = values.array_set(arg_array, index, value) {
+        let inserted = values.array_set(arg_array, index, value);
+        let released = values.release(index);
+        if let Err(status) = inserted.and(released) {
             values.release(arg_array)?;
             return Err(status);
         }
@@ -86,33 +144,49 @@ fn build_native_function_arg_array(
 }
 
 /// Releases retained raw native-function by-reference staging slots without writeback.
-fn cleanup_native_function_ref_args(
+pub(super) fn cleanup_native_function_ref_args(
     bound_args: &BoundNativeFunctionArgs,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    let mut cleanup = Ok(());
     for ref_slot in &bound_args.ref_slots {
+        if let Err(status) = cleanup_native_function_ref_slot(ref_slot, values) { cleanup = Err(status); }
+    }
+    cleanup
+}
+
+/// Exposes native reference-slot cleanup to the focused ownership ledger tests.
+#[cfg(test)]
+pub(in crate::interpreter) fn cleanup_native_function_ref_args_for_test(
+    bound_args: &BoundNativeFunctionArgs,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    cleanup_native_function_ref_args(bound_args, values)
+}
+
+/// Retires the owner currently stored in one native by-reference staging slot.
+///
+/// Generated reference-cell stores consume the staged owner before installing a
+/// replacement. Once the native call returns, `original` is an identity marker
+/// only: the slot's current occupant is the one remaining owner to release.
+fn cleanup_native_function_ref_slot(
+    ref_slot: &BoundNativeFunctionRefSlot,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
         match ref_slot {
-            BoundNativeFunctionRefSlot::RawString { original, slot, .. } => {
+            BoundNativeFunctionRefSlot::RawString { slot, .. } => {
                 let words = **slot;
-                values.release_raw_string_words(words[0], words[1])?;
-                if words[0] != original[0] {
-                    values.release_raw_string_words(original[0], original[1])?;
-                }
+                values.release_raw_string_words(words[0], words[1])
             }
-            BoundNativeFunctionRefSlot::OwnedRawWord { original, slot, .. } => {
+            BoundNativeFunctionRefSlot::OwnedRawWord { slot, .. } => {
                 let word = **slot;
-                values.release_raw_heap_word(word)?;
-                if word != *original {
-                    values.release_raw_heap_word(*original)?;
-                }
+                values.release_raw_heap_word(word)
             }
             BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
-                values.release(**slot)?;
+                values.release(RuntimeCellHandle::from_raw(**slot))
             }
-            BoundNativeFunctionRefSlot::RawWord { .. } => {}
+            BoundNativeFunctionRefSlot::RawWord { .. } => Ok(()),
         }
-    }
-    Ok(())
 }
 
 /// Writes changed staged native-function by-reference slots back to eval caller targets.
@@ -121,21 +195,37 @@ fn write_back_native_function_ref_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    for ref_slot in &bound_args.ref_slots {
+    for (index, ref_slot) in bound_args.ref_slots.iter().enumerate() {
+        if let Err(status) = write_back_native_function_ref_slot(ref_slot, context, values) {
+            for remaining in &bound_args.ref_slots[index + 1..] {
+                let _ = cleanup_native_function_ref_slot(remaining, values);
+            }
+            return Err(status);
+        }
+    }
+    Ok(())
+}
+
+/// Consumes one staged reference owner while applying its caller-side writeback.
+fn write_back_native_function_ref_slot(
+    ref_slot: &BoundNativeFunctionRefSlot,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
         match ref_slot {
             BoundNativeFunctionRefSlot::Mixed {
                 original,
                 slot,
                 target,
             } => {
-                let value = **slot;
+                let value = RuntimeCellHandle::from_raw(**slot);
                 if value == *original {
                     values.release(value)?;
-                    continue;
+                    return Ok(());
                 }
                 let Some(target) = target else {
                     values.release(value)?;
-                    continue;
+                    return Ok(());
                 };
                 let current = match eval_reference_target_value(target, context, values) {
                     Ok(current) => current,
@@ -146,7 +236,7 @@ fn write_back_native_function_ref_args(
                 };
                 if current == value {
                     values.release(value)?;
-                    continue;
+                    return Ok(());
                 }
                 if let Err(status) = eval_write_direct_ref_target(
                     target,
@@ -167,10 +257,10 @@ fn write_back_native_function_ref_args(
             } => {
                 let word = **slot;
                 if word == *original {
-                    continue;
+                    return Ok(());
                 }
                 let Some(target) = target else {
-                    continue;
+                    return Ok(());
                 };
                 let value = values.raw_word_value(*tag, word)?;
                 eval_write_direct_ref_target(
@@ -189,23 +279,17 @@ fn write_back_native_function_ref_args(
                 let words = **slot;
                 if target.is_none() {
                     values.release_raw_string_words(words[0], words[1])?;
-                    if words[0] != original[0] {
-                        values.release_raw_string_words(original[0], original[1])?;
-                    }
-                    continue;
+                    return Ok(());
                 }
                 let Some(target) = target else {
                     return Err(EvalStatus::RuntimeFatal);
                 };
                 if words == *original {
                     values.release_raw_string_words(words[0], words[1])?;
-                    continue;
+                    return Ok(());
                 }
                 let value = values.raw_string_value(words[0], words[1]);
                 values.release_raw_string_words(words[0], words[1])?;
-                if words[0] != original[0] {
-                    values.release_raw_string_words(original[0], original[1])?;
-                }
                 let value = value?;
                 eval_write_direct_ref_target(
                     target,
@@ -223,21 +307,17 @@ fn write_back_native_function_ref_args(
                 let word = **slot;
                 if target.is_none() {
                     values.release_raw_heap_word(word)?;
-                    if word != *original {
-                        values.release_raw_heap_word(*original)?;
-                    }
-                    continue;
+                    return Ok(());
                 }
                 let Some(target) = target else {
                     return Err(EvalStatus::RuntimeFatal);
                 };
                 if word == *original {
                     values.release_raw_heap_word(word)?;
-                    continue;
+                    return Ok(());
                 }
                 let value = values.raw_heap_word_value(word);
                 values.release_raw_heap_word(word)?;
-                values.release_raw_heap_word(*original)?;
                 let value = value?;
                 eval_write_direct_ref_target(
                     target,
@@ -248,6 +328,5 @@ fn write_back_native_function_ref_args(
                 )?;
             }
         }
-    }
     Ok(())
 }

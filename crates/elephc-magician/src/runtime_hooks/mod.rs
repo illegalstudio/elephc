@@ -16,6 +16,8 @@ mod externs;
 #[cfg(not(test))]
 mod ops;
 #[cfg(not(test))]
+mod object_owners;
+#[cfg(not(test))]
 mod tags;
 
 #[cfg(not(test))]
@@ -28,6 +30,7 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 use externs::{
     __elephc_eval_install_dynamic_object_destructor_hook, __elephc_eval_value_array_new,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
+    __elephc_eval_value_release,
 };
 
 /// Runtime hook adapter that produces and consumes boxed elephc Mixed cells.
@@ -66,17 +69,26 @@ impl ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_object_from_raw(object) })
     }
 
-    /// Packs source-order argument cells into the boxed eval array ABI.
+    /// Packs borrowed arguments into an owned array, releasing temporary keys and partial arrays on failure.
     fn arg_array(args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
         let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
-        let mut arg_array = Self::handle(arg_array)?;
-        for (index, value) in args.into_iter().enumerate() {
-            let index = Self::handle(unsafe { __elephc_eval_value_int(index as i64) })?;
-            arg_array = Self::handle(unsafe {
-                __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
-            })?;
+        let arg_array = Self::handle(arg_array)?;
+        let result = (|| {
+            for (index, value) in args.into_iter().enumerate() {
+                let index = Self::handle(unsafe { __elephc_eval_value_int(index as i64) })?;
+                let updated = unsafe {
+                    __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
+                };
+                unsafe { __elephc_eval_value_release(index.as_ptr()); }
+                // The setter mutates and returns the same box without creating another owner.
+                Self::handle(updated)?;
+            }
+            Ok(arg_array)
+        })();
+        if result.is_err() {
+            unsafe { __elephc_eval_value_release(arg_array.as_ptr()); }
         }
-        Ok(arg_array)
+        result
     }
 
     /// Returns the active eval class-scope bytes in the generated helper ABI shape.
@@ -96,17 +108,22 @@ impl ElephcRuntimeOps {
 pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
     unsafe {
         __elephc_eval_install_dynamic_object_destructor_hook(callback);
+        externs::__elephc_eval_install_object_owner_hooks(
+            object_owners::object_gc_child as *const () as usize,
+            object_owners::release_object_children as *const () as usize,
+        );
     }
 }
 
 /// Installs the eval output-buffering handler callback into the generated runtime.
 ///
 /// # Safety
-/// `callback` must be the address of a `fn(i64, *const u8, i64, i64) -> *mut RuntimeCell`
-/// with the eval ob-handler ABI; the runtime calls through it on buffer flushes.
+/// `callback` accepts a writable `OutputHandlerCallV1` pointer and returns a status.
+/// The runtime calls it on buffer flushes and consumes returned owners after Rust exits.
+/// `release` accepts a registry id and boxed-Throwable output pointer and returns a status.
 #[cfg(not(test))]
-pub(crate) unsafe fn install_ob_handler_hook(callback: usize) {
+pub(crate) unsafe fn install_ob_handler_hook(callback: usize, release: usize) {
     unsafe {
-        externs::install_ob_handler_hook_raw(callback);
+        externs::install_ob_handler_hook_raw(callback, release);
     }
 }

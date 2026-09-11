@@ -1,11 +1,11 @@
 ---
-title: "error_log() — internals"
+title: "error_log() - internals"
 description: "Compiler internals for error_log(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 881
+  order: 942
 ---
 
-## `error_log()` — internals
+## `error_log()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function error_log(string $message, int $message_type = 0, ?string $destination 
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

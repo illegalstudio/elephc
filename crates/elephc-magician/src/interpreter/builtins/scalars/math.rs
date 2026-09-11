@@ -21,8 +21,7 @@ pub(in crate::interpreter) fn eval_min_max_selected(
     };
     let mut selected = first;
     for candidate in rest {
-        let better = values.compare(op, *candidate, selected)?;
-        if values.truthy(better)? {
+        if eval_comparison_condition(op, *candidate, selected, values)? {
             selected = *candidate;
         }
     }

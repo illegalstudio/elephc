@@ -1,11 +1,11 @@
 ---
-title: "pdo_drivers() — internals"
+title: "pdo_drivers() - internals"
 description: "Compiler internals for pdo_drivers(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 182
 ---
 
-## `pdo_drivers()` — internals
+## `pdo_drivers()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function pdo_drivers(): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

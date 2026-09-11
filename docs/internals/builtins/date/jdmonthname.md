@@ -1,11 +1,11 @@
 ---
-title: "jdmonthname() — internals"
+title: "jdmonthname() - internals"
 description: "Compiler internals for jdmonthname(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 228
 ---
 
-## `jdmonthname()` — internals
+## `jdmonthname()` - internals
 
 ## Where it lives
 

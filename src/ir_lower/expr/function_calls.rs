@@ -80,6 +80,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
+    if !is_extern && !is_user_function {
+        if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr) {
+            return call;
+        }
+    }
     let operands = if is_extern || is_user_function {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
@@ -126,19 +131,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             effects_lookup::user_call_effects(canonical),
             Some(expr.span),
         );
-        // Plain user calls release owned argument temporaries the same way method and
-        // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
-        // that returns its own array argument typed `iterable`) from being freed.
-        let return_alias = ctx
-            .return_alias_summaries
-            .function(canonical)
-            .cloned()
-            .unwrap_or(ReturnArgAlias::Unknown);
-        release_owned_call_arg_temporaries_with_signature(
+        release_user_call_argument_temporaries(
             ctx,
+            canonical,
             &operands,
-            Some(call.value),
-            &return_alias,
+            call,
             sig.as_ref(),
             expr.span,
         );
@@ -161,6 +158,22 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     }
     let eval_literal = eval_literal_fragment(canonical, args);
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
+}
+
+/// Applies the same argument ownership contract to direct and statically resolved user calls.
+pub(super) fn release_user_call_argument_temporaries(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    arguments: &[ValueId],
+    result: LoweredValue,
+    signature: Option<&FunctionSig>,
+    span: Span,
+) {
+    let return_alias = ctx.return_alias_summaries.function(name)
+        .cloned().unwrap_or(ReturnArgAlias::Unknown);
+    release_owned_call_arg_temporaries_with_signature(
+        ctx, arguments, Some(result.value), &return_alias, signature, span,
+    );
 }
 
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
@@ -243,26 +256,12 @@ pub(super) fn emit_builtin_call_value(
             effects_lookup::language_construct_effects(name),
         )
     };
-    let call = ctx.emit_value(
-        op,
-        operands.clone(),
-        immediate,
-        php_type,
-        effects,
-        Some(span),
-    );
-    release_owned_call_arg_temporaries(
-        ctx,
-        &operands,
-        Some(call.value),
-        &ReturnArgAlias::Unknown,
-        span,
-    );
     let eval_needs_barrier = match eval_literal {
         Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
         None => true,
     };
-    if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
+    let is_eval = php_symbol_key(name.trim_start_matches('\\')) == "eval";
+    if is_eval {
         ctx.mark_eval_executed();
         if eval_needs_barrier {
             ctx.apply_eval_barrier();
@@ -271,7 +270,37 @@ pub(super) fn emit_builtin_call_value(
         {
             ctx.apply_eval_scope_barrier(&write_names);
         }
+        ctx.begin_argument_guard_scope();
+        for (parameter, value) in operands.iter().copied().enumerate() {
+            let source = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            if ctx.value_is_owning_temporary(source)
+                && !ctx.has_call_argument_guard(source.value)
+            {
+                ctx.guard_call_argument(source, parameter, span);
+            }
+        }
+        ctx.end_argument_guard_scope();
     }
+    let call = ctx.emit_value(
+        op,
+        operands.clone(),
+        immediate,
+        php_type,
+        effects,
+        Some(span),
+    );
+    // Scope widening can make the already-lowered source load an owned string cast.
+    // Eval guards that owner through exceptional exits, then releases it normally here.
+    release_owned_call_arg_temporaries(
+        ctx,
+        &operands,
+        Some(call.value),
+        if is_eval { &ReturnArgAlias::None } else { &ReturnArgAlias::Unknown },
+        span,
+    );
     call
 }
 
@@ -314,6 +343,7 @@ fn declared_type_is_a_safe_fallback(declared: &PhpType, checked: Option<&PhpType
     let Some(checked) = checked else {
         return true;
     };
+    /// Distinguishes PHP value representations from extension-only raw descriptors.
     fn is_a_php_value(ty: &PhpType) -> bool {
         !matches!(
             ty,

@@ -1,11 +1,11 @@
 ---
-title: "cairo_image_surface_get_height() — internals"
+title: "cairo_image_surface_get_height() - internals"
 description: "Compiler internals for cairo_image_surface_get_height(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 409
 ---
 
-## `cairo_image_surface_get_height()` — internals
+## `cairo_image_surface_get_height()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_image_surface_get_height(mixed $surface): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

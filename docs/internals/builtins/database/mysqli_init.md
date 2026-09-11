@@ -1,11 +1,11 @@
 ---
-title: "mysqli_init() — internals"
+title: "mysqli_init() - internals"
 description: "Compiler internals for mysqli_init(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 136
 ---
 
-## `mysqli_init()` — internals
+## `mysqli_init()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_init(): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

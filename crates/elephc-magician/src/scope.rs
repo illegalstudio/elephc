@@ -188,7 +188,21 @@ impl ElephcEvalScope {
     ) -> Option<RuntimeCellHandle> {
         let name = name.into();
         self.aot_visible_names.insert(name.clone());
-        self.set(name, cell, ownership)
+        let previous = self.entry(&name);
+        let dropped_owner = previous
+            .filter(|entry| {
+                ownership == ScopeCellOwnership::Borrowed
+                    && entry.flags().ownership == ScopeCellOwnership::Owned
+                    && entry.cell() == cell
+            })
+            .map(ScopeEntry::cell);
+        let replaced = self.set(name, cell, ownership);
+        if let Some(dropped_owner) = dropped_owner {
+            // Native code retains its own owner when it flushes this same cell
+            // back as borrowed, so the scope must surrender its previous owner.
+            return Some(dropped_owner);
+        }
+        replaced
     }
 
     /// Stores a variable while preserving existing PHP reference aliases.
@@ -333,6 +347,22 @@ impl ElephcEvalScope {
         }
     }
 
+    /// Marks a mutated reference and its local aliases dirty without transferring their ownership.
+    pub fn mark_reference_changed(&mut self, name: &str) {
+        let Some(cell) = self.visible_cell(name) else { return; };
+        self.bump_generation();
+        for (entry_name, entry) in &mut self.entries {
+            let flags = entry.flags();
+            if flags.is_visible() && entry.cell() == cell && (entry_name == name || flags.by_ref) {
+                *entry = if flags.by_ref {
+                    ScopeEntry::reference(cell, flags.ownership, self.generation)
+                } else {
+                    ScopeEntry::present(cell, flags.ownership, self.generation)
+                };
+            }
+        }
+    }
+
     /// Returns the entry for a named variable, including unset markers.
     pub fn entry(&self, name: &str) -> Option<ScopeEntry> {
         self.entries.get(name).copied()
@@ -343,6 +373,7 @@ impl ElephcEvalScope {
         self.entry(name)
             .filter(|entry| entry.flags().is_visible())
             .map(ScopeEntry::cell)
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Returns visible cells whose names are synchronized back to generated AOT storage.

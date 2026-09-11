@@ -1,11 +1,11 @@
 ---
-title: "trigger_error() — internals"
+title: "trigger_error() - internals"
 description: "Compiler internals for trigger_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 910
+  order: 971
 ---
 
-## `trigger_error()` — internals
+## `trigger_error()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function trigger_error(string $message, int $error_level = E_USER_NOTICE): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

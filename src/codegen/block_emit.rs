@@ -10,6 +10,8 @@
 //!   explicit unsupported-feature errors for control flow not lowered yet.
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
+//! - Executable and library PHP frames publish local cleanup activations so a throw
+//!   releases abandoned frame owners before control reaches the surviving catch.
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
@@ -86,6 +88,7 @@ pub(super) fn emit_module(
         }
     }
     function_variants::emit_dispatchers(module, emitter, data);
+    super::shared_mbstring_callable::emit(module, emitter, data, &mut shared)?;
     // Emitted before the module's own bodies so every string context that calls them is
     // lowered against helpers that already exist.
     super::shared_mixed_string::emit_shared_mixed_string_helpers(
@@ -243,7 +246,7 @@ fn emit_user_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
     );
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
@@ -280,7 +283,7 @@ pub(super) fn emit_synthetic_function_with_label(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -380,7 +383,7 @@ fn is_property_init_thunk(function: &Function) -> bool {
     function.name.starts_with("_class_propinit_")
 }
 
-/// Emits a class method using the legacy runtime metadata symbol shape.
+/// Emits a class method and gives runtime-called destructors exceptional local cleanup.
 fn emit_class_method(
     module: &Module,
     function: &Function,
@@ -408,7 +411,7 @@ fn emit_class_method(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -701,7 +704,7 @@ fn emit_generator_body(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
     );
     let epilogue_label = format!("{}_epilogue", body_label);
     let mut ctx = FunctionContext::new(
@@ -939,6 +942,14 @@ fn emit_main_function(
     if requires_elephc_tls {
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
     }
+    if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
+        if module.mbstring_startup.is_some() {
+            abi::emit_call_label(ctx.emitter, "__rt_mbstring_startup");
+        }
+        // This entry runs once per CLI invocation or once per web request. Eval fragments
+        // enter below it, preserving the same request settings and encoding lookup cache.
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_request_reset");
+    }
     // Enum cases are NOT initialized here any more: each case now materializes on
     // its first evaluation through `super::enum_singletons`, so a case that user
     // code never touches allocates nothing and burns no object handle — which is
@@ -1163,6 +1174,19 @@ fn emit_static_property_default_value(
             crate::codegen::emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Array(Box::new(elem_type.clone())),
+            );
+        }
+        LiteralDefaultValue::BoxedAssocArray {
+            value_type,
+            entries,
+        } => {
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(value_type.clone()),
+                },
             );
         }
     }

@@ -30,6 +30,41 @@ echo implode(",", $b->items);
     assert_eq!(out, "1,2,3");
 }
 
+/// A declared `array` property may hold associative storage. `usort()` discards those keys,
+/// sorts the values, and writes a dense array back after evaluating a nested place only once.
+#[test]
+fn test_usort_on_declared_assoc_property_reindexes_and_evaluates_place_once() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class B { public function __construct(public array $items) {} }
+class Holder { public function __construct(public B $current) {} }
+function next_index(int &$calls): int {
+    $calls++;
+    return 0;
+}
+$holder = new Holder(new B(["third" => 3, "first" => 1, "second" => 2]));
+$owners = [$holder];
+$original = $holder->current;
+$calls = 0;
+usort(
+    $owners[next_index($calls)]->current->items,
+    function($x, $y) use ($holder) {
+        $holder->current = new B(["replacement" => 9]);
+        return $x <=> $y;
+    },
+);
+echo implode(",", $original->items), "|", implode(",", $holder->current->items), "|", $calls;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1,2,3|9|1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected declared-array normalization owners to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// A property inherited from a parent class resolves through the same visible-property
 /// lookup, so `sort()` mutates the subclass instance's storage.
 #[test]

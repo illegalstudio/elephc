@@ -1,11 +1,11 @@
 ---
-title: "mysqli_prepare() — internals"
+title: "mysqli_prepare() - internals"
 description: "Compiler internals for mysqli_prepare(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 145
 ---
 
-## `mysqli_prepare()` — internals
+## `mysqli_prepare()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_prepare(mixed $mysql, string $query): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -72,7 +72,12 @@ fn native_attribute_take_arg(bytes: &[u8], offset: &mut usize) -> Option<EvalAtt
             native_attribute_take_u64(bytes, offset)?,
         )),
         NATIVE_ATTRIBUTE_ARG_STRING => {
-            native_attribute_take_string(bytes, offset).map(EvalAttributeArg::String)
+            let len = usize::try_from(native_attribute_take_u32(bytes, offset)?).ok()?;
+            let value = native_attribute_take_bytes(bytes, offset, len)?.to_vec();
+            Some(match String::from_utf8(value) {
+                Ok(value) => EvalAttributeArg::String(value),
+                Err(error) => EvalAttributeArg::Bytes(error.into_bytes()),
+            })
         }
         NATIVE_ATTRIBUTE_ARG_NAMED => {
             let name = native_attribute_take_string(bytes, offset)?;

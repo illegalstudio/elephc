@@ -1,7 +1,5 @@
 //! Purpose:
-//! Injects the three PHP version/environment-surface functions that carry no runtime state
-//! and are therefore pure compile-time answers: `zend_version()`, `php_sapi_name()` and
-//! `ini_restore()`.
+//! Injects PHP version/environment functions and the shared INI restore wrapper.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()`, after the OPcache/web preludes and before name
@@ -14,7 +12,7 @@
 //!   shared with the OPcache prelude (`opcache_prelude::detect`) rather than duplicated.
 //! - These are declared PHP FUNCTIONS, not builtins, for the same reason `ini_get` /
 //!   `ini_set` / `ini_get_all` are (see `opcache_prelude::build::cli_ini_get_decl`): they are
-//!   fixed projections of compile-time configuration, and a real declaration is what makes
+//!   wrappers around configuration, and a real declaration is what makes
 //!   `function_exists('zend_version')` report `true`.
 //! - `php_sapi_name()` returns the `PHP_SAPI` CONSTANT rather than a second baked literal,
 //!   so the two can never drift; `PHP_SAPI` itself is baked from `web_prelude::sapi_name`
@@ -53,28 +51,12 @@ fn php_sapi_name_decl() -> Stmt {
         .build()
 }
 
-/// `ini_restore()`: restores a directive to its startup value — a NO-OP in elephc.
-///
-/// Reference PHP resets the directive to the value it had at startup and returns `void`
-/// (verified on 8.5.6: `var_dump(ini_restore('precision'))` prints `NULL`).
-///
-/// In elephc every INI value is baked into the binary at compile time and NOTHING can change
-/// it at runtime: `ini_set()` already reports failure (`false`) for every key it is asked to
-/// set, precisely because the compiled value cannot move (see
-/// `opcache_prelude::build::cli_ini_set_decl` and the `--web` `ini_set` in `web_prelude`). A
-/// directive is therefore *always already* at its startup value, which makes "restore it to
-/// the startup value" a no-op that is not an approximation but the exact outcome: after
-/// `ini_restore($k)`, `ini_get($k)` returns what it returned before, which is what reference
-/// PHP guarantees too whenever no `ini_set` succeeded in between. Because no `ini_set` can
-/// ever succeed here, that condition always holds.
-///
-/// The parameter is consumed into a discarded local so the checker does not flag it unused,
-/// mirroring how the CLI `ini_set` wrapper consumes `$value`.
+/// Restores shared Core and mbstring directives while leaving immutable or unknown settings unchanged.
 fn ini_restore_decl() -> Stmt {
     function("ini_restore")
         .param("option", TypeExpr::Str)
         .returns(TypeExpr::Void)
-        .body(vec![s_assign(
+        .body(vec![crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_RESTORE), s_assign(
             "option",
             e_cast(CastType::String, e_var("option")),
         )])

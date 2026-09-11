@@ -20,6 +20,18 @@ use super::scan::tokenize;
 use super::TokenKind;
 use crate::errors::EvalParseError;
 
+/// Preserves hexadecimal/octal bytes and keeps private-use source characters distinct from byte markers.
+#[test]
+fn string_literal_bytes_preserve_raw_escapes_and_private_use_text() {
+    for (source, expected) in [(r#""\xFF\377\xC3\xA9";"#.to_owned(), vec![0xff, 0xff, 0xc3, 0xa9]),
+        ("\"\u{e000}\u{e0ff}\";".to_owned(), "\u{e000}\u{e0ff}".as_bytes().to_vec()),
+        ("'\u{e000}\u{e0ff}';".to_owned(), "\u{e000}\u{e0ff}".as_bytes().to_vec())] {
+        let tokens = kinds(&source);
+        let [TokenKind::String(value), TokenKind::Semicolon, TokenKind::Eof] = tokens.as_slice() else { panic!("unexpected tokens: {tokens:?}"); };
+        assert_eq!(elephc_builtin_contract::string_literal::literal_bytes(value), expected);
+    }
+}
+
 /// Tokenizes a fragment and returns the token kinds, failing the test on a parse error.
 fn kinds(source: &str) -> Vec<TokenKind> {
     tokenize(source)

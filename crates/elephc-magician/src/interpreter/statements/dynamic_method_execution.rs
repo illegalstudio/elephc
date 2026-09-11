@@ -98,13 +98,14 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     method_scope.set("this", object, ScopeCellOwnership::Borrowed);
     let scope_parameter_is_by_ref =
         method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
-    bind_method_scope_args(
+    let binding_result = bind_method_scope_args(
         &mut method_scope,
         method.params(),
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
-    let result = execute_statements(method.body(), context, &mut method_scope, values);
+    let result = binding_result.and_then(|()| execute_statements(method.body(), context, &mut method_scope, values));
     let persist_result = persist_static_locals(
         context,
         &qualified_method_name,
@@ -133,6 +134,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
+    let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
     context.pop_function();
     return_result
 }
@@ -220,13 +222,14 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let mut method_scope = ElephcEvalScope::new();
     let scope_parameter_is_by_ref =
         method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
-    bind_method_scope_args(
+    let binding_result = bind_method_scope_args(
         &mut method_scope,
         method.params(),
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
-    let result = execute_statements(method.body(), context, &mut method_scope, values);
+    let result = binding_result.and_then(|()| execute_statements(method.body(), context, &mut method_scope, values));
     let persist_result = persist_static_locals(
         context,
         &qualified_method_name,
@@ -255,6 +258,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
+    let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
     context.pop_function();
     return_result
 }

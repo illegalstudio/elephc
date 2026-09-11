@@ -41,28 +41,22 @@ pub(super) fn eval_reflection_method_forwarded_value_arg(arg: EvaluatedCallArg) 
     }
 }
 
-/// Binds `ReflectionMethod::invokeArgs()` and expands its PHP argument array.
+/// Binds ReflectionMethod's receiver and argument-array handle before owned expansion.
 pub(super) fn eval_reflection_method_invoke_args_array(
     evaluated_args: Vec<EvaluatedCallArg>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, Vec<EvaluatedCallArg>), EvalStatus> {
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
     let args = bind_evaluated_function_args(
-        &[String::from("object"), String::from("args")],
-        evaluated_args,
+        &[String::from("object"), String::from("args")], evaluated_args,
     )?;
-    let method_args = eval_array_call_arg_values(args[1], context, values)?;
-    Ok((args[0], method_args))
+    Ok((args[0], args[1]))
 }
 
-/// Binds `ReflectionFunction::invokeArgs()` and expands its PHP argument array.
+/// Binds ReflectionFunction's argument-array handle before owned expansion.
 pub(super) fn eval_reflection_function_invoke_args_array(
     evaluated_args: Vec<EvaluatedCallArg>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("args")], evaluated_args)?;
-    eval_array_call_arg_values(args[0], context, values)
+    Ok(args[0])
 }
 
 /// Dispatches one reflected function invocation through eval or registered native functions.

@@ -1,0 +1,15 @@
+{
+    "php_version": "8.5.10",
+    "encodings": {
+        "EUC-TW": {
+            "planes": {
+                "file": "euc-tw-planes.bin",
+                "sha256": "e69ff523dd960726836a3be51d3fb952962e3aee89e4407dea5fe8378391cb11"
+            },
+            "encode": {
+                "file": "euc-tw-encode.bin",
+                "sha256": "01d8cc5b60897677d6cc0a367280a945e872b229f7ba35a3cefe0aa3b4b04bfe"
+            }
+        }
+    }
+}

@@ -22,14 +22,18 @@ pub(super) fn lower_static_callable_call(
             let operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&function_name),
                 Some(expr.span),
-            ))
+            );
+            release_user_call_argument_temporaries(
+                ctx, &function_name, &operands, call, sig.as_ref(), expr.span,
+            );
+            Some(call)
         }
         StaticCallableBinding::ExternFunction(function_name) => {
             let sig = ctx
@@ -49,11 +53,15 @@ pub(super) fn lower_static_callable_call(
             ))
         }
         StaticCallableBinding::Builtin(function_name) => {
+            if builtin_callable_needs_runtime_arity(&function_name, callback_args) { return None; }
             let sig = call_signature(
                 ctx,
                 &function_name,
                 source_prefers_extension_builtin(&function_name),
             );
+            if let Some(call) = lower_packed_builtin_call(ctx, &function_name, sig.as_ref(), callback_args, expr) {
+                return Some(call);
+            }
             let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
             let php_type = static_callable_builtin_result_type(
                 ctx,
@@ -76,17 +84,22 @@ pub(super) fn lower_static_callable_call(
             captures,
         } => {
             let mut operands = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            let visible_arguments = operands.len();
             append_closure_capture_operands(&mut operands, &captures);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
             let data = ctx.intern_function_name(&name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&name),
                 Some(expr.span),
-            ))
+            );
+            release_user_call_argument_temporaries(
+                ctx, &name, &operands[..visible_arguments], call, Some(&signature), expr.span,
+            );
+            Some(call)
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
             Some(lower_static_method_call(ctx, &receiver, &method, callback_args, expr))
@@ -108,6 +121,16 @@ pub(super) fn lower_static_callable_call(
         } => Some(lower_method_call(ctx, &object, &method, callback_args, Op::MethodCall, expr)),
         StaticCallableBinding::InstanceMethod { .. } => None,
     }
+}
+
+/// Keeps invalid positional mbstring callable arities on the boxed runtime diagnostic path.
+pub(super) fn builtin_callable_needs_runtime_arity(name: &str, args: &[Expr]) -> bool {
+    use crate::builtins::semantics::BuiltinLowering;
+    use crate::ir::RuntimeCallTarget;
+    if args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args) { return false; }
+    let Some(definition) = crate::builtins::registry::lookup(name) else { return false; };
+    let BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)) = definition.spec.semantics.lowering else { return false; };
+    target.mbstring_operation().is_some_and(|operation| !operation.supports_arity(args.len()))
 }
 
 /// Resolves a PHP string callback using case-insensitive function lookup rules.

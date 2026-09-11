@@ -25,6 +25,7 @@ mod strcopy;
 mod str_inc_dec;
 mod str_persist;
 mod strtolower;
+mod ascii_case;
 mod strtoupper;
 mod trim;
 mod ltrim;
@@ -88,7 +89,7 @@ mod md5;
 mod sha1;
 mod crc32;
 mod iconv;
-mod mb_strlen;
+mod mbstring;
 mod hash;
 pub(crate) mod hash_algos;
 mod hash_context;
@@ -260,9 +261,9 @@ pub use md5::emit_md5;
 pub use sha1::emit_sha1;
 /// Emit CRC-32 checksum helper.
 pub use crc32::emit_crc32;
-/// Emit mb_strlen UTF-8 code-point-count helper.
+/// Emits the optional shared mbstring bridge result adapters.
 pub use iconv::emit_iconv;
-pub use mb_strlen::emit_mb_strlen;
+pub use mbstring::emit_mbstring;
 /// Emit SHA1 hash helper.
 pub use hash::emit_hash;
 /// Emit generic hash helper.

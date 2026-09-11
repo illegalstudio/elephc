@@ -1,11 +1,11 @@
 ---
-title: "date_date_set() — internals"
+title: "date_date_set() - internals"
 description: "Compiler internals for date_date_set(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 194
 ---
 
-## `date_date_set()` — internals
+## `date_date_set()` - internals
 
 ## Where it lives
 

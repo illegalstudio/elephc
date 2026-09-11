@@ -1,11 +1,11 @@
 ---
-title: "cal_days_in_month() — internals"
+title: "cal_days_in_month() - internals"
 description: "Compiler internals for cal_days_in_month(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 183
 ---
 
-## `cal_days_in_month()` — internals
+## `cal_days_in_month()` - internals
 
 ## Where it lives
 

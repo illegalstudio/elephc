@@ -11,6 +11,26 @@
 use super::super::*;
 use super::support::*;
 
+/// Releases captured scalar arguments and the rendered output, including partial argument failure.
+#[test]
+fn var_dump_argument_and_output_ownership() {
+    for source in ["var_dump(731);", "var_dump(value: 731);", "var_dump(731, missing_dump_argument());"] {
+        let program = parse_fragment(source.as_bytes()).expect("parse dump ownership fixture");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values);
+        assert_eq!(result.is_ok(), !source.contains("missing_dump_argument"), "{source}");
+        let owners: Vec<_> = values.values.iter()
+            .filter(|(_, value)| matches!(value, FakeValue::Int(731))
+                || matches!(value, FakeValue::String(text) if text == "int(731)\n"))
+            .map(|(id, _)| *id).collect();
+        assert!(!owners.is_empty(), "{source}");
+        for owner in owners {
+            assert_eq!(values.releases.iter().filter(|value| value.as_ptr() as usize == owner).count(), 1, "{source}: {owner}");
+        }
+    }
+}
+
 /// Verifies eval `print_r()` emits values, returns true, and captures output when requested.
 #[test]
 fn execute_program_dispatches_print_r_builtin() {

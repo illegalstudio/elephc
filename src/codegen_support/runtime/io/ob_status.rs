@@ -11,8 +11,8 @@
 //! - Status entries mirror PHP's default-handler shape: name = "default output
 //!   handler", type = 0, flags = 112 (PHP_OUTPUT_HANDLER_STDFLAGS), level =
 //!   0-based buffer index, chunk_size = 0, buffer_size = capacity, buffer_used =
-//!   used bytes. elephc does not support user handlers, so every entry reports
-//!   the default handler.
+//!   used bytes. User handlers retain their display name, type, permissions, and actual
+//!   started, processed, or disabled status in the shared buffer slot.
 //! - Hashes are built with `__rt_hash_new(cap, value_type 7 = mixed)` +
 //!   `__rt_hash_set(hash, key_ptr, key_len, value_lo, value_hi, tag)`; the hash
 //!   pointer may move on insert, so it is reloaded/saved around every set.
@@ -94,12 +94,6 @@ pub fn emit_ob_status_entry(emitter: &mut Emitter) {
     emitter.instruction("cmp x11, #0");                                         // is a user handler installed?
     emitter.instruction("cset x11, ne");                                        // user handlers add PHP's user-handler bit
     emitter.instruction("orr x3, x3, x11");                                     // fold the user-handler bit into the flags
-    abi::emit_symbol_address(emitter, "x10", "_ob_started");                    // materialize the started-flag slot array
-    emitter.instruction("ldr x11, [x10, x9, lsl #3]");                          // load the slot's started flag
-    emitter.instruction("cbz x11, __rt_ob_status_flags_ready");                 // an unstarted handler keeps the base flags
-    emitter.instruction("mov x11, #0x5000");                                    // PHP's STARTED (0x1000) | PROCESSED (0x4000) bits
-    emitter.instruction("orr x3, x3, x11");                                     // fold the started/processed bits into the flags
-    emitter.label("__rt_ob_status_flags_ready");
     emitter.instruction("mov x4, #0");                                          // value_hi = 0
     emitter.instruction("mov x5, #0");                                          // value tag = int
     abi::emit_symbol_address(emitter, "x1", "_ob_k_flags");                     // key = "flags"
@@ -208,12 +202,6 @@ fn emit_ob_status_entry_x86_64(emitter: &mut Emitter) {
     emitter.instruction("setnz al");                                            // user handlers add PHP's user-handler bit
     emitter.instruction("movzx rax, al");                                       // zero-extend the user-handler bit
     emitter.instruction("or rcx, rax");                                         // fold the user-handler bit into the flags
-    abi::emit_symbol_address(emitter, "r11", "_ob_started");                    // materialize the started-flag slot array
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the slot's started flag
-    emitter.instruction("test rax, rax");                                       // has the handler run at least once?
-    emitter.instruction("jz __rt_ob_status_flags_ready_x86");                   // an unstarted handler keeps the base flags
-    emitter.instruction("or rcx, 0x5000");                                      // fold PHP's STARTED|PROCESSED bits into the flags
-    emitter.label("__rt_ob_status_flags_ready_x86");
     emitter.instruction("mov r8, 0");                                           // value_hi = 0
     emitter.instruction("mov r9, 0");                                           // value tag = int
     abi::emit_symbol_address(emitter, "rsi", "_ob_k_flags");                    // key = "flags"

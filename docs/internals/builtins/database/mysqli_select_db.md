@@ -1,11 +1,11 @@
 ---
-title: "mysqli_select_db() — internals"
+title: "mysqli_select_db() - internals"
 description: "Compiler internals for mysqli_select_db(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 154
 ---
 
-## `mysqli_select_db()` — internals
+## `mysqli_select_db()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_select_db(mixed $mysql, string $database): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

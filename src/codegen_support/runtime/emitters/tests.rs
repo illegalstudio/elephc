@@ -52,23 +52,23 @@ fn test_runtime_can_omit_regex_helpers() {
     assert!(!asm.contains("__rt_preg_split:"));
 }
 
-/// Verifies the iconv-backed `mb_strlen()` helper is emitted only for programs that use it.
+/// Verifies the shared mbstring helper is omitted when neither AOT nor eval requires it.
 #[test]
-fn test_runtime_can_gate_mb_strlen_helper() {
+fn test_runtime_can_gate_mbstring_helpers() {
     let target = Target::new(Platform::MacOS, Arch::AArch64);
     let mut omitted = Emitter::new(target);
     emit_runtime(&mut omitted, RuntimeFeatures::none());
-    assert!(!omitted.output().contains("__rt_mb_strlen:"));
+    assert!(!omitted.output().contains("__rt_mbstring_native:"));
 
     let mut included = Emitter::new(target);
     emit_runtime(
         &mut included,
         RuntimeFeatures {
-            mb_strlen: true,
+            mbstring: true,
             ..RuntimeFeatures::none()
         },
     );
-    assert!(included.output().contains("__rt_mb_strlen:"));
+    assert!(included.output().contains("__rt_mbstring_native:"));
 }
 
 /// Verifies that Linux x86_64 uses the shared runtime surface.
@@ -315,4 +315,17 @@ fn test_macos_dead_strip_no_cross_atom_internal_refs() {
          targets):\n{}",
         violations.join("\n")
     );
+}
+
+/// Keeps native eval scopes independent of mbstring across the complete supported target matrix.
+#[test]
+fn test_runtime_scope_only_omits_mbstring_dispatch() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut emitter = Emitter::new(Target::parse(name).unwrap());
+        emit_runtime(&mut emitter, RuntimeFeatures { eval_scope: true, ..RuntimeFeatures::none() });
+        let assembly = emitter.output();
+        assert!(assembly.contains("__elephc_eval_scope_set"), "{name}");
+        assert!(!assembly.contains("__rt_mbstring_"), "{name}");
+        assert!(!assembly.contains("__elephc_runtime_builtin_v1_mbstring_"), "{name}");
+    }
 }

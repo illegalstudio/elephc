@@ -1,11 +1,11 @@
 ---
-title: "_cairo_pack() — internals"
+title: "_cairo_pack() - internals"
 description: "Compiler internals for _cairo_pack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1060
+  order: 1122
 ---
 
-## `_cairo_pack()` — internals
+## `_cairo_pack()` - internals
 
 ## Where it lives
 
@@ -38,8 +38,8 @@ function _cairo_pack(mixed $x, mixed $y): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

@@ -65,7 +65,7 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
     let bridge_scope =
         eval_native_constructor_bridge_scope(class_name, context, values)?;
     let signature = context.native_constructor_signature(class_name);
-    let bound_args = bind_native_callable_bound_args_with_mode(
+    let (bound_args, defaults) = bind_native_callable_bound_args_with_mode(
         signature,
         evaluated_args,
         by_ref_mode,
@@ -80,9 +80,10 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         values.construct_object(object, native_bound_arg_values(&bound_args))
     };
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
-    match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(()), Ok(())) => Ok(()),
+    let cleanup = release_native_call_defaults(defaults, values);
+    match (result, writeback, cleanup) {
+        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
+        (Ok(()), Ok(()), Ok(())) => Ok(()),
     }
 }
 

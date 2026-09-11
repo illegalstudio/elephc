@@ -1,16 +1,16 @@
 ---
-title: "array_is_list() — internals"
+title: "array_is_list() - internals"
 description: "Compiler internals for array_is_list(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 18
 ---
 
-## `array_is_list()` — internals
+## `array_is_list()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_is_list.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_is_list.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,7 +48,7 @@ function array_is_list(mixed $array): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

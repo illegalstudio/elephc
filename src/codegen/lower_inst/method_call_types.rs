@@ -34,6 +34,8 @@ pub(super) struct CallArgMaterialization {
     pub(super) ref_temp_cells: Vec<RefArgTempCell>,
     pub(super) cleanup_slots: Vec<CallArgTempCleanup>,
     pub(super) cleanup_bytes: usize,
+    /// Stack records that transfer conversion cleanup ownership only during exceptional unwind.
+    pub(super) cleanup_guard_bytes: usize,
     pub(super) borrowed_stack_arg_bytes: usize,
 }
 

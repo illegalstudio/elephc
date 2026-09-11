@@ -349,6 +349,15 @@ independent, explicit argument-alias, and may-alias storage, including scratch-b
 results that are not fresh heap blocks. That contract feeds direct-call cleanup,
 optimizer reasoning, and summaries for source wrappers.
 
+Non-string by-value lifetime-tracked compiled PHP returns also carry an internal
+ownership marker in `x15` on AArch64 or `r11` on x86_64. A `Call` result with
+`MaybeOwned` metadata spills the marker immediately, and a forwarding epilogue
+restores it after cleanup. Descriptor invokers consume the marker by retaining a
+borrowed result or transferring an owned result into the boxed return cell. This
+is a private compiler protocol; the public C ABI still returns one owned raw
+cell and exposes no ownership marker. Typed string returns keep their dedicated
+persist and ownership-transfer boxing path and do not consume this marker.
+
 ## Effects
 
 Each instruction and terminator carries an `Effects` summary. The builder

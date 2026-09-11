@@ -46,6 +46,22 @@ macro_rules! impl_collection_call_ops {
         array: RuntimeCellHandle,
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let value = Self::handle(unsafe { __elephc_eval_value_array_get(array.as_ptr(), index.as_ptr()) })?;
+        if self.is_reference(value)? {
+            let result = self.copy_value(value);
+            self.release(value)?;
+            result
+        } else {
+            Ok(value)
+        }
+    }
+
+    /// Retains the stored boxed slot for argument binding without detaching its reference identity.
+    fn array_get_preserving_references(
+        &mut self,
+        array: RuntimeCellHandle,
+        index: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_array_get(array.as_ptr(), index.as_ptr()) })
     }
 
@@ -65,6 +81,31 @@ macro_rules! impl_collection_call_ops {
         position: usize,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_array_iter_key(array.as_ptr(), position as u64) })
+    }
+
+    /// Copies an insertion-order element without conflating numeric string and integer keys.
+    fn array_iter_value(&mut self, array: RuntimeCellHandle, position: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        let value = Self::handle(unsafe { __elephc_eval_value_array_iter_value(array.as_ptr(), position as u64) })?;
+        if self.is_reference(value)? {
+            let result = self.copy_value(value);
+            self.release(value)?;
+            result
+        } else {
+            Ok(value)
+        }
+    }
+
+    /// Detaches the array's boxed value while retaining its payload for ordinary COW writes.
+    fn copy_array_value(
+        &mut self,
+        array: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let tag = self.type_tag(array)?;
+        if !self.is_array_like(array)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let word = self.raw_value_word(array)?;
+        self.raw_word_value(tag, word)
     }
 
     /// Writes one element to a boxed Mixed array through the generated runtime wrapper.

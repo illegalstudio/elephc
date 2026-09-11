@@ -39,7 +39,7 @@ pub(super) fn emit_error(ctx: &mut FunctionContext<'_>, message: &str) {
 }
 
 /// Throws a catchable PHP `TypeError` carrying a static message.
-pub(super) fn emit_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
+pub(in crate::codegen) fn emit_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "TypeError", "_spl_type_error_class_id", message);
 }
 

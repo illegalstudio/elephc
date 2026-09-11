@@ -1,0 +1,31 @@
+[
+    {
+        "case": {
+            "query": "613d3126623d32",
+            "encodings": "UTF-8",
+            "strict": false,
+            "max_vars": 1,
+            "max_nesting": 64,
+            "seed": "settings",
+            "action": "settings",
+            "internal": "UTF-8"
+        },
+        "reason": "Initial capture process terminated without a valid oracle; exit status was not retained."
+    },
+    {
+        "case": {
+            "query": "613d3126623d32",
+            "encodings": "UTF-8",
+            "strict": false,
+            "max_vars": 1,
+            "max_nesting": 64,
+            "seed": "settings",
+            "action": "nested",
+            "internal": "UTF-8"
+        },
+        "exit": 255,
+        "stdout": "",
+        "stderr": "",
+        "reason": "PHP worker failed; this trace is not a semantic oracle."
+    }
+]

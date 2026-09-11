@@ -1,11 +1,11 @@
 ---
-title: "imagecopyresized() — internals"
+title: "imagecopyresized() - internals"
 description: "Compiler internals for imagecopyresized(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 484
 ---
 
-## `imagecopyresized()` — internals
+## `imagecopyresized()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecopyresized(mixed $dst_image, mixed $src_image, int $dst_x, int $d
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

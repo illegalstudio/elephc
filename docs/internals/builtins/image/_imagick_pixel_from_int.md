@@ -1,11 +1,11 @@
 ---
-title: "_imagick_pixel_from_int() — internals"
+title: "_imagick_pixel_from_int() - internals"
 description: "Compiler internals for _imagick_pixel_from_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1073
+  order: 1135
 ---
 
-## `_imagick_pixel_from_int()` — internals
+## `_imagick_pixel_from_int()` - internals
 
 ## Where it lives
 
@@ -38,8 +38,8 @@ function _imagick_pixel_from_int(int $packed): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

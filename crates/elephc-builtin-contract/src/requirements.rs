@@ -18,7 +18,10 @@ const PCNTL: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_pcntl"
 const XML: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_xml")];
 const TLS: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_tls")];
 const ZLIB: &[BuiltinRequirement] = &[BuiltinRequirement::SystemLibrary("z")];
-const ICONV_MACOS: &[BuiltinRequirement] = &[BuiltinRequirement::MacOsLibrary("iconv")];
+const MBSTRING: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_mbstring")];
+const MBREGEX: &[BuiltinRequirement] = &[
+    BuiltinRequirement::Bridge("elephc_mbstring"), BuiltinRequirement::RuntimeCapability("oniguruma"),
+];
 const ICONV_BRIDGE: &[BuiltinRequirement] = &[
     BuiltinRequirement::Bridge("elephc_iconv"),
     BuiltinRequirement::MacOsLibrary("iconv"),
@@ -27,6 +30,9 @@ const REGEX: &[BuiltinRequirement] = &[BuiltinRequirement::RuntimeCapability("pc
 
 /// Returns fixed neutral requirements for one canonical shared contract ID.
 pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement] {
+    if matches_name(id, &["mb_ereg_match", "mb_split", "mb_ereg_replace", "mb_eregi_replace",
+        "mb_ereg_search_init", "mb_ereg_search", "mb_ereg_search_pos", "mb_ereg_search_regs", "mb_ereg_search_getpos", "mb_ereg_search_getregs", "mb_ereg_search_setpos"
+    ]) { return MBREGEX; }
     if crate::catalog_xml::contract_names()
         .any(|name| id == BuiltinId::from_canonical_name(name))
     {
@@ -151,8 +157,9 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
     ) {
         return ZLIB;
     }
-    if matches_name(id, &["mb_strlen"]) {
-        return ICONV_MACOS;
+    if matches_name(id, &["mb_regex_encoding", "mb_regex_set_options", "mb_strlen", "mb_strwidth", "mb_strtoupper", "mb_strtolower", "mb_convert_case", "mb_ucfirst", "mb_lcfirst", "mb_strimwidth",
+        "mb_substr", "mb_strcut", "mb_scrub", "mb_decode_mimeheader", "mb_encode_mimeheader", "mb_get_info", "mb_http_input", "mb_trim", "mb_ltrim", "mb_rtrim", "mb_str_pad", "mb_convert_kana", "mb_substr_count", "mb_ord", "mb_chr", "mb_strpos", "mb_stripos", "mb_strrpos", "mb_strripos", "mb_strstr", "mb_stristr", "mb_strrchr", "mb_strrichr", "mb_language", "mb_internal_encoding", "mb_http_output", "mb_encoding_aliases", "mb_str_split", "mb_preferred_mime_name"]) {
+        return MBSTRING;
     }
     if matches_name(
         id,

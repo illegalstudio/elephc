@@ -208,6 +208,24 @@ pub(super) fn emit_property_default(
             abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
             abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
         }
+        LiteralDefaultValue::BoxedAssocArray {
+            value_type,
+            entries,
+        } => {
+            abi::emit_push_reg(ctx.emitter, object_reg);
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(value_type.clone()),
+                },
+            );
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
+            abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
+        }
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             abi::emit_push_reg(ctx.emitter, object_reg);
             emit_empty_assoc_array_literal_to_result(ctx, value_type);

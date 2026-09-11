@@ -1,11 +1,11 @@
 ---
-title: "imagecolorsforindex() — internals"
+title: "imagecolorsforindex() - internals"
 description: "Compiler internals for imagecolorsforindex(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 476
 ---
 
-## `imagecolorsforindex()` — internals
+## `imagecolorsforindex()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolorsforindex(mixed $image, int $color): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

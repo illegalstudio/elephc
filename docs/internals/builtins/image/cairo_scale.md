@@ -1,11 +1,11 @@
 ---
-title: "cairo_scale() — internals"
+title: "cairo_scale() - internals"
 description: "Compiler internals for cairo_scale(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 432
 ---
 
-## `cairo_scale()` — internals
+## `cairo_scale()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_scale(mixed $context, float $sx, float $sy): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

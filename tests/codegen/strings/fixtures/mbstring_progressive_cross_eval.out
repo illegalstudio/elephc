@@ -1,0 +1,32 @@
+array(2) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(2)
+}
+int(4)
+array(3) {
+  [0]=>
+  string(2) "ab"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(1) "b"
+}
+bool(true)
+int(7)
+array(3) {
+  [0]=>
+  string(2) "ab"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(1) "b"
+}
+array(2) {
+  [0]=>
+  int(5)
+  [1]=>
+  int(2)
+}
+int(7)

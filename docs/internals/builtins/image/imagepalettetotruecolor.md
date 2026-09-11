@@ -1,11 +1,11 @@
 ---
-title: "imagepalettetotruecolor() — internals"
+title: "imagepalettetotruecolor() - internals"
 description: "Compiler internals for imagepalettetotruecolor(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 519
 ---
 
-## `imagepalettetotruecolor()` — internals
+## `imagepalettetotruecolor()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagepalettetotruecolor(mixed $image): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

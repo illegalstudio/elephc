@@ -260,13 +260,15 @@ impl Checker {
                 let seen = self.param_specialization_seen.contains(&key);
                 if Self::is_generic_array_hint(&param_types[seen_idx].1)
                     && !seen
-                    && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    && is_specializable_array_argument(&actual_ty)
                 {
                     // Discard the generic `array` hint exactly once, mirroring the `Int` fallback
                     // below: adopt the first call's concrete array type so an all-`array<int>`
                     // parameter is not immediately polluted back to `array<mixed>` by unioning with
-                    // its own declaration. The seen set marks the discard, so every LATER call
-                    // widens instead of re-adopting — which is the whole point.
+                    // its own declaration. Exact PHP `array` arguments are a packed/hash union, not
+                    // `Array(Mixed)`; adopting that union keeps by-reference `array` parameters
+                    // array-typed instead of widening to `Mixed`. The seen set marks the discard,
+                    // so every LATER call widens instead of re-adopting.
                     self.param_specialization_seen.insert(key);
                     let specialized = Self::specialize_generic_array_param_hint(
                         &param_types[seen_idx].1,
@@ -303,6 +305,16 @@ impl Checker {
 
         Ok(changed.then_some(param_types))
     }
+}
+
+/// Returns whether a call argument can specialize a generic `array` parameter.
+///
+/// Concrete packed and associative arrays are adopted as-is. Exact PHP `array` is a two-member
+/// packed/hash union whose codegen representation is Mixed; treating that union as an array
+/// shape lets `specialize_generic_array_param_hint` keep the array contract instead of
+/// `union_param_type` widening it to Mixed.
+fn is_specializable_array_argument(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || ty.is_php_array()
 }
 
 /// Returns true when a call argument is an array whose elements are callable descriptors.

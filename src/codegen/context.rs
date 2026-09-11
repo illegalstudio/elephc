@@ -59,6 +59,7 @@ pub(crate) struct FunctionContext<'a> {
     current_inst: Option<InstId>,
     current_inst_promoted_ref_cells: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
+    exception_guard_offsets: HashMap<ValueId, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
@@ -128,6 +129,7 @@ impl<'a> FunctionContext<'a> {
             current_inst: None,
             current_inst_promoted_ref_cells: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
+            exception_guard_offsets: layout.exception_guard_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
             exception_activation_offset: layout.exception_activation_offset,
@@ -142,6 +144,12 @@ impl<'a> FunctionContext<'a> {
             epilogue_label,
             block_labels,
         }
+    }
+
+    /// Returns the fixed frame record backing an owned-value exception guard token.
+    pub(super) fn exception_guard_offset(&self, token: ValueId) -> Result<usize> {
+        self.exception_guard_offsets.get(&token).copied().ok_or_else(||
+            CodegenIrError::invalid_module(format!("missing exception guard token {}", token.as_raw())))
     }
 
     /// Returns a module-unique local label carrying a readable but lossy prefix.
@@ -335,6 +343,18 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
     }
 
+    /// Returns the frame slot that preserves a dynamic PHP-call return ownership marker.
+    pub(super) fn runtime_return_ownership_offset(&self, value: ValueId) -> Option<usize> {
+        self.placement.runtime_return_ownership_slot(value)
+    }
+
+    /// Preserves the internal ownership marker immediately after a direct PHP call.
+    pub(super) fn store_runtime_return_ownership(&mut self, value: ValueId) {
+        if let Some(offset) = self.runtime_return_ownership_offset(value) {
+            super::return_ownership::emit_store_status(self.emitter, offset);
+        }
+    }
+
     /// Returns the runtime PHP type stored in a local slot.
     pub(super) fn local_php_type(&self, slot: LocalSlotId) -> Result<PhpType> {
         self.function
@@ -451,6 +471,11 @@ impl<'a> FunctionContext<'a> {
     /// Returns whether this by-value parameter slot is owned by the callee frame.
     pub(super) fn owns_parameter_slot(&self, slot: LocalSlotId) -> bool {
         self.local_analysis.owns_parameter_slot(slot)
+    }
+
+    /// Returns whether synchronized eval writeback may replace an owned local value.
+    pub(super) fn owns_eval_local_writeback_target(&self, slot: LocalSlotId) -> bool {
+        self.is_by_ref_param_slot(slot) || super::frame::local_slot_has_epilogue_owner(self, slot)
     }
 
     /// Selects the EIR instruction whose CFG-local representation facts codegen must use.
@@ -1091,6 +1116,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns true when Mixed boxing can consume the value's owned source reference.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
+        if self.value_has_explicit_release(value) {
+            return Ok(false);
+        }
         let value_ty = self.value_php_type(value)?.codegen_repr();
         if value_ty == PhpType::Str {
             return self.value_is_heap_owned_string_for_mixed_box(value);
@@ -1139,9 +1167,61 @@ impl<'a> FunctionContext<'a> {
         if self.value_ownership(value)? != Ownership::Owned {
             return Ok(false);
         }
-        Ok(!self.function.instructions.iter().any(|inst| {
+        Ok(!self.value_has_explicit_release(value))
+    }
+
+    /// Returns whether a string edge may transfer its current storage without persisting it.
+    ///
+    /// String SSA values deliberately remain `MaybeOwned`, so their metadata alone cannot
+    /// distinguish a fresh heap result from concat scratch or a borrowed local. Reuse the
+    /// same source-provenance check as Mixed boxing, and preserve an existing explicit
+    /// `Release` by requiring the edge to take a separate owner in that case.
+    pub(super) fn string_value_can_transfer_ownership_to_consumer(
+        &self,
+        value: ValueId,
+    ) -> Result<bool> {
+        if self.value_has_explicit_release(value) {
+            return Ok(false);
+        }
+        if self.value_is_heap_owned_string_for_mixed_box(value)? {
+            return Ok(true);
+        }
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let inst = self
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if inst.op != Op::RuntimeCall {
+            return Ok(false);
+        }
+        use crate::builtins::semantics::BuiltinResultOwnership;
+        use crate::ir::RuntimeCallTarget;
+        let fresh = match inst.immediate {
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) => {
+                target.result_ownership() == BuiltinResultOwnership::Fresh
+            }
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                target,
+                ..
+            })) => target.result_ownership() == BuiltinResultOwnership::Fresh,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) => {
+                target.result_ownership() == BuiltinResultOwnership::Fresh
+            }
+            _ => false,
+        };
+        Ok(fresh)
+    }
+
+    /// Reports whether EIR cleanup still owns a reference to this exact SSA value.
+    fn value_has_explicit_release(&self, value: ValueId) -> bool {
+        self.function.instructions.iter().any(|inst| {
             inst.op == Op::Release && inst.operands.first().copied() == Some(value)
-        }))
+        })
     }
 
     /// Returns true when a string producer leaves a heap-owned payload that Mixed boxing may consume.

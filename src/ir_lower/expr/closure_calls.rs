@@ -26,8 +26,9 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     let callable = ctx.load_local(var, Some(expr.span));
     let result_type = result_type.unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
     if instance_signature.is_none() {
+        guard_owned_descriptor_callback(ctx, callable, expr.span);
         if let Some(arg_container) =
-            lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+            lower_guarded_descriptor_invoker_arg_container(ctx, args, expr.span)
         {
             return emit_callable_descriptor_invoke(
                 ctx,
@@ -125,8 +126,9 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
         }
     }
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
+    guard_owned_descriptor_callback(ctx, lowered_callee, expr.span);
     if let Some(arg_container) =
-        lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+        lower_guarded_descriptor_invoker_arg_container(ctx, args, expr.span)
     {
         return emit_callable_descriptor_invoke(
             ctx,
@@ -286,4 +288,3 @@ pub(super) fn terminate_dynamic_method_call_on_null(
     );
     ctx.builder.terminate(Terminator::Unreachable);
 }
-

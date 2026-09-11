@@ -52,7 +52,8 @@ fn main() {
         entry.insert("eval".to_string(), eval_support_json(contract));
         entry.insert(
             "eval_only".to_string(),
-            json!(matches!(aot_support(contract), BackendSupport::Unsupported(_))),
+            json!(matches!(aot_support(contract), BackendSupport::Unsupported(_))
+                && matches!(eval_support(contract), BackendSupport::Implemented(_))),
         );
     }
 
@@ -113,7 +114,8 @@ fn contract_record_json(contract: &BuiltinContract) -> Value {
         "examples": contract.examples,
         "php_manual": contract.php_manual,
         "deprecated": contract.deprecation,
-        "eval_only": matches!(aot_support(contract), BackendSupport::Unsupported(_)),
+        "eval_only": matches!(aot_support(contract), BackendSupport::Unsupported(_))
+            && matches!(eval_support(contract), BackendSupport::Implemented(_)),
         "aot": aot_support_json(contract),
         "eval": eval_support_json(contract),
     })
@@ -257,21 +259,7 @@ fn default_json(default: DefaultSpec) -> Value {
 
 /// Returns the documentation spelling for a neutral PHP type.
 fn type_name(ty: TypeSpec) -> String {
-    match ty {
-        TypeSpec::Int => "int".to_string(),
-        TypeSpec::Float => "float".to_string(),
-        TypeSpec::Str => "string".to_string(),
-        TypeSpec::Bool => "bool".to_string(),
-        TypeSpec::Mixed => "mixed".to_string(),
-        TypeSpec::Void => "void".to_string(),
-        // elephc extensions to the neutral spelling. Without these the generated pages would
-        // document `mixed` for a raw address — the same wrong answer the declaration itself
-        // used to give, moved one step downstream into the docs.
-        TypeSpec::Ptr => "pointer".to_string(),
-        TypeSpec::Callable => "callable".to_string(),
-        TypeSpec::Array => "array".to_string(),
-        TypeSpec::Nullable(inner) => format!("?{}", type_name(*inner)),
-    }
+    ty.to_string()
 }
 
 /// Returns the lowercase documentation spelling for a contract area.
@@ -329,6 +317,7 @@ fn unsupported_reason_name(reason: UnsupportedReason) -> &'static str {
         UnsupportedReason::InternalCompilerSurface => "internal-compiler-surface",
         UnsupportedReason::EvalImplementationPending => "eval-implementation-pending",
         UnsupportedReason::EvalOnlyReflection => "eval-only-reflection",
+        UnsupportedReason::ReferenceAdaptersPending => "reference-adapters-pending",
     }
 }
 

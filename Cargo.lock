@@ -674,6 +674,7 @@ dependencies = [
  "elephc-curl",
  "elephc-image",
  "elephc-magician",
+ "elephc-mbstring",
  "elephc-monitoring-contract",
  "elephc-pcntl",
  "elephc-pdo",
@@ -773,6 +774,7 @@ dependencies = [
  "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-iconv",
+ "elephc-mbstring",
  "elephc-pcntl",
  "elephc-phar",
  "flate2",
@@ -780,6 +782,16 @@ dependencies = [
  "libc",
  "serde_json",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "elephc-mbstring"
+version = "0.1.0"
+dependencies = [
+ "elephc-builtin-contract",
+ "flate2",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

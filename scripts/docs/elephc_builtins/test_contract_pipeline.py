@@ -62,6 +62,48 @@ class ContractPipelineTests(unittest.TestCase):
             ),
         )
 
+    def test_capture_contracts_publish_shared_reference_support(self) -> None:
+        """Keep shared capture passing modes distinct from the pending AOT callable wrapper policy."""
+        for name in ["mb_ereg", "mb_eregi"]:
+            record = self.by_name[name]
+            self.assertFalse(record["eval_only"])
+            self.assertTrue(record["aot"]["supported"])
+            self.assertEqual(record["aot"]["kind"], "registry")
+            self.assertTrue(record["aot"]["params"][2]["by_ref"])
+            self.assertTrue(record["eval"]["supported"])
+            self.assertEqual(record["eval"]["kind"], "registry")
+            self.assertTrue(record["eval"]["params"][2]["by_ref"])
+            rendered = self.render_by_name[name]
+            self.assertFalse(rendered["eval_only"])
+            self.assertEqual(rendered["lowering"]["sig_file"], f"src/builtins/string/{name}.rs")
+            self.assertEqual(rendered["semantics"]["callable"]["kind"], "static_only")
+            page = render.render_internals(rendered, 0, REPO)
+            self.assertIn(f"runtime.{name}", page)
+            self.assertNotIn("No compiled lowering is available", page)
+            self.assertNotIn("intentionally eval-only", page)
+            self.assertNotIn("](\u0029", page)
+        errors = []
+        audit_builtins._check_backend_contracts(list(self.render_by_name.values()), errors, {})
+        self.assertEqual(errors, [])
+        inconsistent = [dict(record, eval_only=True) if record["name"] == "mb_ereg" else record
+                        for record in self.render_by_name.values()]
+        audit_builtins._check_backend_contracts(inconsistent, errors, {})
+        self.assertIn("mb_ereg has an inconsistent eval_only flag", errors)
+
+    def test_query_contract_publishes_shared_reference_support(self) -> None:
+        """Publish the shared query implementation while retaining its explicit callable restriction."""
+        record = self.by_name["mb_parse_str"]
+        for backend in ["aot", "eval"]:
+            self.assertTrue(record[backend]["supported"])
+            self.assertEqual(record[backend]["kind"], "registry")
+        self.assertTrue(record["params"][1]["by_ref"])
+        self.assertEqual([param["name"] for param in record["params"]], ["string", "result"])
+        page = render.render_internals(self.render_by_name["mb_parse_str"], 0, REPO)
+        self.assertIn("runtime.mb_parse_str", page)
+        self.assertNotIn("No compiled lowering is available", page)
+        self.assertEqual(self.render_by_name["mb_parse_str"]["semantics"]["callable"]["kind"], "static_only")
+        self.assertIn("What the type checker enforces", page)
+
     def test_hash_init_and_exit_use_backend_contract_signatures(self) -> None:
         """Pin the prelude subset and construct default that previously drifted."""
         hash_init = self.by_name["hash_init"]

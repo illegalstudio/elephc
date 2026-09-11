@@ -171,6 +171,7 @@ pub(super) fn emit_eval_native_function_invoker_inline(
     let done_label = ctx.next_label("eval_callable_invoker_done");
     let captures: [(String, PhpType, bool); 0] = [];
     let invoker = RuntimeCallableInvoker {
+        mbstring_operation: None,
         label: &label,
         sig,
         captures: &captures,

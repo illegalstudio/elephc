@@ -1,11 +1,11 @@
 ---
-title: "date_timestamp_set() — internals"
+title: "date_timestamp_set() - internals"
 description: "Compiler internals for date_timestamp_set(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 213
 ---
 
-## `date_timestamp_set()` — internals
+## `date_timestamp_set()` - internals
 
 ## Where it lives
 

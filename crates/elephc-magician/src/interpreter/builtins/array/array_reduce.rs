@@ -28,15 +28,30 @@ pub(in crate::interpreter) fn eval_array_reduce_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_reduce` array builtin.
 pub(in crate::interpreter) fn eval_array_reduce_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
         [array, callback] => {
             let initial = values.null()?;
-            eval_array_reduce_result(*array, *callback, initial, context, values)
+            eval_array_reduce_result_from_scope(
+                *array,
+                *callback,
+                initial,
+                lexical_scope,
+                context,
+                values,
+            )
         }
-        [array, callback, initial] => eval_array_reduce_result(*array, *callback, *initial, context, values),
+        [array, callback, initial] => eval_array_reduce_result_from_scope(
+            *array,
+            *callback,
+            *initial,
+            lexical_scope,
+            context,
+            values,
+        ),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -63,17 +78,6 @@ pub(in crate::interpreter) fn eval_builtin_array_reduce(
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     eval_array_reduce_result_from_scope(array, callback, initial, Some(scope), context, values)
-}
-
-/// Reduces one eval array by invoking a callable with carry and item cells.
-pub(in crate::interpreter) fn eval_array_reduce_result(
-    array: RuntimeCellHandle,
-    callback: RuntimeCellHandle,
-    initial: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_array_reduce_result_from_scope(array, callback, initial, None, context, values)
 }
 
 /// Reduces one eval array with optional lexical scope for callback names.

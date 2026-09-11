@@ -1,11 +1,11 @@
 ---
-title: "cal_info() — internals"
+title: "cal_info() - internals"
 description: "Compiler internals for cal_info(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 185
 ---
 
-## `cal_info()` — internals
+## `cal_info()` - internals
 
 ## Where it lives
 

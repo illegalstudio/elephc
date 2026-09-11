@@ -122,6 +122,10 @@ pub(crate) struct LoweringSnapshot {
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
+    /// Maps captured call values to their active exception-cleanup tokens.
+    argument_guards: HashMap<ValueId, ValueId>,
+    /// Pending call scopes order capture cleanup by PHP parameter position.
+    argument_guard_scopes: Vec<Vec<(usize, ValueId)>>,
     eval_barrier_active: bool,
     eval_executed: bool,
     eval_scope_read_param: Option<String>,
@@ -273,6 +277,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
+    /// Maps captured call values to their active exception-cleanup tokens.
+    argument_guards: HashMap<ValueId, ValueId>,
+    /// Pending call scopes order capture cleanup by PHP parameter position.
+    argument_guard_scopes: Vec<Vec<(usize, ValueId)>>,
     /// Set while a container write BORROWS its value operand — the reference belongs to a
     /// hidden temporary that outlives the write. See `with_borrowed_write_operand`.
     write_operand_is_borrowed: bool,
@@ -392,6 +400,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             pending_static_callable_result: None,
             closure_counter: 0,
             hidden_temp_counter: 0,
+            argument_guards: HashMap::new(),
+            argument_guard_scopes: Vec::new(),
             write_operand_is_borrowed: false,
             eval_barrier_active: false,
             eval_executed: false,
@@ -432,6 +442,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             pending_static_callable_result: self.pending_static_callable_result.clone(),
             closure_counter: self.closure_counter,
             hidden_temp_counter: self.hidden_temp_counter,
+            argument_guards: self.argument_guards.clone(),
+            argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
             eval_executed: self.eval_executed,
             eval_scope_read_param: self.eval_scope_read_param.clone(),
@@ -469,6 +481,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.pending_static_callable_result = snapshot.pending_static_callable_result;
         self.closure_counter = snapshot.closure_counter;
         self.hidden_temp_counter = snapshot.hidden_temp_counter;
+        self.argument_guards = snapshot.argument_guards;
+        self.argument_guard_scopes = snapshot.argument_guard_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
         self.eval_executed = snapshot.eval_executed;
         self.eval_scope_read_param = snapshot.eval_scope_read_param;
@@ -779,8 +793,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Rebinds a by-value array/hash parameter to an owning copy-on-write shadow slot.
     ///
-    /// Call sites pass container pointers as borrows. Acquiring the value into a fresh local makes
-    /// the first callee mutation observe refcount two and split instead of modifying caller storage.
+    /// Call sites pass container pointers as borrows. Concrete containers are retained so their
+    /// first mutation observes refcount two and splits. An exact PHP `array` arrives as a boxed
+    /// Mixed cell, so its wrapper is cloned before the shadow is published; mutating that cell can
+    /// then replace its payload without rewriting caller storage.
     pub(crate) fn privatize_container_param(
         &mut self,
         name: &str,
@@ -788,6 +804,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let borrowed = self.load_local(name, span);
+        let value = if php_type.is_php_array() {
+            self.emit_owned_value(
+                Op::RuntimeCall,
+                vec![borrowed.value],
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::MixedCellClone,
+                )),
+                php_type.clone(),
+                crate::ir_lower::effects_lookup::runtime_effects(),
+                span,
+            )
+        } else {
+            borrowed
+        };
         let shadow = self.builder.add_local(
             Some(format!("{}#cow", name)),
             value_ir_type(php_type),
@@ -797,7 +827,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_slots.insert(name.to_string(), shadow);
         self.local_kinds
             .insert(name.to_string(), LocalKind::PhpLocal);
-        self.store_local(name, borrowed, php_type.clone(), span);
+        self.store_local(name, value, php_type.clone(), span);
     }
 
     /// Marks a local slot as initialized by caller or synthetic setup.
@@ -1394,7 +1424,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// The caller must first retain the incoming value because borrowing operations
     /// can return storage that aliases the previous occupant (for example,
     /// `$value = trim($value)`). When the slot's storage type already needs lifetime
-    /// tracking this emits the eager load+release pair. When it does not, the slot can
+    /// tracking this emits a slot retirement that clears the owner before release.
+    /// This prevents exceptional frame cleanup from revisiting storage freed by a
+    /// throwing destructor. When it does not, the slot can
     /// STILL be widened to refcounted storage by a store lowered later that reaches
     /// this one through a loop back-edge (e.g. an inner `for` counter re-initialized
     /// by the outer body but widened Int→Mixed by its checked-add update). The storage
@@ -1410,18 +1442,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let storage_type = self.builder.local_php_type(slot);
-        if Ownership::php_type_needs_lifetime_tracking(&storage_type) {
-            self.release_stored_local_value(name, slot, span);
+        let tracked = Ownership::php_type_needs_lifetime_tracking(&storage_type);
+        // A ref-bound slot stores an alias, not the payload owner being replaced.
+        if self.is_ref_bound_local(name) {
+            if tracked {
+                self.release_stored_local_value(name, slot, span);
+            }
             return;
         }
-        if self.loop_stack.is_empty() {
+        if !tracked && self.loop_stack.is_empty() {
             // Outside loops no back-edge can execute a later widening store before
             // this one, so the untracked storage type is final for this path.
-            return;
-        }
-        // Ref-bound locals keep a cell pointer in the frame slot and are released
-        // through the ref-cell owner machinery, never through a raw slot release.
-        if self.is_ref_bound_local(name) {
             return;
         }
         self.emit_void(
@@ -1561,25 +1592,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
         // A loop-carried slot can exist globally without being definitely initialized
-        // on this CFG path. Release the runtime occupant before overwriting it.
+        // on this CFG path. An eval barrier can likewise populate a slot through scope
+        // reload before its first source-level assignment. Release that runtime occupant
+        // before overwriting it.
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && !self.loop_stack.is_empty()
+            && (!self.loop_stack.is_empty() || self.eval_barrier_active)
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
-        // A first syntactic store inside a loop body (main or function) can still
-        // overwrite a prior runtime iteration's value: the slot has no straight-line
-        // predecessor store so it is not in `initialized_slots`, but the loop back-edge
-        // makes it live on iterations 2+. Release the previous occupant so the old value
-        // is freed on reassign. Function cleanup locals (including returned slots) are
-        // zero-initialized in the prologue, so the first iteration safely releases a null
-        // slot; subsequent iterations release the prior value.
+        // A first syntactic store inside a loop body can overwrite a prior iteration's
+        // value. It can also replace a value installed by eval scope reload. In either
+        // case the slot has no straight-line predecessor store, so release its runtime
+        // occupant. Function cleanup locals are zero-initialized, making a path where
+        // neither source ran safe.
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
-            && !self.loop_stack.is_empty()
+            && (!self.loop_stack.is_empty() || self.eval_barrier_active)
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
@@ -2253,6 +2284,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.is_ref_bound_local(name) && self.local_type(name).codegen_repr() == PhpType::Mixed {
             return;
         }
+        if !self.is_ref_bound_local(name) {
+            // Frame layout applies the final slot representation to all earlier stores.
+            // Widen the slot directly: reading it as a concrete value and boxing it again
+            // would introduce an unnecessary conversion owner during reference promotion.
+            let slot = self.declare_local(name, PhpType::Mixed);
+            self.builder.widen_local_storage_type(slot, PhpType::Mixed);
+            self.set_local_type(name, PhpType::Mixed);
+            self.promote_local_ref_cell(name, span);
+            return;
+        }
         if self.local_type(name).codegen_repr() != PhpType::Mixed {
             let source = self.load_local(name, span);
             let boxed = self.emit_value(
@@ -2456,6 +2497,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::BoolToStr
                     | Op::ResourceToStr
                     | Op::MixedBox
+                    | Op::MixedClone
                     | Op::ArrayToMixed
                     | Op::HashToMixed
                     | Op::InvokerRefArg
@@ -2555,7 +2597,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Returns whether a user-call result can alias a borrowed visible argument.
     ///
-    /// User functions currently return refcounted parameter storage without
+    /// Typed object returns always carry an independent caller owner. Other
+    /// user-function returns can return refcounted parameter storage without
     /// acquiring it for the caller. Such a result is borrowed when the matching
     /// argument is borrowed, but remains an owning temporary when an owning
     /// argument temporary transfers through the call.
@@ -2573,6 +2616,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         else {
             return false;
         };
+        if matches!(self.builder.value_php_type(result).codegen_repr(), PhpType::Object(_))
+            && self.functions.get(function_name).is_some_and(|sig| !sig.by_ref_return)
+        {
+            return false;
+        }
         let Some(return_alias) = self.return_alias_summaries.function(function_name) else {
             return false;
         };
@@ -2681,7 +2729,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Later source-order stores can widen the final frame slot after this load has
     /// already been lowered. Array/hash/object/iterable loads are therefore treated as
     /// provisional owners; builder finalization removes their emitted releases if the
-    /// slot stays concrete. Callable loads use the eager answer because assignment has
+    /// slot stays concrete. String and callable loads use the eager answer because assignment has
     /// a separate move-vs-retain decision that cannot be repaired by pruning a release.
     ///
     /// Callers that *publish* the pointer without consuming the local's ownership
@@ -2714,7 +2762,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return true;
         }
         matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
-            && matches!(result_type, PhpType::Callable)
+            && matches!(result_type, PhpType::Str | PhpType::Callable)
     }
 
     /// Returns whether a generic cast owns a detached string copy of a Mixed operand.
@@ -2833,7 +2881,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh
             ),
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::UnaryString(_))) => true,
-            Some(Immediate::Data(name_id)) if inst.op == Op::LanguageConstructCall => self
+            Some(Immediate::Data(name_id) | Immediate::ProfiledData { data: name_id, .. })
+                if inst.op == Op::LanguageConstructCall => self
                 .data
                 .function_names
                 .get(name_id.as_raw() as usize)
@@ -3087,6 +3136,72 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.insert(slot);
     }
 
+    /// Starts a call-local capture group without disturbing a surrounding argument evaluation.
+    pub(crate) fn begin_argument_guard_scope(&mut self) {
+        self.argument_guard_scopes.push(Vec::new());
+    }
+
+    /// Finishes capture registration while keeping emitted guards active through invocation.
+    pub(crate) fn end_argument_guard_scope(&mut self) {
+        self.argument_guard_scopes.pop().expect("balanced argument capture scope");
+    }
+
+    /// Protects a captured argument in PHP parameter order until normal release or unwinding.
+    pub(crate) fn guard_call_argument(&mut self, value: LoweredValue, parameter: usize, span: Span) {
+        let ty = self.builder.value_php_type(value.value);
+        if !Ownership::php_type_needs_lifetime_tracking(&ty) { return; }
+        let previous = self.argument_guard_scopes.last().expect("active call capture scope")
+            .iter().filter(|(index, _)| *index < parameter).max_by_key(|(index, _)| *index)
+            .map(|(_, token)| *token);
+        let anchor = previous.unwrap_or_else(|| self.builder.emit_const_i64(0));
+        let token = self.emit_value(Op::RuntimeCall, vec![value.value, anchor],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionGuardOwned)),
+            PhpType::Int, Effects::WRITES_GLOBAL, Some(span));
+        self.argument_guards.insert(value.value, token.value);
+        self.argument_guard_scopes.last_mut().expect("active call capture scope").push((parameter, token.value));
+    }
+
+    /// Reports whether construction already registered exceptional ownership for this call operand.
+    pub(crate) fn has_call_argument_guard(&self, value: ValueId) -> bool {
+        self.argument_guards.contains_key(&value)
+    }
+
+    /// Adds an already active value guard to the current parameter-order insertion chain.
+    pub(crate) fn reuse_call_argument_guard_anchor(
+        &mut self,
+        value: ValueId,
+        parameter: usize,
+    ) -> bool {
+        let Some(&token) = self.argument_guards.get(&value) else {
+            return false;
+        };
+        self.argument_guard_scopes
+            .last_mut()
+            .expect("active call capture scope")
+            .push((parameter, token));
+        true
+    }
+
+    /// Refreshes an active indexed or associative argument guard after mutation can replace its heap address.
+    pub(crate) fn refresh_argument_array_guard(&mut self, array: LoweredValue, span: Span) {
+        let Some(&token) = self.argument_guards.get(&array.value) else { return; };
+        let target = if matches!(self.builder.value_php_type(array.value), PhpType::AssocArray { .. }) {
+            crate::ir::RuntimeCallTarget::ExceptionUpdateHashGuard
+        } else { crate::ir::RuntimeCallTarget::ExceptionUpdateArrayGuard };
+        self.emit_void(Op::RuntimeCall, vec![array.value, token],
+            Some(Immediate::RuntimeCall(target)),
+            Effects::WRITES_GLOBAL, Some(span));
+    }
+
+    /// Ends exceptional ownership immediately before normal call cleanup consumes a captured value.
+    pub(crate) fn unguard_call_argument(&mut self, value: ValueId, span: Span) {
+        if let Some(token) = self.argument_guards.remove(&value) {
+            self.emit_void(Op::RuntimeCall, vec![token],
+                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionUnguardOwned)),
+                Effects::WRITES_GLOBAL, Some(span));
+        }
+    }
+
     /// Emits a void opcode with optional operands and source span.
     pub(crate) fn emit_void(
         &mut self,
@@ -3272,11 +3387,14 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
                     crate::ir::RuntimeFnId::FunctionExists
                         | crate::ir::RuntimeFnId::IsCallable
                         | crate::ir::RuntimeFnId::ObStart
-                ) || target.string_callback_operand_index().is_some() =>
+                ) || target.string_callback_operand_index().is_some()
+                    || target.uses_mbstring_runtime() =>
             {
                 crate::ir::RuntimeCallTarget::ProfiledFunction {
                     target,
+                    arguments: crate::ir::RuntimeArgumentLayout::Values,
                     strict_php: crate::strict_php::is_enabled(),
+                    strict_types: Some(crate::source::current_strict_types()),
                 }
             }
             target => target,

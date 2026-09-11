@@ -1309,9 +1309,10 @@ fn lower_body_into_function(
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
     // every write in the callee landed in the CALLER's storage. Re-bind each by-value container
     // parameter to an owning shadow slot, which restores the refcount the copy-on-write split
-    // depends on. This one site is the single funnel for free functions, methods, static methods
-    // and closures, so every call flavour — including `call_user_func`, dynamic `$f(...)` and
-    // recursion — is covered without any per-flavour code.
+    // depends on. Exact PHP `array` parameters carry a boxed Mixed cell, so the shadow clones that
+    // wrapper as well as retaining its payload. This one site is the single funnel for free
+    // functions, methods, static methods and closures, so every call flavour, including
+    // `call_user_func`, dynamic `$f(...)` and recursion, is covered without per-flavour code.
     //
     // By-reference parameters are excluded by definition: `array &$a` must alias, not copy.
     // `$this` is excluded because it is an object, never a container.
@@ -1322,10 +1323,12 @@ fn lower_body_into_function(
         if name == "this" {
             continue;
         }
-        if !matches!(
-            php_type.codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. }
-        ) {
+        if !php_type.is_php_array()
+            && !matches!(
+                php_type.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+        {
             continue;
         }
         ctx.privatize_container_param(name, php_type, None);
@@ -1335,12 +1338,18 @@ fn lower_body_into_function(
         crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
     }
     terminate_open_block(&mut ctx);
+    // Cleanup-only loads must follow the final frame representation after every
+    // source-order store has had a chance to widen its local slot.
+    ctx.builder.repair_owned_local_cleanup_load_types();
     // Final storage types are now known: erase deferred loop-store releases that
     // guard slots which never widened to lifetime-tracked storage (issue #534).
     ctx.builder.prune_untracked_release_local_slot_ops();
     // Likewise, erase provisional releases for concrete local loads unless a
     // later store widened their final frame slot to Mixed (issue #538).
     ctx.builder.prune_borrowed_local_load_release_ops();
+    // Provisional exception guards obey the same final-storage boundary. A
+    // concrete slot remains the owner and must survive a throwing call.
+    ctx.builder.prune_borrowed_local_load_guard_ops();
     // Publish the lowering-time ownership proof after provisional local-load
     // releases have been pruned, so codegen can consume EIR metadata instead of
     // maintaining a second producer allow-list (issue #595).

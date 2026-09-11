@@ -33,8 +33,11 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.
+/// Registers the managed Oniguruma and PCRE2 providers selected for this binary.
 pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
+    if ctx.module.required_runtime_features.mbregex {
+        abi::emit_call_label(ctx.emitter, "__rt_mbregex_init");
+    }
     if !ctx.module.required_runtime_features.regex {
         return;
     }

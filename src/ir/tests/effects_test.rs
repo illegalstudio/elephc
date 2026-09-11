@@ -9,6 +9,18 @@
 
 use crate::ir::{Effects, Op, RuntimeFnId};
 
+/// Keeps saturated hash appends observable and catchable through EIR optimization.
+#[test]
+fn hash_appends_retain_index_reads_and_catchable_failures() {
+    for op in [Op::HashAppend, Op::MixedArrayAppend] {
+        let effects = op.default_effects();
+        assert!(effects.contains(Effects::MAY_THROW));
+        assert!(effects.contains(Effects::READS_HEAP));
+        assert!(effects.may_mutate());
+        assert!(!effects.is_pure());
+    }
+}
+
 /// The pure effect set is empty and reports itself as pure.
 #[test]
 fn pure_has_no_bits() {

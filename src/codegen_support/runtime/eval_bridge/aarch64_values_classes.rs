@@ -234,6 +234,9 @@ pub(super) fn emit_aarch64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boolean class-relation result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_class_name");
+    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve linkage while following the referenced object
+    emitter.instruction("bl __rt_mixed_deref");                                 // resolve the concrete receiver before class-name lookup
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore linkage for the leaf metadata lookup
     emitter.instruction("cbz x0, __elephc_eval_value_object_class_name_miss");  // reject null boxed handles before reading their tag
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed eval value runtime tag
     emitter.instruction("cmp x9, #6");                                          // tag 6 is an object payload

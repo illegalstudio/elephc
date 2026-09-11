@@ -265,6 +265,10 @@ fn emit_sprintf_mixed_to_string_aarch64(emitter: &mut Emitter, eval_bridge: bool
         emitter.instruction("ldr x0, [sp, #80]");                               // boxed Throwable
         emitter.instruction("bl __rt_mixed_unbox");                             // raw object pointer in x1
         abi::emit_store_reg_to_symbol(emitter, "x1", "_exc_value", 0);
+        emitter.instruction("mov x0, x1");                                      // retain the raw Throwable before releasing its bridge-owned box
+        emitter.instruction("bl __rt_incref");                                  // transfer one object owner to the native pending exception slot
+        emitter.instruction("ldr x0, [sp, #80]");                               // recover the owned eval Throwable result cell
+        emitter.instruction("bl __rt_decref_any");                              // release the result box without losing the retained pending exception
         emitter.instruction("b __rt_throw_current");                            // unwind to the nearest active PHP catch handler
     } else {
         emitter.instruction("b __rt_sprintf_mixed_string_missing");             // no eval bridge in this runtime
@@ -533,6 +537,10 @@ fn emit_sprintf_mixed_to_string_linux_x86_64(emitter: &mut Emitter, eval_bridge:
         emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                   // boxed Throwable
         emitter.instruction("call __rt_mixed_unbox");                           // raw object pointer in rdi
         abi::emit_store_reg_to_symbol(emitter, "rdi", "_exc_value", 0);
+        emitter.instruction("mov rax, rdi");                                    // retain the raw Throwable before releasing its bridge-owned box
+        emitter.instruction("call __rt_incref");                                // transfer one object owner to the native pending exception slot
+        emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                   // recover the eval-owned Throwable result cell
+        emitter.instruction("call __rt_decref_any");                            // release the box while preserving the separately retained pending object
         emitter.instruction("jmp __rt_throw_current");                          // unwind to the nearest active PHP catch handler
     } else {
         emitter.instruction("jmp __rt_sprintf_mixed_string_missing_x64");       // no eval bridge in this runtime

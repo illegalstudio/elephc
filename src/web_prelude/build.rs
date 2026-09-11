@@ -4357,6 +4357,7 @@ fn decl_fn_ini_get() -> Stmt {
         .param("option", TypeExpr::Str)
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
+            crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_GET),
             s_assign("__elephc_oc", e_call("__elephc_opcache_ini_string", vec![e_var("option")])),
             s_if(
                 e_binop(e_var("__elephc_oc"), BinOp::StrictNotEq, e_bool(false)),
@@ -4451,9 +4452,19 @@ fn decl_fn_elephc_session_name_valid() -> Stmt {
 fn decl_fn_ini_set() -> Stmt {
     function("ini_set")
         .param("option", TypeExpr::Str)
-        .param_untyped("value")
+        .param(
+            "value",
+            t_union(vec![
+                TypeExpr::Str,
+                TypeExpr::Int,
+                TypeExpr::Float,
+                TypeExpr::Bool,
+                TypeExpr::Void,
+            ]),
+        )
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
+            crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_SET),
             s_assign("old", e_str("")),
             s_if(
                 e_binop(e_call("__elephc_opcache_ini_string", vec![e_var("option")]), BinOp::StrictNotEq, e_bool(false)),
@@ -5026,38 +5037,7 @@ fn decl_fn_elephc_ini_all_plain() -> Stmt {
 
 /// `ini_get_all` — transcribed from the PHP form.
 fn decl_fn_ini_get_all() -> Stmt {
-    function("ini_get_all")
-        .param_default("extension", t_nullable(TypeExpr::Str), e_null())
-        .param_default("details", TypeExpr::Bool, e_bool(true))
-        .body(vec![
-            s_if(
-                e_binop(e_binop(e_binop(e_binop(e_var("extension"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_var("extension"), BinOp::StrictNotEq, e_str("session"))), BinOp::And, e_binop(e_var("extension"), BinOp::StrictNotEq, e_str("zend opcache"))), BinOp::And, e_binop(e_var("extension"), BinOp::StrictNotEq, e_str("core"))),
-                vec![
-                    s_if(
-                        e_call("__elephc_ini_module_known", vec![e_var("extension")]),
-                        vec![
-                            s_return(e_array(vec![])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_call("trigger_error", vec![e_binop(e_binop(e_str("ini_get_all(): Extension \""), BinOp::Concat, e_var("extension")), BinOp::Concat, e_str("\" cannot be found")), e_const("E_WARNING")])),
-                    s_return(e_bool(false)),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_var("details"),
-                vec![
-                    s_return(e_call("__elephc_ini_all_details", vec![e_var("extension")])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_call("__elephc_ini_all_plain", vec![e_var("extension")])),
-        ])
-        .build()
+    crate::shared_ini_prelude::all_declaration(true)
 }
 
 /// `bootstrap 39` — transcribed from the PHP form.

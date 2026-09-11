@@ -1,11 +1,11 @@
 ---
-title: "session_get_cookie_params() — internals"
+title: "session_get_cookie_params() - internals"
 description: "Compiler internals for session_get_cookie_params(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 894
+  order: 955
 ---
 
-## `session_get_cookie_params()` — internals
+## `session_get_cookie_params()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_get_cookie_params(): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

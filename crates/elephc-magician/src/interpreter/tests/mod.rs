@@ -11,6 +11,7 @@
 //! - Child modules import the interpreter entry points from their parent module.
 
 mod array_literals;
+mod array_references;
 mod builtins_arrays_core;
 mod builtins_arrays_iterators;
 mod builtins_arrays_sets;
@@ -63,6 +64,7 @@ mod expressions;
 mod functions_namespaces;
 mod method_arguments;
 mod native_scope;
+mod operand_ownership;
 mod static_members;
 mod support;
 mod trait_adaptations;

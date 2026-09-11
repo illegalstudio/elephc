@@ -1,16 +1,16 @@
 ---
-title: "urlencode() — internals"
+title: "urlencode() - internals"
 description: "Compiler internals for urlencode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 848
+  order: 909
 ---
 
-## `urlencode()` — internals
+## `urlencode()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/urlencode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/urlencode.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

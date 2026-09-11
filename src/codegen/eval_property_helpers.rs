@@ -133,7 +133,7 @@ fn collect_class_property_slots(
             property: property.clone(),
             visibility,
             offset: 8 + index * 16,
-            ty: ty.codegen_repr(),
+            ty: super::eval_value_helpers::bridge_storage_type(ty),
             is_declared: class_info.property_slot_is_declared(index, property),
             is_hidden_shadow,
         });
@@ -539,6 +539,8 @@ fn emit_aarch64_stdclass_property_set_fallback(
     abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
     emitter.instruction("cmp x9, x10");                                         // check whether the receiver is stdClass
     emitter.instruction(&format!("b.ne {}", fail_label));                       // non-stdClass misses remain unsupported eval writes
+    emitter.instruction("ldr x0, [sp, #24]");                                   // load the borrowed eval value before transferring an owner to the property hash
+    abi::emit_call_label(emitter, "__rt_incref");
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed receiver for the Mixed stdClass setter
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload requested property-name pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested property-name length
@@ -564,6 +566,8 @@ fn emit_x86_64_stdclass_property_set_fallback(
     abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
     emitter.instruction("cmp r11, r10");                                        // check whether the receiver is stdClass
     emitter.instruction(&format!("jne {}", fail_label));                        // non-stdClass misses remain unsupported eval writes
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the borrowed eval value before transferring an owner to the property hash
+    abi::emit_call_label(emitter, "__rt_incref");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the boxed receiver for the Mixed stdClass setter
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload requested property-name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload requested property-name length
@@ -734,22 +738,14 @@ fn emit_x86_64_property_scope_check(
     fail_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = x86_64_scope_offsets(mode);
-    emitter.instruction(
-        &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
-    );                                                                          // reload the active eval class-scope pointer
-    emitter.instruction(
-        &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
-    );                                                                          // reload the active eval class-scope length
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
     emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
     emitter.instruction(&format!("jz {}", fail_label));                         // reject scoped property access outside a class scope
     for scope_name in &slot.allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(
-            &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
-        );                                                                      // reload the active eval class-scope pointer
-        emitter.instruction(
-            &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
-        );                                                                      // reload the active eval class-scope length
+        emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
+        emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
         abi::emit_symbol_address(emitter, "rdx", &label);
         abi::emit_load_int_immediate(emitter, "rcx", len as i64);
         emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
@@ -889,9 +885,7 @@ fn emit_x86_64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalPrope
         return;
     }
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
-    emitter.instruction(
-        &format!("mov rax, QWORD PTR [r11 + {}]", slot.offset + 8)
-    );                                                                          // load the typed-property initialization marker
+    emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset + 8)); // load the typed-property initialization marker
     abi::emit_load_int_immediate(emitter, "r10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rax, r10");                                        // compare the property marker against the uninitialized sentinel
     emitter.instruction("setne al");                                            // materialize true when the instance property is initialized
@@ -935,9 +929,7 @@ fn emit_x86_64_uninitialized_property_get_guard(
         slot_body_label_raw(slot, "get")
     );
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for marker inspection
-    emitter.instruction(
-        &format!("mov rax, QWORD PTR [r10 + {}]", slot.offset + 8)
-    );                                                                          // load the typed-property initialization marker
+    emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {}]", slot.offset + 8)); // load the typed-property initialization marker
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rax, r11");                                        // compare the property marker against the uninitialized sentinel
     emitter.instruction(&format!("jne {}", initialized_label));                 // continue boxing once the instance property is initialized
@@ -969,13 +961,13 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
         }
         PhpType::Str => {
             emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset));    // load the string property pointer
-            emitter.instruction(&format!("ldr x2, [x9, #{}]", slot.offset + 8));// load the string property length
+            emitter.instruction(&format!("ldr x2, [x9, #{}]", slot.offset + 8)); // load the string property length
             emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string
             emitter.instruction("bl __rt_mixed_from_value");                    // persist and box the string property payload
         }
         PhpType::TaggedScalar => {
             emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // load the nullable integer property payload
-            emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset + 8));//load the nullable integer property tag
+            emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset + 8)); // load the nullable integer property tag
             emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
         }
         PhpType::Mixed | PhpType::Union(_) => {
@@ -989,7 +981,11 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
             );
             emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // load the stored Mixed property cell
             emitter.instruction(&format!("cbz x0, {}", null_label));            // null property storage reads as PHP null
-            emitter.instruction("bl __rt_incref");                              // retain the stored Mixed cell for the eval caller
+            if slot.ty.is_php_array() {
+                emitter.instruction("bl __rt_mixed_clone");                     // detach the array zval so eval writes preserve property COW aliases
+            } else {
+                emitter.instruction("bl __rt_incref");                          // retain the stored Mixed cell for the eval caller
+            }
             emitter.instruction(&format!("b {}", done_label));                  // skip null materialization after a retained hit
             emitter.label(&null_label);
             let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
@@ -1008,50 +1004,40 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
     match slot.ty.codegen_repr() {
         PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            emitter.instruction(
-                &format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)
-            );                                                                  // load the property payload low word
+            emitter.instruction(&format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)); // load the property payload low word
             emitter.instruction("xor esi, esi");                                // heap/scalar property payloads do not use a high word here
             abi::emit_load_int_immediate(emitter, "rax", runtime_value_tag(&slot.ty) as i64);
             emitter.instruction("call __rt_mixed_from_value");                  // box the property payload as a Mixed cell
         }
         PhpType::Float => {
-            emitter.instruction(
-                &format!("movsd xmm0, QWORD PTR [r11 + {}]", slot.offset)
-            );                                                                  // load the floating property payload
+            emitter.instruction(&format!("movsd xmm0, QWORD PTR [r11 + {}]", slot.offset)); // load the floating property payload
             emitter.instruction("movq rdi, xmm0");                              // move float bits into the Mixed low payload word
             emitter.instruction("xor esi, esi");                                // float payloads do not use a high word
             emitter.instruction("mov eax, 2");                                  // runtime tag 2 = float
             emitter.instruction("call __rt_mixed_from_value");                  // box the floating property payload as Mixed
         }
         PhpType::Str => {
-            emitter.instruction(
-                &format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)
-            );                                                                  // load the string property pointer
-            emitter.instruction(
-                &format!("mov rsi, QWORD PTR [r11 + {}]", slot.offset + 8)
-            );                                                                  // load the string property length
+            emitter.instruction(&format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)); // load the string property pointer
+            emitter.instruction(&format!("mov rsi, QWORD PTR [r11 + {}]", slot.offset + 8)); // load the string property length
             emitter.instruction("mov eax, 1");                                  // runtime tag 1 = string
             emitter.instruction("call __rt_mixed_from_value");                  // persist and box the string property payload
         }
         PhpType::TaggedScalar => {
-            emitter.instruction(
-                &format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)
-            );                                                                  //load the nullable integer property payload
-            emitter.instruction(
-                &format!("mov rdx, QWORD PTR [r11 + {}]", slot.offset + 8)
-            );                                                                  //load the nullable integer property tag
+            emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)); // load the nullable integer property payload
+            emitter.instruction(&format!("mov rdx, QWORD PTR [r11 + {}]", slot.offset + 8)); // load the nullable integer property tag
             emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
         }
         PhpType::Mixed | PhpType::Union(_) => {
             let null_label = format!("{}_mixed_null_x", slot_body_label_raw(slot, "get"));
             let done_label = format!("{}_mixed_done_x", slot_body_label_raw(slot, "get"));
-            emitter.instruction(
-                &format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)
-            );                                                                  // load the stored Mixed property cell
+            emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)); // load the stored Mixed property cell
             emitter.instruction("test rax, rax");                               // check whether the property storage is initialized
             emitter.instruction(&format!("jz {}", null_label));                 // null property storage reads as PHP null
-            emitter.instruction("call __rt_incref");                            // retain the stored Mixed cell for the eval caller
+            if slot.ty.is_php_array() {
+                emitter.instruction("call __rt_mixed_clone");                   // detach the array zval so eval writes preserve property COW aliases
+            } else {
+                emitter.instruction("call __rt_incref");                        // retain the stored Mixed cell for the eval caller
+            }
             emitter.instruction(&format!("jmp {}", done_label));                // skip null materialization after a retained hit
             emitter.label(&null_label);
             let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
@@ -1073,6 +1059,10 @@ fn emit_aarch64_store_property_slot(
     slot: &EvalPropertySlot,
     fail_label: &str,
 ) {
+    if slot.ty.is_php_array() {
+        emitter.instruction("ldr x0, [sp, #24]");                               // borrow the boxed array assignment before checking its PHP type
+        super::eval_value_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
         PhpType::Bool => {
@@ -1090,7 +1080,7 @@ fn emit_aarch64_store_property_slot(
             emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval value to a PHP string pair
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
             emitter.instruction(&format!("str x1, [x9, #{}]", slot.offset));    // store the coerced string pointer into the property slot
-            emitter.instruction(&format!("str x2, [x9, #{}]", slot.offset + 8));// store the coerced string length into the property slot
+            emitter.instruction(&format!("str x2, [x9, #{}]", slot.offset + 8)); // store the coerced string length into the property slot
         }
         PhpType::TaggedScalar => emit_aarch64_store_tagged_scalar_property(emitter, slot),
         PhpType::Array(_) => emit_aarch64_store_heap_property_slot(emitter, slot, 4, fail_label),
@@ -1112,9 +1102,7 @@ fn emit_aarch64_store_property_slot(
             emitter.instruction("bl __rt_incref");                              // retain the Mixed cell for property ownership
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
             emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));    // store the retained Mixed cell into the property slot
-            emitter.instruction(
-                &format!("str xzr, [x9, #{}]", slot.offset + 8)
-            );                                                                  // clear the unused property high word
+            emitter.instruction(&format!("str xzr, [x9, #{}]", slot.offset + 8)); // clear the unused property high word
         }
         PhpType::Void => {
             emitter.instruction(&format!("b {}", fail_label));                  // Void slots have no value storage; report the eval write as unsupported
@@ -1131,6 +1119,10 @@ fn emit_x86_64_store_property_slot(
     slot: &EvalPropertySlot,
     fail_label: &str,
 ) {
+    if slot.ty.is_php_array() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                   // borrow the boxed array assignment before checking its PHP type
+        super::eval_value_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
         PhpType::Bool => {
@@ -1140,21 +1132,15 @@ fn emit_x86_64_store_property_slot(
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value for float coercion
             emitter.instruction("call __rt_mixed_cast_float");                  // coerce the eval value to a PHP float
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(
-                &format!("movsd QWORD PTR [r11 + {}], xmm0", slot.offset)
-            );                                                                  // store the coerced float into the property slot
+            emitter.instruction(&format!("movsd QWORD PTR [r11 + {}], xmm0", slot.offset)); // store the coerced float into the property slot
             emit_x86_64_clear_scalar_property_marker(emitter, slot);
         }
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value for string coercion
             emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval value to a PHP string pair
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(
-                &format!("mov QWORD PTR [r11 + {}], rax", slot.offset)
-            );                                                                  // store the coerced string pointer into the property slot
-            emitter.instruction(
-                &format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)
-            );                                                                  // store the coerced string length into the property slot
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); // store the coerced string pointer into the property slot
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)); // store the coerced string length into the property slot
         }
         PhpType::TaggedScalar => emit_x86_64_store_tagged_scalar_property(emitter, slot),
         PhpType::Array(_) => emit_x86_64_store_heap_property_slot(emitter, slot, 4, fail_label),
@@ -1175,12 +1161,8 @@ fn emit_x86_64_store_property_slot(
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value being assigned
             emitter.instruction("call __rt_incref");                            // retain the Mixed cell for property ownership
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(
-                &format!("mov QWORD PTR [r11 + {}], rax", slot.offset)
-            );                                                                  // store the retained Mixed cell into the property slot
-            emitter.instruction(
-                &format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)
-            );                                                                  // clear the unused property high word
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); // store the retained Mixed cell into the property slot
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)); // clear the unused property high word
         }
         PhpType::Void => {
             emitter.instruction(&format!("jmp {}", fail_label));                // Void slots have no value storage; report the eval write as unsupported
@@ -1199,7 +1181,7 @@ fn emit_aarch64_store_cast_scalar(
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for scalar coercion
     emitter.instruction(&format!("bl {}", helper));                             // coerce the eval value to the declared property type
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the store
-    emitter.instruction(&format!("str {}, [x9, #{}]", result_reg, slot.offset));// store the coerced scalar into the property slot
+    emitter.instruction(&format!("str {}, [x9, #{}]", result_reg, slot.offset)); // store the coerced scalar into the property slot
     emit_aarch64_clear_scalar_property_marker(emitter, slot);
 }
 
@@ -1246,18 +1228,14 @@ fn emit_x86_64_store_cast_scalar(
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for scalar coercion
     emitter.instruction(&format!("call {}", helper));                           // coerce the eval value to the declared property type
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
-    emitter.instruction(
-        &format!("mov QWORD PTR [r11 + {}], {}", slot.offset, result_reg)
-    );                                                                          // store the coerced scalar into the property slot
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], {}", slot.offset, result_reg)); // store the coerced scalar into the property slot
     emit_x86_64_clear_scalar_property_marker(emitter, slot);
 }
 
 /// Clears an x86_64 one-word scalar typed-property marker after a successful store.
 fn emit_x86_64_clear_scalar_property_marker(emitter: &mut Emitter, slot: &EvalPropertySlot) {
     if slot.is_declared {
-        emitter.instruction(
-            &format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)
-        );                                                                      // clear the typed-property initialization marker
+        emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)); // clear the typed-property initialization marker
     }
 }
 
@@ -1317,10 +1295,8 @@ fn emit_x86_64_store_heap_property_slot(
     emitter.instruction("mov rax, rdi");                                        // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the heap store
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset));//store the retained heap pointer into the property slot
-    emitter.instruction(
-        &format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)
-    );                                                                          // clear the typed-property initialization marker
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); // store the retained heap pointer into the property slot
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)); // clear the typed-property initialization marker
 }
 
 /// Validates and stores a boxed x86_64 eval object into an object property slot.
@@ -1368,10 +1344,8 @@ fn emit_x86_64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPr
     crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
     emitter.label(&done_label);
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset));//store the nullable integer payload into the property slot
-    emitter.instruction(
-        &format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)
-    );                                                                          // store the nullable integer tag into the property slot
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); // store the nullable integer payload into the property slot
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)); // store the nullable integer tag into the property slot
 }
 
 /// Groups property slots by class id while preserving sorted class order.

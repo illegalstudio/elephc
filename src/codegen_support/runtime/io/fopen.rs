@@ -232,7 +232,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.label("__rt_fopen_uw_fail");
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the wrapper object pointer (or 0 if instantiation never happened)
     emitter.instruction("cbz x0, __rt_fopen_uw_fail_release");                  // no object to release — skip the deep-free
-    emitter.instruction("bl __rt_object_free_deep");                            // free the wrapper object so failed dispatches do not leak
+    emitter.instruction("bl __rt_decref_object");                               // consume the failed wrapper owner and preserve any destructor-retained alias
     emitter.label("__rt_fopen_uw_fail_release");
     emitter.instruction("add sp, sp, #64");                                     // release the wrapper-dispatch scratch before falling into the shared silent-fail path
     emitter.instruction("b __rt_fopen_silent_fail");                            // share the existing -1 return
@@ -458,10 +458,10 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fopen_return_x86");                           // share the common return path
 
     emitter.label("__rt_fopen_uw_fail_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer (or 0 if instantiation never happened)
-    emitter.instruction("test rdi, rdi");                                       // any object to release?
+    emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                       // pass the owned wrapper through the private object-release convention
+    emitter.instruction("test rax, rax");                                       // inspect whether wrapper instantiation produced an owner
     emitter.instruction("jz __rt_fopen_uw_fail_release_x86");                   // no object to release — skip the deep-free
-    emitter.instruction("call __rt_object_free_deep");                          // free the wrapper object so failed dispatches do not leak
+    emitter.instruction("call __rt_decref_object");                             // release the failed wrapper without discarding a destructor-retained alias
     emitter.label("__rt_fopen_uw_fail_release_x86");
     emitter.instruction("add rsp, 64");                                         // release the wrapper-dispatch scratch before falling into the shared silent-fail path
     emitter.instruction("jmp __rt_fopen_silent_fail_x86");                      // share the existing -1 return

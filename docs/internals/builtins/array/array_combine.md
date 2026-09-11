@@ -1,16 +1,16 @@
 ---
-title: "array_combine() — internals"
+title: "array_combine() - internals"
 description: "Compiler internals for array_combine(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 5
 ---
 
-## `array_combine()` — internals
+## `array_combine()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_combine.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_combine.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_free_result() — internals"
+title: "mysqli_stmt_free_result() - internals"
 description: "Compiler internals for mysqli_stmt_free_result(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 167
 ---
 
-## `mysqli_stmt_free_result()` — internals
+## `mysqli_stmt_free_result()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_stmt_free_result(mixed $statement): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
