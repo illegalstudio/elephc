@@ -2,7 +2,7 @@
 title: "xmlwriter_write_attribute_ns() — internals"
 description: "Compiler internals for xmlwriter_write_attribute_ns(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 964
+  order: 965
 ---
 
 ## `xmlwriter_write_attribute_ns()` — internals

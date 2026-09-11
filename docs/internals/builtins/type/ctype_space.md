@@ -2,7 +2,7 @@
 title: "ctype_space() — internals"
 description: "Compiler internals for ctype_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 856
+  order: 857
 ---
 
 ## `ctype_space()` — internals

@@ -2,7 +2,7 @@
 title: "mysqli_more_results()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 138
+  order: 139
 ---
 
 ## mysqli_more_results()

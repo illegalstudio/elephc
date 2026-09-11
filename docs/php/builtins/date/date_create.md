@@ -2,7 +2,7 @@
 title: "date_create()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 190
+  order: 191
 ---
 
 ## date_create()

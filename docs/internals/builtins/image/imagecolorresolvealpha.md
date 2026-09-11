@@ -2,7 +2,7 @@
 title: "imagecolorresolvealpha() — internals"
 description: "Compiler internals for imagecolorresolvealpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 474
+  order: 475
 ---
 
 ## `imagecolorresolvealpha()` — internals

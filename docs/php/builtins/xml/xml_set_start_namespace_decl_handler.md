@@ -2,7 +2,7 @@
 title: "xml_set_start_namespace_decl_handler()"
 description: "Sets the handler called when a namespace declaration starts."
 sidebar:
-  order: 931
+  order: 932
 ---
 
 ## xml_set_start_namespace_decl_handler()

@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_remove() — internals"
 description: "Compiler internals for __elephc_curl_multi_remove(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1006
+  order: 1007
 ---
 
 ## `__elephc_curl_multi_remove()` — internals

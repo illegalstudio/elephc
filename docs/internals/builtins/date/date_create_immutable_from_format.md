@@ -2,7 +2,7 @@
 title: "date_create_immutable_from_format() — internals"
 description: "Compiler internals for date_create_immutable_from_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 193
+  order: 194
 ---
 
 ## `date_create_immutable_from_format()` — internals

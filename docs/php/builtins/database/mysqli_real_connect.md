@@ -2,7 +2,7 @@
 title: "mysqli_real_connect()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 147
+  order: 148
 ---
 
 ## mysqli_real_connect()

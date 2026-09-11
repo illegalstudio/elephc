@@ -2,7 +2,7 @@
 title: "mysqli_data_seek()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 107
+  order: 108
 ---
 
 ## mysqli_data_seek()

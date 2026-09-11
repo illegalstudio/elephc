@@ -2,7 +2,7 @@
 title: "mysqli_fetch_all()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 114
+  order: 115
 ---
 
 ## mysqli_fetch_all()

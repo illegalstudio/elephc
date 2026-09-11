@@ -2,7 +2,7 @@
 title: "mysqli_init()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 136
+  order: 137
 ---
 
 ## mysqli_init()

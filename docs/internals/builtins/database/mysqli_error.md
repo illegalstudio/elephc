@@ -2,7 +2,7 @@
 title: "mysqli_error() — internals"
 description: "Compiler internals for mysqli_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 109
+  order: 110
 ---
 
 ## `mysqli_error()` — internals

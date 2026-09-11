@@ -2,7 +2,7 @@
 title: "timezone_identifiers_list() — internals"
 description: "Compiler internals for timezone_identifiers_list(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 244
+  order: 245
 ---
 
 ## `timezone_identifiers_list()` — internals

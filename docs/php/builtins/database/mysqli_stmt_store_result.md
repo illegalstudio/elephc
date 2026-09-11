@@ -2,7 +2,7 @@
 title: "mysqli_stmt_store_result()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 176
+  order: 177
 ---
 
 ## mysqli_stmt_store_result()

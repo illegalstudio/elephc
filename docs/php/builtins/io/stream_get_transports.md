@@ -2,7 +2,7 @@
 title: "stream_get_transports()"
 description: "Retrieves list of registered socket transports."
 sidebar:
-  order: 373
+  order: 374
 ---
 
 ## stream_get_transports()

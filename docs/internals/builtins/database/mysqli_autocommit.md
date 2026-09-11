@@ -2,7 +2,7 @@
 title: "mysqli_autocommit() — internals"
 description: "Compiler internals for mysqli_autocommit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 99
+  order: 100
 ---
 
 ## `mysqli_autocommit()` — internals

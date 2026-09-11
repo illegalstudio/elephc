@@ -2,7 +2,7 @@
 title: "cairo_restore()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 429
+  order: 430
 ---
 
 ## cairo_restore()

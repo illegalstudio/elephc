@@ -2,7 +2,7 @@
 title: "jddayofweek()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 227
+  order: 228
 ---
 
 ## jddayofweek()

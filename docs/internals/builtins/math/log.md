@@ -2,7 +2,7 @@
 title: "log() — internals"
 description: "Compiler internals for log(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 584
+  order: 585
 ---
 
 ## `log()` — internals

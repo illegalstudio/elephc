@@ -79,6 +79,7 @@ pub mod range;
 pub mod reset;
 pub mod rsort;
 pub mod shuffle;
+pub mod sizeof;
 pub mod sort;
 pub mod uasort;
 pub mod uksort;

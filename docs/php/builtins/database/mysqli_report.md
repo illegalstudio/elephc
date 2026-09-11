@@ -2,7 +2,7 @@
 title: "mysqli_report()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 151
+  order: 152
 ---
 
 ## mysqli_report()

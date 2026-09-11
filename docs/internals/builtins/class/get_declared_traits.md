@@ -2,7 +2,7 @@
 title: "get_declared_traits() — internals"
 description: "Compiler internals for get_declared_traits(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 89
+  order: 90
 ---
 
 ## `get_declared_traits()` — internals

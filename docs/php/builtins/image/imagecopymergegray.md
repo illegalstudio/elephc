@@ -2,7 +2,7 @@
 title: "imagecopymergegray()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 482
+  order: 483
 ---
 
 ## imagecopymergegray()

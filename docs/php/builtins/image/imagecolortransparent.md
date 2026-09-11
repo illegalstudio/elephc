@@ -2,7 +2,7 @@
 title: "imagecolortransparent()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 478
+  order: 479
 ---
 
 ## imagecolortransparent()

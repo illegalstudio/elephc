@@ -30,6 +30,26 @@ return defined("COUNT_RECURSIVE");"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `sizeof()` is PHP's `count()` alias, including named `$mode` and callables.
+#[test]
+fn execute_program_dispatches_sizeof_alias_of_count() {
+    let program = parse_fragment(
+        br#"echo sizeof([1, [2, 3], [4]]) . ":";
+echo SIZEOF([1, [2, 3], [4]], COUNT_RECURSIVE) . ":";
+echo call_user_func("sizeof", [1, [2]]) . ":";
+echo call_user_func_array("sizeof", ["value" => [1, [2]], "mode" => COUNT_RECURSIVE]) . ":";
+return function_exists("sizeof");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "3:6:2:3:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `count()` dispatches to eval-declared `Countable` objects.
 #[test]
 fn execute_program_counts_eval_countable_objects() {

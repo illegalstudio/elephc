@@ -2,7 +2,7 @@
 title: "mysqli_next_result() — internals"
 description: "Compiler internals for mysqli_next_result(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 140
+  order: 141
 ---
 
 ## `mysqli_next_result()` — internals

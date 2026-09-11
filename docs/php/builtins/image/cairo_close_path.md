@@ -2,7 +2,7 @@
 title: "cairo_close_path()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 400
+  order: 401
 ---
 
 ## cairo_close_path()

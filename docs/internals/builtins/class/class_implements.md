@@ -2,7 +2,7 @@
 title: "class_implements() — internals"
 description: "Compiler internals for class_implements(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 78
+  order: 79
 ---
 
 ## `class_implements()` — internals

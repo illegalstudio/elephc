@@ -2,7 +2,7 @@
 title: "is_a()"
 description: "Checks whether an object is of a given type or has it as one of its parents."
 sidebar:
-  order: 93
+  order: 94
 ---
 
 ## is_a()

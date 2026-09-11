@@ -2,7 +2,7 @@
 title: "localtime() — internals"
 description: "Compiler internals for localtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 236
+  order: 237
 ---
 
 ## `localtime()` — internals

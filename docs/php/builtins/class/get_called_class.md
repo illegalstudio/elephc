@@ -2,7 +2,7 @@
 title: "get_called_class()"
 description: "Returns the late-static-binding class name in eval context."
 sidebar:
-  order: 83
+  order: 84
 ---
 
 ## get_called_class()

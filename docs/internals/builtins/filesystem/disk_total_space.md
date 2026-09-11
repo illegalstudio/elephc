@@ -2,7 +2,7 @@
 title: "disk_total_space() — internals"
 description: "Compiler internals for disk_total_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 262
+  order: 263
 ---
 
 ## `disk_total_space()` — internals

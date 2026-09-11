@@ -2,7 +2,7 @@
 title: "stream_get_meta_data() — internals"
 description: "Compiler internals for stream_get_meta_data(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 372
+  order: 373
 ---
 
 ## `stream_get_meta_data()` — internals

@@ -2,7 +2,7 @@
 title: "imagecolorclosest()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 466
+  order: 467
 ---
 
 ## imagecolorclosest()

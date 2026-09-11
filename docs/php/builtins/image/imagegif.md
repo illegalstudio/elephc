@@ -2,7 +2,7 @@
 title: "imagegif()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 511
+  order: 512
 ---
 
 ## imagegif()

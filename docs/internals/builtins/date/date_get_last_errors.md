@@ -2,7 +2,7 @@
 title: "date_get_last_errors() — internals"
 description: "Compiler internals for date_get_last_errors(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 199
+  order: 200
 ---
 
 ## `date_get_last_errors()` — internals

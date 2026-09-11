@@ -2,7 +2,7 @@
 title: "session_set_save_handler() — internals"
 description: "Compiler internals for session_set_save_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 903
+  order: 904
 ---
 
 ## `session_set_save_handler()` — internals

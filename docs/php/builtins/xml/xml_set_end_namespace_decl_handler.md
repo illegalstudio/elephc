@@ -2,7 +2,7 @@
 title: "xml_set_end_namespace_decl_handler()"
 description: "Sets the handler called when a namespace declaration ends."
 sidebar:
-  order: 926
+  order: 927
 ---
 
 ## xml_set_end_namespace_decl_handler()

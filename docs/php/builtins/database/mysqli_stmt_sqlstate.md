@@ -2,7 +2,7 @@
 title: "mysqli_stmt_sqlstate()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 175
+  order: 176
 ---
 
 ## mysqli_stmt_sqlstate()

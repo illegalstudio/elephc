@@ -2,7 +2,7 @@
 title: "date_interval_create_from_date_string()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 200
+  order: 201
 ---
 
 ## date_interval_create_from_date_string()

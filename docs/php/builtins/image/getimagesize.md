@@ -2,7 +2,7 @@
 title: "getimagesize()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 451
+  order: 452
 ---
 
 ## getimagesize()

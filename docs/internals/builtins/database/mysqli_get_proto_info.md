@@ -2,7 +2,7 @@
 title: "mysqli_get_proto_info() — internals"
 description: "Compiler internals for mysqli_get_proto_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 132
+  order: 133
 ---
 
 ## `mysqli_get_proto_info()` — internals

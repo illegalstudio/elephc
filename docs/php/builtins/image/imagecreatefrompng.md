@@ -2,7 +2,7 @@
 title: "imagecreatefrompng()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 489
+  order: 490
 ---
 
 ## imagecreatefrompng()

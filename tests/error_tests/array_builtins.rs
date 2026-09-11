@@ -408,6 +408,12 @@ fn test_error_count_wrong_args() {
     expect_error("<?php count();", "count() takes 1 or 2 arguments");
 }
 
+/// Verifies PHP's `sizeof()` alias exposes the same one-required, one-optional arity as `count()`.
+#[test]
+fn test_error_sizeof_wrong_args() {
+    expect_error("<?php sizeof();", "sizeof() takes 1 or 2 arguments");
+}
+
 /// Verifies that error array diff wrong args.
 #[test]
 fn test_error_array_diff_wrong_args() {

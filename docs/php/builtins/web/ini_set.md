@@ -2,7 +2,7 @@
 title: "ini_set()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 884
+  order: 885
 ---
 
 ## ini_set()

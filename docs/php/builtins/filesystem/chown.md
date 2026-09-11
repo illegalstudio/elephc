@@ -2,7 +2,7 @@
 title: "chown()"
 description: "Changes file owner."
 sidebar:
-  order: 257
+  order: 258
 ---
 
 ## chown()

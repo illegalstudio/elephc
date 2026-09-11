@@ -2,7 +2,7 @@
 title: "cairo_fill_preserve()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 404
+  order: 405
 ---
 
 ## cairo_fill_preserve()

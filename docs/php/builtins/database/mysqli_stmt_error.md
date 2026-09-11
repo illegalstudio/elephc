@@ -2,7 +2,7 @@
 title: "mysqli_stmt_error()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 163
+  order: 164
 ---
 
 ## mysqli_stmt_error()

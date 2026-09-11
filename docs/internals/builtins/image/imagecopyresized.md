@@ -2,7 +2,7 @@
 title: "imagecopyresized() — internals"
 description: "Compiler internals for imagecopyresized(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 484
+  order: 485
 ---
 
 ## `imagecopyresized()` — internals

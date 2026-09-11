@@ -2,7 +2,7 @@
 title: "mysqli_thread_id()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 178
+  order: 179
 ---
 
 ## mysqli_thread_id()

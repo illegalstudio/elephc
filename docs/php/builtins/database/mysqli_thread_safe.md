@@ -2,7 +2,7 @@
 title: "mysqli_thread_safe()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 179
+  order: 180
 ---
 
 ## mysqli_thread_safe()

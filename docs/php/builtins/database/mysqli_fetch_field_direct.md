@@ -2,7 +2,7 @@
 title: "mysqli_fetch_field_direct()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 119
+  order: 120
 ---
 
 ## mysqli_fetch_field_direct()

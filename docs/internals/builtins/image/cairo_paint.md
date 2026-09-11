@@ -2,7 +2,7 @@
 title: "cairo_paint() — internals"
 description: "Compiler internals for cairo_paint(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 421
+  order: 422
 ---
 
 ## `cairo_paint()` — internals

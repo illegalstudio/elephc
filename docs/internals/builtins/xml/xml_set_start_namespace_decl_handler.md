@@ -2,7 +2,7 @@
 title: "xml_set_start_namespace_decl_handler() — internals"
 description: "Compiler internals for xml_set_start_namespace_decl_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 931
+  order: 932
 ---
 
 ## `xml_set_start_namespace_decl_handler()` — internals

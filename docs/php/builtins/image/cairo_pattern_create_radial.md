@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_radial()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 425
+  order: 426
 ---
 
 ## cairo_pattern_create_radial()

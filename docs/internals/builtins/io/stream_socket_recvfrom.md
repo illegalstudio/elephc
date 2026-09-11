@@ -2,7 +2,7 @@
 title: "stream_socket_recvfrom() — internals"
 description: "Compiler internals for stream_socket_recvfrom(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 389
+  order: 390
 ---
 
 ## `stream_socket_recvfrom()` — internals

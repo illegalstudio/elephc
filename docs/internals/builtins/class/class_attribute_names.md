@@ -2,7 +2,7 @@
 title: "class_attribute_names() — internals"
 description: "Compiler internals for class_attribute_names(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 75
+  order: 76
 ---
 
 ## `class_attribute_names()` — internals

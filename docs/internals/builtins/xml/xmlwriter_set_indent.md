@@ -2,7 +2,7 @@
 title: "xmlwriter_set_indent() — internals"
 description: "Compiler internals for xmlwriter_set_indent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 948
+  order: 949
 ---
 
 ## `xmlwriter_set_indent()` — internals

@@ -2,7 +2,7 @@
 title: "cairo_line_to() — internals"
 description: "Compiler internals for cairo_line_to(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 411
+  order: 412
 ---
 
 ## `cairo_line_to()` — internals

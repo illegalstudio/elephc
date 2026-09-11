@@ -2,7 +2,7 @@
 title: "date_offset_get() — internals"
 description: "Compiler internals for date_offset_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 204
+  order: 205
 ---
 
 ## `date_offset_get()` — internals

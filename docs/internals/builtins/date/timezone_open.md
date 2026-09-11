@@ -2,7 +2,7 @@
 title: "timezone_open() — internals"
 description: "Compiler internals for timezone_open(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 249
+  order: 250
 ---
 
 ## `timezone_open()` — internals

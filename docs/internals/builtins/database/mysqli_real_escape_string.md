@@ -2,7 +2,7 @@
 title: "mysqli_real_escape_string() — internals"
 description: "Compiler internals for mysqli_real_escape_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 148
+  order: 149
 ---
 
 ## `mysqli_real_escape_string()` — internals

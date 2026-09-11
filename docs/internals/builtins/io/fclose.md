@@ -2,7 +2,7 @@
 title: "fclose() — internals"
 description: "Compiler internals for fclose(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 309
+  order: 310
 ---
 
 ## `fclose()` — internals

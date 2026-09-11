@@ -2,7 +2,7 @@
 title: "imagesetpixel() — internals"
 description: "Compiler internals for imagesetpixel(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 528
+  order: 529
 ---
 
 ## `imagesetpixel()` — internals

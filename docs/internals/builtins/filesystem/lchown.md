@@ -2,7 +2,7 @@
 title: "lchown() — internals"
 description: "Compiler internals for lchown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 285
+  order: 286
 ---
 
 ## `lchown()` — internals

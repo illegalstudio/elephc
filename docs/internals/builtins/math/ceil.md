@@ -2,7 +2,7 @@
 title: "ceil() — internals"
 description: "Compiler internals for ceil(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 566
+  order: 567
 ---
 
 ## `ceil()` — internals

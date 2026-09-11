@@ -2,7 +2,7 @@
 title: "xml_get_current_byte_index()"
 description: "Returns the current byte index of the parser."
 sidebar:
-  order: 912
+  order: 913
 ---
 
 ## xml_get_current_byte_index()

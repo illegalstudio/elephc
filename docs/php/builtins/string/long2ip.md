@@ -2,7 +2,7 @@
 title: "long2ip()"
 description: "Converts an IPv4 address from long integer to dotted string notation."
 sidebar:
-  order: 796
+  order: 797
 ---
 
 ## long2ip()

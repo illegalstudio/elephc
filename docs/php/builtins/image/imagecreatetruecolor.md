@@ -2,7 +2,7 @@
 title: "imagecreatetruecolor()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 493
+  order: 494
 ---
 
 ## imagecreatetruecolor()

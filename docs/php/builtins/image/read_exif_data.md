@@ -2,7 +2,7 @@
 title: "read_exif_data()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 539
+  order: 540
 ---
 
 ## read_exif_data()

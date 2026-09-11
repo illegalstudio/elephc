@@ -2,7 +2,7 @@
 title: "buffer_len() — internals"
 description: "Compiler internals for buffer_len(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 72
+  order: 73
 ---
 
 ## `buffer_len()` — internals

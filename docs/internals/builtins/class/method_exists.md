@@ -2,7 +2,7 @@
 title: "method_exists() — internals"
 description: "Compiler internals for method_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 95
+  order: 96
 ---
 
 ## `method_exists()` — internals

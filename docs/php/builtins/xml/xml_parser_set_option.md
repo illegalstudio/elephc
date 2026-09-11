@@ -2,7 +2,7 @@
 title: "xml_parser_set_option()"
 description: "Sets an XML_OPTION_* parser option."
 sidebar:
-  order: 922
+  order: 923
 ---
 
 ## xml_parser_set_option()

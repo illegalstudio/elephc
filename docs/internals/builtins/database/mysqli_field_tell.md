@@ -2,7 +2,7 @@
 title: "mysqli_field_tell() — internals"
 description: "Compiler internals for mysqli_field_tell(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 126
+  order: 127
 ---
 
 ## `mysqli_field_tell()` — internals

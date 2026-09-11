@@ -2,7 +2,7 @@
 title: "pcntl_daemon()"
 description: "Detaches the surviving child into a background daemon process."
 sidebar:
-  order: 622
+  order: 623
 ---
 
 ## pcntl_daemon()

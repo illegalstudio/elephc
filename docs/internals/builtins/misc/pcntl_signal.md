@@ -2,7 +2,7 @@
 title: "pcntl_signal() — internals"
 description: "Compiler internals for pcntl_signal(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 635
+  order: 636
 ---
 
 ## `pcntl_signal()` — internals

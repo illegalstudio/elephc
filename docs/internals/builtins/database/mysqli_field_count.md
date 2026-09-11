@@ -2,7 +2,7 @@
 title: "mysqli_field_count() — internals"
 description: "Compiler internals for mysqli_field_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 124
+  order: 125
 ---
 
 ## `mysqli_field_count()` — internals

@@ -2,7 +2,7 @@
 title: "date_add() — internals"
 description: "Compiler internals for date_add(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 189
+  order: 190
 ---
 
 ## `date_add()` — internals

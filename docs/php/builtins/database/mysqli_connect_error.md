@@ -2,7 +2,7 @@
 title: "mysqli_connect_error()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 106
+  order: 107
 ---
 
 ## mysqli_connect_error()

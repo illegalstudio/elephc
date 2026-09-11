@@ -64,6 +64,7 @@ mod range;
 mod reset;
 mod rsort;
 mod shuffle;
+mod sizeof;
 mod sort;
 mod uasort;
 mod uksort;

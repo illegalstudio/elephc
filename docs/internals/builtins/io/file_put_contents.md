@@ -2,7 +2,7 @@
 title: "file_put_contents() — internals"
 description: "Compiler internals for file_put_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 318
+  order: 319
 ---
 
 ## `file_put_contents()` — internals

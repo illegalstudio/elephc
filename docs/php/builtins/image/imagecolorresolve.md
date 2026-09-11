@@ -2,7 +2,7 @@
 title: "imagecolorresolve()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 473
+  order: 474
 ---
 
 ## imagecolorresolve()

@@ -2,7 +2,7 @@
 title: "mysqli_stmt_prepare()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 173
+  order: 174
 ---
 
 ## mysqli_stmt_prepare()

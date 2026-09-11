@@ -2,7 +2,7 @@
 title: "xml_parser_create_ns()"
 description: "Creates a namespace-aware XML parser whose qualified names join the URI and local name with a separator."
 sidebar:
-  order: 919
+  order: 920
 ---
 
 ## xml_parser_create_ns()

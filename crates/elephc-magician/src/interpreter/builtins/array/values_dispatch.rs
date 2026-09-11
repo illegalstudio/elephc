@@ -46,7 +46,7 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
         "array_slice" => super::array_slice::eval_array_slice_declared_values_result(evaluated_args, context, values),
         "array_unique" => super::array_unique::eval_array_unique_declared_values_result(evaluated_args, context, values),
         "array_values" => super::array_values::eval_array_values_declared_values_result(evaluated_args, context, values),
-        "count" => super::count::eval_count_declared_values_result(evaluated_args, context, values),
+        "count" | "sizeof" => super::count::eval_count_declared_values_result(evaluated_args, context, values),
         "current" => super::current::eval_current_declared_values_result(evaluated_args, context, values),
         "key" => super::key::eval_key_declared_values_result(evaluated_args, context, values),
         "range" => super::range::eval_range_declared_values_result(evaluated_args, context, values),

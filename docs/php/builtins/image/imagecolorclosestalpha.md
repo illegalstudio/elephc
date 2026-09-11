@@ -2,7 +2,7 @@
 title: "imagecolorclosestalpha()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 467
+  order: 468
 ---
 
 ## imagecolorclosestalpha()

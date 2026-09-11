@@ -2,7 +2,7 @@
 title: "mysqli_field_count()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 124
+  order: 125
 ---
 
 ## mysqli_field_count()
