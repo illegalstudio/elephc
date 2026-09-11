@@ -49,6 +49,83 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
+/// Verifies `get_class()` preserves valid object lookup and throws PHP's catchable
+/// `TypeError` for a statically known string argument.
+#[test]
+fn test_get_class_rejects_static_non_object_with_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticClassLookup {}
+echo get_class(new StaticClassLookup()), "\n";
+try {
+    get_class("not-an-object");
+} catch (TypeError $error) {
+    echo get_class($error), ": ", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "StaticClassLookup\nTypeError: get_class(): Argument #1 ($object) must be of type object, string given"
+    );
+}
+
+/// Verifies a runtime-selected non-object in a `mixed` cell raises a catchable
+/// `TypeError` instead of taking the old empty-string branch.
+#[test]
+fn test_get_class_rejects_runtime_mixed_non_object_with_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeClassLookup {}
+function runtime_class_subject(int $selector): mixed {
+    return $selector > 1 ? new RuntimeClassLookup() : "not-an-object";
+}
+try {
+    get_class(runtime_class_subject($argc));
+} catch (TypeError $error) {
+    echo get_class($error), ": ", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "TypeError: get_class(): Argument #1 ($object) must be of type object, string given"
+    );
+}
+
+/// Verifies `get_parent_class()` shares the corrected TypeError behavior while
+/// retaining object and runtime class-string lookup for valid child classes.
+#[test]
+fn test_get_parent_class_rejects_invalid_static_and_mixed_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentLookupBase {}
+class ParentLookupChild extends ParentLookupBase {}
+function runtime_parent_subject(bool $valid): mixed {
+    return $valid ? "ParentLookupChild" : 42;
+}
+echo get_parent_class(new ParentLookupChild()), "|";
+echo get_parent_class(runtime_parent_subject(true)), "\n";
+try {
+    get_parent_class(42);
+} catch (TypeError $error) {
+    echo get_class($error), ": ", $error->getMessage(), "\n";
+}
+try {
+    get_parent_class(runtime_parent_subject(false));
+} catch (TypeError $error) {
+    echo get_class($error), ": ", $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "ParentLookupBase|ParentLookupBase\n\
+TypeError: get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n\
+TypeError: get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n"
+    );
+}
+
 /// Verifies a named class can be instantiated without constructor parentheses.
 #[test]
 fn test_class_instantiation_without_constructor_parentheses() {

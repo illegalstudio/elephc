@@ -1148,9 +1148,13 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_GLOBAL.bits()
                     | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
-            RuntimeFnId::GetClass
-            | RuntimeFnId::GetParentClass
-            | RuntimeFnId::ElephcObjectIsEnum
+            RuntimeFnId::GetClass | RuntimeFnId::GetParentClass => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::MAY_THROW.bits(),
+                )
+            }
+            RuntimeFnId::ElephcObjectIsEnum
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,

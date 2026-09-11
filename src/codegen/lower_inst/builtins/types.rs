@@ -441,13 +441,19 @@ pub(crate) fn lower_class_name_lookup(
     }
 
     let value = expect_operand(inst, 0)?;
-    match ctx.value_php_type(value)? {
+    let value_ty = ctx.value_php_type(value)?;
+    match &value_ty {
         PhpType::Object(_) => {
             ctx.load_value_to_result(value)?;
             emit_dynamic_object_class_name(ctx, name);
         }
-        PhpType::Callable if name == "get_class" => {
-            emit_string_result(ctx, b"Closure");
+        PhpType::Callable => {
+            let result = if name == "get_class" {
+                b"Closure".as_slice()
+            } else {
+                b"".as_slice()
+            };
+            emit_string_result(ctx, result);
         }
         PhpType::Mixed | PhpType::Union(_) if super::has_eval_context(ctx) => {
             return super::lower_eval_object_class_name(ctx, inst, value, name);
@@ -458,8 +464,23 @@ pub(crate) fn lower_class_name_lookup(
         }
         PhpType::Str if name == "get_parent_class" => {
             let class_name = const_string_operand(ctx, value)?;
-            let parent = parent_of(ctx, &class_name);
-            emit_string_result(ctx, parent.as_bytes());
+            if let Some(parent) = parent_of_existing(ctx, &class_name) {
+                emit_string_result(ctx, parent.as_bytes());
+            } else {
+                emit_class_lookup_type_error(ctx, name, "string");
+            }
+        }
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Str
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Void
+        | PhpType::Never
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Resource(_) => {
+            emit_static_class_lookup_type_error(ctx, name, value, &value_ty)?;
         }
         _ => {
             ctx.load_value_to_result(value)?;
@@ -921,45 +942,219 @@ fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
 
 /// Emits class-name lookup for a boxed Mixed value that may contain an object.
 fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
-    let empty_label = ctx.next_label("get_class_mixed_empty");
+    let object_label = ctx.next_label("get_class_mixed_object");
     let closure_label = ctx.next_label("get_class_mixed_closure");
+    let string_label = ctx.next_label("get_parent_class_mixed_string");
+    let bool_label = ctx.next_label("get_class_mixed_bool");
+    let false_label = ctx.next_label("get_class_mixed_false");
+    let true_label = ctx.next_label("get_class_mixed_true");
+    let fallback_error_label = ctx.next_label("get_class_mixed_type_error");
     let done_label = ctx.next_label("get_class_mixed_done");
+    let mut error_labels = vec![
+        (0_u64, "int", ctx.next_label("get_class_mixed_type_error")),
+        (2, "float", ctx.next_label("get_class_mixed_type_error")),
+        (4, "array", ctx.next_label("get_class_mixed_type_error")),
+        (5, "array", ctx.next_label("get_class_mixed_type_error")),
+        (8, "null", ctx.next_label("get_class_mixed_type_error")),
+        (9, "resource", ctx.next_label("get_class_mixed_type_error")),
+    ];
+    if name == "get_class" {
+        error_labels.push((1, "string", ctx.next_label("get_class_mixed_type_error")));
+    }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            if name == "get_class" {
-                ctx.emitter.instruction("cmp x0, #10");                         // runtime tag 10 identifies boxed Closure values
-                ctx.emitter.instruction(&format!("b.eq {}", closure_label));    // return PHP's builtin Closure class name
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 identifies boxed object payloads
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // resolve a valid object's concrete class metadata
+            ctx.emitter.instruction("cmp x0, #10");                             // runtime tag 10 identifies boxed Closure values
+            ctx.emitter.instruction(&format!("b.eq {}", closure_label));        // closures are objects for both lookup builtins
+            if name == "get_parent_class" {
+                ctx.emitter.instruction("cmp x0, #1");                          // runtime tag 1 identifies a possible class-name string
+                ctx.emitter.instruction(&format!("b.eq {}", string_label));     // validate and resolve the dynamic class name
             }
-            ctx.emitter.instruction("cmp x0, #6");                              // require a boxed object payload for class-name lookup
-            ctx.emitter
-                .instruction(&format!("b.ne {}", empty_label));                 // non-object Mixed payloads produce an empty class name
+            ctx.emitter.instruction("cmp x0, #3");                              // runtime tag 3 identifies a boolean payload
+            ctx.emitter.instruction(&format!("b.eq {}", bool_label));           // PHP names the rejected boolean value
+            for (tag, _, label) in &error_labels {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));          // identify the rejected Mixed payload kind
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // throw the TypeError naming that payload kind
+            }
+            ctx.emitter.instruction(&format!("b {}", fallback_error_label));    // reject every remaining non-object runtime tag
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 identifies boxed object payloads
+            ctx.emitter.instruction(&format!("je {}", object_label));           // resolve a valid object's concrete class metadata
+            ctx.emitter.instruction("cmp rax, 10");                             // runtime tag 10 identifies boxed Closure values
+            ctx.emitter.instruction(&format!("je {}", closure_label));          // closures are objects for both lookup builtins
+            if name == "get_parent_class" {
+                ctx.emitter.instruction("cmp rax, 1");                          // runtime tag 1 identifies a possible class-name string
+                ctx.emitter.instruction(&format!("je {}", string_label));       // validate and resolve the dynamic class name
+            }
+            ctx.emitter.instruction("cmp rax, 3");                              // runtime tag 3 identifies a boolean payload
+            ctx.emitter.instruction(&format!("je {}", bool_label));             // PHP names the rejected boolean value
+            for (tag, _, label) in &error_labels {
+                ctx.emitter.instruction(&format!("cmp rax, {}", tag));          // identify the rejected Mixed payload kind
+                ctx.emitter.instruction(&format!("je {}", label));              // throw the TypeError naming that payload kind
+            }
+            ctx.emitter.instruction(&format!("jmp {}", fallback_error_label));  // reject every remaining non-object runtime tag
+        }
+    }
+
+    ctx.emitter.label(&object_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // expose the unboxed object pointer to the object lookup path
         }
         Arch::X86_64 => {
-            if name == "get_class" {
-                ctx.emitter.instruction("cmp rax, 10");                         // runtime tag 10 identifies boxed Closure values
-                ctx.emitter.instruction(&format!("je {}", closure_label));      // return PHP's builtin Closure class name
-            }
-            ctx.emitter.instruction("cmp rax, 6");                              // require a boxed object payload for class-name lookup
-            ctx.emitter
-                .instruction(&format!("jne {}", empty_label));                  // non-object Mixed payloads produce an empty class name
             ctx.emitter.instruction("mov rax, rdi");                            // expose the unboxed object pointer to the object lookup path
         }
     }
     emit_dynamic_object_class_name(ctx, name);
     abi::emit_jump(ctx.emitter, &done_label);
 
+    ctx.emitter.label(&closure_label);
     if name == "get_class" {
-        ctx.emitter.label(&closure_label);
         emit_string_result(ctx, b"Closure");
-        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_string_result(ctx, b"");
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    if name == "get_parent_class" {
+        ctx.emitter.label(&string_label);
+        emit_dynamic_parent_class_name(ctx, &done_label);
     }
 
-    ctx.emitter.label(&empty_label);
-    emit_string_result(ctx, b"");
+    ctx.emitter.label(&bool_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // a zero boolean payload is PHP false
+            ctx.emitter.instruction(&format!("b {}", true_label));              // every non-zero boolean payload is PHP true
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");                           // inspect the unboxed boolean payload
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // a zero boolean payload is PHP false
+            ctx.emitter.instruction(&format!("jmp {}", true_label));            // every non-zero boolean payload is PHP true
+        }
+    }
+    ctx.emitter.label(&false_label);
+    emit_class_lookup_type_error(ctx, name, "false");
+    ctx.emitter.label(&true_label);
+    emit_class_lookup_type_error(ctx, name, "true");
+    for (_, type_name, label) in &error_labels {
+        ctx.emitter.label(label);
+        emit_class_lookup_type_error(ctx, name, type_name);
+    }
+    ctx.emitter.label(&fallback_error_label);
+    emit_class_lookup_type_error(ctx, name, "unknown");
 
     ctx.emitter.label(&done_label);
+}
+
+/// Resolves an unboxed dynamic class-name string for `get_parent_class()`.
+///
+/// The string pair is still in the Mixed-unbox payload registers. It is matched
+/// case-insensitively against deterministic AOT class metadata; unknown names
+/// raise the same catchable `TypeError` as reference PHP.
+fn emit_dynamic_parent_class_name(ctx: &mut FunctionContext<'_>, done_label: &str) {
+    let mut metadata = ctx
+        .module
+        .class_infos
+        .iter()
+        .map(|(name, info)| (name.clone(), info.parent.clone().unwrap_or_default()))
+        .collect::<Vec<_>>();
+    metadata.sort_by(|left, right| left.0.cmp(&right.0));
+    let candidates = metadata
+        .into_iter()
+        .map(|(name, parent)| {
+            (
+                name,
+                parent,
+                ctx.next_label("get_parent_class_mixed_match"),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
+        Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rdi", "rdx"),
+    }
+    for (candidate, _, label) in &candidates {
+        super::member_queries::emit_branch_if_dynamic_class_like_exists_candidate(
+            ctx,
+            candidate,
+            label,
+        );
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    emit_class_lookup_type_error(ctx, "get_parent_class", "string");
+
+    for (_, parent, label) in candidates {
+        ctx.emitter.label(&label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        emit_string_result(ctx, parent.as_bytes());
+        abi::emit_jump(ctx.emitter, done_label);
+    }
+}
+
+/// Throws the lookup builtin's PHP-compatible `TypeError` for a static argument.
+fn emit_static_class_lookup_type_error(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    if matches!(value_ty, PhpType::Bool) {
+        ctx.load_value_to_result(value)?;
+        let false_label = ctx.next_label("get_class_static_false");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz x0, {}", false_label));   // a zero boolean argument is PHP false
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                       // inspect the static boolean argument
+                ctx.emitter.instruction(&format!("jz {}", false_label));        // a zero boolean argument is PHP false
+            }
+        }
+        emit_class_lookup_type_error(ctx, name, "true");
+        ctx.emitter.label(&false_label);
+        emit_class_lookup_type_error(ctx, name, "false");
+        return Ok(());
+    }
+    let type_name = match value_ty {
+        PhpType::Int => "int",
+        PhpType::Float => "float",
+        PhpType::Str => "string",
+        PhpType::False => "false",
+        PhpType::Void | PhpType::Never => "null",
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array",
+        PhpType::Resource(_) => "resource",
+        _ => "unknown",
+    };
+    emit_class_lookup_type_error(ctx, name, type_name);
+    Ok(())
+}
+
+/// Throws the selected class-name builtin's catchable PHP `TypeError`.
+fn emit_class_lookup_type_error(ctx: &mut FunctionContext<'_>, name: &str, type_name: &str) {
+    let expected = if name == "get_parent_class" {
+        "an object or a valid class name"
+    } else {
+        "of type object"
+    };
+    super::super::exceptions::emit_type_error(
+        ctx,
+        &format!(
+            "{}(): Argument #1 (${parameter}) must be {}, {} given",
+            name,
+            expected,
+            type_name,
+            parameter = if name == "get_parent_class" {
+                "object_or_class"
+            } else {
+                "object"
+            },
+        ),
+    );
 }
 
 /// Emits AArch64 runtime object class-name lookup for `get_class()` and `get_parent_class()`.
@@ -1268,6 +1463,11 @@ fn parent_of(ctx: &FunctionContext<'_>, class_name: &str) -> String {
         .get(class_name.trim_start_matches('\\'))
         .and_then(|info| info.parent.clone())
         .unwrap_or_default()
+}
+
+/// Returns a known class's parent, distinguishing parentless from invalid names.
+fn parent_of_existing(ctx: &FunctionContext<'_>, class_name: &str) -> Option<String> {
+    lookup_class(ctx, class_name).map(|info| info.parent.clone().unwrap_or_default())
 }
 
 /// Returns a string literal value defined by a `ConstStr` operand.
