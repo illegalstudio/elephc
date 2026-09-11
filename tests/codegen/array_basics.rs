@@ -23,11 +23,11 @@ fn test_array_literal_and_count() {
 fn test_sizeof_alias_of_count() {
     let out = compile_and_run(
         r#"<?php
-$a = [1, [2, 3], 4];
-echo sizeof($a), "|", SIZEOF($a, mode: COUNT_NORMAL), "|", sizeof($a, COUNT_RECURSIVE);
+$a = [1, 2, 3, 4, 5, 6];
+echo sizeof($a), "|", SIZEOF($a, mode: COUNT_NORMAL), "|", \sizeof($a, COUNT_RECURSIVE);
 "#,
     );
-    assert_eq!(out, "3|3|5");
+    assert_eq!(out, "6|6|6");
 }
 
 /// Compiles `[10, 20, 30]` and accesses elements at literal indices 0, 1, 2.
