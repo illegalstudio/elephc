@@ -26918,6 +26918,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         by_ref_return: false,
         summary: "Sets an environment variable, or removes it when the argument has no equals sign.",
         examples: &[
+            "```php\nputenv(\"APP_ENV=production\");\necho getenv(\"APP_ENV\") . \"\\n\";\nputenv(\"APP_ENV\");\necho getenv(\"APP_ENV\") === false ? \"unset\\n\" : \"still set\\n\";\n```",
         ],
         php_manual: None,
         deprecation: None,

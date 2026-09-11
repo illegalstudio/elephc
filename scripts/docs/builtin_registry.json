@@ -96283,7 +96283,9 @@
       "variadic": null
     },
     "eval_only": false,
-    "examples": [],
+    "examples": [
+      "```php\nputenv(\"APP_ENV=production\");\necho getenv(\"APP_ENV\") . \"\\n\";\nputenv(\"APP_ENV\");\necho getenv(\"APP_ENV\") === false ? \"unset\\n\" : \"still set\\n\";\n```"
+    ],
     "in_catalog": true,
     "is_extension": false,
     "is_internal": false,
