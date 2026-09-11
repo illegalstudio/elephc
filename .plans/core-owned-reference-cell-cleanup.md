@@ -2458,3 +2458,16 @@ active in CI. Native Sol traced and repaired this narrow production gap.
 Cargo check for curl-enabled Magician tests and root tests, the complete
 update-builtin-docs workflow, assembly-comment checks and diff hygiene pass.
 Generated documentation is unchanged. No local tests or repros execute.
+
+### Remove temporary diagnostics after exact-head focused CI passes
+
+CI run 34574902061 on 657fab65bb423696756f410489a9ba8b501aa417 confirms all
+16 selected ownership test instances pass in job 103186136966, including the
+previously failing callable fixture and both original runtime leaks. Curl feature
+contract coverage also passes in job 103185137363 after the timezone fix.
+
+Remove the PR-specific early diagnostic job. All selected tests remain in their
+ordinary target shards; this final cleanup changes no production code or test
+assertions. Workflow YAML validation and diff hygiene pass. The full matrix on
+the final cleanup commit must still complete in CI. No local tests were run and
+the PR remains unmerged on feat/core-align.
