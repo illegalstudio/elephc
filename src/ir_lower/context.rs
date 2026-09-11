@@ -39,11 +39,21 @@ pub(crate) struct LoopFrame {
     pub break_block: BlockId,
     pub continue_block: BlockId,
     pub cleanup: Option<LoopCleanup>,
+    /// Published owner for a foreach source that can run user code while the
+    /// iterator is initialized. It protects temporary sources through catches.
+    pub source_owner: Option<(LocalSlotId, Span)>,
     /// Lifetime reference a by-reference `foreach` took on a borrowed element or property source,
     /// so the loop keeps iterating live storage even if the body drops the parent that owned it
     /// (issues #580 and #642). Released on every exit that skips the loop's own exit block,
     /// exactly like `cleanup`.
     pub source_pin: Option<LoopCleanup>,
+    /// Mixed slot owning a `getIterator()` result produced inside `Op::IterStart`.
+    ///
+    /// Published before `IterStart` and retired with `PopCallOperandOwner` then
+    /// `ReleaseLocalSlot` on every exit that skips the loop's own exit block.
+    /// Innermost `break` and `continue` must not retire it here: they keep using
+    /// the iterator, and the exit block owns the normal-completion retire.
+    pub iterator_owner: Option<(LocalSlotId, Span)>,
 }
 
 /// Cleanup that must run when control leaves a loop without visiting its exit block.
@@ -139,6 +149,7 @@ pub(crate) struct LoweringSnapshot {
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
     finally_stack: Vec<FinallyFrame>,
+    handler_loop_depths: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
     reflection_function_locals: HashMap<String, String>,
@@ -285,6 +296,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
     pub finally_stack: Vec<FinallyFrame>,
+    /// Loop-stack depth captured when each active runtime exception handler was installed.
+    /// Explicit throws retire only loops entered after the nearest handler.
+    pub(crate) handler_loop_depths: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
     reflection_function_locals: HashMap<String, String>,
@@ -441,6 +455,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             current_class,
             loop_stack: Vec::new(),
             finally_stack: Vec::new(),
+            handler_loop_depths: Vec::new(),
             static_callable_locals: HashMap::new(),
             reflection_class_locals: HashMap::new(),
             reflection_function_locals: HashMap::new(),
@@ -493,6 +508,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
             finally_stack: self.finally_stack.clone(),
+            handler_loop_depths: self.handler_loop_depths.clone(),
             static_callable_locals: self.static_callable_locals.clone(),
             reflection_class_locals: self.reflection_class_locals.clone(),
             reflection_function_locals: self.reflection_function_locals.clone(),
@@ -537,6 +553,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
         self.finally_stack = snapshot.finally_stack;
+        self.handler_loop_depths = snapshot.handler_loop_depths;
         self.static_callable_locals = snapshot.static_callable_locals;
         self.reflection_class_locals = snapshot.reflection_class_locals;
         self.reflection_function_locals = snapshot.reflection_function_locals;
@@ -1126,6 +1143,133 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.hidden_temp_counter += 1;
         self.declare_local_with_kind(&name, php_type, LocalKind::OwnedTemp);
         name
+    }
+
+    /// Returns true when `IterStart` may call `IteratorAggregate::getIterator` on this source.
+    pub(crate) fn iter_start_needs_get_iterator_owner(&self, source_ty: &PhpType) -> bool {
+        match source_ty.codegen_repr() {
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => true,
+            PhpType::Object(name) => self.object_may_invoke_get_iterator(&name),
+            _ => false,
+        }
+    }
+
+    /// Publishes a zeroed Mixed owner for `getIterator()` results when the source can produce one.
+    pub(crate) fn publish_iter_start_owner(
+        &mut self,
+        source_ty: &PhpType,
+        span: Span,
+    ) -> Option<LocalSlotId> {
+        if !self.iter_start_needs_get_iterator_owner(source_ty) {
+            return None;
+        }
+        let name = self.declare_owned_hidden_temp(PhpType::Mixed);
+        let slot = self.local_slots[&name];
+        self.emit_void(
+            Op::PushCallOperandOwner,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::PushCallOperandOwner.default_effects(),
+            Some(span),
+        );
+        Some(slot)
+    }
+
+    /// Emits `iter_start` after publishing its optional `getIterator()` owner.
+    pub(crate) fn emit_iter_start(
+        &mut self,
+        source: LoweredValue,
+        by_ref: bool,
+        span: Span,
+    ) -> (LoweredValue, Option<LocalSlotId>) {
+        let source_ty = self.builder.value_php_type(source.value);
+        let owner = self.publish_iter_start_owner(&source_ty, span);
+        let iterator = self.emit_value(
+            Op::IterStart,
+            vec![source.value],
+            Some(Immediate::IterStart { by_ref, owner }),
+            PhpType::Iterable,
+            Op::IterStart.default_effects(),
+            Some(span),
+        );
+        (iterator, owner)
+    }
+
+    /// Unlinks and releases a published `IterStart` `getIterator()` owner.
+    pub(crate) fn retire_iter_start_owner(&mut self, slot: LocalSlotId, span: Span) {
+        self.emit_void(
+            Op::PopCallOperandOwner,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::PopCallOperandOwner.default_effects(),
+            Some(span),
+        );
+        self.emit_void(
+            Op::ReleaseLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(),
+            Some(span),
+        );
+    }
+
+    /// Returns true when a named object or interface type can invoke `getIterator()`.
+    ///
+    /// Direct `Iterator` implementations (including `Generator`) take precedence and
+    /// never call `getIterator()`, so they do not need an owner slot.
+    fn object_may_invoke_get_iterator(&self, type_name: &str) -> bool {
+        let name = type_name.trim_start_matches('\\');
+        if self.type_is_or_implements_interface(name, "Iterator") {
+            return false;
+        }
+        self.type_is_or_implements_interface(name, "IteratorAggregate")
+            || self.type_is_or_implements_interface(name, "Traversable")
+    }
+
+    /// Returns true when `type_name` is `interface_name` or implements/extends it.
+    fn type_is_or_implements_interface(&self, type_name: &str, interface_name: &str) -> bool {
+        let type_key = php_symbol_key(type_name);
+        let interface_key = php_symbol_key(interface_name);
+        if type_key == interface_key {
+            return true;
+        }
+        if self.interfaces.contains_key(type_name) {
+            return self.interface_extends(type_name, interface_name);
+        }
+        let mut current = Some(type_name);
+        while let Some(candidate) = current {
+            let Some(info) = self.classes.get(candidate) else {
+                return false;
+            };
+            if info.interfaces.iter().any(|implemented| {
+                let implemented = implemented.trim_start_matches('\\');
+                php_symbol_key(implemented) == interface_key
+                    || self.interface_extends(implemented, interface_name)
+            }) {
+                return true;
+            }
+            current = info
+                .parent
+                .as_deref()
+                .map(|parent| parent.trim_start_matches('\\'));
+        }
+        false
+    }
+
+    /// Returns true when `interface_name` is `ancestor_name` or extends it.
+    fn interface_extends(&self, interface_name: &str, ancestor_name: &str) -> bool {
+        let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+        let ancestor_key = php_symbol_key(ancestor_name.trim_start_matches('\\'));
+        if interface_key == ancestor_key {
+            return true;
+        }
+        let Some(info) = self.interfaces.get(interface_name.trim_start_matches('\\')) else {
+            return false;
+        };
+        info.parents.iter().any(|parent| {
+            let parent = parent.trim_start_matches('\\');
+            php_symbol_key(parent) == ancestor_key || self.interface_extends(parent, ancestor_name)
+        })
     }
 
     /// Declares a parser-reserved hidden expression-result temporary.

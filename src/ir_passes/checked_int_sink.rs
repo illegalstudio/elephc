@@ -423,9 +423,10 @@ fn retirement_precedes_overwrite(function: &Function, retirement: InstId, slot: 
 
 /// Returns true when an instruction names `slot` through either slot-carrying immediate.
 fn instruction_mentions_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
-    match inst.immediate {
-        Some(Immediate::LocalSlot(named)) => named == slot,
-        Some(Immediate::LocalSlotPair { first, second }) => first == slot || second == slot,
+    match inst.immediate.as_ref() {
+        Some(Immediate::LocalSlot(named)) => *named == slot,
+        Some(Immediate::LocalSlotPair { first, second }) => *first == slot || *second == slot,
+        Some(Immediate::IterStart { owner: Some(named), .. }) => *named == slot,
         _ => false,
     }
 }

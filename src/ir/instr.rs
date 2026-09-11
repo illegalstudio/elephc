@@ -163,6 +163,18 @@ pub enum Immediate {
     TypeName(DataId),
     Capacity(u32),
     WidthBytes(u8),
+    /// Metadata for `Op::IterStart`: by-reference binding and optional Mixed owner.
+    ///
+    /// `owner` is the OwnedTemp Mixed slot that holds a successful
+    /// `IteratorAggregate::getIterator()` result for the iterator lifetime. The
+    /// iterator source word then borrows that payload. `None` means this start
+    /// cannot produce such a result (arrays, direct `Iterator`, generators).
+    IterStart {
+        /// Whether the foreach binds each value by reference.
+        by_ref: bool,
+        /// Optional Mixed slot owning a `getIterator()` result.
+        owner: Option<LocalSlotId>,
+    },
 }
 
 /// Heap-backed operation sequence carried by a fused checked numeric chain immediate.
@@ -1031,8 +1043,14 @@ impl Op {
             MethodCall | NullsafeMethodCall => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT
             }
-            IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
-            | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
+            // These opcodes drive PHP's Iterator protocol through hidden method calls.
+            // The callbacks may observe or mutate arbitrary program state, allocate,
+            // adjust ownership, emit output, or throw. Keep them conservative until
+            // iterator method summaries become explicit EIR calls.
+            IterStart | IterCurrentKey | IterCurrentValue | IterNext | IteratorMethodCall => {
+                E::all()
+            }
+            SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp
             | Spaceship => {
@@ -1042,7 +1060,7 @@ impl Op {
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
             StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
-            IterCurrentValueRef | IterNext | IterEnd | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
+            IterCurrentValueRef | IterEnd | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,

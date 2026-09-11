@@ -34,6 +34,8 @@ mod omitted_by_ref_default_args;
 mod callable_property_owners;
 #[path = "runtime_gc/foreach_object_source.rs"]
 mod foreach_object_source;
+#[path = "runtime_gc/foreach_iterator_aggregate_owner.rs"]
+mod foreach_iterator_aggregate_owner;
 #[path = "runtime_gc/stack_args.rs"]
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]

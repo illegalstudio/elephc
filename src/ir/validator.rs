@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::block::{BlockId, SwitchCase, Terminator};
 use crate::ir::effects::Effects;
-use crate::ir::function::Function;
+use crate::ir::function::{Function, LocalKind};
 use crate::ir::instr::{Immediate, InstId, Instruction, Op};
 use crate::ir::module::Module;
 use crate::ir::types::{IrHeapKind, IrType};
@@ -439,6 +439,9 @@ fn validate_instruction_immediate(
         CoreBuiltin => require_immediate(inst_id, inst, "Core builtin selector", |imm| {
             matches!(imm, Imm::I64(value) if crate::ir::CoreBuiltinOp::from_i64(*value).is_some())
         }),
+        IterStart => require_immediate(inst_id, inst, "iter_start metadata", |imm| {
+            matches!(imm, Imm::IterStart { .. })
+        }),
         Nop => {
             if matches!(inst.immediate, None | Some(Imm::Data(_))) {
                 Ok(())
@@ -735,7 +738,33 @@ fn validate_opcode_rules(
         DynamicPdoStatementConstructorCall => check_count(inst_id, inst, 3, "3"),
         DynamicPdoStatementInitialize => check_count(inst_id, inst, 5, "5"),
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
+        IterStart => validate_iter_start(function, inst_id, inst),
         _ => Ok(()),
+    }
+}
+
+/// Requires a single source operand and a live owner slot when `IterStart` names one.
+fn validate_iter_start(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 1, "1")?;
+    let Some(Immediate::IterStart { owner: Some(slot), .. }) = inst.immediate.as_ref() else {
+        return Ok(());
+    };
+    if function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
+        local.id == *slot
+            && local.kind == LocalKind::OwnedTemp
+            && local.php_type.codegen_repr() == PhpType::Mixed
+            && local.ir_type == IrType::Heap(IrHeapKind::Mixed)
+    }) {
+        Ok(())
+    } else {
+        Err(ValidationError::MissingImmediate {
+            inst: inst_id,
+            expected: "valid iter_start owner local slot",
+        })
     }
 }
 

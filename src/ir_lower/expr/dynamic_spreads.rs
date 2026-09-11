@@ -110,8 +110,7 @@ fn clear_slot(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
 fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &SpreadBindings, source: &Expr) -> String {
     let source_slot = root_value(ctx, source);
     let source = ctx.load_local(&source_slot, Some(state.span));
-    let iterator = ctx.emit_value(Op::IterStart, vec![source.value], None, PhpType::Iterable,
-        Op::IterStart.default_effects(), Some(state.span));
+    let (iterator, iterator_owner) = ctx.emit_iter_start(source, false, state.span);
     let key_slot = initialize_slot(ctx, PhpType::Mixed, &Expr::new(ExprKind::Null, state.span));
     let value_slot = initialize_slot(ctx, PhpType::Mixed, &Expr::new(ExprKind::Null, state.span));
     let header = ctx.builder.create_named_block("spread.iter.next", Vec::new());
@@ -161,6 +160,9 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
     // stores release these values, and the exit path retires the final pair.
     branch(ctx, header);
     ctx.builder.position_at_end(exit);
+    if let Some(slot) = iterator_owner {
+        ctx.retire_iter_start_owner(slot, state.span);
+    }
     clear_slot(ctx, &key_slot, state.span);
     clear_slot(ctx, &value_slot, state.span);
     source_slot

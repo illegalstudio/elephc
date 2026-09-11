@@ -50,6 +50,15 @@ impl LocalSlotAnalysis {
                     stored_slots.insert(slot);
                 }
             }
+            // `IterStart` writes a successful getIterator Mixed cell into this
+            // slot from the backend, so prologue zero-init and epilogue
+            // cleanup must treat it as a stored owner.
+            if inst.op == Op::IterStart {
+                if let Some(Immediate::IterStart { owner: Some(slot), .. }) = inst.immediate.as_ref()
+                {
+                    stored_slots.insert(*slot);
+                }
+            }
             if let Some(slot) =
                 ref_cell_target_slot(function, inst.op, inst.immediate.as_ref(), &inst.operands)
             {
@@ -740,5 +749,50 @@ mod tests {
 
         generate_user_asm_from_ir(&module, false, false)
             .expect("dynamic ReleaseLocalSlot fixture should lower")
+    }
+
+    /// `IterStart` owner slots count as stored so prologue zero-init covers them.
+    #[test]
+    fn iter_start_owner_slot_counts_as_a_store() {
+        let mut function =
+            Function::new("iter_owner".to_string(), IrType::Void, PhpType::Void);
+        let owner = function.add_local(
+            Some("iter_owner".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::OwnedTemp,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let source = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    None,
+                    IrType::Heap(crate::ir::IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("array_new produces a value");
+            builder
+                .emit(
+                    Op::IterStart,
+                    vec![source],
+                    Some(Immediate::IterStart {
+                        by_ref: false,
+                        owner: Some(owner),
+                    }),
+                    IrType::Heap(crate::ir::IrHeapKind::Iterable),
+                    PhpType::Iterable,
+                    Ownership::MaybeOwned,
+                )
+                .expect("iter_start produces a value");
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert!(analysis.has_store(owner));
     }
 }

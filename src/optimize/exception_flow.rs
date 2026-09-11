@@ -545,7 +545,12 @@ impl ExceptionFlowAnalysis {
                 .combined(self.block_throws(body, bindings, class_context)),
             StmtKind::Foreach { array, body, .. } => self
                 .expr_throws(array, bindings, class_context)
-                .combined(self.block_throws(body, bindings, class_context)),
+                .combined(self.block_throws(body, bindings, class_context))
+                // Iteration can invoke IteratorAggregate::getIterator and the
+                // Iterator protocol, warn through a user handler, and retire
+                // values whose destructors throw. Those callbacks are hidden
+                // below the foreach AST node, so keep catch routing conservative.
+                .combined(ThrownTypes::unknown()),
             StmtKind::Switch {
                 subject,
                 cases,

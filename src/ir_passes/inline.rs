@@ -647,6 +647,11 @@ fn remap_immediate_local(imm: &mut Immediate, local_map: &HashMap<LocalSlotId, L
                 *second = nl;
             }
         }
+        Immediate::IterStart { owner: Some(ls), .. } => {
+            if let Some(&nl) = local_map.get(ls) {
+                *ls = nl;
+            }
+        }
         _ => {}
     }
 }
@@ -1127,11 +1132,6 @@ pub(crate) fn inline_small_functions(module: &mut Module) -> bool {
     changed
 }
 
-#[cfg(test)]
-mod tests {
-    // Real tests are in src/ir_passes/tests/inline_test.rs (Builder-driven, per repo policy).
-}
-
 /// Whether the callee stores release-requiring refcounted storage into one of its locals.
 ///
 /// A call site inside a loop refuses such a callee because its store carries no
@@ -1168,4 +1168,49 @@ fn callee_has_by_value_container_param(callee: &Function) -> bool {
     callee.params.iter().any(|param| {
         crate::types::FunctionSig::parameter_needs_owned_shadow(&param.php_type, param.by_ref)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remap_immediate_local;
+    use crate::ir::{Immediate, LocalSlotId};
+    use std::collections::HashMap;
+
+    /// Transplanting a callee remaps the optional IterStart owner onto the host slot.
+    #[test]
+    fn remaps_iter_start_owner_slot() {
+        let mut immediate = Immediate::IterStart {
+            by_ref: true,
+            owner: Some(LocalSlotId::from_raw(3)),
+        };
+        let mut local_map = HashMap::new();
+        local_map.insert(LocalSlotId::from_raw(3), LocalSlotId::from_raw(11));
+        remap_immediate_local(&mut immediate, &local_map);
+        assert_eq!(
+            immediate,
+            Immediate::IterStart {
+                by_ref: true,
+                owner: Some(LocalSlotId::from_raw(11)),
+            }
+        );
+    }
+
+    /// An IterStart without an owner keeps by_ref and does not invent a slot.
+    #[test]
+    fn remaps_iter_start_without_owner() {
+        let mut immediate = Immediate::IterStart {
+            by_ref: false,
+            owner: None,
+        };
+        let mut local_map = HashMap::new();
+        local_map.insert(LocalSlotId::from_raw(0), LocalSlotId::from_raw(4));
+        remap_immediate_local(&mut immediate, &local_map);
+        assert_eq!(
+            immediate,
+            Immediate::IterStart {
+                by_ref: false,
+                owner: None,
+            }
+        );
+    }
 }

@@ -469,7 +469,9 @@ pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::i
         }
         return;
     }
-    emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
+    let handler_loop_depth = ctx.handler_loop_depths.last().copied().unwrap_or(0);
+    let crossed_loops = ctx.loop_stack.len().saturating_sub(handler_loop_depth);
+    emit_innermost_loop_cleanups(ctx, crossed_loops);
     ctx.builder.terminate(Terminator::Throw { value });
 }
 
@@ -558,6 +560,14 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
         .copied()
         .collect::<Vec<_>>();
     for frame in frames {
+        // Retire the getIterator Mixed owner first so a destructor on that
+        // iterator still observes the loop's aggregate retain.
+        if let Some((slot, span)) = frame.iterator_owner {
+            ctx.retire_iter_start_owner(slot, span);
+        }
+        if let Some((slot, span)) = frame.source_owner {
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+        }
         if let Some(cleanup) = frame.cleanup {
             crate::ir_lower::ownership::release_if_owned(ctx, cleanup.value, Some(cleanup.span));
         }
@@ -584,6 +594,7 @@ pub(super) fn run_innermost_finally(ctx: &mut LoweringContext<'_, '_>, is_throw:
         .expect("finally frame disappeared after last() check");
     if let Some((handler_token, span)) = frame.handler_cleanup {
         emit_try_pop_handler(ctx, handler_token, span);
+        ctx.handler_loop_depths.pop();
     }
     lower_block(ctx, &frame.body);
     true

@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - `IterStart` values reserve a fixed stack state for source, cursor, and current hash payload.
+//! - A successful `IteratorAggregate::getIterator()` result is transferred into the
+//!   optional Mixed owner slot before the raw iterator pointer is published. The
+//!   source word then borrows that payload; the aggregate word is overwritten
+//!   without being released. `IterEnd` remains a no-op.
 //! - Current values are boxed into `Mixed` unless EIR preserves a concrete indexed-array element type.
 //! - A source that is not iterable does NOT abort. Every dispatch that misses the
 //!   indexed/hash/object cases — the static `NonIterable` kind, the `__rt_mixed_unbox` tag
@@ -19,7 +23,10 @@
 //!   `IteratorIterator` sites, where the shape really is unsupported.
 
 use crate::codegen::platform::Arch;
-use crate::codegen::{abi, emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed};
+use crate::codegen::{
+    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    emit_box_runtime_payload_as_mixed,
+};
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::{method_symbol, php_symbol_key};
@@ -38,6 +45,7 @@ const ITER_VALUE_HI_OFFSET_DELTA: usize = 40;
 const ITER_VALUE_TAG_OFFSET_DELTA: usize = 48;
 const ITER_VALUE_ADDR_OFFSET_DELTA: usize = 56;
 const ITER_SNAPSHOT_LEN_OFFSET_DELTA: usize = 64;
+const MIXED_CELL_PAYLOAD_LOW_OFFSET: usize = 8;
 
 /// The runtime value tag `__rt_warn_foreach_non_iterable` reads as "null".
 ///
@@ -79,6 +87,7 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let source = expect_operand(inst, 0)?;
     let source_kind = iterator_source_kind_from_type(ctx, &ctx.value_php_type(source)?, inst)?;
     let by_ref = iter_start_is_by_ref(inst);
+    let owner = iter_start_owner_slot(inst);
     let result = inst.result.ok_or_else(|| {
         CodegenIrError::invalid_module("iter_start missing result value".to_string())
     })?;
@@ -92,7 +101,7 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(source, result_reg)?;
     if matches!(source_kind, IteratorSourceKind::DynamicMixed) {
-        initialize_dynamic_mixed_iterator(ctx, offset, by_ref)?;
+        initialize_dynamic_mixed_iterator(ctx, offset, by_ref, owner)?;
         return Ok(());
     }
     if by_ref {
@@ -115,7 +124,7 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     if matches!(source_kind, IteratorSourceKind::DynamicIterable) {
-        initialize_dynamic_iterable_iterator(ctx, offset, by_ref, source)?;
+        initialize_dynamic_iterable_iterator(ctx, offset, by_ref, source, owner)?;
         return Ok(());
     }
     // -- the loop's reference on an object source is taken by EIR lowering, not here --
@@ -143,8 +152,20 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
             aggregate_class_name: Some(aggregate_class_name),
             ..
         } => {
-            emit_object_iterator_method_call(ctx, offset, aggregate_class_name, "getIterator")?;
-            abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+            let return_ty =
+                emit_object_iterator_method_call(ctx, offset, aggregate_class_name, "getIterator")?;
+            adopt_get_iterator_result(ctx, offset, owner, &return_ty)?;
+        }
+        IteratorSourceKind::Interface { interface_name, .. }
+            if interface_needs_get_iterator(ctx, interface_name) =>
+        {
+            let return_ty = emit_interface_iterator_method_call(
+                ctx,
+                offset,
+                interface_name,
+                "getIterator",
+            )?;
+            adopt_get_iterator_result(ctx, offset, owner, &return_ty)?;
         }
         _ => {}
     }
@@ -158,7 +179,12 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
             emit_object_iterator_method_call(ctx, offset, &class_name, "rewind")?;
         }
         IteratorSourceKind::Interface { interface_name, .. } => {
-            emit_interface_iterator_method_call(ctx, offset, &interface_name, "rewind")?;
+            let rewind_interface = if interface_needs_get_iterator(ctx, &interface_name) {
+                "Iterator"
+            } else {
+                interface_name.as_str()
+            };
+            emit_interface_iterator_method_call(ctx, offset, rewind_interface, "rewind")?;
         }
         _ => {}
     }
@@ -358,6 +384,7 @@ fn initialize_dynamic_iterable_iterator(
     offset: usize,
     by_ref: bool,
     source: ValueId,
+    owner: Option<LocalSlotId>,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_start_dyn_indexed");
     let hash_case = ctx.next_label("iter_start_dyn_hash");
@@ -393,7 +420,7 @@ fn initialize_dynamic_iterable_iterator(
 
     ctx.emitter.label(&object_case);
     store_iterator_cursor(ctx, offset, 0);
-    resolve_dynamic_object_iterator_source(ctx, offset)?;
+    resolve_dynamic_object_iterator_source(ctx, offset, owner)?;
     emit_interface_iterator_method_call(ctx, offset, "Iterator", "rewind")?;
     ctx.emitter.label(&done);
     Ok(())
@@ -404,6 +431,7 @@ fn initialize_dynamic_mixed_iterator(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
     by_ref: bool,
+    owner: Option<LocalSlotId>,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_start_mixed_indexed");
     let hash_case = ctx.next_label("iter_start_mixed_hash");
@@ -446,7 +474,7 @@ fn initialize_dynamic_mixed_iterator(
     ctx.emitter.label(&object_case);
     store_mixed_payload_low_as_iterator_source(ctx, offset);
     store_iterator_cursor(ctx, offset, 0);
-    resolve_dynamic_object_iterator_source(ctx, offset)?;
+    resolve_dynamic_object_iterator_source(ctx, offset, owner)?;
     emit_interface_iterator_method_call(ctx, offset, "Iterator", "rewind")?;
     ctx.emitter.label(&done);
     if by_ref {
@@ -522,7 +550,18 @@ fn emit_empty_iterator_state(ctx: &mut FunctionContext<'_>, offset: usize) {
 
 /// Returns true when an `iter_start` instruction is preparing a by-reference foreach.
 fn iter_start_is_by_ref(inst: &Instruction) -> bool {
-    matches!(inst.immediate, Some(Immediate::Bool(true)))
+    match inst.immediate.as_ref() {
+        Some(Immediate::IterStart { by_ref, .. }) => *by_ref,
+        _ => false,
+    }
+}
+
+/// Returns the optional Mixed owner slot named by an `iter_start` immediate.
+fn iter_start_owner_slot(inst: &Instruction) -> Option<LocalSlotId> {
+    match inst.immediate.as_ref() {
+        Some(Immediate::IterStart { owner, .. }) => *owner,
+        _ => None,
+    }
 }
 
 /// Splits statically typed array/hash sources before by-reference iteration.
@@ -904,29 +943,78 @@ fn lower_dynamic_iter_current_value(
 fn resolve_dynamic_object_iterator_source(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
+    owner: Option<LocalSlotId>,
 ) -> Result<()> {
     if !ctx.module.interface_infos.contains_key("IteratorAggregate") {
         return Ok(());
     }
-    let keep_original = ctx.next_label("iter_dynamic_keep_original_object");
-    emit_interface_iterator_method_call(ctx, offset, "IteratorAggregate", "getIterator")?;
+    let return_ty =
+        emit_interface_iterator_method_call(ctx, offset, "IteratorAggregate", "getIterator")?;
+    adopt_get_iterator_result(ctx, offset, owner, &return_ty)
+}
+
+/// Owns a nonzero `getIterator()` result in the Mixed owner slot, then publishes a borrow.
+///
+/// `emit_box_current_owned_value_as_mixed` is the transfer: `__rt_mixed_from_value`
+/// retains the payload into a fresh Mixed cell, then the helper releases the
+/// original method-return owner. There is no user callback between those two
+/// steps, so the Mixed cell is the sole owner afterward. The iterator source
+/// word is then loaded from that cell's payload. The previous aggregate pointer
+/// is overwritten without a matching release; the loop's source retain still
+/// owns the aggregate.
+fn adopt_get_iterator_result(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    owner: Option<LocalSlotId>,
+    return_ty: &PhpType,
+) -> Result<()> {
+    let slot = require_get_iterator_owner(owner)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let keep_original = ctx.next_label("iter_keep_original_source");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(
                 &format!("cbz {}, {}", result_reg, keep_original)
-            );                                                                  // keep direct Iterator objects when IteratorAggregate dispatch misses
+            );                                                                  // keep the original source when getIterator() returned null
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(
                 &format!("test {}, {}", result_reg, result_reg)
-            );                                                                  // keep direct Iterator objects when IteratorAggregate dispatch misses
-            ctx.emitter.instruction(&format!("je {}", keep_original));          // skip source replacement when getIterator() was not resolved
+            );                                                                  // keep the original source when getIterator() returned null
+            ctx.emitter.instruction(&format!("je {}", keep_original));          // skip replacement when getIterator() was not resolved
         }
     }
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+    let local_offset = ctx.local_offset(slot)?;
+    abi::store_at_offset(ctx.emitter, result_reg, local_offset);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        result_reg,
+        result_reg,
+        MIXED_CELL_PAYLOAD_LOW_OFFSET,
+    );
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     ctx.emitter.label(&keep_original);
     Ok(())
+}
+
+/// Rejects an aggregate adoption path that has no place to retain the returned iterator.
+fn require_get_iterator_owner(owner: Option<LocalSlotId>) -> Result<LocalSlotId> {
+    owner.ok_or_else(|| {
+        CodegenIrError::invalid_module(
+            "iterator aggregate result has no owning Mixed slot".to_string(),
+        )
+    })
+}
+
+/// Returns true when an interface-typed source must call `getIterator()` before rewind.
+fn interface_needs_get_iterator(ctx: &FunctionContext<'_>, interface_name: &str) -> bool {
+    let name = interface_name.trim_start_matches('\\');
+    if name == "Iterator" || interface_extends_interface(ctx, name, "Iterator") {
+        return false;
+    }
+    name == "IteratorAggregate"
+        || interface_extends_interface(ctx, name, "IteratorAggregate")
 }
 
 /// Branches on the heap kind of the raw iterable source stored in iterator state.
@@ -1984,10 +2072,16 @@ fn object_iterator_source(
     class_name: &str,
 ) -> IteratorSourceKind {
     if ctx.module.interface_infos.contains_key(class_name) {
-        return IteratorSourceKind::Interface {
-            interface_name: class_name.to_string(),
-            aggregate_class_name: None,
-        };
+        if class_name == "Iterator" || interface_extends_interface(ctx, class_name, "Iterator") {
+            return IteratorSourceKind::Interface {
+                interface_name: class_name.to_string(),
+                aggregate_class_name: None,
+            };
+        }
+        // A Traversable-typed value can be either an Iterator or an
+        // IteratorAggregate at runtime. The dynamic iterable path distinguishes
+        // those cases before invoking any protocol method.
+        return IteratorSourceKind::DynamicIterable;
     }
     if class_implements_interface(ctx, class_name, "Iterator") {
         return IteratorSourceKind::Object {
@@ -2089,4 +2183,26 @@ fn interface_extends_interface(
 /// Returns a class-like name without PHP's optional leading namespace separator.
 fn normalized_type_name(name: &str) -> &str {
     name.trim_start_matches('\\')
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit coverage for iterator lowering contracts that reject malformed EIR.
+    //!
+    //! Called from:
+    //! - `cargo test` through the Rust test harness.
+    //!
+    //! Key details:
+    //! - IteratorAggregate results must never be published without an owner.
+
+    use super::*;
+
+    /// Missing owner metadata is a codegen error before a result can be adopted.
+    #[test]
+    fn aggregate_adoption_requires_an_owner_slot() {
+        assert!(require_get_iterator_owner(None).is_err());
+        let slot = LocalSlotId::from_raw(7);
+        assert_eq!(require_get_iterator_owner(Some(slot)).unwrap(), slot);
+    }
 }

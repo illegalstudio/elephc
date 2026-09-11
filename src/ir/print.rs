@@ -268,6 +268,12 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::WidthBytes(width) => {
             let _ = write!(out, " width={}", width);
         }
+        Immediate::IterStart { by_ref, owner } => {
+            let _ = write!(out, " by_ref={}", if *by_ref { "true" } else { "false" });
+            if let Some(slot) = owner {
+                let _ = write!(out, " owner=slot[{}]", slot.as_raw());
+            }
+        }
     }
 }
 

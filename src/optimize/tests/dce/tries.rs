@@ -14,4 +14,5 @@ mod try_pruning;
 mod catch_pruning;
 mod destructor_catches;
 mod finally_paths;
+mod iterator_catches;
 mod tail_paths;
