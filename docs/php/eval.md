@@ -162,6 +162,14 @@ include expression value, successful includes without `return` evaluate to `1`,
 repeated `*_once` includes evaluate to `true`, missing `include` returns
 `false` with warnings, and missing `require` aborts the eval fragment.
 
+In eval, `get_included_files()` preserves first-inclusion order, with the first
+nonempty native call-site path retained as the main entry. A query inside a
+nested include does not promote that included file ahead of main.
+`get_required_files()` is an alias and reports the same inventory, not a
+separate require history. Standalone contexts without a file path start empty.
+The AOT inventory remains a closed-world resolved-file manifest rather than a
+runtime include-execution history.
+
 ## Supported expressions
 
 | Expression area | Support |

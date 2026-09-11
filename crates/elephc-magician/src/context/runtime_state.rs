@@ -155,22 +155,38 @@ impl ElephcEvalContext {
     }
 
     /// Records one successfully loaded eval include key for include_once/require_once.
+    ///
+    /// The set retains the existing once-deduplication behavior; the separate list
+    /// records first inclusion rather than reconstructing a lexical order on reads.
+    /// The main script may already have been seeded without joining the once set.
     pub fn mark_included_file(&mut self, path: impl Into<String>) {
-        self.included_files.insert(path.into());
+        let path = path.into();
+        if self.included_files.insert(path.clone())
+            && self.included_main_file.as_deref() != Some(path.as_str())
+        {
+            self.included_file_order.push(path);
+        }
     }
 
-    /// Returns included file names in stable lexical order, including the active main file.
+    /// Seeds the first nonempty call site once, independently of earlier include entries.
+    ///
+    /// A nested include temporarily changes `call_file`, so subsequent call sites
+    /// must never reorder the inventory. Keep the seed out of the once set to
+    /// preserve that set's existing behavior, including explicitly including main.
+    fn seed_main_included_file(&mut self) {
+        if self.call_file.is_empty() || self.included_main_file.is_some() {
+            return;
+        }
+        if let Some(position) = self.included_file_order.iter().position(|name| name == &self.call_file) {
+            self.included_file_order.remove(position);
+        }
+        self.included_file_order.insert(0, self.call_file.clone());
+        self.included_main_file = Some(self.call_file.clone());
+    }
+
+    /// Returns the stable main entry followed by files in first-inclusion order.
     pub(crate) fn included_file_names(&self) -> Vec<String> {
-        let mut names = self.included_files.iter().cloned().collect::<Vec<_>>();
-        if !self.call_file.is_empty() && !names.iter().any(|name| name == &self.call_file) {
-            names.push(self.call_file.clone());
-        }
-        names.sort();
-        if let Some(position) = names.iter().position(|name| name == &self.call_file) {
-            let main = names.remove(position);
-            names.insert(0, main);
-        }
-        names
+        self.included_file_order.clone()
     }
 
     /// Returns the current error reporting mask, replacing it when a new mask is supplied.
@@ -601,11 +617,15 @@ impl ElephcEvalContext {
     }
 
     /// Updates the source file, directory, and line for the current eval call site.
+    ///
+    /// The first nonempty site seeds main once; temporary include sites and their
+    /// restoration never change the order subsequently reported by file inventories.
     pub fn set_call_site(&mut self, file: impl Into<String>, dir: impl Into<String>, line: i64) {
         self.call_file = file.into();
         self.call_dir = dir.into();
         self.call_line = line;
         self.file_magic_override = None;
+        self.seed_main_included_file();
     }
 
     /// Returns a copy of the current call-site metadata for temporary overrides.

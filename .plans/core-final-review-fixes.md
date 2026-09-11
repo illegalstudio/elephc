@@ -19,7 +19,7 @@ branch `feat/core-align`.
 - [ ] Accept valid Mixed class-name strings in get_class_vars.
 - [ ] Capture native argument metadata for indirect and eval-originated backtraces.
 - [ ] Expose AOT user constants in eval inventories under the correct category.
-- [ ] Preserve first-inclusion order in eval file inventories.
+- [x] Preserve first-inclusion order in eval file inventories.
 - [ ] Add focused regression coverage and synchronize affected documentation.
 - [ ] Review every implementation diff and pass compilation and static hygiene checks.
 - [ ] Commit thematically, push the reviewed head, and obtain CI results on that head.
@@ -163,3 +163,27 @@ below, and checklist items must not imply that unexecuted tests passed.
 - Final source compilation passed without warnings in 15.99 seconds, including
   the source-test corrections and the uncommitted include-order proposal.
   `git diff --check` passed. Runtime verification is left to CI.
+
+### Eval include order reviewed for CI
+
+- Applied Claude's read-only patch proposal with a coordinator correction:
+  explicit main-file identity allows first-path seeding even after earlier
+  include entries, without promoting temporary nested call sites on every query.
+- Both context constructors keep an ordered history beside the unchanged once
+  set. Six source regressions cover nonlexical order, repeated include/require,
+  nested queries, delayed main seeding, once-state separation, and empty contexts.
+- The fixture directories are exclusively created and scoped to their tests.
+  Documentation distinguishes eval's history from AOT's closed-world manifest;
+  `get_required_files()` remains the same alias, not a separate require history.
+- Source compilation passed with the callable batch, and `git diff --check`
+  passed. No tests were executed locally. This item still needs CI execution.
+
+### Remaining reference CI cleanup failures
+
+- CI `34602101553` on `184cb9df3` now compiles the previous failure cases but
+  fails the three raw-reference same-frame cleanup fixtures: payload destructor
+  output is missing, with one array/object pair leaked per attempt.
+- A read-only Claude diagnosis is investigating promotion, transferred owners,
+  and cleanup records. A separate writer handles property/bound-closure typing.
+  The new callable and include-order commits do not claim to resolve these CI
+  failures without evidence from the follow-up investigation.
