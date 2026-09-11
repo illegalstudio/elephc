@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Direct calls, literal `call_user_func` calls, and first-class callables use class metadata.
+//! - A boxed `Mixed`/union argument is accepted and validated against its runtime tag during
+//!   lowering: only a string tag names a class, every other tag throws a catchable `TypeError`.
 //! - Runtime-selected callable targets remain unsupported because they cannot be specialized.
 
 use crate::builtins::semantics::{
@@ -43,16 +45,21 @@ builtin! {
     },
 }
 
-/// Validates concrete class-name arguments and defers unpacked entries to runtime binding.
+/// Accepts static or boxed class-name strings and defers unpacked entries to runtime binding.
+///
+/// The shared contract declares a `mixed` parameter, so a value whose static type is `Mixed` or a
+/// union reaches EIR lowering with its PHP tag intact and is tag-checked there. A statically known
+/// non-string type (an object, an array, a bool) stays a compile error, exactly as before.
 fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
     if input.args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
         return Ok(());
     }
-    if !input
-        .arg_types
-        .first()
-        .is_some_and(|ty| ty.codegen_repr() == PhpType::Str)
-    {
+    if !input.arg_types.first().is_some_and(|ty| {
+        matches!(
+            ty.codegen_repr(),
+            PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+        )
+    }) {
         return Err(CompileError::new(
             input.span,
             "get_class_vars() argument must be a string in AOT mode",

@@ -291,3 +291,83 @@ echo implode(',', get_class_methods(OrderedEnum::class));
 "#);
     assert_eq!(out, "zebra,middle,alpha,parentLast|zebra,middle,alpha|zebra,middle,alpha|label,cases,from,tryFrom");
 }
+
+/// Boxed `mixed` class names reach every AOT dispatch form, at an early and a late candidate.
+#[test]
+fn test_core_class_introspection_accepts_boxed_runtime_class_names() {
+    let out = compile_and_run(r#"<?php
+class BoxedVarsFirst { public int $a = 1; public function first(): void {} }
+class BoxedVarsLate { public int $z = 26; public function last(): void {} }
+$names = ["early" => $argc > 0 ? "BoxedVarsFirst" : "BoxedVarsLate", "late" => "BoxedVarsLate", "count" => 2];
+$early = $names["early"];
+$callback = get_class_vars(...);
+echo implode(",", array_keys(get_class_vars($early))), "|";
+echo implode(",", array_keys(call_user_func("get_class_vars", $names["late"]))), "|";
+echo implode(",", array_keys($callback($names["early"]))), "|";
+echo implode(",", array_keys(call_user_func_array("get_class_vars", [$names["late"]]))), "|";
+echo implode(",", array_keys(get_class_vars(...[$names["early"]]))), "|";
+echo implode(",", get_class_methods($names["late"]));
+"#);
+    assert_eq!(out, "a|z|a|z|a|last");
+}
+
+/// Invalid boxed tags throw PHP's catchable TypeError instead of becoming class-name strings.
+#[test]
+fn test_core_class_introspection_boxed_tags_reject_non_strings() {
+    let out = compile_and_run(r#"<?php
+class BoxedTagProbe { public int $a = 1; public function m(): void {} }
+$values = ["int" => 7, "bool" => true, "null" => null, "array" => [1], "object" => new BoxedTagProbe(), "name" => "BoxedTagProbe"];
+foreach (["int", "bool", "null", "array", "object"] as $key) {
+    try { get_class_vars($values[$key]); echo "bad|"; }
+    catch (TypeError $error) { echo $error->getMessage(), "|"; }
+}
+foreach (["int", "bool", "null", "array"] as $key) {
+    try { get_class_methods($values[$key]); echo "bad|"; }
+    catch (TypeError $error) { echo $error->getMessage(), "|"; }
+}
+echo implode(",", get_class_methods($values["object"])), "|";
+echo implode(",", get_class_methods($values["name"])), "|";
+echo implode(",", array_keys(get_class_vars($values["name"])));
+"#);
+    let vars = "get_class_vars(): Argument #1 ($class) must be of type string, ";
+    let methods = "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, ";
+    assert_eq!(
+        out,
+        format!(
+            "{vars}int given|{vars}bool given|{vars}null given|{vars}array given|{vars}object given|\
+             {methods}int given|{methods}bool given|{methods}null given|{methods}array given|m|m|a"
+        )
+    );
+}
+
+/// A boxed introspection argument is evaluated once and never frees the caller's own object.
+#[test]
+fn test_core_class_introspection_boxed_arguments_evaluate_once() {
+    let out = compile_and_run(r#"<?php
+class BoxedOnceTarget { public int $a = 1; public function m(): void {} }
+class BoxedOnceOwner { public string $tag = "kept"; public function owned(): void {} }
+function boxedOnceName(): mixed { echo "e"; return "BoxedOnceTarget"; }
+echo implode(",", array_keys(get_class_vars(boxedOnceName()))), "|";
+$owner = new BoxedOnceOwner();
+$boxed = ["owner" => $owner, "count" => 1];
+echo implode(",", get_class_methods($boxed["owner"])), "|";
+echo $owner->tag, "|", $boxed["owner"]->tag;
+"#);
+    assert_eq!(out, "ea|owned|kept|kept");
+}
+
+/// An owned boxed temporary is retired at the failing call, before its TypeError is catchable.
+///
+/// The validator releases its published input immediately before the throw, so the destructor
+/// of a temporary object argument runs while the same-frame catch is still pending.
+#[test]
+fn test_core_class_introspection_boxed_temporary_is_retired_before_the_throw() {
+    let out = compile_and_run(r#"<?php
+class BoxedTimingProbe { public function __destruct() { echo "D"; } }
+function boxedTimingTemporary(): mixed { return new BoxedTimingProbe(); }
+try { get_class_vars(boxedTimingTemporary()); echo "bad"; }
+catch (TypeError $error) { echo "T"; }
+echo "|end";
+"#);
+    assert_eq!(out, "DT|end");
+}

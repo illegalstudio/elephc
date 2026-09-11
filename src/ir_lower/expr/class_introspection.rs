@@ -7,6 +7,10 @@
 //! Key details:
 //! - Direct calls, including literal and dynamic array spreads, accept runtime class-name
 //!   strings; `get_class_methods()` also resolves an object's concrete runtime class.
+//! - A boxed argument of either builtin is tag-checked before its class name is used, so an
+//!   object, an array or a scalar is never coerced into a class-name string.
+//! - The dispatch name is published as one scoped owner record and retired explicitly on both
+//!   the selected-class path and the catchable TypeError path.
 //! - Property defaults are lowered as ordinary EIR expressions and boxed into fresh Mixed cells.
 
 use super::*;
@@ -50,10 +54,11 @@ fn lower_class_introspection_value(
     expr: &Expr,
 ) -> LoweredValue {
     let argument_type = ctx.builder.value_php_type(argument.value).codegen_repr();
-    if kind == ClassIntrospectionKind::Methods
-        && matches!(argument_type, PhpType::Mixed | PhpType::Union(_))
-    {
-        let name = super::class_introspection_mixed::lower_mixed_methods_class_name(ctx, argument, expr);
+    if matches!(argument_type, PhpType::Mixed | PhpType::Union(_)) {
+        // A boxed argument carries its PHP tag at runtime, so BOTH builtins extract the class
+        // name through the shared validator. Coercing the cell to a string here would turn an
+        // object, an array or an int into a class name instead of raising PHP's TypeError.
+        let name = super::class_introspection_mixed::lower_mixed_class_name(ctx, kind, argument, expr);
         return lower_dynamic_class_introspection(ctx, kind, name, None, expr);
     }
     let object_bound = match &argument_type {
@@ -64,6 +69,8 @@ fn lower_class_introspection_value(
     let name = if kind == ClassIntrospectionKind::Methods
         && matches!(argument_type, PhpType::Object(_))
     {
+        let result_owner = prepublish_call_result(ctx, &PhpType::Str, expr.span);
+        let (argument, argument_owner) = root_owned_call_operand(ctx, argument, expr.span);
         let target = crate::ir::RuntimeFnId::GetClass;
         let class_name = ctx.emit_value(
             Op::RuntimeCall,
@@ -75,22 +82,11 @@ fn lower_class_introspection_value(
             target.effects(),
             Some(expr.span),
         );
-        let class_name_temp = ctx.declare_owned_hidden_temp(PhpType::Str);
-        store_value_into_temp(
-            ctx,
-            &class_name_temp,
-            PhpType::Str,
-            class_name,
-            expr.span,
-        );
-        release_owned_call_arg_temporaries(
-            ctx,
-            &[argument.value],
-            Some(class_name.value),
-            &ReturnArgAlias::None,
-            expr.span,
-        );
-        take_owned_temp(ctx, &class_name_temp, expr.span)
+        stage_call_result(ctx, result_owner.as_ref(), class_name, expr.span);
+        if let Some(slot) = argument_owner {
+            retire_owned_call_operand(ctx, slot, expr.span);
+        }
+        take_prepublished_call_result(ctx, result_owner, class_name, expr.span)
     } else {
         argument
     };
@@ -99,7 +95,7 @@ fn lower_class_introspection_value(
 
 /// Identifies the metadata projection produced by one supported introspection builtin.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ClassIntrospectionKind {
+pub(super) enum ClassIntrospectionKind {
     Variables,
     Methods,
 }
@@ -110,6 +106,26 @@ impl ClassIntrospectionKind {
         match self {
             Self::Variables => "class",
             Self::Methods => "object_or_class",
+        }
+    }
+
+    /// Returns whether this builtin also accepts an object and resolves its runtime class.
+    ///
+    /// `get_class_vars()` declares a `string` parameter, so an object tag is invalid for it.
+    pub(super) fn accepts_object(self) -> bool {
+        matches!(self, Self::Methods)
+    }
+
+    /// Returns the TypeError prefix used when a boxed argument carries an unusable runtime tag.
+    ///
+    /// The runtime type name and the trailing `" given"` are appended by the throwing block, so
+    /// both builtins keep their own function and parameter naming in the message.
+    pub(super) fn invalid_argument_message(self) -> &'static str {
+        match self {
+            Self::Variables => "get_class_vars(): Argument #1 ($class) must be of type string, ",
+            Self::Methods => {
+                "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, "
+            }
         }
     }
 
@@ -155,8 +171,13 @@ fn lower_dynamic_class_introspection(
     // Dispatch reads the candidate name once per known class. A one-shot OwnedTemp would make
     // every read look like an ownership transfer and free a runtime-derived name after the first
     // failed comparison, so keep one ordinary hidden-slot owner for the whole dispatch chain.
+    // That slot is published as one operand-owner record: an ordinary hidden temp is only swept
+    // by frame cleanup, which a same-frame catch never runs, so the record plus the explicit
+    // retirement on each exit is what bounds the name's lifetime to this expression.
     let name_temp = ctx.declare_hidden_temp(PhpType::Str);
     store_value_into_temp(ctx, &name_temp, PhpType::Str, name, expr.span);
+    let name_slot = ctx.local_slots[&name_temp];
+    register_owned_call_operand(ctx, name_slot, expr.span);
     let name_var = Expr::new(ExprKind::Variable(name_temp.clone()), expr.span);
     let result_type = kind.result_type();
     let result_temp = ctx.declare_owned_hidden_temp(result_type.clone());
@@ -194,9 +215,9 @@ fn lower_dynamic_class_introspection(
         ctx.builder.position_at_end(next_block);
     }
 
-    lower_invalid_class_introspection_throw(ctx, kind, &name_var, expr);
+    lower_invalid_class_introspection_throw(ctx, kind, &name_var, name_slot, expr);
     ctx.builder.position_at_end(merge);
-    ctx.clear_owned_hidden_temp(&name_temp, Some(expr.span));
+    retire_owned_call_operand(ctx, name_slot, expr.span);
     take_owned_temp(ctx, &result_temp, expr.span)
 }
 
@@ -478,6 +499,7 @@ fn lower_invalid_class_introspection_throw(
     ctx: &mut LoweringContext<'_, '_>,
     kind: ClassIntrospectionKind,
     name_var: &Expr,
+    name_slot: LocalSlotId,
     expr: &Expr,
 ) {
     let message = match kind {
@@ -521,13 +543,10 @@ fn lower_invalid_class_introspection_throw(
         expr.span,
     );
     let exception = lower_expr(ctx, &exception);
-    ctx.clear_owned_hidden_temp(
-        match &name_var.kind {
-            ExprKind::Variable(name) => name,
-            _ => unreachable!("class introspection name must use a hidden temporary"),
-        },
-        Some(expr.span),
-    );
+    // The message already copied the name, so the dispatch owner can be retired here. Doing it
+    // before the throw is what a same-frame catch needs: it keeps the PHP activation alive, so
+    // no frame cleanup would otherwise release this slot.
+    retire_owned_call_operand(ctx, name_slot, expr.span);
     ctx.builder.terminate(Terminator::Throw {
         value: exception.value,
     });

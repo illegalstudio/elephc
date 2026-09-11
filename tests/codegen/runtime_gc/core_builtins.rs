@@ -888,3 +888,62 @@ echo $guard . $reuse;
         out.stderr
     );
 }
+
+/// Boxed class introspection releases its input and dispatch name on success and on caught throws.
+///
+/// The loop repeats each shape so a per-call retained reference shows up as a heap-debug leak:
+/// a valid boxed name, a boxed object, an invalid boxed tag, and a heap class-name string that
+/// names no compiled class (the dispatch-name owner on the TypeError path).
+#[test]
+fn test_core_boxed_class_introspection_releases_inputs_under_heap_debug() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class HeapBoxedTarget { public string $a = "kept"; public function m(): void {} }
+$values = ["name" => "HeapBoxedTarget", "bad" => 7, "object" => new HeapBoxedTarget(), "count" => 0];
+for ($i = 0; $i < 8; $i++) {
+    $vars = get_class_vars($values["name"]); unset($vars);
+    $methods = get_class_methods($values["name"]); unset($methods);
+    $owned = get_class_methods($values["object"]); unset($owned);
+    try { get_class_vars($values["bad"]); } catch (TypeError $error) { unset($error); }
+    try { get_class_vars(str_repeat("Missing", 1)); } catch (TypeError $error) { unset($error); }
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "boxed class introspection retained per-call storage: {}",
+        out.stderr
+    );
+}
+
+/// Throwing input destructors cannot strand an extracted name or an already-created TypeError.
+#[test]
+fn test_core_class_introspection_roots_outputs_during_throwing_input_cleanup() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ThrowingIntrospectionInput {
+    public function __destruct() { echo "input|"; throw new RuntimeException("cleanup"); }
+}
+function boxedIntrospectionInput(): mixed { return new ThrowingIntrospectionInput(); }
+for ($i = 0; $i < 2; $i++) {
+    try { get_class_methods(new ThrowingIntrospectionInput()); echo "unreached|"; }
+    catch (RuntimeException $error) { echo "typed|"; unset($error); }
+    try { get_class_methods(boxedIntrospectionInput()); echo "unreached|"; }
+    catch (RuntimeException $error) { echo "boxed|"; unset($error); }
+    try { get_class_vars(boxedIntrospectionInput()); echo "unreached|"; }
+    catch (RuntimeException $error) { echo "invalid|"; unset($error); }
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "input|typed|input|boxed|input|invalid|input|typed|input|boxed|input|invalid|done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "throwing input cleanup stranded an introspection result: {}",
+        out.stderr
+    );
+}

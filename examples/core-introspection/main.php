@@ -38,6 +38,10 @@ function settings_introspection_args(): array {
 $readDefaults = get_class_vars(...);
 echo 'Theme via callable: ', $readDefaults(...settings_introspection_args())['theme'], "\n";
 
+// Heterogeneous configuration entries preserve a boxed class-name string.
+$inspector = ['class' => DisplaySettings::class, 'enabled' => true];
+echo 'Configured defaults: ', implode(', ', array_keys(get_class_vars($inspector['class']))), "\n";
+
 // Introspection also accepts an object returned through the boxed eval boundary.
 $source = 'return new DisplaySettings();' . ' // ' . $argc;
 $settings = eval($source);
