@@ -2323,3 +2323,21 @@ MixedUnbox call-surface coverage remains unchanged.
 Cargo check --tests, exporter build, documentation and target-boundary audits,
 assembly-comment alignment and diff hygiene pass. Generated docs are unchanged.
 No local tests execute; CI must run these strengthened storage-owner assertions.
+
+### Promote caller locals before their reference can escape through a return
+
+The exact 75f0f8910 CI assembly passes a raw caller frame address into the managed
+reference relay. The callee cannot find a managed owner for that address; the
+returned alias therefore adopts owner zero and loses its value after the caller
+unsets the original variable. Promote a local by-reference argument when the
+callee can return by reference. Perform array normalization before promotion and
+emit only the final reference-cell load, avoiding a discarded detached payload.
+Named reference arguments share this argument-lowering path.
+
+Native Sol traced the actual assembly and implemented the repair. Add five-target
+promotion/order coverage, trace the return acquire to its actual reference load,
+and use the already-supported dynamic constructor route for the property-source
+guard fixture. Preserve the existing exact-output and heap-clean relay regression.
+Coordinator review corrected an intermediate discarded array-load hazard before
+commit. Cargo check --tests, assembly-comment alignment and diff hygiene pass.
+No local tests or repros execute; runtime confirmation remains assigned to CI.

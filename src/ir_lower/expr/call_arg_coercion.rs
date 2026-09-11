@@ -37,8 +37,30 @@ pub(super) fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
+    promote_reference_return_local_argument(ctx, sig, index, arg);
     let lowered = lower_expr(ctx, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Gives an escaping by-reference return a managed owner for a caller local.
+///
+/// A reference-returning callee can hand a by-reference parameter's address back to the caller.
+/// A raw caller frame address has no `__rt_reference_cell_owner`, so promote the local before the
+/// call and pass a fresh `LoadRefCell` marker that resolves to the managed cell pointer. Array
+/// normalization runs first so the cell stores the final parameter-compatible representation.
+fn promote_reference_return_local_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) {
+    if !sig.by_ref_return || !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return;
+    }
+    let ExprKind::Variable(name) = &arg.kind else {
+        return;
+    };
+    ctx.promote_local_ref_cell(name, Some(arg.span));
 }
 
 /// Protects an incidental value view of an earlier reference place without replacing the place.
@@ -277,6 +299,7 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
         let local = ctx.load_local(name, Some(arg.span));
         let boxed = ctx.box_value_as_mixed(local, param_ty.clone(), Some(arg.span));
         ctx.store_call_argument_local(name, boxed, param_ty.clone(), Some(arg.span));
+        promote_reference_return_local_argument(ctx, sig, index, arg);
         return Some(ctx.load_local(name, Some(arg.span)).value);
     }
     if !by_ref_array_arg_needs_mixed_storage(ctx, name, param_ty) {
@@ -293,6 +316,7 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
         Some(arg.span),
     );
     ctx.store_call_normalized_local(name, converted, array_ty, Some(arg.span));
+    promote_reference_return_local_argument(ctx, sig, index, arg);
     Some(ctx.load_local(name, Some(arg.span)).value)
 }
 

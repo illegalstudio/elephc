@@ -58,13 +58,52 @@ class PromotedReferenceCell {
 class PromotedReferenceSource { public int $value = 7; }
 $default = new PromotedReferenceCell();
 $source = new PromotedReferenceSource();
-$property = new PromotedReferenceCell($source->value);
+$class = "PromotedReferenceCell";
+$property = new $class($source->value);
 echo $default->value, $property->value;
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// Array normalization promotes before its final reference-place load.
+#[test]
+fn reference_return_array_normalization_does_not_strand_a_detached_load_on_every_target() {
+    let source = r#"<?php
+function &relayNormalizedArray(array &$value): array { return $value; }
+function consumeNormalizedArray(): void {
+    $value = [1];
+    $alias = &relayNormalizedArray($value);
+    echo $alias[0];
+}
+consumeNormalizedArray();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let caller = module.functions.iter()
+            .find(|function| function.name == "consumeNormalizedArray").unwrap();
+        let call = caller.instructions.iter().enumerate().find(|(_, inst)| inst.op == Op::Call)
+            .expect("normalized array relay call");
+        let argument = caller.instructions.iter().find(|inst| inst.result == call.1.operands.first().copied())
+            .expect("normalized reference argument producer");
+        assert_eq!(argument.op, Op::LoadRefCell, "{name}: call uses the promoted cell place");
+        let Some(Immediate::LocalSlot(slot)) = argument.immediate else { unreachable!(); };
+        let promotion = caller.instructions[..call.0].iter().enumerate().rev().find(|(_, inst)| {
+            matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, .. }) if inst.op == Op::PromoteLocalRefCell && first == slot)
+        }).expect("normalized array is promoted before its final load");
+        let normalized_store = caller.instructions[..promotion.0].iter().rposition(|inst| {
+            matches!(inst.immediate, Some(Immediate::LocalSlot(stored)) if inst.op == Op::StoreLocal && stored == slot)
+        }).expect("normalized array is stored before promotion");
+        assert!(!caller.instructions[normalized_store + 1..promotion.0].iter().any(|inst| {
+            matches!(inst.immediate, Some(Immediate::LocalSlot(loaded)) if inst.op == Op::LoadLocal && loaded == slot)
+        }), "{name}: no detached normalized load may be discarded before promotion");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
@@ -308,15 +347,29 @@ consumeReturnedReference();
             "{name}: replacing a pending reference return can run a payload destructor");
         let relay = module.functions.iter()
             .find(|function| function.name.eq_ignore_ascii_case("relayReturnedReference")).unwrap();
-        let relay_load = relay.instructions.iter().find(|inst| inst.op == Op::LoadRefCell)
-            .expect("local by-reference return retains its source place");
-        let relay_acquire = relay.instructions.iter().find(|inst| {
-            inst.op == Op::AcquireRefCell && inst.operands.first() == relay_load.result.as_ref()
-        }).expect("local by-reference return retains the managed cell owner");
+        let relay_acquire = relay.instructions.iter().find(|inst| inst.op == Op::AcquireRefCell)
+            .expect("local by-reference return retains the managed cell owner");
+        let relay_load = relay.instructions.iter().find(|inst| {
+            inst.result.as_ref() == relay_acquire.operands.first()
+        }).expect("local by-reference return retains its source place");
+        assert_eq!(relay_load.op, Op::LoadRefCell, "{name}");
         let Some(Immediate::LocalSlot(relay_owner)) = relay_acquire.immediate else { unreachable!(); };
         assert_eq!(relay.locals[relay_owner.as_raw() as usize].kind, LocalKind::ReturnRefCell, "{name}");
         let caller = module.functions.iter()
             .find(|function| function.name.eq_ignore_ascii_case("consumeReturnedReference")).unwrap();
+        let relay_call = caller.instructions.iter().enumerate().find(|(_, inst)| {
+            inst.op == Op::Call && inst.operands.len() == 1
+        }).expect("caller invokes the one-argument reference relay");
+        let relay_operand = relay_call.1.operands[0];
+        let relay_argument = caller.instructions.iter().find(|inst| inst.result == Some(relay_operand))
+            .expect("reference relay operand has a local-load producer");
+        assert_eq!(relay_argument.op, Op::LoadRefCell, "{name}: caller passes the managed cell");
+        let Some(Immediate::LocalSlot(relay_slot)) = relay_argument.immediate else { unreachable!(); };
+        let promotion = caller.instructions[..relay_call.0].iter().find(|inst| {
+            matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, .. }) if inst.op == Op::PromoteLocalRefCell && first == relay_slot)
+        }).expect("caller promotes the returned by-reference argument before the call");
+        let Some(Immediate::LocalSlotPair { second: relay_owner, .. }) = promotion.immediate else { unreachable!(); };
+        assert_eq!(caller.locals[relay_owner.as_raw() as usize].kind, LocalKind::RefCell, "{name}");
         assert!(caller.instructions.iter().filter(|inst| inst.op == Op::AdoptRefCellPtr).count() >= 3,
             "{name}: aliases and value copies consume the returned lease before argument cleanup");
         assert!(caller.instructions.iter().any(|inst| inst.op == Op::LoadRefCell),
