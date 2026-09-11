@@ -2529,3 +2529,41 @@ ARM-specific test timeout from its unrelated job-deadline cancellation.
 Native Sol reviewed the forced-prelude and linking path and implemented the
 scoped adjustment. Cargo check --test extension_loaded_tests, TOML parsing,
 exact override validation and diff hygiene pass. No local tests execute.
+
+### Classify Core eval fixture budgets instead of adding repeated one-off limits
+
+Run 34582407312 on 534aca449 confirms all six web and twelve non-codegen shards
+pass after the previous changes. Its only failed test job is macOS codegen shard
+2/16, job 103210078410: boxed get_class_methods arguments and the flat constant
+inventory comparison both hit the outer 60-second limit twice. Neither reports
+an output assertion failure. Production code is unchanged from the preceding
+head, whose corresponding shard passed.
+
+Inspect all sixteen macOS codegen logs, including passing shards. Three more
+fixtures time out once before passing on retry: inherited property unset at
+56.900 seconds, post-eval instanceof at 58.843 seconds, and hook defaults at
+59.687 seconds. Already-budgeted collection tests pass in 60.503 to 61.691
+seconds. These measurements show why retaining the default for sibling eval
+fixtures repeatedly makes different members fail at the same boundary.
+
+Replace fourteen exact Core eval GC overrides with one anchored binary, module
+and test-name family rule. Independent native Sol audits verify all 127 matched
+tests across fourteen immediate runtime_gc modules use opaque eval: 82 directly
+and 45 through collection or receiver helpers. Ordinary AOT and unrelated GC
+tests do not match. Give this family the same 60-second slow warnings and bounded
+180-second outer limit as the existing codegen::eval suite. Preserve all former
+exceptions through the family rule, including the newly measured flat-inventory
+and inherited-unset cases.
+
+Assign that bounded limit by exact name to the three measured cases outside the
+family: boxed class methods, three-compile hook defaults, and heap-debug plus
+tagged post-eval instanceof. Retain the independent 60-second compiled-program
+watchdog, all output and heap assertions, retries, shard membership and workflow
+gates. Add elapsed-time diagnostics around the original boxed-method harness and
+each flat-inventory comparison run without duplicating or changing that harness.
+If a fixture reaches the new outer bound, investigate its compiler/linker phase
+instead of increasing the limit again.
+
+Cargo check --test codegen_tests, TOML parsing, exact-name and replacement-coverage
+checks, and diff hygiene pass. No local test or repro executes. Runtime completion
+still requires the next exact-head CI matrix; the PR remains unmerged.

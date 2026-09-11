@@ -762,6 +762,8 @@ echo eval($source);
 #[test]
 fn test_core_eval_flat_constant_inventory_releases_each_result() {
     let outstanding = |iterations: usize| {
+        let started = std::time::Instant::now();
+        eprintln!("flat constant inventory: compiling and running iterations={iterations}");
         let source = format!(r#"<?php
 $source = 'define("INVENTORY_PAYLOAD", [1, 2, 3]);
 for ($iteration = 0; $iteration < {iterations}; $iteration++) {{
@@ -778,6 +780,10 @@ echo eval($source);
         assert_eq!(output.stdout, "42");
         let (allocations, frees) = parse_gc_stats(&output.stderr);
         assert!(allocations > 0, "fixture must exercise the runtime heap");
+        eprintln!(
+            "flat constant inventory: iterations={iterations} completed in {:?}, allocs={allocations}, frees={frees}",
+            started.elapsed(),
+        );
         (allocations, allocations as i128 - frees as i128)
     };
     let (once_allocated, once_live) = outstanding(1);

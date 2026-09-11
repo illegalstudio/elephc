@@ -9,6 +9,7 @@
 //!   visibility, inherited defaults, named and spread arguments, and callable forms.
 
 use crate::support::*;
+use std::time::Instant;
 
 /// Verifies `get_called_class()` follows late static binding for instance and static calls.
 #[test]
@@ -124,7 +125,14 @@ $source = 'return "BoxedMethodsTarget";' . ' // ' . $argc;
 $name = eval($source);
 echo implode(',', get_class_methods(...[$name])), '|', get_class($object);
 "#;
-    assert_eq!(compile_and_run(source), "method|method|method|method|BoxedMethodsTarget");
+    let started = Instant::now();
+    eprintln!("boxed get_class_methods: compiling and running eval fixture");
+    let output = compile_and_run(source);
+    eprintln!("boxed get_class_methods: fixture completed in {:?}", started.elapsed());
+    assert_eq!(
+        output,
+        "method|method|method|method|BoxedMethodsTarget",
+    );
 }
 
 /// Boxed non-object/non-string values throw catchable TypeErrors without scalar coercion.
