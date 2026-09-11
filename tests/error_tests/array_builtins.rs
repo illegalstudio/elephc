@@ -299,6 +299,22 @@ fn test_error_by_ref_builtin_parameter_refuses_a_value_with_no_storage() {
             "array_walk(): Argument #1 ($array) could not be passed by reference",
         ),
         (
+            r#"<?php function f($v) {} array_walk(["key" => 1], "f");"#,
+            "array_walk(): Argument #1 ($array) could not be passed by reference",
+        ),
+        (
+            r#"<?php function f($v) {} array_walk(callback: "f", array: [1, 2]);"#,
+            "array_walk(): Argument #1 ($array) could not be passed by reference",
+        ),
+        (
+            r#"<?php function make_array(): array { return [1]; } function f($v) {} array_walk(make_array(), "f");"#,
+            "array_walk(): Argument #1 ($array) could not be passed by reference",
+        ),
+        (
+            r#"<?php function f($v) {} array_walk_recursive([[1]], "f");"#,
+            "array_walk_recursive(): Argument #1 ($array) could not be passed by reference",
+        ),
+        (
             "<?php sort([3, 1, 2]);",
             "sort(): Argument #1 ($array) could not be passed by reference",
         ),

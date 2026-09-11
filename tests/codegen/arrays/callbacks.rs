@@ -384,19 +384,20 @@ echo $product;
     assert_eq!(out, "24");
 }
 
-// Tests `array_walk` with a callback that echoes each element, verifying the function
-// walks by reference and mutates the array in place.
-/// Verifies that array walk.
+// Tests `array_walk` with a callback that mutates each element by reference, verifying the
+// variable argument remains a writable lvalue and receives the callback's changes.
+/// Verifies `array_walk` writes callback mutations back to a variable argument.
 #[test]
 fn test_array_walk() {
     let out = compile_and_run(
         r#"<?php
-function show($x) { echo $x; }
+function increment(&$x) { $x = $x + 1; }
 $a = [10, 20, 30];
-array_walk($a, "show");
+array_walk($a, "increment");
+echo implode(",", $a);
 "#,
     );
-    assert_eq!(out, "102030");
+    assert_eq!(out, "11,21,31");
 }
 
 // Tests `usort` with a comparison callback that sorts an unsorted array in ascending
