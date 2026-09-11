@@ -1,7 +1,7 @@
 //! Purpose:
 //! Shared curl easy-handle resolution and `curl_setopt()`'s option-KIND dispatch, reused
-//! by every home file in this family (mirrors `crate::curl_prelude::curl_setopt`'s body
-//! one-for-one, minus the callback/share arms this module's doc defers).
+//! by every home file in this family (mirrors `crate::curl_prelude::curl_setopt`'s dispatch,
+//! including its callback, share, and `CURLOPT_POSTFIELDS` multipart arms).
 //!
 //! Called from:
 //! - Every `curl_*` home file in this directory.
@@ -269,10 +269,9 @@ pub(in crate::interpreter) fn eval_curl_require_php_85(
     Ok(())
 }
 
-/// `curl_setopt()`'s message for KIND 6 (a real option this build cannot carry), KIND 8
-/// (callbacks) and KIND 9 (the PHP-stream options) — accepted PHP API this eval interpreter
-/// specifically does not wire, per this family's module doc — formatted exactly like the
-/// AOT prelude's own
+/// `curl_setopt()`'s message for KIND 6 (a real option this build cannot carry), KIND 9
+/// (the PHP-stream options), or a defensive unknown KIND 8 callback slot — formatted
+/// exactly like the AOT prelude's own
 /// `__elephc_curl_setopt_unsupported_warning` (`src/codegen_support/runtime/curl/
 /// warn_option.rs`'s `CURL_SETOPT_UNSUPPORTED_PREFIX`/`_SUFFIX`), so a script observing
 /// the warning text sees the identical wording whether it runs compiled or through
@@ -304,11 +303,10 @@ pub(in crate::interpreter) fn eval_curl_warn_unsupported_multi_option(
 /// id, EVAL TABLE KEY (for the PHP-layer mirror fields), and already-evaluated option/value
 /// cells. Returns the same `bool` `curl_setopt()` itself returns.
 ///
-/// Mirrors `crate::curl_prelude::curl_setopt`'s body kind-for-kind (see that function's own
-/// extensive comments for the libcurl-side rationale of each branch), MINUS the
-/// `CURLOPT_POSTFIELDS` array/`multipart` special case and KIND 8 (callbacks) — both fall
-/// into the honest "not supported by this build" warning path instead, per this family's
-/// module doc.
+/// Mirrors `crate::curl_prelude::curl_setopt`'s body kind-for-kind, including
+/// `CURLOPT_POSTFIELDS` array/multipart handling and KIND 8 callbacks. KIND 9 PHP-stream
+/// options and KIND 6 options this build cannot carry still take the honest "not supported
+/// by this build" warning path.
 pub(in crate::interpreter) fn eval_curl_setopt_apply(
     raw: i64,
     table_id: i64,

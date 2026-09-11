@@ -9,7 +9,8 @@
 //!   exactly (see that function's own extensive comment for the mask values and why three
 //!   options are special-cased before the mask). `CURLINFO_HEADER_OUT` always answers
 //!   `false` here too, for the identical reason the AOT wrapper documents (the header
-//!   capture needs the `CURLOPT_DEBUGFUNCTION` plumbing this family does not implement).
+//!   capture needs internal request-header tracking that this family does not implement;
+//!   the `CURLOPT_DEBUGFUNCTION` callback option itself is supported).
 
 use crate::curl_ffi as ffi;
 
