@@ -8,7 +8,7 @@
 //! - Candidate matching, constructor calls, and runtime fallback preserve scratch state.
 
 use super::*;
-use crate::codegen::lower_inst::callable_guards;
+use crate::codegen::lower_inst::{callable_guards, emit_call_arg_temp_cleanups};
 
 /// Materializes the dynamic class name as a string result pair, branching for non-string Mixed.
 pub(super) fn emit_generic_dynamic_new_class_string(

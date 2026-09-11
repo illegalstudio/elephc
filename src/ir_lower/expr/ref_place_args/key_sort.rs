@@ -231,6 +231,58 @@ fn property_requires_generic_write_context(
         || class_info.methods.contains_key(&setter)
 }
 
+/// Sorts an exact PHP `array` local or general writable place through its boxed Mixed cell.
+///
+/// Plain locals own an independent PHP value, including exact `array` parameters cloned into a
+/// dominating copy-on-write shadow at function entry. Ref-bound locals intentionally keep their
+/// shared cell. General places first clone one stable read into an ordinary PHP local, then write
+/// the sorted cell back through the existing property, static-property, hook, readonly, and
+/// nested-place machinery.
+fn lower_exact_php_array_place_key_sort(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    sig: &FunctionSig,
+    args: &[Expr],
+    expr: &Expr,
+    sort: ArrayKeySort,
+) -> Option<LoweredValue> {
+    let [arg] = args else {
+        return None;
+    };
+    let place = ref_param_place(sig, 0, arg)?;
+    if !static_place_type(ctx, place)?.is_php_array() {
+        return None;
+    }
+    if let ExprKind::Variable(local) = &place.kind {
+        let cell = ctx.load_local(local, Some(place.span));
+        return Some(sort_attached_mixed_cell(ctx, name, cell, expr, sort));
+    }
+    if !super::is_candidate_place_shape(place) {
+        return None;
+    }
+
+    let place = super::stabilize_place(ctx, place);
+    let source = lower_expr(ctx, &place);
+    let work_cell = clone_mixed_cell(ctx, source, expr);
+    let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    ctx.store_local(&temp, work_cell, PhpType::Mixed, Some(place.span));
+
+    let cell = ctx.load_local(&temp, Some(place.span));
+    let result = sort_attached_mixed_cell(ctx, name, cell, expr, sort);
+    let temp_value = Expr::new(ExprKind::Variable(temp.clone()), place.span);
+    super::lower_non_local_assignment_write(ctx, &place, &temp_value, place.span);
+
+    let slot = ctx.declare_local(&temp, PhpType::Mixed);
+    ctx.emit_void(
+        Op::ReleaseLocalSlot,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(),
+        Some(expr.span),
+    );
+    Some(result)
+}
+
 /// Sorts one nested array cell through an independently mutable boxed-Mixed payload.
 ///
 /// Direct packed or associative parents are first COW-separated and widened. Parents that already
@@ -361,6 +413,41 @@ fn lower_boxed_parent_element_key_sort(
 
     let cell = ctx.load_local(&temp, Some(place.span));
     let result = sort_attached_mixed_cell(ctx, name, sig, cell, flags, expr, sort);
+    let temp_value = Expr::new(ExprKind::Variable(temp.clone()), place.span);
+    super::lower_non_local_assignment_write(ctx, &place, &temp_value, place.span);
+
+    let slot = ctx.declare_local(&temp, PhpType::Mixed);
+    ctx.emit_void(
+        Op::ReleaseLocalSlot,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(),
+        Some(expr.span),
+    );
+    result
+}
+
+/// Sorts one child of an exact PHP `array` place through an owned Mixed work cell.
+///
+/// The place and any side-effecting index are stabilized before the read. The temporary owns an
+/// independent PHP value while runtime promotion validates and sorts its boxed payload. A normal
+/// return writes the cell back through existing place COW and reference handling, then retires the
+/// temporary; an exceptional return leaves frame cleanup responsible for that same owner.
+fn lower_boxed_parent_element_key_sort(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    place: &Expr,
+    expr: &Expr,
+    sort: ArrayKeySort,
+) -> LoweredValue {
+    let place = super::stabilize_place(ctx, place);
+    let child = lower_expr(ctx, &place);
+    let child = clone_mixed_cell(ctx, child, expr);
+    let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    ctx.store_local(&temp, child, PhpType::Mixed, Some(place.span));
+
+    let cell = ctx.load_local(&temp, Some(place.span));
+    let result = sort_attached_mixed_cell(ctx, name, cell, expr, sort);
     let temp_value = Expr::new(ExprKind::Variable(temp.clone()), place.span);
     super::lower_non_local_assignment_write(ctx, &place, &temp_value, place.span);
 

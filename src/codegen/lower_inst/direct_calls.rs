@@ -229,6 +229,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes,
     })
 }
@@ -316,6 +317,7 @@ pub(super) fn materialize_static_method_call_args_with_refs(
         preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes: 0,
     })
 }

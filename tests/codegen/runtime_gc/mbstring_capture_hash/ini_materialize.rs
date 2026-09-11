@@ -85,23 +85,27 @@ echo "done\n";
 /// Adapts private C fixture calls to the native result tuple and common consuming Mixed boxer.
 fn shims() -> String {
     use elephc_builtin_contract::mbstring_abi::RESULT_STRING_ARRAY;
+    let failed = format!(
+        "{}ini_fixture_materialize_failed",
+        target().platform.local_label_prefix()
+    );
     if target().arch == Arch::AArch64 {
         format!("\n.text\n.globl _ini_fixture_materialize\n_ini_fixture_materialize:\n\
             stp x29, x30, [sp, #-16]!\nbl __rt_mbstring_materialize\n\
-            cbnz x1, _ini_fixture_materialize_failed\nbl __rt_mbstring_box_result\n\
-            ldp x29, x30, [sp], #16\nret\n_ini_fixture_materialize_failed:\n\
+            cbnz x1, {failed}\nbl __rt_mbstring_box_result\n\
+            ldp x29, x30, [sp], #16\nret\n{failed}:\n\
             mov x0, #0\nldp x29, x30, [sp], #16\nret\n\
             .globl _ini_fixture_restore\n_ini_fixture_restore:\nstp x29, x30, [sp, #-16]!\n\
-            bl __rt_mbstring_restore_ini_array\ncbz x0, _ini_fixture_materialize_failed\n\
+            bl __rt_mbstring_restore_ini_array\ncbz x0, {failed}\n\
             mov x1, #0\nmov x2, #0\nmov x3, #{RESULT_STRING_ARRAY}\n\
             bl __rt_mbstring_box_result\nldp x29, x30, [sp], #16\nret\n")
     } else {
         format!("\n.text\n.globl _ini_fixture_materialize\n_ini_fixture_materialize:\n\
             sub rsp, 8\ncall __rt_mbstring_materialize\ntest rdx, rdx\n\
-            jnz _ini_fixture_materialize_failed\ncall __rt_mbstring_box_result\n\
-            add rsp, 8\nret\n_ini_fixture_materialize_failed:\nxor eax, eax\nadd rsp, 8\nret\n\
+            jnz {failed}\ncall __rt_mbstring_box_result\n\
+            add rsp, 8\nret\n{failed}:\nxor eax, eax\nadd rsp, 8\nret\n\
             .globl _ini_fixture_restore\n_ini_fixture_restore:\nsub rsp, 8\n\
-            call __rt_mbstring_restore_ini_array\ntest rax, rax\njz _ini_fixture_materialize_failed\n\
+            call __rt_mbstring_restore_ini_array\ntest rax, rax\njz {failed}\n\
             xor edx, edx\nxor ecx, ecx\nmov r8d, {RESULT_STRING_ARRAY}\n\
             call __rt_mbstring_box_result\nadd rsp, 8\nret\n")
     }

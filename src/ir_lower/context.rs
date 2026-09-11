@@ -947,8 +947,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Rebinds a by-value container or Mixed parameter to an owning copy-on-write shadow slot.
     ///
-    /// Call sites pass container pointers as borrows. Acquiring the value into a fresh local makes
-    /// the first callee mutation observe refcount two and split instead of modifying caller storage.
+    /// Call sites pass container pointers as borrows. Concrete containers are retained so their
+    /// first mutation observes refcount two and splits. An exact PHP `array` arrives as a boxed
+    /// Mixed cell, so its wrapper is cloned before the shadow is published; mutating that cell can
+    /// then replace its payload without rewriting caller storage.
     pub(crate) fn privatize_container_param(
         &mut self,
         name: &str,
@@ -4344,6 +4346,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Reports whether construction already registered exceptional ownership for this call operand.
     pub(crate) fn has_call_argument_guard(&self, value: ValueId) -> bool {
         self.argument_guards.contains_key(&value)
+    }
+
+    /// Adds an already active value guard to the current parameter-order insertion chain.
+    pub(crate) fn reuse_call_argument_guard_anchor(
+        &mut self,
+        value: ValueId,
+        parameter: usize,
+    ) -> bool {
+        let Some(&token) = self.argument_guards.get(&value) else {
+            return false;
+        };
+        self.argument_guard_scopes
+            .last_mut()
+            .expect("active call capture scope")
+            .push((parameter, token));
+        true
     }
 
     /// Refreshes an active indexed or associative argument guard after mutation can replace its heap address.

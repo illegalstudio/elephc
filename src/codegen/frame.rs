@@ -565,11 +565,6 @@ pub(super) fn emit_exception_cleanup_callback(
     if !ctx.exception_cleanup_activation {
         return;
     }
-    if is_destructor(ctx.function) {
-        destructor_cleanup::emit_callback(ctx, entry_label);
-        return;
-    }
-    let callback = format!("{entry_label}__cdylib_exception_cleanup");
     ctx.emitter.blank();
     ctx.emitter.comment("exceptional PHP frame cleanup callback");
     ctx.emitter.label_global(&callback);
@@ -1284,9 +1279,6 @@ pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset
     let result_reg = abi::int_result_reg(ctx.emitter);
     let done = ctx.next_label("main_refcounted_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
-    if is_destructor(ctx.function) {
-        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
-    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter

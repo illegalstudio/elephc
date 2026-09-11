@@ -1,8 +1,8 @@
 //! Purpose:
-//! Releases every owned destructor-frame value through protected, resumable cleanup steps.
+//! Releases every abandoned PHP-frame owner through protected, resumable cleanup steps.
 //!
 //! Called from:
-//! - Native destructor return epilogues and their exception activation callbacks.
+//! - Native destructor return epilogues and PHP-frame exception activation callbacks.
 //!
 //! Key details:
 //! - Each step borrows the original PHP frame and clears its owner slot before releasing it.
@@ -12,7 +12,7 @@
 
 use super::*;
 
-/// One owner whose cleanup can execute PHP code while the destructor frame remains readable.
+/// One owner whose cleanup can execute PHP code while the abandoned frame remains readable.
 enum Owner {
     Local(LocalSlotId, PhpType, usize),
     Reference(PhpType, usize),
@@ -90,13 +90,13 @@ fn enter_borrowed_frame(emitter: &mut Emitter) {
         emitter.instruction("stp x29, x30, [sp, #32]");                         // preserve caller linkage across protected cleanup calls
         emitter.instruction("str x19, [sp, #16]");                              // retain the caller's callee-saved stack anchor
         emitter.instruction("mov x19, sp");                                     // remember this helper's actual stack independently of the borrowed frame
-        emitter.instruction("mov x29, x0");                                     // address the destructor's original owned local slots
+        emitter.instruction("mov x29, x0");                                     // address the abandoned frame's original owned local slots
     } else {
-        emitter.instruction("push rbp");                                        // retain the caller's frame pointer before borrowing the destructor frame
+        emitter.instruction("push rbp");                                        // retain the caller's frame pointer before borrowing the abandoned frame
         emitter.instruction("push r12");                                        // preserve the register used to anchor this helper's real stack
         emitter.instruction("sub rsp, 24");                                     // align nested calls and reserve cleanup state outside the PHP frame
         emitter.instruction("mov r12, rsp");                                    // remember the real helper stack across slot-based cleanup calls
-        emitter.instruction("mov rbp, rdi");                                    // address the destructor's original owned local slots
+        emitter.instruction("mov rbp, rdi");                                    // address the abandoned frame's original owned local slots
     }
 }
 

@@ -13,6 +13,29 @@
 
 use crate::support::*;
 
+/// A destructor escaping an explicit unset cannot make frame unwinding release its retired owner again.
+#[test]
+fn test_core_unset_throwing_local_retires_owner_before_unwinding() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RetiredLocalDestructor {
+    public function __destruct() { echo "destruct|"; throw new RuntimeException("retired"); }
+}
+function retireThrowingLocal(): void {
+    $value = new RetiredLocalDestructor();
+    unset($value);
+}
+try { retireThrowingLocal(); }
+catch (RuntimeException $error) {
+    echo $error->getMessage();
+    unset($error);
+}
+echo "|after";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "destruct|retired|after", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Transfers new object ownership through a Mixed alias so replacement runs its destructor immediately.
 #[test]
 fn test_mbstring_owned_mixed_reference_assignment() {

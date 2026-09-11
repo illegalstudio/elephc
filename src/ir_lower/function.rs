@@ -1738,9 +1738,10 @@ fn lower_body_into_function(
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
     // every write in the callee landed in the CALLER's storage. Re-bind each by-value container
     // parameter to an owning shadow slot, which restores the refcount the copy-on-write split
-    // depends on. This one site is the single funnel for free functions, methods, static methods
-    // and closures, so every call flavour — including `call_user_func`, dynamic `$f(...)` and
-    // recursion — is covered without any per-flavour code.
+    // depends on. Exact PHP `array` parameters carry a boxed Mixed cell, so the shadow clones that
+    // wrapper as well as retaining its payload. This one site is the single funnel for free
+    // functions, methods, static methods and closures, so every call flavour, including
+    // `call_user_func`, dynamic `$f(...)` and recursion, is covered without per-flavour code.
     //
     // Mixed parameters also need an owning cell: native return values must outlive an eval
     // caller's temporary arguments, and a boxed array mutation must not replace the caller's

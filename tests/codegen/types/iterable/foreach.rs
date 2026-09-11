@@ -1746,7 +1746,9 @@ $keep = $o->x;
 }
 
 /// Regression for issue #642: a hash-valued property reached through a ref cell must use the hash
-/// split helper, proving the cell path is not hardwired to the indexed one.
+/// split helper, proving the cell path is not hardwired to the indexed one. The heap oracle uses
+/// direct writes as its baseline so both programs retain the same reference binding and final COW
+/// generations; any remaining delta belongs to the by-reference iterator rather than the split.
 #[test]
 fn test_regression_642_by_ref_foreach_reference_hash_property_shared_with_another_owner() {
     let setup = r#"<?php
@@ -1763,8 +1765,11 @@ echo $out;
     let by_ref = compile_and_run_with_heap_debug(&format!(
         "{setup}foreach ($o->x as &$v) {{ $v = $v * 2; }}\nunset($v);\n{dump}"
     ));
-    let baseline = compile_and_run_with_heap_debug(&format!("{setup}{dump}"));
+    let baseline = compile_and_run_with_heap_debug(&format!(
+        "{setup}$o->x['a'] = 2;\n$o->x['b'] = 4;\n{dump}"
+    ));
     assert_eq!(by_ref.stdout, "a=2;b=4;a=1;b=2;");
+    assert_eq!(baseline.stdout, by_ref.stdout);
     assert!(
         !by_ref.stderr.contains("bad refcount"),
         "the split must balance the property's own reference, got: {}",

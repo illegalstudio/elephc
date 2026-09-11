@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Ownership retention and missing-entry fallbacks remain type-aware.
+//! - Global reload publishes the replacement before releasing the prior owner.
 
 use super::*;
 
@@ -282,6 +283,30 @@ fn emit_branch_if_scope_cell_matches_local(
         }
     }
     Ok(())
+}
+
+/// Branches when the fetched scope cell already occupies a boxed global slot.
+fn emit_branch_if_scope_cell_matches_global(
+    ctx: &mut FunctionContext<'_>,
+    symbol: &str,
+    label: &str,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scope_cell_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, symbol, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, scope_cell_reg, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, scope_cell_reg)); // compare the current global owner with the fetched scope cell
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // preserve an unchanged owner without another retain
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, scope_cell_reg)); // compare the current global owner with the fetched scope cell
+            ctx.emitter.instruction(&format!("je {}", label));                  // preserve an unchanged owner without another retain
+        }
+    }
 }
 
 /// Stores the program-global fallback for a missing eval global entry.

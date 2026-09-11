@@ -54,7 +54,7 @@ use crate::codegen::callable_invoker_args::{
 };
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::Arch;
+use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed,
@@ -152,7 +152,7 @@ impl InvokerEmitContext {
         defaults: InvokerDefaults,
     ) -> Self {
         Self {
-            label_prefix: local_label_prefix(invoker_label),
+            label_prefix: local_label_prefix(invoker_label, target),
             label_counter: 0,
             argument_owners,
             owns_string_return,
@@ -173,9 +173,9 @@ impl InvokerEmitContext {
     }
 }
 
-/// Converts an invoker's global assembly label into a safe prefix for its local labels.
-fn local_label_prefix(label: &str) -> String {
-    label
+/// Converts an invoker's global assembly label into a platform-local prefix for branch labels.
+fn local_label_prefix(label: &str, target: Target) -> String {
+    let sanitized: String = label
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || ch == '_' {
@@ -184,7 +184,8 @@ fn local_label_prefix(label: &str) -> String {
                 '_'
             }
         })
-        .collect()
+        .collect();
+    format!("{}{sanitized}", target.platform.local_label_prefix())
 }
 
 /// Emits a descriptor invoker wrapper for a runtime-callable signature.
@@ -925,6 +926,17 @@ fn variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
             .get(sig.params.len().saturating_sub(1))
             .copied()
             .unwrap_or(false)
+}
+
+/// Transfers the fresh variadic container on top of the staging stack into the invoker's
+/// argument-owner ledger while preserving the borrowed pointer passed to the callee.
+fn capture_pushed_variadic_owner(
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+    variadic_ty: &PhpType,
+) {
+    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 0);
+    argument_owners::capture(emitter, ctx, variadic_ty);
 }
 
 /// Returns the declared target PHP type for a parameter.

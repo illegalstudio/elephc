@@ -82,7 +82,7 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
 }
 
 /// Builds an indexed descriptor-invoker container for signature-unknown calls.
-pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
+fn lower_untyped_descriptor_invoker_indexed_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
@@ -121,7 +121,7 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
 }
 
 /// Builds an associative descriptor-invoker container for named or named/spread calls.
-pub(super) fn lower_untyped_descriptor_invoker_hash_container(
+fn lower_untyped_descriptor_invoker_hash_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,

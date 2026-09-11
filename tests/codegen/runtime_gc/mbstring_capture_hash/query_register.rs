@@ -119,6 +119,10 @@ fn run(source: &str, expected: &str, limit: bool) {
 
 /// Owns a persistent writer, calls the C7 adapter, and retires it before propagating PHP exceptions.
 fn registration_shim(plan: &str, count: usize) -> String {
+    let done = format!(
+        "{}query_register_{plan}_done",
+        target().platform.local_label_prefix(),
+    );
     if target().arch == Arch::AArch64 {
         let address = |reg: &str, symbol: &str| if target().platform == Platform::Linux {
             format!("adrp {reg}, {symbol}\nadd {reg}, {reg}, :lo12:{symbol}")
@@ -161,7 +165,9 @@ fn registration_shim(plan: &str, count: usize) -> String {
     ldp x29, x30, [sp, #48]
     add sp, sp, #64
     cmp x0, #2
-    b.eq __rt_throw_current
+    b.ne {done}
+    b __rt_throw_current
+{done}:
     mov x10, #10
     madd x0, x9, x10, x0
     ret
@@ -201,7 +207,9 @@ fn registration_shim(plan: &str, count: usize) -> String {
     mov r10, QWORD PTR [rsp + 32]
     leave
     cmp eax, 2
-    je __rt_throw_current
+    jne {done}
+    jmp __rt_throw_current
+{done}:
     imul r10, r10, 10
     add rax, r10
     ret

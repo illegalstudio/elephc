@@ -106,6 +106,84 @@ echo update_eval_parameters(
     );
 }
 
+/// Releases replaced managed values while a function reloads a boxed program global from eval.
+/// The destructor reads the replacement, proving publication precedes release of the old owner.
+#[test]
+fn test_eval_function_global_reload_balances_mixed_managed_values() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$managed = $argc > 0 ? ["seed"] : [];
+function reload_managed_global(string $code): void {
+    global $managed;
+    eval($code);
+}
+class ObserveEvalGlobalReload {
+    public function __destruct() {
+        global $managed;
+        echo "drop:", $managed, "|";
+    }
+}
+reload_managed_global('global $managed;');
+echo $managed[0], "|";
+reload_managed_global('global $managed; $managed = ["next"];');
+echo $managed[0], "|";
+reload_managed_global('global $managed; $managed = "text";');
+echo $managed, "|";
+reload_managed_global('global $managed; unset($managed);');
+echo $managed, "|";
+$managed = new ObserveEvalGlobalReload();
+reload_managed_global('global $managed; $managed = "after";');
+echo $managed;
+unset($managed);
+"#,
+    );
+    assert!(output.success, "{}\n{}", output.stdout, output.stderr);
+    assert_eq!(
+        output.stdout,
+        "seed|next|text|text|drop:after|after"
+    );
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        output.stderr
+    );
+}
+
+/// Releases the old global owner through protected teardown when its destructor throws.
+/// The replacement remains published and readable after the throwable is caught.
+#[test]
+fn test_eval_function_global_reload_finishes_throwing_destructor_cleanup() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$managed = null;
+function reload_managed_global(string $code): void {
+    global $managed;
+    eval($code);
+}
+class ThrowOnEvalGlobalReload {
+    public function __destruct() {
+        echo "drop|";
+        throw new Exception("release");
+    }
+}
+$managed = new ThrowOnEvalGlobalReload();
+try {
+    reload_managed_global('global $managed; $managed = "after";');
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "|", $managed;
+}
+unset($managed);
+"#,
+    );
+    assert!(output.success, "{}\n{}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "drop|Exception:release|after");
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        output.stderr
+    );
+}
+
 /// Borrows native method arguments through normal returns and throws without retaining lookup cells.
 #[test]
 fn test_mbstring_eval_native_method_argument_ownership() {

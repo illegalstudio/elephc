@@ -22,14 +22,19 @@ fn mixed_invoker_returns_follow_runtime_ownership_on_all_targets() {
         "linux-aarch64",
         "linux-x86_64",
     ] {
-        let mut emitter = Emitter::new(Target::parse(name).unwrap());
-        let mut ctx = InvokerEmitContext::new("mixed_owner_invoker");
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        let mut ctx = InvokerEmitContext::new("mixed_owner_invoker", target);
         emit_boxed_invoker_return(&mut emitter, &PhpType::Mixed, false, &mut ctx);
         let arch = emitter.target.arch;
         let output = emitter.output();
         let retain = output.find("__rt_incref").expect("borrowed path must retain");
+        let owned_label = format!(
+            "{}mixed_owner_invoker_return_owned_0:",
+            target.platform.local_label_prefix()
+        );
         let owned = output
-            .find("mixed_owner_invoker_return_owned_0:")
+            .find(&owned_label)
             .expect("owned path label must be emitted");
         assert!(retain < owned, "{name}: borrowed promotion must precede owned transfer");
         match arch {
@@ -80,8 +85,9 @@ fn by_ref_invoker_returns_ignore_the_internal_ownership_status() {
         "linux-aarch64",
         "linux-x86_64",
     ] {
-        let mut emitter = Emitter::new(Target::parse(name).unwrap());
-        let mut ctx = InvokerEmitContext::new("by_ref_invoker");
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        let mut ctx = InvokerEmitContext::new("by_ref_invoker", target);
         emit_boxed_invoker_return(&mut emitter, &PhpType::Mixed, true, &mut ctx);
         let output = emitter.output();
         assert!(!output.contains("return_owned"), "{name}: {output}");
@@ -101,8 +107,9 @@ fn by_value_string_returns_persist_only_the_borrowed_path() {
         "linux-aarch64",
         "linux-x86_64",
     ] {
-        let mut emitter = Emitter::new(Target::parse(name).unwrap());
-        let mut ctx = InvokerEmitContext::new("string_owner_invoker");
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        let mut ctx = InvokerEmitContext::new("string_owner_invoker", target);
         restore_concat_offset_after_nested_call(&mut emitter, &PhpType::Str, false, &mut ctx);
         let arch = emitter.target.arch;
         let output = emitter.output();
