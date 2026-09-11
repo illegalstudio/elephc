@@ -36,6 +36,7 @@ mod class_metadata;
 mod context_symbols;
 mod native_functions;
 mod native_methods;
+mod native_user_constants;
 mod scope_execution;
 
 const TEST_NATIVE_DEFAULT_NULL: u64 = 0;

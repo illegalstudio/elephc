@@ -20,7 +20,7 @@ branch `feat/core-align`.
 - [x] Protect partial statically lowered array_map results across exceptions.
 - [x] Accept valid Mixed class-name strings in get_class_vars.
 - [ ] Capture native argument metadata for indirect and eval-originated backtraces.
-- [ ] Expose AOT user constants in eval inventories under the correct category.
+- [x] Expose AOT user constants in eval inventories under the correct category.
 - [x] Preserve first-inclusion order in eval file inventories.
 - [ ] Add focused regression coverage and synchronize affected documentation.
 - [ ] Review every implementation diff and pass compilation and static hygiene checks.
@@ -263,3 +263,62 @@ below, and checklist items must not imply that unexecuted tests passed.
   audit passed. Assembly-comment alignment and `git diff --check` passed.
 - AOT user-constant visibility is now delegated to the sole Claude writer.
   Call-unpack duplicate/order semantics remain in a separate read-only review.
+
+### CI signal after the promotion correction
+
+- On `31a641ef4`, CI `34606644288` Linux x86_64 codegen shard 4/16
+  passed all 498 tests (job `103289188962`), replacing the previous failure of
+  the promoted-local reference-return regression. Linux ARM64 shard 4 also passed.
+- Linux x86_64 shards 2 and 13 no longer report the repeated-catch, reference-lease
+  or rebound-target leaks. Their remaining failures were the invalid array-push
+  fixture and Closure::call ownership, both subsequently corrected in `a219edf0e`.
+- `a219edf0e329620014f0353a0fe677927364e3cc` is now pushed. CI `34608929671`
+  and PDO `34608929559` started on that exact head. No green-head claim yet.
+- The descriptor-container proposal remains unaccepted: its iterator temporaries
+  were not published for same-frame catches, it retained fresh key strings,
+  and it left source-validation and sparse sole-spread gaps. A focused follow-up
+  must close these before integration. No part of that proposal has been applied.
+- Native public hidden-argument transport is now assigned read-only in parallel
+  with the user-constant writer. Eval prebinding and backtrace detection remain
+  separate subsequent tasks, not completed work.
+
+### Review and CI follow-up on a219edf0e
+
+- User-constant first draft is reviewed, not committed. Claude is refining
+  recursive metadata validation, duplicate-name protection and missing namespace,
+  heap-debug and five-target regression sources. No local tests are authorized.
+- CI confirms descriptor spread validation remains broken. Its refined proposal
+  is still running and has not been applied.
+- New Fiber callable-capture SIGSEGV is assigned read-only to Claude. The direct
+  call and IIFE destructor failures are assigned separately after the coordinator
+  inspected CI assembly: `buildWithSameFrameCatch` has no handler or catch blocks
+  at all, identifying optimizer destruction-effect pruning as the next boundary
+  to fix rather than weakening the exception assertions.
+- A static builtin success fixture now reaches execution but leaks two strings.
+  Source inspection confirms both replacement helpers always copy to a separate
+  concat reservation, including no-match and empty-search paths. The coordinator
+  changed their alias contract to Independent, preserving scratch persistence,
+  and added cleanup regressions. Compilation and CI confirmation remain pending.
+- One Linux ARM64 non-codegen job failed at GHCR login before running tests.
+- Native public transport proposal returned, but is not accepted yet: its tests
+  include a placeholder API and its signature-shape fallback needs correction.
+
+### Independent replacement results and eval user constants
+
+- Commit `4f0323e4b` corrects replacement result ownership to Independent and
+  adds string-argument retirement regression sources. Compilation and required
+  generated-doc audits passed; CI execution is still pending.
+- Claude's user-constant implementation and refinement are source-reviewed.
+  Separate native user metadata supports scalar and bounded nested array values,
+  keeps Core resources separate, rejects duplicate or malformed registrations,
+  and materializes independent values without duplicating the reverse inventory.
+- Added namespace, category, resource, repeated heap-debug, malformed metadata
+  and five-target ABI regression sources. Documented the 16-level bridge bound
+  and skipped unsupported values instead of claiming unlimited constant parity.
+- Final `cargo check --locked -p elephc -p elephc-magician --tests` passed without
+  warnings in 17.91s. Assembly-comment and whitespace checks passed. Required
+  builtin documentation generation and audits passed with this binding draft.
+  No local tests, PHP/compiler repros or formatters ran.
+- CI `34608929671` on `a219edf0e` completed with failures. The descriptor spread,
+  Callable/Mixed capture-release and destructor-aware exception-flow corrections
+  remain in progress. The latter is now the sole external write delegation.

@@ -54,6 +54,7 @@ fn eval_defined_name(
 ) -> Result<bool, EvalStatus> {
     let name = eval_constant_name(name, values)?;
     Ok(context.has_native_global_constant(&name)
+        || context.has_native_user_constant(&name)
         || eval_predefined_constant_value(&name).is_some()
         || context.has_constant(&name))
 }

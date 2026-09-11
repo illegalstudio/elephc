@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Context creation also preserves regex-provider and PHP-profile registration.
+//! - Core and user global constants are seeded through separate bridge registries so
+//!   PHP's `Core` / `user` categories stay exact inside eval.
 
 use super::*;
 
@@ -26,6 +28,7 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::store_at_offset(ctx.emitter, result_reg, offset);
     register_eval_declared_symbols(ctx, offset);
     register_eval_native_global_constants(ctx, offset)?;
+    register_eval_native_user_constants(ctx, offset);
     register_eval_native_functions(ctx, offset)?;
     register_eval_native_method_signatures(ctx, offset);
     ctx.emitter.label(&ready);
@@ -67,20 +70,119 @@ fn register_eval_native_global_constant(
     value: &ExprKind,
     ty: &PhpType,
 ) -> Result<()> {
+    let (kind, word, string_value) = eval_native_global_constant_abi_value(value, ty)?;
+    register_eval_native_scalar_constant(
+        ctx,
+        context_offset,
+        name,
+        kind,
+        word,
+        string_value.as_deref(),
+        "__elephc_eval_register_native_global_constant",
+    );
+    Ok(())
+}
+
+/// Registers the AOT user-declared constant inventory with a newly allocated eval context.
+///
+/// User constants stay in their own bridge registry so eval reports them under PHP's `user`
+/// category instead of `Core`. A value AOT itself cannot materialize is skipped rather than
+/// failing the compile; see `eval_native_user_constant_value`.
+pub(super) fn register_eval_native_user_constants(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+) {
+    let user_names = ctx
+        .module
+        .user_defined_constants
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut entries = ctx
+        .module
+        .global_constants
+        .iter()
+        .filter(|(name, _)| user_names.contains(*name))
+        .map(|(name, (value, ty))| (name.clone(), value.clone(), ty.clone()))
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    for (name, value, ty) in entries {
+        let Some(encoded) = eval_native_user_constant_value(&value, &ty) else {
+            continue;
+        };
+        register_eval_native_user_constant(ctx, context_offset, &name, &encoded);
+    }
+}
+
+/// Emits one user-constant registration call for a scalar or array constant value.
+fn register_eval_native_user_constant(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    name: &str,
+    value: &EvalNativeUserConstantValue,
+) {
+    match value {
+        EvalNativeUserConstantValue::Scalar {
+            kind,
+            word,
+            string_value,
+        } => register_eval_native_scalar_constant(
+            ctx,
+            context_offset,
+            name,
+            *kind,
+            *word,
+            string_value.as_deref(),
+            "__elephc_eval_register_native_user_constant",
+        ),
+        EvalNativeUserConstantValue::Array(elements) => {
+            register_eval_native_user_constant_array(ctx, context_offset, name, elements)
+        }
+    }
+}
+
+/// Emits one array-valued user-constant registration call with its encoded element spec.
+fn register_eval_native_user_constant_array(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    name: &str,
+    elements: &[EvalNativeCallableArrayDefaultElement],
+) {
+    let spec = encode_eval_native_array_default_elements(elements);
     load_eval_context_local_to_arg(ctx, context_offset, 0);
-    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+    emit_eval_constant_name_args(ctx, name);
+    let (spec_label, spec_len) = ctx.data.add_string(&spec);
     abi::emit_symbol_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &name_label,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        &spec_label,
     );
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        spec_len as i64,
     );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_user_constant_array");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
 
-    let (kind, word, string_value) = eval_native_global_constant_abi_value(value, ty)?;
+/// Emits one scalar constant registration call against the requested bridge symbol.
+///
+/// The Core and user registries share this kind/payload ABI shape; only the callee differs.
+fn register_eval_native_scalar_constant(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    name: &str,
+    kind: i64,
+    word: i64,
+    string_value: Option<&str>,
+    symbol_name: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    emit_eval_constant_name_args(ctx, name);
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 3),
@@ -110,16 +212,27 @@ fn register_eval_native_global_constant(
             0,
         );
     }
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_register_native_global_constant");
+    let symbol = ctx.emitter.target.extern_symbol(symbol_name);
     abi::emit_call_label(ctx.emitter, &symbol);
-    Ok(())
+}
+
+/// Materializes one constant name into the shared name pointer/length argument pair.
+fn emit_eval_constant_name_args(ctx: &mut FunctionContext<'_>, name: &str) {
+    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
 }
 
 /// Encodes one prescanned scalar constant for the eval registration ABI.
-fn eval_native_global_constant_abi_value(
+pub(super) fn eval_native_global_constant_abi_value(
     value: &ExprKind,
     ty: &PhpType,
 ) -> Result<(i64, i64, Option<String>)> {

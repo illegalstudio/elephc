@@ -267,6 +267,16 @@ pub(super) fn encode_eval_native_array_default(default: &EvalNativeCallableDefau
     let EvalNativeCallableDefault::Array(elements) = default else {
         return Vec::new();
     };
+    encode_eval_native_array_default_elements(elements)
+}
+
+/// Encodes one array element list into the shared native array-default binary spec.
+///
+/// The spec is a little-endian `u32` element count followed by one encoded element each, so
+/// libelephc-magician's decoder rejects any truncated or trailing input.
+pub(super) fn encode_eval_native_array_default_elements(
+    elements: &[EvalNativeCallableArrayDefaultElement],
+) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&(elements.len() as u32).to_le_bytes());
     for element in elements {

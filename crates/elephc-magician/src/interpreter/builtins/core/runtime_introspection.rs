@@ -12,7 +12,7 @@ use super::super::super::*;
 use super::backtrace_runtime::{eval_debug_backtrace, eval_debug_print_backtrace};
 use super::super::collection_builder::EvalArrayBuilder;
 use super::object_inventory::eval_get_mangled_object_vars;
-use crate::context::EvalErrorHandlerState;
+use crate::context::{EvalErrorHandlerState, EvalNativeUserConstant};
 
 const E_USER_ERROR: i64 = 256;
 const E_USER_WARNING: i64 = 512;
@@ -359,10 +359,14 @@ fn eval_get_defined_constants(
         Some(value) => values.truthy(value)?,
         None => false,
     };
+    let native_user = context.native_user_constant_entries();
     let entries = context.defined_constant_entries();
     if !categorize {
         let core = core_constant_array(context, values)?;
         let mut result = EvalArrayBuilder::from_owned(values, core);
+        for (name, value) in &native_user {
+            result.string(name, |values| eval_native_user_constant(value, values))?;
+        }
         for (name, value) in entries {
             result.string(&name, |values| values.retain(value))?;
         }
@@ -370,7 +374,29 @@ fn eval_get_defined_constants(
     }
     let mut result = EvalArrayBuilder::assoc(values, 2)?;
     result.string("Core", |values| core_constant_array(context, values))?;
-    result.string("user", |values| assoc_from_entries(&entries, values))?;
+    result.string("user", |values| {
+        user_constant_array(&native_user, &entries, values)
+    })?;
+    Ok(result.finish())
+}
+
+/// Builds PHP's `user` constant category from seeded AOT user constants plus eval `define()`s.
+///
+/// Seeded names come first, matching AOT's own categorized inventory, which emits the module's
+/// user constants before appending the eval-context inventory. Both groups are name-sorted, and
+/// the seeded registry never holds an eval-defined name, so no constant appears twice.
+fn user_constant_array(
+    native_user: &[(String, EvalNativeUserConstant)],
+    entries: &[(String, RuntimeCellHandle)],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = EvalArrayBuilder::assoc(values, native_user.len() + entries.len())?;
+    for (name, value) in native_user {
+        result.string(name, |values| eval_native_user_constant(value, values))?;
+    }
+    for (name, value) in entries {
+        result.string(name, |values| values.retain(*value))?;
+    }
     Ok(result.finish())
 }
 

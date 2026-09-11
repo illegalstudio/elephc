@@ -183,7 +183,7 @@ runtime include-execution history.
 | Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, variadic tails, dynamic static receivers (`$class::method()`, `$class::$method()`, and `($expr)::method()`), variable static method names on named receivers (`ClassName::$method()`), braced dynamic static method names (`ClassName::{$method}()` / `$class::{$method}()` / `($expr)::{$method}()`), and by-reference parameters for direct variable, array-element, object-property including dynamic property names, object-property array-element, static-property, and static-property array-element arguments including dynamic receivers and dynamic property names. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same fixed-parameter binding plus positional variadic tails, registered by-reference lvalue validation and writeback target preservation, plus representable scalar/string constant expressions, resolved global/named class-like constants, null, empty-array, supported array-valued, or supported object-valued default arguments for public/protected/private parameters when the current eval class scope satisfies PHP visibility; scalar, nullable, callable, Mixed, array, iterable, object, union, and intersection-object return values are checked and boxed back to eval. Generated AOT method bridge dispatch can invoke visibility-checked non-by-reference signatures plus `mixed`/untyped, scalar including string, nullable scalar, array, iterable, object, and supported union/intersection object shapes, with by-reference parameters limited to the staged scalar/nullable scalar/Mixed/array/iterable/object slice. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty top-level eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, eval-declared-function `__FUNCTION__` / `__METHOD__`, eval-declared-method `__FUNCTION__` / `__METHOD__` / `__CLASS__` / `__TRAIT__`, eval class-like constant/property initializers for `__CLASS__` / `__TRAIT__`, and reflected parameter defaults using the declaring callable scope, including trait-origin names for imported trait members. |
-| Constants | Predefined eval-visible constants, dynamic constants from `define()`, namespaced constant fallback, bare constant fetches, `$class::CONST`, expression-valued static receivers for `($expr)::CONST`, braced dynamic class constant names (`ClassName::{$constant}` / `$class::{$constant}` / `($expr)::{$constant}`), and `$object::class` are supported. |
+| Constants | Predefined eval-visible constants, AOT user-declared `const` / `define()` constants seeded under PHP's `user` category including recursively nested array values, dynamic constants from `define()`, namespaced constant fallback, bare constant fetches, `$class::CONST`, expression-valued static receivers for `($expr)::CONST`, braced dynamic class constant names (`ClassName::{$constant}` / `$class::{$constant}` / `($expr)::{$constant}`), and `$object::class` are supported. |
 | Ternaries | Full ternary and short ternary (`?:`). |
 | Match | Strict pattern comparison, comma-separated patterns, lazy result-arm evaluation, and `default`. A miss without `default` is reported as an eval runtime fatal. |
 
@@ -910,6 +910,37 @@ Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
 `PATHINFO_*`, `PHP_URL_*`, `FNM_*`, `ARRAY_FILTER_USE_*`, `COUNT_*`, and the supported
 `PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
 optional leading `\`, and `define()` cannot replace them.
+
+Constants the compiled program itself declares with `const` or a literal
+`define()` are seeded into the eval context too, under PHP's `user` category
+rather than `Core`. Bare and namespaced constant fetches, `constant()`,
+`defined()`, and both the flat and categorized forms of
+`get_defined_constants()` see them, and `define()` inside a fragment reports the
+usual duplicate-constant warning and returns `false` for one of these names.
+Seeded values cover the scalar and compound shapes native
+`get_defined_constants()` materializes: `null`, booleans, integers, floats,
+strings, negated numeric literals, and nested indexed or associative arrays
+whose keys are integer, boolean, negated-integer, `null`, or string literals.
+PHP's numeric-string key collapsing and last-wins duplicate-key behavior are
+applied exactly as the native inventory applies them, and each array fetch
+materializes a fresh value, so writing to a fetched constant array never writes
+back into the seeded metadata.
+
+Array nesting is bounded rather than unlimited: the eval bridge encodes at most
+16 levels of nested array metadata, while the native inventory materializes an
+array literal to whatever depth the source declares. A constant nested deeper
+than that limit is therefore seeded natively but stays invisible inside eval.
+The same applies to any value that is not one of the forms above: an expression
+the constant folder could not reduce, an object, or a float array key. Such a
+constant is simply skipped, not a compile error and not a new fatal for an
+otherwise unrelated `eval()`; native `get_defined_constants()` rejects the
+object and float-key cases outright as well.
+
+Resource-typed values never appear in AOT-seeded user metadata: the compiler
+declares resource-typed predefined names such as `STDOUT` under `Core`, so a
+seeded `user` entry is always a scalar or an array. A fragment's own
+`define()` can still place a resource into the eval context's dynamic registry,
+and `get_defined_constants(true)` reports that under `user` as PHP does.
 
 The eval interpreter is a separate crate that cannot read `--php-version`
 itself, so the compiler forwards the profile to it: generated code sets it

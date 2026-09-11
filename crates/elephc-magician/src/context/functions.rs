@@ -20,6 +20,20 @@ pub enum EvalNativeGlobalConstant {
     Resource(i64),
 }
 
+/// One AOT *user-declared* global constant registered with a persistent eval context.
+///
+/// This is a separate registry from [`EvalNativeGlobalConstant`] on purpose: PHP reports
+/// user constants under the `user` category, and the values are compiler metadata rather
+/// than runtime cells, so nothing here may be merged into the dynamic `define()` map that
+/// the native constant inventory exports back to AOT.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalNativeUserConstant {
+    /// A scalar constant, sharing the scalar shapes of the Core registry.
+    Scalar(EvalNativeGlobalConstant),
+    /// A recursively nested array constant, keyed exactly as AOT materialized it.
+    Array(Vec<NativeCallableArrayDefaultElement>),
+}
+
 impl ElephcEvalContext {
     /// Registers one AOT global constant for eval fetches and Core introspection.
     pub fn define_native_global_constant(
@@ -59,12 +73,58 @@ impl ElephcEvalContext {
         entries
     }
 
+    /// Registers one AOT user-declared global constant for eval fetches and introspection.
+    ///
+    /// Fails when the name is empty or already registered in either native registry, so a
+    /// seeded name can never be duplicated by a second registration call. A name already
+    /// present in the dynamic `define()` map is rejected too, and left untouched, so a late
+    /// seeding call can never shadow or replace a constant a fragment already defined.
+    pub fn define_native_user_constant(
+        &mut self,
+        name: &str,
+        value: EvalNativeUserConstant,
+    ) -> bool {
+        let key = normalize_constant_name(name);
+        if key.is_empty()
+            || self.native_user_constants.contains_key(&key)
+            || self.native_global_constants.contains_key(&key)
+            || self.constants.contains_key(&key)
+        {
+            return false;
+        }
+        self.native_user_constants.insert(key, value);
+        true
+    }
+
+    /// Returns one registered AOT user constant by its case-sensitive PHP name.
+    pub fn native_user_constant(&self, name: &str) -> Option<&EvalNativeUserConstant> {
+        self.native_user_constants
+            .get(&normalize_constant_name(name))
+    }
+
+    /// Returns whether an AOT user constant is registered under the requested name.
+    pub fn has_native_user_constant(&self, name: &str) -> bool {
+        self.native_user_constant(name).is_some()
+    }
+
+    /// Returns registered AOT user constants in stable PHP-visible name order.
+    pub(crate) fn native_user_constant_entries(&self) -> Vec<(String, EvalNativeUserConstant)> {
+        let mut entries = self
+            .native_user_constants
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
     /// Defines an eval dynamic constant value, failing if the name is invalid or already present.
     pub fn define_constant(&mut self, name: &str, value: RuntimeCellHandle) -> bool {
         let key = normalize_constant_name(name);
         if key.is_empty()
             || self.constants.contains_key(&key)
             || self.native_global_constants.contains_key(&key)
+            || self.native_user_constants.contains_key(&key)
         {
             return false;
         }

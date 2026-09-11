@@ -181,11 +181,34 @@ pub(in crate::interpreter) fn materialize_native_callable_default(
 }
 
 /// Allocates one array-valued native AOT parameter default with fresh element cells.
-pub(super) fn materialize_native_callable_array_default(
+pub(super) fn materialize_native_callable_array_default<V: RuntimeValueOps>(
     elements: &[NativeCallableArrayDefaultElement],
     context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
+    values: &mut V,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    materialize_native_callable_array_default_elements(
+        elements,
+        values,
+        |value: &NativeCallableDefault, values: &mut V| {
+            materialize_native_callable_default(value, context, values)
+        },
+    )
+}
+
+/// Allocates one array metadata value with fresh element cells and PHP auto-index keys.
+///
+/// `element_value` materializes each element payload, letting callers that cannot supply an
+/// eval context (AOT user constants) reuse the same key normalization, auto-index sequence,
+/// and copy-on-write insertion path as constructor and parameter defaults.
+pub(in crate::interpreter) fn materialize_native_callable_array_default_elements<V, F>(
+    elements: &[NativeCallableArrayDefaultElement],
+    values: &mut V,
+    mut element_value: F,
+) -> Result<RuntimeCellHandle, EvalStatus>
+where
+    V: RuntimeValueOps,
+    F: FnMut(&NativeCallableDefault, &mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+{
     let has_string_key = elements.iter().any(|element| {
         matches!(
             element.key,
@@ -200,7 +223,7 @@ pub(super) fn materialize_native_callable_array_default(
     let mut next_auto_key = 0;
     for element in elements {
         array.entry(
-            |values| materialize_native_callable_default(&element.value, context, values),
+            |values| element_value(&element.value, values),
             |values, _| match &element.key {
                 Some(NativeCallableArrayDefaultKey::Int(value)) => {
                     if *value >= next_auto_key {
