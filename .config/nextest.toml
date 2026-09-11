@@ -82,6 +82,17 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(parity_function_first_class_callable_dispatch)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# This single-compile fixture force-loads the full PDO surface and static archive. Its first
+# cold run reached the 60s boundary on Linux x86_64 and macOS, while the isolated retries
+# passed, so keep the global budget unchanged and allow this exact link to finish once.
+[[profile.default.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=dynamic_argument_tracks_linked_bridges)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=dynamic_argument_tracks_linked_bridges)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # The `codegen::eval` fixtures compile, link (against the Magician staticlib), and
 # run several programs per test — five in the largest — at ~7-8s per program on
 # a fast Linux box and appreciably more on the shared macOS runners, where the

@@ -2511,3 +2511,21 @@ the workflow change. YAML parsing and semantic comparison verify that unrelated
 jobs are untouched, all four partitions are present, and selection and gate
 semantics are preserved. Diff hygiene passes. No local tests execute; the next
 exact-head matrix must establish that all partitions complete successfully.
+
+### Let the measured cold PDO contract finish without a timeout retry
+
+The same run terminates dynamic_argument_tracks_linked_bridges at 60 seconds
+on x86 and macOS, then passes the unchanged test on isolated retries in 21.987
+and 34.556 seconds. This test already performs just one compile and one run;
+its forced PDO path processes the complete prelude and force-loads the debug
+bridge archive. Replacing PDO with a lighter bridge would discard its intended
+linked-extension coverage, not remove the other required PDO compilations.
+
+Add default and CI 180-second budgets for only this exact test and binary. Keep
+the global timeout and its PDO/output assertions unchanged. Add compile and run
+timings to separate those phases in future timeout diagnostics. Do not infer an
+ARM-specific test timeout from its unrelated job-deadline cancellation.
+
+Native Sol reviewed the forced-prelude and linking path and implemented the
+scoped adjustment. Cargo check --test extension_loaded_tests, TOML parsing,
+exact override validation and diff hygiene pass. No local tests execute.
