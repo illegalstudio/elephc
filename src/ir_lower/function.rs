@@ -41,9 +41,12 @@ type AstParams = [(
     bool,
 )];
 
-const EVAL_AOT_SCOPE_PARAM: &str = "__eir_eval_scope";
-
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
+/// Scope handle a scope-aware AOT eval fragment receives by value.
+///
+/// Both spellings live in `crate::names` so the EIR producer here and every backend
+/// exact-name lookup read one definition, and so both carry the generated-local marker
+/// that keeps them out of the fragment's `get_defined_vars()`.
+const EVAL_AOT_SCOPE_PARAM: &str = crate::names::EVAL_AOT_SCOPE_LOCAL;
 
 /// Compile-time callable binding to seed for a self-recursive closure capture.
 struct RecursiveClosureBinding {
@@ -280,7 +283,11 @@ pub(crate) fn lower_class_method(
     let mut env = env_from_signature(&signature, web);
     let mut body_params = signature.params.clone();
     if is_static {
-        let hidden_called_class = (CALLED_CLASS_ID_PARAM.to_string(), PhpType::Int);
+        // The hidden late-static-binding argument keeps its leading position and its `Int`
+        // type; only the NAME is the marked one from `crate::names`, so the slot stays
+        // invisible to `get_defined_vars()` and to eval scope synchronization.
+        let hidden_called_class =
+            (crate::names::CALLED_CLASS_ID_LOCAL.to_string(), PhpType::Int);
         function.params.push(FunctionParam {
             name: hidden_called_class.0.clone(),
             ir_type: value_ir_type(&hidden_called_class.1),

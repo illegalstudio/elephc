@@ -28,8 +28,6 @@ use super::{
 };
 use crate::codegen::{CodegenIrError, Result};
 
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
-
 /// Resolved direct static property metadata for symbol-backed storage.
 struct StaticPropertySlot {
     declaring_class: String,
@@ -356,7 +354,7 @@ fn emit_called_class_id_to_reg(
     ctx: &mut FunctionContext<'_>,
     dest_reg: &str,
 ) -> Result<bool> {
-    let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) else {
+    let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) else {
         return Ok(false);
     };
     let offset = ctx.local_offset(slot)?;

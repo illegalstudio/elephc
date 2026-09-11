@@ -6,6 +6,11 @@
 //!
 //! Key details:
 //! - Only storage types that safely round-trip through Mixed are selected.
+//! - Compiler-generated frame and parser temporaries are excluded here, which is the single
+//!   choke point both the pre-eval FLUSH and the post-eval RELOAD read. Leaking one of them
+//!   would publish `__elephc_func_args#gen` into the eval scope, let `get_defined_vars()`
+//!   inside the fragment report it as a PHP variable, and let an eval assignment to that name
+//!   be written back over the frame's hidden argument collector or its actual-argument count.
 
 use super::*;
 
@@ -36,6 +41,11 @@ fn eval_sync_function_locals(function: &Function) -> Vec<EvalSyncLocal> {
             } else {
                 stored_name
             };
+            // The marker survives the `#cow` strip above, so a privatized hidden local is
+            // caught here too.
+            if crate::names::is_generated_local_name(name) {
+                return None;
+            }
             let ty = local.php_type.codegen_repr();
             eval_sync_type_supported(&ty).then_some(EvalSyncLocal {
                 name: name.to_string(), slot: local.id, ty,
@@ -332,5 +342,34 @@ mod tests {
         let actual = eval_sync_function_locals(&function).into_iter()
             .map(|local| (local.name, local.slot)).collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    /// Compiler-generated frame locals never enter the inventory, privatized ones included.
+    ///
+    /// This is the single list both the pre-eval flush and the post-eval reload read, so a name
+    /// appearing here would be publishable to `get_defined_vars()` inside the fragment AND
+    /// writable back over the frame's hidden argument state. The user variable spelled like a
+    /// hidden local's readable stem is in the same fixture to pin that the filter keys on the
+    /// unforgeable marker rather than on the `__elephc_` prefix.
+    #[test]
+    fn eval_inventory_excludes_generated_frame_locals() {
+        let mut function = Function::new("hidden_scope".to_string(), IrType::Void, PhpType::Void);
+        let visible = function.add_local(
+            Some("__elephc_func_arg_value".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        for hidden in [
+            crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            crate::func_args::HIDDEN_ARGC_PARAM.to_string(),
+            crate::names::generated_local_name("__elephc_foreach_3_9"),
+            format!("{}#cow", crate::func_args::HIDDEN_ARGS_PARAM),
+        ] {
+            function.add_local(Some(hidden), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        }
+        let actual = eval_sync_function_locals(&function).into_iter()
+            .map(|local| (local.name, local.slot)).collect::<Vec<_>>();
+        assert_eq!(actual, vec![("__elephc_func_arg_value".to_string(), visible)]);
     }
 }

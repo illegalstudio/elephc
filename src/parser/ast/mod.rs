@@ -35,4 +35,8 @@ pub use types::TypeExpr;
 /// `crate::ir_lower::stmt::nested_append`). It lives here, on the AST, because it is the shared
 /// contract between those two — and it must not be reused by any other desugar, or that
 /// recognizer would claim statements it does not own.
+///
+/// The minted name also carries `crate::names::GENERATED_LOCAL_MARKER` as a suffix, which is
+/// what keeps it out of `get_defined_vars()` and eval scope synchronization; the prefix match
+/// here is unaffected by that suffix.
 pub const NESTED_APPEND_TEMP_PREFIX: &str = "__elephc_napp_";

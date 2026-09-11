@@ -16,6 +16,72 @@
 
 use crate::support::*;
 
+/// An AOT function with an optional parameter reports the same frame whether eval or AOT calls it.
+///
+/// Eval-registered natives are bound through the same descriptor container as `call_user_func`,
+/// so an omitted optional must not be counted as a supplied argument on either path.
+#[test]
+fn test_eval_call_matches_direct_call_for_optional_parameter_frames() {
+    let out = compile_and_run(r#"<?php
+function optionalTallyFrame($first, $second = 2) {
+    return func_num_args() . ":" . implode(",", func_get_args());
+}
+echo optionalTallyFrame(1), "|", optionalTallyFrame(1, 5), "|";
+$source = 'echo optionalTallyFrame(1), "|", optionalTallyFrame(1, 5);' . ' // ' . $argc;
+eval($source);
+"#);
+    assert_eq!(out, "1:1|2:1,5|1:1|2:1,5");
+}
+
+/// An eval fragment sees the enclosing AOT frame's PHP variables and none of its hidden locals.
+///
+/// The enclosing function carries every hidden local this pass can mint (the argument collector,
+/// the actual-argument count) plus a parser-generated `foreach` destructuring temporary, and the
+/// fragment proves three separate things about them:
+///
+/// - No name carrying `crate::names::GENERATED_LOCAL_MARKER` reaches the eval scope at all. The
+///   scan is written over `str_contains($name, "#")` rather than a fixed list, so a generated
+///   local added later cannot slip through by not being enumerated here.
+/// - A user variable that merely SPELLS a hidden local's readable stem stays visible. PHP source
+///   can legally declare `$__elephc_func_arg_value`, and hiding on the prefix would erase it.
+/// - Assigning those stems inside the fragment cannot reach the frame's hidden state: the
+///   post-eval reload consults the same inventory as the flush, so `func_num_args()` and
+///   `func_get_args()` still describe the real call after the fragment ran.
+///
+/// `$visible` is written by the fragment and read afterwards, so the test also fails if the
+/// filtering broke ordinary scope synchronization instead of only excluding hidden locals.
+#[test]
+fn test_eval_scope_sync_excludes_hidden_frame_locals_only() {
+    // The fixture greps eval scope names for the `#` marker, so it needs a `r##` raw string:
+    // the `"#` inside `str_contains($name, "#")` would close an `r#` one.
+    let out = compile_and_run(r##"<?php
+function evalScopeFrameProbe($first, $second = 5) {
+    $visible = "before";
+    $__elephc_func_arg_value = "user";
+    foreach ([[1, 2]] as [$left, $right]) { $visible = "pair" . $left . $right; }
+    $probe = 'echo array_key_exists("__elephc_func_args", get_defined_vars()) ? "leak" : "clean";
+        echo array_key_exists("__elephc_func_argc", get_defined_vars()) ? "leak" : "clean";
+        echo array_key_exists("__elephc_func_arg_value", get_defined_vars()) ? "user" : "hidden";
+        $marked = 0;
+        foreach (array_keys(get_defined_vars()) as $name) {
+            if (str_contains($name, "#")) { $marked = $marked + 1; }
+        }
+        echo $marked;
+        $__elephc_func_args = "clobber";
+        $__elephc_func_argc = 99;
+        $visible = "after";';
+    eval($probe . ' // ' . $first);
+    return ":" . $visible . ":" . $__elephc_func_arg_value . ":"
+        . func_num_args() . ":" . implode(",", func_get_args());
+}
+echo evalScopeFrameProbe(1), "|", evalScopeFrameProbe(1, 2, 3);
+"##);
+    assert_eq!(
+        out,
+        "cleancleanuser0:after:user:1:1|cleancleanuser0:after:user:3:1,2,3"
+    );
+}
+
 /// Eval argument frames stay outside PHP variables, including formerly colliding parameter names.
 #[test]
 fn test_eval_func_args_metadata_does_not_shadow_php_variables() {

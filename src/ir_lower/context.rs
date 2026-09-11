@@ -932,11 +932,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns definitely visible PHP locals in declaration order for scope introspection.
+    ///
+    /// Compiler-generated frame and parser temporaries are `PhpLocal`s like any other by the
+    /// time lowering sees them, so they are excluded by the one shared name predicate rather
+    /// than by a `LocalKind` of their own: nothing about their ownership, initialization or
+    /// store behaviour differs, only their visibility to PHP.
+    ///
+    /// The bound `$this` of a method frame is excluded for the separate, PHP-semantic reason
+    /// spelled out at the filter below, and only here.
     pub(crate) fn visible_local_names(&self) -> Vec<String> {
         let mut locals = self
             .local_slots
             .iter()
             .filter_map(|(name, slot)| {
+                if crate::names::is_generated_local_name(name.as_str()) {
+                    return None;
+                }
+                // PHP never lists `$this` in `get_defined_vars()`. It is not a variable of the
+                // frame: it is the bound object of the method call, which is why PHP also
+                // refuses to assign to it. The slot keeps its name and its `PhpLocal` kind, so
+                // eval scope synchronization still publishes `$this` into a fragment, where PHP
+                // does make it readable; only this PHP-visible enumeration drops it.
+                if name.as_str() == "this" {
+                    return None;
+                }
                 let kind = self
                     .local_kinds
                     .get(name)
@@ -1130,10 +1149,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// `LocalKind::PhpLocal` gives it exactly the ownership rules the equivalent user-written
     /// assignment would have. The `__eir_` prefix cannot appear in PHP source, so the name can
     /// never collide with a user variable.
+    ///
+    /// The name additionally carries `crate::names::GENERATED_LOCAL_MARKER`. The prefix alone is
+    /// a convention the compiler trusts, not a rule PHP enforces, and this temporary is a
+    /// `PhpLocal` precisely so its ownership matches a user assignment: without the marker it
+    /// was enumerated as a PHP variable and `get_defined_vars()` reported `$__eir_place0` from
+    /// any function that sorted a property. Only the name changes; the kind and every store,
+    /// retain and release stay exactly as they were.
     pub(crate) fn declare_synthetic_php_local(&mut self, php_type: PhpType) -> String {
-        let name = format!("__eir_place{}", self.hidden_temp_counter);
-        self.hidden_temp_counter += 1;
+        let name = self.next_synthetic_place_local_name();
         self.declare_local_with_kind(&name, php_type, LocalKind::PhpLocal);
+        name
+    }
+
+    /// Mints the next synthetic place temporary name from the shared frame counter.
+    ///
+    /// The single spelling site for both place temporaries, so the marker cannot be applied to
+    /// one and forgotten on the other.
+    fn next_synthetic_place_local_name(&mut self) -> String {
+        let name = crate::names::synthetic_place_local_name(self.hidden_temp_counter);
+        self.hidden_temp_counter += 1;
         name
     }
 
@@ -2766,8 +2801,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// with every other ref-cell owner in the frame prologue, so publishing it in the unwind
     /// chain before anything can be adopted into it is a no-op for cleanup.
     pub(crate) fn predeclare_returned_ref_cell_staging(&mut self) -> (String, LocalSlotId) {
-        let staged = format!("__eir_place{}", self.hidden_temp_counter);
-        self.hidden_temp_counter += 1;
+        let staged = self.next_synthetic_place_local_name();
         let owner = self.declare_ref_cell_owner(&staged, PhpType::Mixed);
         (staged, owner)
     }

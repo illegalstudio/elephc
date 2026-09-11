@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for closures, closure array-literal returns, expr calls, language features, constants and system, state and variadics, argument introspection, and callable strings.
+//! - Submodules group focused fixtures for closures, closure array-literal returns, expr calls, language features, constants and system, state and variadics, argument introspection, callable strings, and compiler-generated local visibility.
 
 mod boxed_calls;
 mod callable_strings;
@@ -25,6 +25,7 @@ mod core_reflection_regressions;
 mod core_native_subclasses;
 mod core_inventory_regressions;
 mod core_backtrace_regressions;
+mod core_generated_local_visibility;
 mod core_runtime_introspection;
 mod state_and_variadics;
 mod pipe;

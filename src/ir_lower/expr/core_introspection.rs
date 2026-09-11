@@ -27,6 +27,9 @@ pub(super) fn lower_visible_defined_vars(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
 ) -> LoweredValue {
+    // `visible_local_names` already drops every compiler-generated frame and parser temporary,
+    // which matters far beyond `func_*` users: once the backtrace gate fires, EVERY function in
+    // the program receives the hidden argument collector.
     let names = ctx.visible_local_names();
     let hash_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Str),

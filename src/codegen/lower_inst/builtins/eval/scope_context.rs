@@ -249,13 +249,13 @@ pub(super) fn emit_eval_called_class_name_result_x86_64(ctx: &mut FunctionContex
 
 /// Returns true when the current method frame can provide a late-static class id.
 pub(super) fn eval_late_static_class_id_available(ctx: &FunctionContext<'_>) -> bool {
-    ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM).is_some()
+    ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL).is_some()
         || ctx.local_slot_by_name("this").is_some()
 }
 
 /// Loads the late-static class id from the hidden static slot or `$this`.
 pub(super) fn emit_eval_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) -> Result<()> {
-    if let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) {
+    if let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) {
         let offset = ctx.local_offset(slot)?;
         abi::load_at_offset(ctx.emitter, reg, offset);
         return Ok(());

@@ -273,7 +273,7 @@ pub(super) fn resolve_static_called_class_arg(
 ) -> Result<CalledClassIdArg> {
     let receiver_label = receiver_label.trim_start_matches('\\');
     if matches!(receiver_label, "self" | "parent" | "static") {
-        if let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) {
+        if let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) {
             return Ok(CalledClassIdArg::Local(slot));
         }
         if let Some(slot) = ctx.local_slot_by_name("this") {

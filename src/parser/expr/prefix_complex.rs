@@ -304,13 +304,18 @@ fn infer_arrow_captures(
 }
 
 /// Records `name` as an arrow capture unless it is bound locally or already recorded.
+///
+/// A compiler-generated temporary is recognised through [`crate::names::is_generated_local_name`],
+/// the one shared predicate, rather than through an `__elephc` spelling. The prefix is forgeable
+/// from source: `$__elephc_tag` is a perfectly legal PHP variable, and filtering on the prefix
+/// silently dropped it from an arrow function's capture list, so the body read an unset variable.
 fn push_arrow_capture(
     name: &str,
     bound: &HashSet<String>,
     seen: &mut HashSet<String>,
     captures: &mut Vec<String>,
 ) {
-    if bound.contains(name) || name.starts_with("__elephc") {
+    if bound.contains(name) || crate::names::is_generated_local_name(name) {
         return;
     }
     if seen.insert(name.to_string()) {

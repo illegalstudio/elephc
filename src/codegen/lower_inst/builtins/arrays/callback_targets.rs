@@ -200,7 +200,7 @@ pub(super) fn current_callback_class<'a>(ctx: &'a FunctionContext<'_>) -> Result
 
 /// Returns the current called-class id source available to a late-static callback.
 pub(super) fn static_callback_env_source(ctx: &FunctionContext<'_>) -> Result<StaticCallbackEnvSource> {
-    if let Some(slot) = ctx.local_slot_by_name("__elephc_called_class_id") {
+    if let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) {
         return Ok(StaticCallbackEnvSource::Local(slot));
     }
     if let Some(slot) = ctx.local_slot_by_name("this") {

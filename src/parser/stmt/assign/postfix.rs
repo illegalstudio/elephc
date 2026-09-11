@@ -802,10 +802,10 @@ impl EffectfulTargetLowerer {
 
     /// Returns a unique synthetic temporary name for this lowered statement.
     fn next_temp_name(&mut self) -> String {
-        let name = format!(
+        let name = crate::names::generated_local_name(&format!(
             "__elephc_compound_{}_{}_{}",
             self.span.line, self.span.col, self.next_temp
-        );
+        ));
         self.next_temp += 1;
         name
     }
@@ -817,13 +817,13 @@ impl EffectfulTargetLowerer {
     /// lower it as a fused, in-place append instead of the read/copy/write-back it desugars
     /// to here. `next_temp_name`'s prefix is shared with the `.=` / `+=` desugars, which emit
     /// the same statement shapes, so it cannot serve as that signal. PHP source cannot forge
-    /// either lock: the name is not a legal PHP identifier and `StmtKind::Synthetic` has no
-    /// surface syntax.
+    /// either lock: the name carries `crate::names::GENERATED_LOCAL_MARKER`, whose `#` is not a
+    /// legal PHP identifier character, and `StmtKind::Synthetic` has no surface syntax.
     fn next_nested_append_temp_name(&mut self) -> String {
-        let name = format!(
+        let name = crate::names::generated_local_name(&format!(
             "{}{}_{}_{}",
             NESTED_APPEND_TEMP_PREFIX, self.span.line, self.span.col, self.next_temp
-        );
+        ));
         self.next_temp += 1;
         name
     }

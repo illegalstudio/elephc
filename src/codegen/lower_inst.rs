@@ -148,7 +148,6 @@ pub(super) use runtime_wrappers::{
     runtime_builtin_wrapper_sig,
 };
 
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
 
 /// Lowers one EIR instruction by opcode.

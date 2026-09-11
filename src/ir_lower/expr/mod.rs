@@ -851,7 +851,7 @@ fn array_splice_receiver_local(
     if !ctx.has_local_slot(name) || ctx.is_ref_bound_local(name) {
         return None;
     }
-    if name.starts_with("__eir_place") {
+    if name.starts_with(crate::names::SYNTHETIC_PLACE_LOCAL_STEM) {
         return None;
     }
     Some((name.clone(), receiver.span))

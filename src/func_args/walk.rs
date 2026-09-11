@@ -20,6 +20,15 @@
 //! - Parameter defaults, class constant initialisers, property defaults and enum case
 //!   values are PHP constant expressions and cannot contain a function call, so they carry
 //!   no introspection call to rewrite and are not walked.
+//! - The same walk also answers `program_uses_backtrace()`, the gate that decides whether
+//!   every frame keeps its hidden argument snapshot. That gate must never under-approximate:
+//!   `crate::codegen::frame::module_uses_backtrace()` independently enables backtraces for
+//!   any program carrying the eval bridge, and a frame lowered without the snapshot would
+//!   then report missing or stale arguments. It therefore also fires on `eval()`, on a
+//!   first-class callable naming a backtrace builtin, and on any string literal spelling one,
+//!   which conservatively covers literal `call_user_func*` and string-variable callables.
+//!   A surviving dynamic `include`/`require` is deliberately not a trigger: it lowers to a
+//!   runtime stub that cannot execute PHP source, so it can reach no new frame.
 
 use crate::errors::CompileError;
 use crate::names::{Name, NameKind};
@@ -28,7 +37,10 @@ use crate::parser::ast::{
     TypeExpr,
 };
 
-use super::{build, IntrospectionCall, HIDDEN_ARGC_PARAM, HIDDEN_ARGS_PARAM};
+use super::{
+    build, IntrospectionCall, HIDDEN_ARGC_PARAM, HIDDEN_ARGS_PARAM, SNAPSHOT_KEY_LOCAL,
+    SNAPSHOT_VALUE_LOCAL,
+};
 
 /// The argument frame of the function-like scope currently being walked.
 struct Scope {
@@ -363,9 +375,17 @@ impl Rewriter {
     /// three introspection calls.
     fn walk_expr(&mut self, expr: &mut Expr) {
         match &mut expr.kind {
+            // A string literal is the only leaf that can name a callable, and every
+            // dynamic backtrace form (literal `call_user_func*`, a callable held in a
+            // variable, a callable array entry) spells the name through one.
+            ExprKind::StringLiteral(literal) => {
+                if string_literal_names_backtrace(literal) {
+                    self.saw_backtrace = true;
+                }
+            }
+
             // Leaves and identifier-only forms.
-            ExprKind::StringLiteral(_)
-            | ExprKind::IntLiteral(_)
+            ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::Null
@@ -516,6 +536,9 @@ impl Rewriter {
             ExprKind::FirstClassCallable(target) => {
                 match target {
                     CallableTarget::Function(name) => {
+                        if name_is_backtrace(name) {
+                            self.saw_backtrace = true;
+                        }
                         if let Some(call) = IntrospectionCall::from_name(name) {
                             self.errors.push(CompileError::new(
                                 expr.span,
@@ -557,10 +580,7 @@ impl Rewriter {
         let ExprKind::FunctionCall { name, args } = &expr.kind else {
             return;
         };
-        if name.last_segment().is_some_and(|name| {
-            name.eq_ignore_ascii_case("debug_backtrace")
-                || name.eq_ignore_ascii_case("debug_print_backtrace")
-        }) {
+        if name_is_backtrace(name) || name_is_eval(name) {
             self.saw_backtrace = true;
         }
         if !self.rewrite_introspection {
@@ -663,11 +683,68 @@ fn literal_call_user_func_introspection(
     }
 }
 
-/// Returns whether the resolved program contains a direct Core backtrace call.
-pub(super) fn program_uses_backtrace(program: &[Stmt]) -> bool {
-    let mut scratch = program.to_vec();
+/// Returns whether an unqualified name segment spells one of PHP's Core backtrace builtins.
+///
+/// Both spellings are matched case-insensitively, exactly as PHP resolves function names.
+fn segment_is_backtrace(segment: &str) -> bool {
+    segment.eq_ignore_ascii_case("debug_backtrace")
+        || segment.eq_ignore_ascii_case("debug_print_backtrace")
+}
+
+/// Returns whether a resolved call name refers to a Core backtrace builtin.
+///
+/// Matching the unqualified last segment accepts `debug_backtrace`, `\debug_backtrace` and
+/// the `Foo\debug_backtrace` an unqualified call inside a namespace resolves to.
+fn name_is_backtrace(name: &Name) -> bool {
+    name.last_segment().is_some_and(segment_is_backtrace)
+}
+
+/// Returns whether a resolved call name is `eval()`.
+///
+/// Eval-originated PHP can request a backtrace over AOT frames at runtime, which the gate
+/// cannot see in the AST, so any eval call keeps every frame's hidden argument snapshot.
+fn name_is_eval(name: &Name) -> bool {
+    name.last_segment()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("eval"))
+}
+
+/// Returns whether a string literal spells a Core backtrace builtin as a callable name.
+///
+/// PHP accepts one optional leading namespace separator in a callable string, so exactly one
+/// is stripped before the comparison.
+fn string_literal_names_backtrace(literal: &str) -> bool {
+    segment_is_backtrace(literal.strip_prefix('\\').unwrap_or(literal))
+}
+
+/// Returns whether the resolved program can reach a Core backtrace over AOT frames.
+///
+/// Deliberately conservative: a false positive only costs every frame its hidden argument
+/// snapshot, while a false negative produces a backtrace with missing arguments.
+///
+/// The gate runs in the `func-args` pipeline phase, which is BEFORE `optimize::fold_constants`
+/// (`crate::pipeline`), so a callable name that only becomes a literal through folding, such as
+/// `call_user_func('debug_' . 'backtrace')`, is not yet a single literal when the detector looks
+/// at it. Coverage is therefore conservative in one direction only: every spelling that is
+/// already a literal, a direct call, or a first-class callable IS detected, and `eval()` is a
+/// trigger in its own right, so eval-originated backtraces stay covered whatever they spell.
+/// A name assembled at runtime and called indirectly remains outside this gate by construction,
+/// which no phase ordering could fix. Moving the gate after folding would widen detection only
+/// for the degenerate folded-literal case while making the detector and the rewriting walk see
+/// different ASTs, so the ordering is deliberate rather than incidental.
+///
+/// The detector reuses the rewriting walk so the two can never disagree about which syntax is
+/// reachable, and it takes `&mut` only because that walk does. With `capture_all_frames` and
+/// `rewrite_introspection` both off it writes NOTHING: the only expression rewrite
+/// (`try_rewrite_call`) returns before it on `!rewrite_introspection`, `Scope::used` starts at
+/// `capture_all_frames` and is set solely by `scope_replacement` on that same path, and
+/// `walk_function_scope` does descend into every `body` (that is how a backtrace call nested
+/// inside a function is found at all), but it returns before the `params`/`variadic`/`body`
+/// MUTATIONS while `used` is false. Borrowing the real program instead of cloning it keeps
+/// this gate off the compiler's allocation path for every program, including the ones that
+/// never mention a backtrace.
+pub(super) fn program_uses_backtrace(program: &mut [Stmt]) -> bool {
     let mut detector = Rewriter::new(false, false);
-    detector.walk_stmts(&mut scratch);
+    detector.walk_stmts(program);
     detector.saw_backtrace
 }
 
@@ -692,8 +769,8 @@ fn source_variadic_snapshot(
         },
         span,
     );
-    let key_name = "__elephc_func_arg_key".to_string();
-    let value_name = "__elephc_func_arg_value".to_string();
+    let key_name = SNAPSHOT_KEY_LOCAL.to_string();
+    let value_name = SNAPSHOT_VALUE_LOCAL.to_string();
     let key = Expr::new(ExprKind::Variable(key_name.clone()), span);
     let is_positional = Expr::new(
         ExprKind::FunctionCall {
