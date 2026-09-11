@@ -66,7 +66,12 @@ mod tests {
             for source in [PhpType::Mixed, PhpType::Str, PhpType::Int, PhpType::php_array()] {
                 let mut emitter = Emitter::new(Target::parse(target).unwrap());
                 let owners = super::super::InvokerArgumentOwners::new(super::super::INVOKER_BOUNDARY_FRAME_SIZE, 1);
-                let mut ctx = InvokerEmitContext::new("callable_argument", owners, false);
+                let mut ctx = InvokerEmitContext::new(
+                    "callable_argument",
+                    owners,
+                    false,
+                    super::super::InvokerArgMode::PublicRaw,
+                );
                 let result = coerce(&mut emitter, &mut ctx, &mut DataSection::new(), &source, Some(&PhpType::Callable));
                 assert_eq!(result, (PhpType::Callable, true), "{target}: {source:?}");
                 let asm = emitter.output();

@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Descriptor invokers emitted here use `InvokerArgMode::PublicRaw` so public callers
+//!   pass raw user arguments and never a hidden argc/count prefix.
 
 use super::*;
 
@@ -27,7 +29,8 @@ pub(super) fn emit_runtime_callable_invoker_with_string_owner(
 ) -> String {
     ctx.shared.callable_argument_normalizer |=
         crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
-    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures, owns_string_return) {
+    let arg_mode = crate::codegen::runtime_callable_invoker::InvokerArgMode::PublicRaw;
+    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures, owns_string_return, arg_mode) {
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
@@ -37,6 +40,7 @@ pub(super) fn emit_runtime_callable_invoker_with_string_owner(
         sig,
         captures,
         owns_string_return,
+        arg_mode,
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
     // enclosing function back before continuing it, or its tail lands in there.
@@ -46,7 +50,7 @@ pub(super) fn emit_runtime_callable_invoker_with_string_owner(
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, owns_string_return, &label);
+        .cache_runtime_callable_invoker(sig, captures, owns_string_return, arg_mode, &label);
     label
 }
 

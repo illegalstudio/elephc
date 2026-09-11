@@ -323,6 +323,28 @@ echo spread(...[1, 2, 3, 4]), "|", call_user_func('spread', 1, 2);
     assert_eq!(out, "4|2");
 }
 
+/// Public descriptor invokers synthesize hidden argument metadata without consuming user slots.
+#[test]
+fn test_func_args_through_public_first_class_and_named_callable_forms() {
+    let out = compile_and_run(
+        r#"<?php
+function optional_frame($a = 10, $b = 20) {
+    return func_num_args() . ":" . implode(",", func_get_args());
+}
+function variadic_frame($a = 10, $b = 20, ...$rest) {
+    return func_num_args() . ":" . implode(",", func_get_args());
+}
+$optional = optional_frame(...);
+$variadic = variadic_frame(...);
+echo $optional(b: 2), "|";
+echo call_user_func($optional, b: 3), "|";
+echo $variadic(b: 4), "|";
+echo call_user_func($variadic, 1, 2, 3, named: 5);
+"#,
+    );
+    assert_eq!(out, "2:10,2|2:10,3|2:10,4|3:1,2,3");
+}
+
 /// Verifies PHP's literal `call_user_func*` special cases inspect the caller's frame.
 #[test]
 fn test_func_args_support_literal_call_user_func_forms() {

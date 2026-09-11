@@ -7,8 +7,10 @@
 //! Key details:
 //! - Visibility and descriptor-invoker compatibility remain explicit gates.
 //! - Inline invokers restore the caller's ELF section before registration resumes.
+//! - Registered native free-function callbacks use `InvokerArgMode::EvalPrebound`.
 
 use super::*;
+use crate::codegen::runtime_callable_invoker::InvokerArgMode;
 
 /// Returns true when eval can enforce this instance method visibility in the bridge.
 pub(super) fn class_method_visibility_bridge_supported(class_info: &ClassInfo, method_name: &str) -> bool {
@@ -180,6 +182,7 @@ pub(super) fn emit_eval_native_function_invoker_inline(
         captures: &captures,
         owns_string_return: ctx.module.functions.iter().find(|function| function.name == name)
             .is_some_and(crate::codegen::runtime_callable_invoker::function_returns_owned_string),
+        arg_mode: InvokerArgMode::EvalPrebound,
     };
     let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);

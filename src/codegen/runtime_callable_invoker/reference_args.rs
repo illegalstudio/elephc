@@ -63,7 +63,12 @@ mod tests {
             for ty in [PhpType::Int, PhpType::Str, PhpType::php_array(), PhpType::Object("Value".into())] {
                 let mut emitter = Emitter::new(Target::parse(target).unwrap());
                 let owners = super::super::InvokerArgumentOwners::new(super::super::INVOKER_BOUNDARY_FRAME_SIZE, 1);
-                let mut ctx = InvokerEmitContext::new("ref_argument", owners, false);
+                let mut ctx = InvokerEmitContext::new(
+                    "ref_argument",
+                    owners,
+                    false,
+                    super::super::InvokerArgMode::PublicRaw,
+                );
                 push_owned_cell(&mut emitter, &mut ctx, 0, &ty);
                 let asm = emitter.output();
                 assert_eq!(asm.matches("__rt_reference_cell_new").count(), 1, "{target}: {ty:?}");
@@ -81,7 +86,12 @@ mod tests {
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(target).unwrap());
             let owners = super::super::InvokerArgumentOwners::new(super::super::INVOKER_BOUNDARY_FRAME_SIZE, 1);
-            let mut ctx = InvokerEmitContext::new("ref_hash_argument", owners, false);
+            let mut ctx = InvokerEmitContext::new(
+                "ref_hash_argument",
+                owners,
+                false,
+                super::super::InvokerArgMode::PublicRaw,
+            );
             push_owned_boxed_value(&mut emitter, &mut ctx, &mut DataSection::new(), 0, Some(&PhpType::Mixed));
             let asm = emitter.output();
             assert!(asm.find("__rt_reference_cell_new").unwrap() < asm.find("__rt_decref_mixed").unwrap(), "{target}");

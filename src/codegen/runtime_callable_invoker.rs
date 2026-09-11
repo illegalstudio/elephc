@@ -10,6 +10,8 @@
 //! - Capture values are loaded from the callable descriptor, not caller frame state.
 //! - Argument materialization supports indexed arrays, associative arrays, defaults, variadics,
 //!   by-reference marker cells, and target-aware ABI calls without depending on `Context`.
+//! - `InvokerArgMode::PublicRaw` binds public containers and synthesizes hidden argc/count
+//!   prefixes; `InvokerArgMode::EvalPrebound` keeps the registered-native physical layout.
 //! - The trampoline preserves the callee-saved registers it scratches (issue #487), including on
 //!   the eval exception-boundary escape path, so allocator-parked caller values survive the invoke.
 //! - Exception-boundary slots use ABI frame helpers because the expanded save area pushes ARM64
@@ -19,12 +21,16 @@
 
 mod argument_owners;
 mod owned_value_args;
+mod public_args;
 mod reference_args;
 mod reference_return;
 mod string_return;
 
+pub(crate) use public_args::InvokerArgMode;
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
+
+use public_args::InvokerParamShape;
 
 use argument_owners::InvokerArgumentOwners;
 use crate::codegen::callable_descriptor;
@@ -96,6 +102,8 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
     pub(super) owns_string_return: bool,
+    /// How the boxed argument container maps onto this signature's physical parameters.
+    pub(super) arg_mode: InvokerArgMode,
 }
 
 /// Reports whether regular or variadic callable parameters can require runtime normalization.
@@ -112,16 +120,23 @@ struct InvokerEmitContext {
     label_counter: usize,
     argument_owners: InvokerArgumentOwners,
     owns_string_return: bool,
+    arg_mode: InvokerArgMode,
 }
 
 impl InvokerEmitContext {
     /// Creates a fresh label context for one generated invoker body.
-    fn new(invoker_label: &str, argument_owners: InvokerArgumentOwners, owns_string_return: bool) -> Self {
+    fn new(
+        invoker_label: &str,
+        argument_owners: InvokerArgumentOwners,
+        owns_string_return: bool,
+        arg_mode: InvokerArgMode,
+    ) -> Self {
         Self {
             label_prefix: local_label_prefix(invoker_label),
             label_counter: 0,
             argument_owners,
             owns_string_return,
+            arg_mode,
         }
     }
 
@@ -176,7 +191,12 @@ fn emit_runtime_callable_invoker_impl(
     let escape_label = format!("{}_eval_escape", invoker.label);
     let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
-    let mut ctx = InvokerEmitContext::new(invoker.label, argument_owners, invoker.owns_string_return);
+    let mut ctx = InvokerEmitContext::new(
+        invoker.label,
+        argument_owners,
+        invoker.owns_string_return,
+        invoker.arg_mode,
+    );
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -553,21 +573,16 @@ fn emit_loaded_indexed_array_callback_call(
         _ => PhpType::Mixed,
     };
     let elem_size = array_element_stride(&elem_ty);
-    let visible_param_count = sig.params.len();
-    let regular_param_count = if sig.variadic.is_some() {
-        visible_param_count.saturating_sub(1)
-    } else {
-        visible_param_count
-    };
+    let shape = InvokerParamShape::of(sig, ctx.arg_mode);
 
     // -- load the argument array and validate the required argument count --
     emit_loaded_array_source_to_reg(array_source, array_reg, emitter);
     abi::emit_load_from_address(emitter, len_reg, array_reg, 0);
-    emit_indexed_required_arg_count_check(sig, regular_param_count, len_reg, emitter, ctx, data);
+    emit_indexed_required_arg_count_check(sig, shape.visible_regular, len_reg, emitter, ctx, data);
 
     let mut arg_types = Vec::new();
-    // -- marshal each fixed parameter from the indexed container --
-    for index in 0..regular_param_count {
+    // -- marshal each visible regular from the indexed container --
+    for index in 0..shape.visible_regular {
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let is_ref = sig.ref_params.get(index).copied().unwrap_or(false);
@@ -611,30 +626,45 @@ fn emit_loaded_indexed_array_callback_call(
         arg_types.push(pushed_ty);
     }
 
+    if shape.hidden_argc {
+        // PublicRaw synthesizes argc from the container length; it never consumes a user slot.
+        public_args::push_arg_count_from_reg(emitter, len_reg);
+        arg_types.push(PhpType::Int);
+    }
+
     if sig.variadic.is_some() {
         let variadic_elem_ty = sig
             .params
-            .get(visible_param_count.saturating_sub(1))
+            .last()
             .and_then(|(_, ty)| match ty {
                 PhpType::Array(elem) => Some((**elem).clone()),
                 _ => None,
             })
             .unwrap_or_else(|| elem_ty.clone());
-        let build_label = ctx.next_label("invoker_build_variadic");
+        let source_base = shape.visible_regular;
+        let prefix = shape.collector_prefix();
+        let owner_index = shape.variadic_owner_index();
         let done_label = ctx.next_label("invoker_variadic_done");
-        // -- no tail arguments: pass an empty variadic array --
-        emit_compare_len_gt(emitter, len_reg, regular_param_count, &build_label);
-        emit_empty_indexed_array(emitter, &variadic_elem_ty);
-        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-        abi::emit_jump(emitter, &done_label);
+        if !shape.collector_needs_count {
+            let build_label = ctx.next_label("invoker_build_variadic");
+            // -- no tail arguments: pass an empty variadic array --
+            emit_compare_len_gt(emitter, len_reg, source_base, &build_label);
+            emit_empty_indexed_array(emitter, &variadic_elem_ty);
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+            abi::emit_jump(emitter, &done_label);
+            emitter.label(&build_label);
+        }
 
-        // -- allocate the variadic array sized to the argument tail --
-        emitter.label(&build_label);
-        emit_tail_count(emitter, tail_count_reg, len_reg, regular_param_count);
+        // -- allocate the variadic array sized to the argument tail (plus a count prefix) --
+        emit_tail_count(emitter, tail_count_reg, len_reg, source_base);
+        if shape.collector_needs_count {
+            public_args::clamp_tail_count_to_zero(emitter, ctx, tail_count_reg);
+        }
         emitter.instruction(&format!(                                           // size the variadic array to the tail element count
             "mov {}, {}",
             array_new_capacity_reg, tail_count_reg
         ));
+        emit_add_usize_if_nonzero(emitter, array_new_capacity_reg, prefix);
         abi::emit_load_int_immediate(
             emitter,
             array_new_elem_size_reg,
@@ -643,7 +673,7 @@ fn emit_loaded_indexed_array_callback_call(
         abi::emit_call_label(emitter, "__rt_array_new");
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
         ctx.argument_owners.record_pushed(
-            regular_param_count, &PhpType::Array(Box::new(variadic_elem_ty.clone())), emitter,
+            owner_index, &PhpType::Array(Box::new(variadic_elem_ty.clone())), emitter,
         );
         emitter.instruction(&format!(                                           // keep the new array pointer for the type stamp and copy loop
             "mov {}, {}",
@@ -651,6 +681,21 @@ fn emit_loaded_indexed_array_callback_call(
             abi::int_result_reg(emitter)
         ));
         crate::codegen::emit_array_value_type_stamp(emitter, peek_reg, &variadic_elem_ty);
+        if prefix > 0 {
+            // `data_reg` is not the integer result: boxing the count occupies that register
+            // until the collector pointer is reloaded from the pushed slot.
+            public_args::store_indexed_count_prefix(
+                emitter,
+                ctx,
+                data,
+                len_reg,
+                data_reg,
+                len_store_reg,
+                offset_reg,
+                index_reg,
+                &variadic_elem_ty,
+            );
+        }
         abi::emit_load_int_immediate(emitter, tail_index_reg, 0);
         let loop_label = ctx.next_label("invoker_variadic_loop");
         let loop_done_label = ctx.next_label("invoker_variadic_loop_done");
@@ -658,7 +703,7 @@ fn emit_loaded_indexed_array_callback_call(
         emitter.label(&loop_label);
         emit_compare_reg_ge(emitter, tail_index_reg, tail_count_reg, &loop_done_label);
         emitter.instruction(&format!("mov {}, {}", index_reg, tail_index_reg)); // start the source index from the tail loop counter
-        emit_add_usize_if_nonzero(emitter, index_reg, regular_param_count);
+        emit_add_usize_if_nonzero(emitter, index_reg, source_base);
         emitter.instruction(&format!("mov {}, {}", data_reg, array_reg));       // start the source element address at the array header base
         emit_add_usize(emitter, data_reg, 24);
         emit_scale_index_to_offset(emitter, offset_reg, index_reg, elem_size);
@@ -670,25 +715,29 @@ fn emit_loaded_indexed_array_callback_call(
             abi::emit_incref_if_refcounted(emitter, &stored_ty);
         }
         abi::emit_load_temporary_stack_slot(emitter, peek_reg, 0);
+        emitter.instruction(&format!("mov {}, {}", index_reg, tail_index_reg)); // dest index starts after the synthesized count prefix
+        emit_add_usize_if_nonzero(emitter, index_reg, prefix);
         emit_store_current_value_to_array_slot(
             emitter,
             &stored_ty,
             peek_reg,
             len_store_reg,
             offset_reg,
-            tail_index_reg,
+            index_reg,
         );
         emit_increment_reg(emitter, tail_index_reg);
-        abi::emit_store_to_address(emitter, tail_index_reg, peek_reg, 0);
+        emitter.instruction(&format!("mov {}, {}", len_store_reg, tail_index_reg)); // length is copied count plus the prefix
+        emit_add_usize_if_nonzero(emitter, len_store_reg, prefix);
+        abi::emit_store_to_address(emitter, len_store_reg, peek_reg, 0);
         abi::emit_jump(emitter, &loop_label);
         emitter.label(&loop_done_label);
         emitter.label(&done_label);
         let variadic_ty = PhpType::Array(Box::new(variadic_elem_ty));
         if variadic_param_is_by_ref(sig) {
-            reference_args::push_owned_cell(emitter, ctx, regular_param_count, &variadic_ty);
+            reference_args::push_owned_cell(emitter, ctx, owner_index, &variadic_ty);
             arg_types.push(PhpType::Int);
         } else {
-            ctx.argument_owners.record_pushed(regular_param_count, &variadic_ty, emitter);
+            ctx.argument_owners.record_pushed(owner_index, &variadic_ty, emitter);
             arg_types.push(variadic_ty);
         }
     }
@@ -721,16 +770,17 @@ fn emit_loaded_assoc_array_callback_call(
     };
     emit_loaded_array_source_to_reg(array_source, hash_reg, emitter);
 
-    let visible_param_count = sig.params.len();
-    let regular_param_count = if sig.variadic.is_some() {
-        visible_param_count.saturating_sub(1)
-    } else {
-        visible_param_count
-    };
+    let shape = InvokerParamShape::of(sig, ctx.arg_mode);
+    let count_reg = public_args::assoc_arg_count_reg(emitter);
+    if shape.needs_actual_count() {
+        public_args::emit_assoc_actual_arg_count(
+            hash_reg, sig, &shape, count_reg, emitter, ctx, data,
+        );
+    }
     let mut arg_types = Vec::new();
 
-    // -- marshal each fixed parameter via hash lookup --
-    for index in 0..regular_param_count {
+    // -- marshal each visible regular via hash lookup --
+    for index in 0..shape.visible_regular {
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let param_name = sig.params.get(index).map(|(name, _)| name.as_str());
@@ -787,22 +837,27 @@ fn emit_loaded_assoc_array_callback_call(
         arg_types.push(pushed_ty);
     }
 
+    if shape.hidden_argc {
+        public_args::push_arg_count_from_reg(emitter, count_reg);
+        arg_types.push(PhpType::Int);
+    }
+
     if sig.variadic.is_some() {
         let variadic_ty = emit_loaded_assoc_variadic_array_arg(
             hash_reg,
             &elem_ty,
             sig,
-            regular_param_count,
-            regular_param_count,
+            &shape,
+            count_reg,
             emitter,
             ctx,
             data,
         );
         if variadic_param_is_by_ref(sig) {
-            reference_args::push_owned_cell(emitter, ctx, regular_param_count, &variadic_ty);
+            reference_args::push_owned_cell(emitter, ctx, shape.variadic_owner_index(), &variadic_ty);
             arg_types.push(PhpType::Int);
         } else {
-            ctx.argument_owners.record_pushed(regular_param_count, &variadic_ty, emitter);
+            ctx.argument_owners.record_pushed(shape.variadic_owner_index(), &variadic_ty, emitter);
             arg_types.push(variadic_ty);
         }
     }
@@ -2166,16 +2221,15 @@ fn emit_loaded_assoc_variadic_array_arg(
     source_hash_reg: &str,
     elem_ty: &PhpType,
     sig: &FunctionSig,
-    skip_numeric_before: usize,
-    skip_param_names_before: usize,
+    shape: &InvokerParamShape,
+    count_reg: &str,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    let visible_param_count = sig.params.len();
     let variadic_elem_ty = sig
         .params
-        .get(visible_param_count.saturating_sub(1))
+        .last()
         .and_then(|(_, ty)| match ty {
             PhpType::Array(elem) => Some((**elem).clone()),
             PhpType::Iterable => Some(PhpType::Mixed),
@@ -2197,11 +2251,15 @@ fn emit_loaded_assoc_variadic_array_arg(
     );
     abi::emit_call_label(emitter, "__rt_hash_new");
     abi::emit_push_result_value(emitter, &variadic_ty);
+    if shape.collector_needs_count {
+        public_args::insert_assoc_count_prefix(emitter, count_reg, &variadic_elem_ty);
+    }
     emit_loaded_assoc_variadic_entries(
         source_hash_reg,
         sig,
-        skip_numeric_before,
-        skip_param_names_before,
+        shape.visible_regular,
+        shape.visible_regular,
+        shape.collector_prefix(),
         emitter,
         ctx,
         data,
@@ -2210,11 +2268,13 @@ fn emit_loaded_assoc_variadic_array_arg(
 }
 
 /// Copies unconsumed associative source entries into the variadic hash.
+#[allow(clippy::too_many_arguments)]
 fn emit_loaded_assoc_variadic_entries(
     source_hash_reg: &str,
     sig: &FunctionSig,
     skip_numeric_before: usize,
     skip_param_names_before: usize,
+    first_numeric_key: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -2242,12 +2302,22 @@ fn emit_loaded_assoc_variadic_entries(
         Arch::AArch64 => {
             abi::emit_store_to_address(emitter, source_hash_reg, "sp", SOURCE_HASH_OFF);
             abi::emit_store_zero_to_address(emitter, "sp", CURSOR_OFF);
-            abi::emit_store_zero_to_address(emitter, "sp", NUMERIC_KEY_OFF);
+            if first_numeric_key == 0 {
+                abi::emit_store_zero_to_address(emitter, "sp", NUMERIC_KEY_OFF);
+            } else {
+                abi::emit_load_int_immediate(emitter, "x8", first_numeric_key as i64);
+                abi::emit_store_to_address(emitter, "x8", "sp", NUMERIC_KEY_OFF);
+            }
         }
         Arch::X86_64 => {
             abi::emit_store_to_address(emitter, source_hash_reg, "rsp", SOURCE_HASH_OFF);
             abi::emit_store_zero_to_address(emitter, "rsp", CURSOR_OFF);
-            abi::emit_store_zero_to_address(emitter, "rsp", NUMERIC_KEY_OFF);
+            if first_numeric_key == 0 {
+                abi::emit_store_zero_to_address(emitter, "rsp", NUMERIC_KEY_OFF);
+            } else {
+                abi::emit_load_int_immediate(emitter, "r10", first_numeric_key as i64);
+                abi::emit_store_to_address(emitter, "r10", "rsp", NUMERIC_KEY_OFF);
+            }
         }
     }
 
@@ -2456,6 +2526,7 @@ fn emit_insert_assoc_variadic_entry(
             abi::emit_load_temporary_stack_slot(emitter, "x1", key_ptr_off);
             abi::emit_load_temporary_stack_slot(emitter, "x2", key_len_off);
             abi::emit_call_label(emitter, "__rt_hash_set");
+            abi::emit_store_to_address(emitter, "x0", "sp", hash_slot_off);
             emitter.instruction(&format!("b {}", loop_label));                  // continue with the next source entry
         }
         Arch::X86_64 => {
@@ -2496,6 +2567,7 @@ fn emit_insert_assoc_variadic_entry(
             abi::emit_load_temporary_stack_slot(emitter, "rsi", key_ptr_off);
             abi::emit_load_temporary_stack_slot(emitter, "rdx", key_len_off);
             abi::emit_call_label(emitter, "__rt_hash_set");
+            abi::emit_store_to_address(emitter, "rax", "rsp", hash_slot_off);
             emitter.instruction(&format!("jmp {}", loop_label));                // continue with the next source entry
         }
     }
@@ -2588,11 +2660,35 @@ mod tests {
     fn invoker_cache_separates_owned_and_borrowed_string_returns() {
         let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, "borrowed_result");
-        assert!(state.runtime_callable_invoker(&sig, &[], true).is_none());
-        state.cache_runtime_callable_invoker(&sig, &[], true, "owned_result");
-        assert_eq!(state.runtime_callable_invoker(&sig, &[], false).as_deref(), Some("borrowed_result"));
-        assert_eq!(state.runtime_callable_invoker(&sig, &[], true).as_deref(), Some("owned_result"));
+        state.cache_runtime_callable_invoker(&sig, &[], false, InvokerArgMode::PublicRaw, "borrowed_result");
+        assert!(state.runtime_callable_invoker(&sig, &[], true, InvokerArgMode::PublicRaw).is_none());
+        state.cache_runtime_callable_invoker(&sig, &[], true, InvokerArgMode::PublicRaw, "owned_result");
+        assert_eq!(
+            state.runtime_callable_invoker(&sig, &[], false, InvokerArgMode::PublicRaw).as_deref(),
+            Some("borrowed_result")
+        );
+        assert_eq!(
+            state.runtime_callable_invoker(&sig, &[], true, InvokerArgMode::PublicRaw).as_deref(),
+            Some("owned_result")
+        );
+    }
+
+    /// PublicRaw and EvalPrebound wrappers with the same signature must not alias.
+    #[test]
+    fn invoker_cache_separates_public_raw_from_eval_prebound() {
+        let sig = hidden_argc_signature();
+        let mut state = crate::codegen::shared_state::SharedCodegenState::default();
+        state.cache_runtime_callable_invoker(&sig, &[], false, InvokerArgMode::PublicRaw, "public_raw");
+        assert!(state.runtime_callable_invoker(&sig, &[], false, InvokerArgMode::EvalPrebound).is_none());
+        state.cache_runtime_callable_invoker(&sig, &[], false, InvokerArgMode::EvalPrebound, "eval_prebound");
+        assert_eq!(
+            state.runtime_callable_invoker(&sig, &[], false, InvokerArgMode::PublicRaw).as_deref(),
+            Some("public_raw")
+        );
+        assert_eq!(
+            state.runtime_callable_invoker(&sig, &[], false, InvokerArgMode::EvalPrebound).as_deref(),
+            Some("eval_prebound")
+        );
     }
 
     /// Restoring concat state copies borrowed strings but leaves a transferred owner intact on every ABI.
@@ -2672,7 +2768,13 @@ mod tests {
             variadic: None,
             deprecation: None,
         };
-        let invoker = RuntimeCallableInvoker { label: "owned_invoker", sig: &sig, captures: &[], owns_string_return: false };
+        let invoker = RuntimeCallableInvoker {
+            label: "owned_invoker",
+            sig: &sig,
+            captures: &[],
+            owns_string_return: false,
+            arg_mode: InvokerArgMode::PublicRaw,
+        };
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             for eval_boundary in [false, true] {
@@ -2721,7 +2823,7 @@ mod tests {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
-            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false);
+            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false, InvokerArgMode::PublicRaw);
             let (ref_cell_reg, source_tag_reg, branch) = match target.arch {
                 Arch::AArch64 => ("x19", "x20", "b.eq mixed_ref_cell_invoker_ref_mixed_0"),
                 Arch::X86_64 => ("r12", "r13", "je mixed_ref_cell_invoker_ref_mixed_0"),
@@ -2743,6 +2845,191 @@ mod tests {
             assert!(boxed < mixed && mixed < retained && retained < done, "{name}: {asm}");
             assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}: {asm}");
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+        }
+    }
+
+    /// Builds a source-variadic signature with a hidden `__elephc_func_argc` slot after `$a`.
+    fn hidden_argc_signature() -> FunctionSig {
+        let count = 3;
+        FunctionSig {
+            params: vec![
+                ("a".to_string(), PhpType::Int),
+                (crate::func_args::HIDDEN_ARGC_PARAM.to_string(), PhpType::Int),
+                ("rest".to_string(), PhpType::Array(Box::new(PhpType::Mixed))),
+            ],
+            param_type_exprs: vec![None; count],
+            param_attributes: vec![Vec::new(); count],
+            defaults: vec![
+                None,
+                Some(crate::parser::ast::Expr::new(
+                    crate::parser::ast::ExprKind::IntLiteral(0),
+                    crate::span::Span::dummy(),
+                )),
+                None,
+            ],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; count],
+            declared_params: vec![true, false, true],
+            variadic: Some("rest".to_string()),
+            deprecation: None,
+        }
+    }
+
+    /// Builds a hidden-collector signature whose first collector element is the actual count.
+    fn hidden_collector_signature() -> FunctionSig {
+        let count = 2;
+        FunctionSig {
+            params: vec![
+                ("a".to_string(), PhpType::Int),
+                (
+                    crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                ),
+            ],
+            param_type_exprs: vec![None; count],
+            param_attributes: vec![Vec::new(); count],
+            defaults: vec![
+                Some(crate::parser::ast::Expr::new(
+                    crate::parser::ast::ExprKind::IntLiteral(10),
+                    crate::span::Span::dummy(),
+                )),
+                None,
+            ],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; count],
+            declared_params: vec![true, false],
+            variadic: Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string()),
+            deprecation: None,
+        }
+    }
+
+    /// Emits one indexed invoker body for the given argument mode.
+    fn emit_invoker_asm(target_name: &str, sig: &FunctionSig, mode: InvokerArgMode, label: &str) -> String {
+        let mut emitter = Emitter::new(Target::parse(target_name).unwrap());
+        let invoker = RuntimeCallableInvoker {
+            label,
+            sig,
+            captures: &[],
+            owns_string_return: false,
+            arg_mode: mode,
+        };
+        emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
+        emitter.output()
+    }
+
+    /// PublicRaw keeps container slot 0 as the first user argument and synthesizes hidden argc.
+    #[test]
+    fn public_raw_preserves_arg0_and_synthesizes_hidden_argc_on_all_targets() {
+        let sig = hidden_argc_signature();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let asm = emit_invoker_asm(name, &sig, InvokerArgMode::PublicRaw, "public_argc");
+            let (arg0, argc_slot, count_move) = if name == "linux-x86_64" {
+                (
+                    "mov rax, QWORD PTR [r13 + 24]",
+                    "mov rax, QWORD PTR [r13 + 32]",
+                    "mov rax, r14",
+                )
+            } else {
+                (
+                    "ldr x0, [x20, #24]",
+                    "ldr x0, [x20, #32]",
+                    "mov x0, x21",
+                )
+            };
+            assert!(asm.contains(arg0), "{name}: public arg 0 must stay at container index 0\n{asm}");
+            assert!(
+                !asm.contains(argc_slot),
+                "{name}: PublicRaw must not consume container index 1 as hidden argc\n{asm}"
+            );
+            assert!(
+                asm.contains(count_move),
+                "{name}: PublicRaw must synthesize argc from the public argument count\n{asm}"
+            );
+        }
+    }
+
+    /// EvalPrebound keeps the registered-native physical layout, including a container argc slot.
+    #[test]
+    fn eval_prebound_still_loads_hidden_argc_from_the_container_on_all_targets() {
+        let sig = hidden_argc_signature();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let asm = emit_invoker_asm(name, &sig, InvokerArgMode::EvalPrebound, "eval_argc");
+            let (arg0, argc_slot, count_move) = if name == "linux-x86_64" {
+                (
+                    "mov rax, QWORD PTR [r13 + 24]",
+                    "mov rax, QWORD PTR [r13 + 32]",
+                    "mov rax, r14",
+                )
+            } else {
+                (
+                    "ldr x0, [x20, #24]",
+                    "ldr x0, [x20, #32]",
+                    "mov x0, x21",
+                )
+            };
+            assert!(asm.contains(arg0), "{name}: eval-prebound still binds container index 0\n{asm}");
+            assert!(
+                asm.contains(argc_slot),
+                "{name}: eval-prebound must keep loading hidden argc from the container\n{asm}"
+            );
+            assert!(
+                !asm.contains(count_move),
+                "{name}: eval-prebound must not synthesize argc from the public count\n{asm}"
+            );
+        }
+    }
+
+    /// PublicRaw hidden collectors store the synthesized count as their first element.
+    #[test]
+    fn public_raw_synthesizes_hidden_collector_count_prefix_on_all_targets() {
+        let sig = hidden_collector_signature();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let public_asm = emit_invoker_asm(name, &sig, InvokerArgMode::PublicRaw, "public_collector");
+            let eval_asm = emit_invoker_asm(name, &sig, InvokerArgMode::EvalPrebound, "eval_collector");
+            assert!(
+                public_asm.contains("invoker_tail_count_ok"),
+                "{name}: PublicRaw collector must clamp and prefix the actual count\n{public_asm}"
+            );
+            assert!(
+                !eval_asm.contains("invoker_tail_count_ok"),
+                "{name}: EvalPrebound collector must keep the previous empty-or-tail layout\n{eval_asm}"
+            );
+
+            let public_assoc = &public_asm[public_asm
+                .rfind("cufa_mixed_assoc")
+                .expect("the Mixed invoker emits an associative branch")..];
+            let public_hash_new = public_assoc
+                .find("__rt_hash_new")
+                .expect("the associative variadic collector is allocated");
+            let public_loop = public_assoc
+                .find("assoc_variadic_loop")
+                .expect("the associative tail walk is emitted");
+            let public_prefix = &public_assoc[public_hash_new..public_loop];
+            assert!(
+                public_prefix.contains("__rt_mixed_from_value")
+                    && public_prefix.contains("__rt_hash_set"),
+                "{name}: PublicRaw must box and insert the count before the associative tail\n{public_asm}",
+            );
+
+            let eval_assoc = &eval_asm[eval_asm
+                .rfind("cufa_mixed_assoc")
+                .expect("the Mixed invoker emits an associative branch")..];
+            let eval_hash_new = eval_assoc
+                .find("__rt_hash_new")
+                .expect("the associative variadic collector is allocated");
+            let eval_loop = eval_assoc
+                .find("assoc_variadic_loop")
+                .expect("the associative tail walk is emitted");
+            let eval_prefix = &eval_assoc[eval_hash_new..eval_loop];
+            assert!(
+                !eval_prefix.contains("__rt_mixed_from_value")
+                    && !eval_prefix.contains("__rt_hash_set"),
+                "{name}: EvalPrebound must not synthesize an associative count prefix\n{eval_asm}",
+            );
         }
     }
 }
