@@ -187,3 +187,17 @@ below, and checklist items must not imply that unexecuted tests passed.
   and cleanup records. A separate writer handles property/bound-closure typing.
   The new callable and include-order commits do not claim to resolve these CI
   failures without evidence from the follow-up investigation.
+
+### Promoted-local leak diagnosis and correction
+
+- Claude's independent read-only diagnosis and coordinator source review agree:
+  Mixed promotion retains a concrete `LoadLocal` view twice but retires it only
+  through the new box. The orphaned array reference survives after both the
+  managed reference cell and its Mixed box have been freed.
+- CI also fails the normal promoted-local return fixture, and leaked arrays have
+  refcount one. Both observations match the diagnosis, independently of catches.
+- Applied the proposed ownership-gated release after boxing and before the
+  widening store. Added a five-target structural regression; the four existing
+  runtime destructor and heap-clean assertions remain unchanged.
+- `cargo check --locked -p elephc --tests` completed without warnings (4.57s).
+  Runtime validation still belongs to CI; no test ran locally.

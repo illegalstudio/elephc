@@ -2514,6 +2514,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 Op::MixedBox.default_effects(),
                 span,
             );
+            // Final Mixed storage makes this narrower load an owned unbox. The new
+            // box has already retained its payload, so retire the detached source view.
+            // Ownership finalization prunes this release if the load stays borrowed.
+            crate::ir_lower::ownership::release_if_owned(self, source, span);
             self.store_local(name, boxed, PhpType::Mixed, span);
         }
         if !self.is_ref_bound_local(name) {

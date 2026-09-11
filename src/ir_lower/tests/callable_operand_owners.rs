@@ -22,6 +22,43 @@ use std::path::Path;
 
 use crate::codegen::platform::Target;
 
+/// Widening a returned local to Mixed retires the concrete payload view it unboxed.
+#[test]
+fn reference_promotion_releases_its_concrete_local_view_on_every_target() {
+    let source = r#"<?php
+class PromotionPayload { public function __destruct() { echo 'payload|'; } }
+function &promoteReturnedLocal(array $marker): array {
+    $values = [new PromotionPayload()];
+    return $values;
+}
+function consumePromotion(): void { $alias = &promoteReturnedLocal([]); unset($alias); }
+consumePromotion();
+"#;
+    for target in TARGETS {
+        let (module, function) = lower_function(source, target, "promoteReturnedLocal");
+        let (boxing, loaded, slot) = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+            if inst.op != Op::MixedBox {
+                return None;
+            }
+            let value = *inst.operands.first()?;
+            let load = function.instructions.iter().find(|load| load.result == Some(value))?;
+            let Some(Immediate::LocalSlot(slot)) = load.immediate else { return None; };
+            (load.op == Op::LoadLocal).then_some((index, value, slot))
+        }).expect("the promotion boxes a concrete local load");
+        let retirement = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+            (index > boxing && inst.op == Op::Release && inst.operands == [loaded])
+                .then_some(index)
+        }).expect("the detached local view is retired after boxing");
+        let store = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+            (index > boxing && inst.op == Op::StoreLocal
+                && inst.immediate == Some(Immediate::LocalSlot(slot))).then_some(index)
+        }).expect("the widened value replaces the local");
+        assert!(boxing < retirement && retirement < store, "{target}: retain before retiring the view");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// A by-value reference return clones the mutable Mixed pointee before retiring its lease.
 #[test]
 fn copied_reference_return_clones_mixed_pointees_on_every_target() {
