@@ -1272,22 +1272,22 @@ fn emit_validate_darwin_thread_process_id(
     let valid = ctx.next_label("pcntl_darwin_thread_process_id_valid");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #3");                             // only PRIO_DARWIN_THREAD constrains the process id
-            ctx.emitter.instruction(&format!("b.ne {valid}"));                 // other priority selectors accept their normal id domain
+            ctx.emitter.instruction("cmp x0, #3");                              // only PRIO_DARWIN_THREAD constrains the process id
+            ctx.emitter.instruction(&format!("b.ne {valid}"));                  // other priority selectors accept their normal id domain
             ctx.emitter.instruction(&format!(
                 "ldr x9, [sp, #{}]",
                 process_id_stack_offset
             ));                                                                 // recover the staged process id
-            ctx.emitter.instruction(&format!("cbz x9, {valid}"));              // Darwin thread priority addresses only the current thread
+            ctx.emitter.instruction(&format!("cbz x9, {valid}"));               // Darwin thread priority addresses only the current thread
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 3");                             // only PRIO_DARWIN_THREAD constrains the process id
-            ctx.emitter.instruction(&format!("jne {valid}"));                  // other priority selectors accept their normal id domain
+            ctx.emitter.instruction("cmp rax, 3");                              // only PRIO_DARWIN_THREAD constrains the process id
+            ctx.emitter.instruction(&format!("jne {valid}"));                   // other priority selectors accept their normal id domain
             ctx.emitter.instruction(&format!(
                 "cmp QWORD PTR [rsp + {}], 0",
                 process_id_stack_offset
             ));                                                                 // inspect the staged process id
-            ctx.emitter.instruction(&format!("je {valid}"));                   // zero denotes the current thread
+            ctx.emitter.instruction(&format!("je {valid}"));                    // zero denotes the current thread
         }
     }
     super::super::exceptions::emit_value_error(

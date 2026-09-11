@@ -569,10 +569,10 @@ fn emit_handler_bool_type_error(
 fn emit_unboxed_handler_bool_type_error(ctx: &mut FunctionContext<'_>) {
     let false_label = ctx.next_label("pcntl_signal_mixed_false_handler");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x1, {false_label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x1, {false_label}")), // branch to the `false` arm when the unboxed bool payload is zero
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rdi, rdi");
-            ctx.emitter.instruction(&format!("jz {false_label}"));
+            ctx.emitter.instruction("test rdi, rdi");                           // test the unboxed bool payload
+            ctx.emitter.instruction(&format!("jz {false_label}"));              // branch to the `false` arm when it is zero
         }
     }
     super::super::exceptions::emit_type_error(

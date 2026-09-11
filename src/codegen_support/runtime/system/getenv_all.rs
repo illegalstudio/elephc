@@ -37,9 +37,9 @@ fn emit_load_environ(emitter: &mut Emitter, dest: &str) {
             // pointer, which has to be dereferenced once more.
             emitter.bl_c("_NSGetEnviron");
             match emitter.target.arch {
-                Arch::AArch64 => emitter.instruction(&format!("ldr {dest}, [x0]")),
+                Arch::AArch64 => emitter.instruction(&format!("ldr {dest}, [x0]")), // dereference the `char ***` into the environ pointer
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("mov {dest}, QWORD PTR [rax]"));
+                    emitter.instruction(&format!("mov {dest}, QWORD PTR [rax]")); // dereference the `char ***` into the environ pointer
                 }
             }
         }
@@ -214,5 +214,5 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop r12");                                             // restore the hash register
     emitter.instruction("pop rbx");                                             // restore the envp cursor
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // return to the caller
 }

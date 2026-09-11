@@ -103,7 +103,7 @@ pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
 /// Every caller is on the way to `exit`.
 pub fn emit_teardown_call_alignment(emitter: &mut Emitter) {
     if matches!(emitter.target.arch, Arch::X86_64) {
-        emitter.instruction("and rsp, -16");                                  // realign for the teardown calls below (this path never returns)
+        emitter.instruction("and rsp, -16");                                    // realign for the teardown calls below (this path never returns)
     }
 }
 
