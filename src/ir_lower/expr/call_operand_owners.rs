@@ -7,6 +7,8 @@
 //! Key details:
 //! - Scoped unwind records retire roots before same-frame catches; frame cleanup sees cleared slots.
 //! - Borrowed local loads remain subject to final storage-aware release pruning.
+//! - A call's own owned result is staged in a record published OUTSIDE every operand root, so
+//!   retiring those roots cannot strand it; the runtime pop is LIFO and never names a record.
 
 use super::*;
 
@@ -230,6 +232,168 @@ pub(super) fn root_user_call_operands(
         if let Some(slot) = root { roots.push((index, slot)); }
     }
     roots
+}
+
+/// A frame slot published BEFORE a call's operand roots so the call's own owned result stays
+/// reachable from exception cleanup while those roots retire.
+///
+/// Retiring an argument root, an evaluation intermediate, a descriptor callback, an argument
+/// container or an owning receiver runs PHP destructors, and any of them can throw into a catch
+/// in this same PHP frame. The result the call already produced is only an SSA temporary at that
+/// point, so without this staging nothing the unwind chain can see owns it.
+///
+/// The record is published before every operand root and popped after all of them, which is what
+/// keeps the chain strictly LIFO: the runtime pop detaches the innermost record and never looks
+/// for a named one.
+pub(super) struct PrepublishedCallResult {
+    /// Hidden one-shot temporary the owned result is moved into.
+    temp_name: String,
+    /// Owner slot published in the unwind chain before any operand root.
+    slot: crate::ir::LocalSlotId,
+    /// Storage type the slot was declared with, which the call must produce exactly.
+    php_type: PhpType,
+}
+
+/// Publishes the staging slot a call's owned result is moved into.
+///
+/// Called before the call's operand roots are published, and therefore before the result type can
+/// be read back from the call, so the caller passes the exact `PhpType` it will emit the call
+/// with. Returns `None` for a result whose storage carries no runtime lifetime state, and for a
+/// `Buffer`, whose raw storage is not refcounted.
+///
+/// The slot is an `OwnedTemp`, which the frame prologue zero-initializes and whose store MOVES
+/// its source instead of retaining it, so publishing it before anything is stored releases
+/// nothing and staging the result never doubles its reference.
+pub(super) fn prepublish_call_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    result_type: &PhpType,
+    span: Span,
+) -> Option<PrepublishedCallResult> {
+    if !Ownership::php_type_needs_lifetime_tracking(result_type)
+        || matches!(result_type.codegen_repr(), PhpType::Buffer(_))
+    {
+        return None;
+    }
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let slot = ctx.local_slots[&temp_name];
+    register_owned_call_operand(ctx, slot, span);
+    Some(PrepublishedCallResult {
+        temp_name,
+        slot,
+        php_type: result_type.clone(),
+    })
+}
+
+/// Publishes result staging for a direct user call whose result owns storage independently.
+///
+/// A by-reference-returning callee is excluded because its result is the transferred cell, which
+/// `begin_reference_return_call` stages instead. A callee summarized as possibly returning one of
+/// its arguments is excluded too: the caller's argument release is guarded by a runtime alias
+/// comparison, so rooting both the argument slot and the result slot would release one shared
+/// reference twice while unwinding.
+pub(super) fn prepublish_user_call_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    signature: Option<&FunctionSig>,
+    return_alias: &ReturnArgAlias,
+    result_type: &PhpType,
+    span: Span,
+) -> Option<PrepublishedCallResult> {
+    if signature.is_some_and(|signature| signature.by_ref_return) {
+        return None;
+    }
+    if return_alias != &ReturnArgAlias::None {
+        return None;
+    }
+    prepublish_call_result(ctx, result_type, span)
+}
+
+/// Moves the owned call result into its published staging slot, immediately after the call.
+///
+/// The store is a plain `OwnedTemp` move: no acquire, no coercion, so the single reference the
+/// call handed back now lives in a slot the unwind chain can release. The declared slot type and
+/// the call's own result type are the same value at every call site; a mismatch would silently
+/// release the wrong storage shape, so it fails closed instead of degrading to no rooting.
+pub(super) fn stage_call_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    staging: Option<&PrepublishedCallResult>,
+    result: LoweredValue,
+    span: Span,
+) {
+    let Some(staging) = staging else {
+        return;
+    };
+    let produced = ctx.builder.value_php_type(result.value);
+    assert_eq!(
+        produced.codegen_repr(),
+        staging.php_type.codegen_repr(),
+        "a prepublished call result slot is declared with the call's own result type",
+    );
+    ctx.store_local(&staging.temp_name, result, staging.php_type.clone(), Some(span));
+}
+
+/// Retires result staging once no further caller cleanup can throw, keeping the result owned.
+///
+/// The record is detached first and the slot is then zeroed with `UnsetLocal`, which transfers
+/// the reference back to the SSA result without releasing it. Using `ReleaseLocalSlot` here would
+/// free the value the expression is about to hand to its consumer.
+pub(super) fn take_prepublished_call_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    staging: Option<PrepublishedCallResult>,
+    result: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let Some(staging) = staging else {
+        return result;
+    };
+    unregister_owned_call_operand(ctx, staging.slot, span);
+    ctx.clear_owned_hidden_temp(&staging.temp_name, Some(span));
+    result
+}
+
+/// Publishes a freshly created container before the expressions that fill it can throw.
+///
+/// A container built element by element is the only owner of everything already inserted, so it
+/// has to be reachable from exception cleanup for the whole construction, not just at the call
+/// that finally consumes it.
+pub(super) fn publish_constructed_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    container: LoweredValue,
+    span: Span,
+) -> crate::ir::LocalSlotId {
+    let (_, owner) = root_owned_call_operand(ctx, container, span);
+    owner.expect("a fresh container must have a managed owner")
+}
+
+/// Borrows the published container through its slot so growth writes the new pointer back.
+pub(super) fn load_published_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    slot: crate::ir::LocalSlotId,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let value = ctx.emit_value(
+        Op::LoadLocal,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        php_type,
+        Op::LoadLocal.default_effects(),
+        Some(span),
+    );
+    ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
+    value
+}
+
+/// Transfers a completed container out of its published construction slot.
+pub(super) fn take_published_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    slot: crate::ir::LocalSlotId,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let borrowed = load_published_container(ctx, slot, php_type, span);
+    let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, borrowed, Some(span));
+    retire_owned_call_operand(ctx, slot, span);
+    owned
 }
 
 /// Publishes a temporary owner in a frame slot and returns its stable invocation operand.

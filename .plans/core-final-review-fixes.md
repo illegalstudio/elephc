@@ -10,12 +10,12 @@ branch `feat/core-align`.
 - [ ] Preserve the selected reference cell across fallthrough finally rebinding.
 - [ ] Align returned property payload guards with bound-closure signature specialization.
 - [x] Publish returned reference leases before throwing caller cleanup and root value arguments.
-- [ ] Protect copied by-value reference-call results during throwing caller cleanup.
-- [ ] Release successful static extern callable argument temporaries.
-- [ ] Protect static builtin callable arguments during later argument evaluation.
-- [ ] Protect descriptor callbacks before argument container construction.
-- [ ] Retire unused immediately invoked closure descriptors.
-- [ ] Protect partial statically lowered array_map results across exceptions.
+- [x] Protect copied by-value reference-call results during throwing caller cleanup.
+- [x] Release successful static extern callable argument temporaries.
+- [x] Protect static builtin callable arguments during later argument evaluation.
+- [x] Protect descriptor callbacks before argument container construction.
+- [x] Retire unused immediately invoked closure descriptors.
+- [x] Protect partial statically lowered array_map results across exceptions.
 - [ ] Accept valid Mixed class-name strings in get_class_vars.
 - [ ] Capture native argument metadata for indirect and eval-originated backtraces.
 - [ ] Expose AOT user constants in eval inventories under the correct category.
@@ -129,3 +129,37 @@ below, and checklist items must not imply that unexecuted tests passed.
   confirmed prepublished owned-result slots and Mixed pointee cloning are needed.
   Proposed example fixtures were screened for genuine same-frame catch behavior
   and valid spread/named ordering before assigning the implementation.
+
+### Reference correction pushed and callable completion in progress
+
+- Commit `184cb9df3ad430eec09c40c11eac6a09f375d1fa` is confirmed on origin.
+  CI run `34602101553` is in progress; no runtime success is claimed yet.
+- The callable completion draft passes `cargo check --locked -p elephc --tests`
+  in 17.25 seconds, with one obsolete `adopt_returned_ref_cell` helper warning.
+  The delegate is still completing its regression sources. No tests ran locally.
+- Separate read-only Claude sessions are checking property/bound-closure typing
+  and preparing an include-order patch proposal. Only the callable delegate may
+  write to the worktree, apart from coordinator-owned bookkeeping and reviews.
+
+### Callable ownership completion reviewed for CI
+
+- Claude implemented partial typed-container roots, total descriptor argument
+  builders, prepublished owned-result staging, and detached Mixed reference copies.
+  New source regressions cover same-frame catches and repeated cleanup.
+- The delegation process is no longer running after the interruption; its final
+  textual response was unavailable. Acceptance is based on the inspected patch,
+  not an inferred success report from the delegate.
+- Coordinator review removed obsolete late-adoption code, balanced original
+  `Closure::call`/`bindTo` receiver and descriptor temporaries, added extern FCC
+  loop coverage, and replaced a static-property reference-return fixture that
+  would be rejected before exercising its intended copy behavior. Structural
+  coverage now explicitly checks Mixed pointee cloning on all five targets.
+- `cargo check --locked -p elephc -p elephc-magician --tests` passed without
+  warnings in 20.91 seconds before the last source-test additions. Final source
+  compilation and CI remain required; no test was executed locally.
+- Checked items mean implemented and source-reviewed, not executed-test success.
+  Bound-property closure specialization and descriptor receiver ownership remain
+  assigned to a separate correction rather than counted as complete here.
+- Final source compilation passed without warnings in 15.99 seconds, including
+  the source-test corrections and the uncommitted include-order proposal.
+  `git diff --check` passed. Runtime verification is left to CI.

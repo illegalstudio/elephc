@@ -78,7 +78,9 @@ mod descriptor_calls;
 mod object_construction;
 mod property_access;
 mod reference_returns;
-use reference_returns::finish_reference_return_call;
+use reference_returns::{
+    begin_reference_return_call, finish_reference_return_call, finish_reference_return_value,
+};
 mod property_fetch_for_write;
 mod method_calls;
 mod reflection_class_calls;

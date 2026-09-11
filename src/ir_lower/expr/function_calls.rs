@@ -86,6 +86,35 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
+    // A by-reference-returning callee hands back a lease that has to survive this caller's own
+    // cleanup, so its staging is published before the arguments are evaluated. Only the direct
+    // user-call branch below transfers a cell; an extern, builtin or eval-dispatched call with
+    // the same name returns an ordinary value and must not publish a record nothing retires.
+    let reference_staging = if is_user_function && !is_extern {
+        begin_reference_return_call(ctx, sig.as_ref(), expr.span)
+    } else {
+        None
+    };
+    // A fresh owned result is owned by nothing the unwind chain can see while the argument
+    // roots, the evaluation intermediates and their PHP destructors retire, so its staging is
+    // published here too, OUTSIDE every root those steps publish. `call_return_type` reads the
+    // signature alone, so the type declared here is the exact type the call is emitted with.
+    let user_return_alias = is_user_function.then(|| {
+        ctx.return_alias_summaries
+            .function(canonical)
+            .cloned()
+            .unwrap_or(ReturnArgAlias::Unknown)
+    });
+    let result_staging = match (is_user_function && !is_extern, user_return_alias.as_ref()) {
+        (true, Some(return_alias)) => prepublish_user_call_result(
+            ctx,
+            sig.as_ref(),
+            return_alias,
+            &call_return_type(ctx, canonical, &[]),
+            expr.span,
+        ),
+        _ => None,
+    };
     begin_call_argument_evaluation(ctx);
     let mut operands = if is_extern || is_user_function {
         lower_args_with_signature(ctx, sig.as_ref(), args)
@@ -126,11 +155,8 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return call;
     }
     if is_user_function {
-        let return_alias = ctx
-            .return_alias_summaries
-            .function(canonical)
-            .cloned()
-            .unwrap_or(ReturnArgAlias::Unknown);
+        let return_alias = user_return_alias
+            .expect("a user function call resolved its return-alias summary before its arguments");
         let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
         let roots = root_user_call_operands(
             ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
@@ -147,12 +173,16 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         // Plain user calls release owned argument temporaries the same way method and
         // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
         // that returns its own array argument typed `iterable`) from being freed.
-        let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
+        let call = finish_reference_return_call(
+            ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
+        );
+        stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
         release_owned_call_arg_temporaries_with_roots(
             ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), &roots, expr.span,
         );
         retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-        return call;
+        let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
+        return finish_reference_return_value(ctx, call, reference_staging, expr.span);
     }
     if ctx.has_eval_barrier()
         && plain_positional_call_args(args)

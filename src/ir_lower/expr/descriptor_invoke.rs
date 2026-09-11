@@ -10,6 +10,9 @@
 use super::*;
 
 /// Lowers `call_user_func*` for receiver-bound first-class callables through `expr_call`.
+///
+/// The callback is a receiver-bound descriptor the caller's expression just built, so it is
+/// published before the argument expressions run, exactly like the descriptor-invoke path does.
 pub(super) fn lower_instance_callable_call_user_func(
     ctx: &mut LoweringContext<'_, '_>,
     callback_expr: &Expr,
@@ -19,16 +22,47 @@ pub(super) fn lower_instance_callable_call_user_func(
 ) -> Option<LoweredValue> {
     let result_type = static_callable_return_type(ctx, &callback);
     let signature = instance_callable_signature(&callback).cloned();
-    let mut operands = vec![lower_expr(ctx, callback_expr).value];
-    operands.extend(lower_args_with_signature(ctx, signature.as_ref(), callback_args));
-    Some(ctx.emit_value(
+    let callback = lower_expr(ctx, callback_expr);
+    Some(emit_rooted_expr_call(
+        ctx,
+        callback,
+        signature.as_ref(),
+        callback_args,
+        result_type,
+        expr.span,
+    ))
+}
+
+/// Emits `Op::ExprCall` with the callback published for the whole argument evaluation.
+///
+/// The callback value is owned by nothing else while the arguments are lowered, and the owned
+/// result is owned by nothing else while that published callback is retired, so both get a
+/// record in the unwind chain, nested strictly: result first, callback inside it.
+pub(super) fn emit_rooted_expr_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: LoweredValue,
+    signature: Option<&FunctionSig>,
+    args: &[Expr],
+    result_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let result_staging = prepublish_call_result(ctx, &result_type, span);
+    let (callback, callback_owner) = root_owned_call_operand(ctx, callback, span);
+    let mut operands = vec![callback.value];
+    operands.extend(lower_args_with_signature(ctx, signature, args));
+    let call = ctx.emit_value(
         Op::ExprCall,
         operands,
         callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
-        Some(expr.span),
-    ))
+        Some(span),
+    );
+    stage_call_result(ctx, result_staging.as_ref(), call, span);
+    if let Some(slot) = callback_owner {
+        retire_owned_call_operand(ctx, slot, span);
+    }
+    take_prepublished_call_result(ctx, result_staging, call, span)
 }
 
 /// Lowers dynamic `call_user_func()` callbacks through descriptor invocation.
@@ -46,29 +80,40 @@ pub(super) fn lower_dynamic_call_user_func(
     }
     let signature = callable_descriptor_signature_for_expr(ctx, &args[0]);
     let callback = lower_expr(ctx, &args[0]);
-    if descriptor_callback_php_type_supported(&ctx.builder.value_php_type(callback.value).codegen_repr()) {
-        return lower_call_user_func_descriptor_invoke_from_value(
-            ctx,
-            callback,
-            &args[1..],
-            signature.as_ref(),
-            expr,
-        );
-    }
-    if crate::types::call_args::has_named_args(&args[1..]) || args[1..].iter().any(is_spread_arg) {
-        return None;
-    }
-    let mut operands = Vec::with_capacity(args.len());
-    operands.push(callback.value);
-    operands.extend(lower_args(ctx, &args[1..]));
-    Some(ctx.emit_value(
-        Op::ExprCall,
-        operands,
-        callable_profile_immediate(),
-        PhpType::Mixed,
-        Op::ExprCall.default_effects(),
-        Some(expr.span),
+    Some(lower_call_user_func_from_lowered_callback(
+        ctx,
+        callback,
+        &args[1..],
+        signature.as_ref(),
+        expr,
     ))
+}
+
+/// Lowers `call_user_func()` for an already evaluated callback, never abandoning that evaluation.
+///
+/// Every decision left at this point is total. A descriptor-dispatchable storage shape goes
+/// through descriptor invocation; a plain positional call of any other shape goes through the
+/// value-call opcode with the SAME callback value; and a named or spread call of a shape with no
+/// descriptor arm is boxed into `Mixed`, which the backend invoker unboxes and dispatches by
+/// runtime tag. Returning `None` from here instead would make the caller re-lower the callback
+/// expression and run its side effects twice.
+pub(super) fn lower_call_user_func_from_lowered_callback(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: LoweredValue,
+    args: &[Expr],
+    sig: Option<&FunctionSig>,
+    expr: &Expr,
+) -> LoweredValue {
+    if descriptor_callback_php_type_supported(
+        &ctx.builder.value_php_type(callback.value).codegen_repr(),
+    ) {
+        return lower_call_user_func_descriptor_invoke_from_value(ctx, callback, args, sig, expr);
+    }
+    if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
+        return emit_rooted_expr_call(ctx, callback, None, args, PhpType::Mixed, expr.span);
+    }
+    let callback = coerce_descriptor_invoker_mixed_value(ctx, callback, expr.span);
+    lower_call_user_func_descriptor_invoke_from_value(ctx, callback, args, sig, expr)
 }
 
 /// Lowers dynamic `call_user_func_array()` through the descriptor-invoker EIR path.
@@ -89,19 +134,19 @@ pub(super) fn lower_dynamic_call_user_func_array(
     }
     let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
     let callback = lower_expr(ctx, callback_expr);
-    let arg_array = lower_descriptor_invoker_arg_array_for_call_user_func_array(
-        ctx,
-        arg_array_expr,
-        signature.as_ref(),
-    )
-    .unwrap_or_else(|| lower_expr(ctx, arg_array_expr));
-    Some(emit_callable_descriptor_invoke(
-        ctx,
-        callback,
-        arg_array,
-        PhpType::Mixed,
-        expr.span,
-    ))
+    // The decision between the ref-marker builder and a plain array expression is made from the
+    // argument SYNTAX, before either one emits anything, so the callback can be published first.
+    let callback = root_descriptor_callback(ctx, callback, PhpType::Mixed, expr.span);
+    let arg_array = match descriptor_invoker_ref_marker_array_items(ctx, arg_array_expr, signature.as_ref()) {
+        Some(items) => lower_descriptor_invoker_arg_array_for_call_user_func_array(
+            ctx,
+            &items,
+            signature.as_ref(),
+            arg_array_expr.span,
+        ),
+        None => lower_expr(ctx, arg_array_expr),
+    };
+    Some(emit_callable_descriptor_invoke(ctx, callback, arg_array, expr.span))
 }
 
 /// Returns the callable signature available to descriptor-invoker argument lowering.
@@ -184,21 +229,41 @@ pub(super) fn function_sig_from_extern_for_descriptor(sig: &ExternFunctionSig) -
     }
 }
 
-/// Builds an invoker argument array that preserves by-reference literal variables.
-pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
-    ctx: &mut LoweringContext<'_, '_>,
+/// Returns the literal `call_user_func_array()` items that need invoker reference markers.
+///
+/// This is a pure syntactic decision: an array literal with no spread and at least one literal
+/// variable bound to a by-reference parameter. Callers consult it BEFORE publishing the callback,
+/// so choosing between the marker builder and a plain array expression never abandons emitted
+/// instructions.
+pub(super) fn descriptor_invoker_ref_marker_array_items(
+    ctx: &LoweringContext<'_, '_>,
     arg_array: &Expr,
     sig: Option<&FunctionSig>,
-) -> Option<LoweredValue> {
+) -> Option<Vec<Expr>> {
     let ExprKind::ArrayLiteral(items) = &arg_array.kind else {
         return None;
     };
-    if items.iter().any(is_spread_arg) || !items.iter().enumerate().any(|(index, item)| {
-        invoker_ref_arg_variable(ctx, sig, index, item).is_some()
-    }) {
+    if items.iter().any(is_spread_arg) {
         return None;
     }
+    items
+        .iter()
+        .enumerate()
+        .any(|(index, item)| invoker_ref_arg_variable(ctx, sig, index, item).is_some())
+        .then(|| items.clone())
+}
 
+/// Builds an invoker argument array that preserves by-reference literal variables.
+///
+/// The array is published for the whole construction and reloaded after every insertion, so a
+/// later item expression that throws cannot strand the items already inserted and a growth
+/// reallocation is picked up from the slot rather than from the stale `array_new` pointer.
+pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
+    ctx: &mut LoweringContext<'_, '_>,
+    items: &[Expr],
+    sig: Option<&FunctionSig>,
+    span: Span,
+) -> LoweredValue {
     let elem_ty = PhpType::Mixed;
     let array_ty = PhpType::Array(Box::new(elem_ty.clone()));
     let array = ctx.emit_value(
@@ -207,8 +272,9 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
         Some(Immediate::Capacity(items.len() as u32)),
         array_ty.clone(),
         Op::ArrayNew.default_effects(),
-        Some(arg_array.span),
+        Some(span),
     );
+    let owner = publish_constructed_container(ctx, array, span);
     for (index, item) in items.iter().enumerate() {
         let value = if let Some(var_name) = invoker_ref_arg_variable(ctx, sig, index, item) {
             lower_invoker_ref_arg_marker(ctx, var_name, item.span)
@@ -216,6 +282,7 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
             let value = lower_expr(ctx, item);
             coerce_variadic_tail_value(ctx, value, &array_ty, item.span)
         };
+        let array = load_published_container(ctx, owner, array_ty.clone(), item.span);
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -225,7 +292,7 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
         );
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, item.span);
     }
-    Some(array)
+    take_published_container(ctx, owner, array_ty, span)
 }
 
 /// Returns true when `call_user_func()` must keep runtime descriptor semantics.
@@ -293,7 +360,11 @@ pub(super) fn call_user_func_has_incompatible_ref_marker_arg(
     })
 }
 
-/// Lowers `call_user_func()` into a descriptor invoke when the callback value is supported.
+/// Lowers `call_user_func()` into a descriptor invoke, reusing the evaluated callback.
+///
+/// The callback expression is lowered exactly once. A storage shape with no descriptor arm does
+/// not decline here, because the caller would then re-lower the same expression; it reuses the
+/// value it already has through `lower_call_user_func_from_lowered_callback`.
 pub(super) fn lower_call_user_func_descriptor_invoke(
     ctx: &mut LoweringContext<'_, '_>,
     callback_expr: &Expr,
@@ -302,42 +373,83 @@ pub(super) fn lower_call_user_func_descriptor_invoke(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let callback = lower_expr(ctx, callback_expr);
-    if !descriptor_callback_php_type_supported(&ctx.builder.value_php_type(callback.value).codegen_repr()) {
-        return None;
-    }
-    lower_call_user_func_descriptor_invoke_from_value(ctx, callback, args, sig, expr)
+    Some(lower_call_user_func_from_lowered_callback(ctx, callback, args, sig, expr))
 }
 
 /// Emits `CallableDescriptorInvoke` for an already evaluated `call_user_func()` callback.
+///
+/// The result type is resolved before the callback is published, because the result staging the
+/// invocation needs is the OUTERMOST record of this call and has to be declared with the exact
+/// type the invocation produces.
 pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     ctx: &mut LoweringContext<'_, '_>,
     callback: LoweredValue,
     args: &[Expr],
     sig: Option<&FunctionSig>,
     expr: &Expr,
-) -> Option<LoweredValue> {
-    let arg_container = lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span)?;
+) -> LoweredValue {
     let result_type = sig
         .map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
         .unwrap_or(PhpType::Mixed);
-    Some(emit_callable_descriptor_invoke(
-        ctx,
-        callback,
-        arg_container,
-        result_type,
-        expr.span,
-    ))
+    let callback = root_descriptor_callback(ctx, callback, result_type, expr.span);
+    let arg_container =
+        lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span);
+    emit_callable_descriptor_invoke(ctx, callback, arg_container, expr.span)
 }
 
-/// Roots temporary callback/container owners across descriptor calls and retires them on return.
-pub(super) fn emit_callable_descriptor_invoke(
+/// A descriptor callback already published in the unwind chain, before its arguments were lowered.
+///
+/// Building the argument container runs PHP expressions that can throw, and a freshly evaluated
+/// callback, such as a computed function name or a callable array holding a `new` receiver,
+/// is owned by nothing else while they do.
+///
+/// The invocation's result staging is published here too, one level FURTHER OUT, because the
+/// callback and container records are retired while that result is still only an SSA temporary.
+pub(super) struct RootedDescriptorCallback {
+    /// Operand the invocation passes, which is the published lease when one was taken.
+    value: LoweredValue,
+    /// Owner slot to retire after the invocation, absent for a borrowed callback.
+    owner: Option<crate::ir::LocalSlotId>,
+    /// Result type the invocation must be emitted with, and the staging declared for it.
+    result_type: PhpType,
+    /// Staging holding the owned result while the callback and container records retire.
+    result: Option<PrepublishedCallResult>,
+}
+
+/// Publishes a descriptor invocation's result staging and then its callback.
+///
+/// A borrowed callback, such as a plain local load, owns nothing and is handed through
+/// unchanged, which keeps the backend's view of the callback's identity exactly as it was.
+/// Taking `result_type` here rather than at the invocation is what guarantees the staged slot
+/// and the emitted call agree on one storage type.
+pub(super) fn root_descriptor_callback(
     ctx: &mut LoweringContext<'_, '_>,
     callback: LoweredValue,
-    arg_container: LoweredValue,
     result_type: PhpType,
     span: Span,
+) -> RootedDescriptorCallback {
+    let result = prepublish_call_result(ctx, &result_type, span);
+    let (value, owner) = root_owned_call_operand(ctx, callback, span);
+    RootedDescriptorCallback { value, owner, result_type, result }
+}
+
+/// Roots the temporary container owner across a descriptor call and retires every owner on return.
+///
+/// The records nest strictly: result staging OUTSIDE the callback, callback OUTSIDE the argument
+/// container. They are therefore retired container first, callback next and result last, which is
+/// the only order the runtime's LIFO pop can express.
+pub(super) fn emit_callable_descriptor_invoke(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: RootedDescriptorCallback,
+    arg_container: LoweredValue,
+    span: Span,
 ) -> LoweredValue {
-    let (callback, callback_owner) = root_owned_call_operand(ctx, callback, span);
+    let RootedDescriptorCallback {
+        value: callback,
+        owner: callback_owner,
+        result_type,
+        result: result_staging,
+    } = callback;
     // The backend borrows this container and owns either its normalized copy
     // or a separate retain of a prebuilt Mixed box. Root both raw and boxed
     // owners so a throw cannot bypass their EIR retirement.
@@ -350,6 +462,10 @@ pub(super) fn emit_callable_descriptor_invoke(
         Op::CallableDescriptorInvoke.default_effects(),
         Some(span),
     );
+    // Retiring the container or the callback destroys a captured object or an argument the
+    // container still owns, and those destructors run PHP code that can throw into a catch in
+    // this same frame. The result is already staged when they do.
+    stage_call_result(ctx, result_staging.as_ref(), result, span);
     if let Some(slot) = container_owner {
         retire_owned_call_operand(ctx, slot, span);
     } else if ctx.value_is_owning_temporary(arg_container) {
@@ -358,5 +474,5 @@ pub(super) fn emit_callable_descriptor_invoke(
     if let Some(slot) = callback_owner {
         retire_owned_call_operand(ctx, slot, span);
     }
-    result
+    take_prepublished_call_result(ctx, result_staging, result, span)
 }

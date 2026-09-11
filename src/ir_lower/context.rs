@@ -2611,18 +2611,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.release_ref_cell_owner(&staged, span);
     }
 
-    /// Stages an owner transferred by a reference-returning callee without retaining it twice.
-    pub(crate) fn adopt_returned_ref_cell(
-        &mut self,
-        cell_ptr: LoweredValue,
-        value_type: PhpType,
-        span: Option<Span>,
-    ) -> String {
-        let staged = self.declare_synthetic_php_local(value_type.clone());
-        self.bind_ref_cell_ptr_impl(&staged, cell_ptr, value_type, true, true, span);
-        staged
-    }
-
     /// Reserves the staging a reference assignment publishes before lowering its source.
     ///
     /// Only the hidden OWNER slot is declared here, because the staging local's storage type is

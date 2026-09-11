@@ -64,12 +64,10 @@ pub(super) fn lower_static_method_call(
     let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();
-    begin_call_argument_evaluation(ctx);
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
-    let mut operands =
-        coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
-    let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
-    let data = ctx.intern_string(&name);
+    // The result type and the alias summary are decided by the receiver and the method alone, so
+    // they are resolved up front: the reference lease and the ordinary owned result both need
+    // their staging published BEFORE any argument expression runs, and the result staging has to
+    // be declared with the exact type the call is emitted with.
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
@@ -91,6 +89,18 @@ pub(super) fn lower_static_method_call(
         _ => result_type,
     };
     let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
+    // A by-reference-returning static method transfers a lease that must outlive this caller's
+    // argument cleanup, so its staging is published before the arguments are evaluated.
+    let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
+    let result_staging = prepublish_user_call_result(
+        ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
+    );
+    begin_call_argument_evaluation(ctx);
+    let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let mut operands =
+        coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
+    let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
+    let data = ctx.intern_string(&name);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     let roots = root_user_call_operands(
         ctx,
@@ -108,7 +118,10 @@ pub(super) fn lower_static_method_call(
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     );
-    let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
+    let call = finish_reference_return_call(
+        ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &operands,
@@ -119,7 +132,8 @@ pub(super) fn lower_static_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    call
+    let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
+    finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }
 
 /// Returns preserved late-static return syntax for EIR static dispatch.

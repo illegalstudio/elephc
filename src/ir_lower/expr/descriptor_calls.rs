@@ -27,12 +27,12 @@ pub(super) fn lower_literal_callable_array_expr_call(
     instance_array_callable_target(ctx, items)?;
     let lowered_callee = lower_expr(ctx, callee);
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
-    let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
+    let lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
+    let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
     Some(emit_callable_descriptor_invoke(
         ctx,
         lowered_callee,
         arg_container,
-        result_type,
         expr.span,
     ))
 }
@@ -45,81 +45,32 @@ pub(super) fn lower_expr_call_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_callable_result_type(ctx, callee.value, expr);
-    if let Some(arg_container) =
-        lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
-    {
-        return emit_callable_descriptor_invoke(ctx, callee, arg_container, result_type, expr.span);
-    }
-    let mut operands = vec![callee.value];
-    operands.extend(lower_args(ctx, args));
-    ctx.emit_value(
-        Op::ExprCall,
-        operands,
-        callable_profile_immediate(),
-        result_type,
-        Op::ExprCall.default_effects(),
-        Some(expr.span),
-    )
+    let callee = root_descriptor_callback(ctx, callee, result_type, expr.span);
+    let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
+    emit_callable_descriptor_invoke(ctx, callee, arg_container, expr.span)
 }
 
 /// Lowers explicit named arguments for signature-unknown descriptor invocations.
+///
+/// Every argument shape has a runtime container form, so this never declines: a sole spread is
+/// passed through as the container, named arguments build a boxed hash, and anything else builds
+/// an indexed array. Callers rely on that totality, because the callback is already published in
+/// the unwind chain by the time the container is built and there is no shape to fall back to.
 pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
-) -> Option<LoweredValue> {
+) -> LoweredValue {
     if let [Expr { kind: ExprKind::Spread(source), .. }] = args {
         // The descriptor invoker already accepts raw or boxed argument arrays and
         // validates their runtime keys. Preserve a sole spread as that container,
         // including declared PHP arrays whose physical representation is Mixed.
-        return Some(lower_expr(ctx, source));
+        return lower_expr(ctx, source);
     }
     if crate::types::call_args::has_named_args(args) {
-        return Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span));
+        return lower_untyped_descriptor_invoker_hash_container(ctx, args, span);
     }
-    Some(lower_untyped_descriptor_invoker_indexed_container(ctx, args, span))
-}
-
-/// Publishes a descriptor container before argument expressions can throw.
-fn publish_untyped_descriptor_container(
-    ctx: &mut LoweringContext<'_, '_>,
-    container: LoweredValue,
-    span: Span,
-) -> crate::ir::LocalSlotId {
-    let (_, owner) = root_owned_call_operand(ctx, container, span);
-    owner.expect("fresh descriptor container must have a managed owner")
-}
-
-/// Borrows the published container through its slot so growth writes the new pointer back.
-fn load_published_descriptor_container(
-    ctx: &mut LoweringContext<'_, '_>,
-    slot: crate::ir::LocalSlotId,
-    php_type: PhpType,
-    span: Span,
-) -> LoweredValue {
-    let value = ctx.emit_value(
-        Op::LoadLocal,
-        Vec::new(),
-        Some(Immediate::LocalSlot(slot)),
-        php_type,
-        Op::LoadLocal.default_effects(),
-        Some(span),
-    );
-    ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
-    value
-}
-
-/// Transfers a completed indexed container out of its published construction slot.
-fn take_published_descriptor_container(
-    ctx: &mut LoweringContext<'_, '_>,
-    slot: crate::ir::LocalSlotId,
-    php_type: PhpType,
-    span: Span,
-) -> LoweredValue {
-    let borrowed = load_published_descriptor_container(ctx, slot, php_type, span);
-    let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, borrowed, Some(span));
-    retire_owned_call_operand(ctx, slot, span);
-    owned
+    lower_untyped_descriptor_invoker_indexed_container(ctx, args, span)
 }
 
 /// Builds an indexed descriptor-invoker container for signature-unknown calls.
@@ -138,11 +89,11 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
-    let owner = publish_untyped_descriptor_container(ctx, array, span);
+    let owner = publish_constructed_container(ctx, array, span);
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
             let source = lower_expr(ctx, inner);
-            let array = load_published_descriptor_container(
+            let array = load_published_container(
                 ctx,
                 owner,
                 array_ty.clone(),
@@ -152,7 +103,7 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
             continue;
         }
         let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
-        let array = load_published_descriptor_container(
+        let array = load_published_container(
             ctx,
             owner,
             array_ty.clone(),
@@ -167,7 +118,7 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
         );
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
     }
-    take_published_descriptor_container(ctx, owner, array_ty, span)
+    take_published_container(ctx, owner, array_ty, span)
 }
 
 /// Builds an associative descriptor-invoker container for named or named/spread calls.
@@ -188,14 +139,14 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
         Op::HashNew.default_effects(),
         Some(span),
     );
-    let owner = publish_untyped_descriptor_container(ctx, hash, span);
+    let owner = publish_constructed_container(ctx, hash, span);
     let mut next_positional_key = emit_i64_at_span(ctx, 0, span);
     for arg in args {
         match &arg.kind {
             ExprKind::NamedArg { name, value } => {
                 let key = lower_string_literal(ctx, name, arg);
                 let value = lower_untyped_descriptor_invoker_arg_value(ctx, value);
-                let hash = load_published_descriptor_container(
+                let hash = load_published_container(
                     ctx,
                     owner,
                     hash_ty.clone(),
@@ -211,7 +162,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             }
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
-                let hash = load_published_descriptor_container(
+                let hash = load_published_container(
                     ctx,
                     owner,
                     hash_ty.clone(),
@@ -228,7 +179,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             _ => {
                 let key = next_positional_key;
                 let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
-                let hash = load_published_descriptor_container(
+                let hash = load_published_container(
                     ctx,
                     owner,
                     hash_ty.clone(),
@@ -253,7 +204,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             }
         }
     }
-    let hash = load_published_descriptor_container(ctx, owner, hash_ty, span);
+    let hash = load_published_container(ctx, owner, hash_ty, span);
     let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span));
     retire_owned_call_operand(ctx, owner, span);
     boxed
@@ -424,13 +375,13 @@ pub(super) fn lower_first_class_callable_expr_call(
                 .as_ref()
                 .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
                 .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+            let callable = root_descriptor_callback(ctx, callable, result_type, expr.span);
             let arg_container =
-                lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
+                lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
             Some(emit_callable_descriptor_invoke(
                 ctx,
                 callable,
                 arg_container,
-                result_type,
                 expr.span,
             ))
         }

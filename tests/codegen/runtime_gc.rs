@@ -72,6 +72,7 @@ mod boxed_array_slice;
 mod boxed_array_key_sort;
 mod boxed_array_usort;
 mod reference_cell_owners;
+mod callable_operand_owners;
 mod descriptor_reference_args;
 mod descriptor_callable_owners;
 mod class_name_owners;

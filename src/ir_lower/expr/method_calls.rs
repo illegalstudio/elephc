@@ -133,10 +133,21 @@ pub(super) fn lower_method_call(
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
+    // A by-reference-returning method transfers a lease that must outlive this caller's
+    // argument and receiver cleanup, so its staging is published before the arguments.
+    let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
+    // An ordinary owned result needs the same protection: retiring the argument roots, the
+    // evaluation intermediates and an owning receiver all run PHP destructors that can throw,
+    // and the result is only an SSA temporary until this staging holds it. Both the result type
+    // and the alias summary are resolved from the receiver and the method alone, so they are
+    // available here, before any argument expression runs.
+    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    let result_staging = prepublish_user_call_result(
+        ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
+    );
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     let mut arg_values = arg_values;
-    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
         ctx,
@@ -156,7 +167,10 @@ pub(super) fn lower_method_call(
         op.default_effects(),
         Some(expr.span),
     );
-    let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
+    let call = finish_reference_return_call(
+        ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &arg_values,
@@ -168,7 +182,8 @@ pub(super) fn lower_method_call(
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     release_owning_receiver_temporary(ctx, object, expr.span);
-    call
+    let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
+    finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }
 
 /// Lowers the `Closure` rebinding methods on a closure (`Callable`) receiver:
@@ -183,36 +198,40 @@ pub(super) fn lower_closure_bind_method(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    match php_symbol_key(method).as_str() {
-        "bindto" => {
-            let new_this = match args.first() {
-                Some(arg) => lower_expr(ctx, arg),
-                None => lower_null(ctx, expr),
-            };
-            Some(emit_closure_bind(ctx, closure.value, new_this.value, expr))
-        }
-        "call" => {
-            // `$closure->call($newThis, ...$args)`: bind `$this` then invoke the
-            // bound closure with the remaining arguments in one step.
-            let new_this = match args.first() {
-                Some(arg) => lower_expr(ctx, arg),
-                None => lower_null(ctx, expr),
-            };
-            let bound = emit_closure_bind(ctx, closure.value, new_this.value, expr);
-            let call_args = &args[args.len().min(1)..];
-            let arg_container =
-                lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span)?;
-            Some(ctx.emit_value(
-                Op::CallableDescriptorInvoke,
-                vec![bound.value, arg_container.value],
-                callable_profile_immediate(),
-                PhpType::Mixed,
-                Op::CallableDescriptorInvoke.default_effects(),
-                Some(expr.span),
-            ))
-        }
-        _ => None,
+    let method = php_symbol_key(method);
+    let result_type = match method.as_str() {
+        "bindto" => PhpType::Callable,
+        "call" => PhpType::Mixed,
+        _ => return None,
+    };
+    // Binding retains its own receiver and environment. Original temporary inputs still
+    // need their own retirement, including a throw while evaluating the new receiver or
+    // invocation arguments. The result must outlive both original-input cleanup records.
+    let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
+    let (closure, closure_owner) = root_owned_call_operand(ctx, *closure, expr.span);
+    let new_this = match args.first() {
+        Some(arg) => lower_expr(ctx, arg),
+        None => lower_null(ctx, expr),
+    };
+    let (new_this, receiver_owner) = root_owned_call_operand(ctx, new_this, expr.span);
+    let bound = emit_closure_bind(ctx, closure.value, new_this.value, expr);
+    let result = if method == "call" {
+        let call_args = &args[args.len().min(1)..];
+        let bound = root_descriptor_callback(ctx, bound, PhpType::Mixed, expr.span);
+        let arg_container =
+            lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span);
+        emit_callable_descriptor_invoke(ctx, bound, arg_container, expr.span)
+    } else {
+        bound
+    };
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    if let Some(slot) = receiver_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
     }
+    if let Some(slot) = closure_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    Some(take_prepublished_call_result(ctx, result_staging, result, expr.span))
 }
 
 /// Emits the `closure_bind` runtime call that rebinds a closure's captured

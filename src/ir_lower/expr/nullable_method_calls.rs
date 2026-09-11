@@ -132,10 +132,20 @@ pub(super) fn lower_method_call_with_receiver(
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
+    // A by-reference-returning method transfers a lease that must outlive this caller's
+    // argument and receiver cleanup, so its staging is published before the arguments.
+    let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
+    // An ordinary owned result gets the same protection as the reference lease: argument roots,
+    // evaluation intermediates and an owning receiver all retire after the call and run PHP
+    // destructors that can throw. Receiver and method alone decide the result type and the alias
+    // summary, so both are available before any argument expression runs.
+    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    let result_staging = prepublish_user_call_result(
+        ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
+    );
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     let mut arg_values = arg_values;
-    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
         ctx,
@@ -155,7 +165,10 @@ pub(super) fn lower_method_call_with_receiver(
         op.default_effects(),
         Some(expr.span),
     );
-    let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
+    let call = finish_reference_return_call(
+        ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &arg_values,
@@ -167,7 +180,8 @@ pub(super) fn lower_method_call_with_receiver(
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     release_owning_receiver_temporary(ctx, object, expr.span);
-    call
+    let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
+    finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }
 
 /// Lowers a nullsafe dynamic instance method call after the receiver was evaluated and guarded.

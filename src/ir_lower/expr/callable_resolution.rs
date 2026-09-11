@@ -9,6 +9,33 @@
 
 use super::*;
 
+/// Returns whether `lower_static_callable_call` can lower this binding without descriptor state.
+///
+/// `LoadRefCell` is the conservative source marker for a capture whose stable cell is not
+/// present in the binding. It always covers by-reference captures, and can also match a
+/// by-value capture read from an already reference-bound local; descriptor fallback is safe for
+/// that extra case. Re-materializing a matched value for a later direct call asks the backend
+/// for the source local's current storage address. After `unset($source)`, however, that local
+/// has detached from the cell retained by the closure descriptor, so the direct call would read
+/// the cleared or rebound local instead of the captured cell. Until static bindings carry the
+/// stable captured-cell pointer, that shape has to route through descriptor invocation.
+///
+/// Callers that must emit owner bookkeeping around the direct call consult this first, so the
+/// decision is made before any instruction is emitted rather than by abandoning a half-lowered
+/// call.
+pub(super) fn static_callable_call_lowers_directly(
+    ctx: &LoweringContext<'_, '_>,
+    target: &StaticCallableBinding,
+) -> bool {
+    match target {
+        StaticCallableBinding::InstanceMethod { direct_call, .. } => *direct_call,
+        StaticCallableBinding::Closure { captures, .. } => !captures.iter().any(|capture| {
+            ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
+        }),
+        _ => true,
+    }
+}
+
 /// Lowers one resolved static callable target to the corresponding EIR call opcode.
 pub(super) fn lower_static_callable_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -16,14 +43,24 @@ pub(super) fn lower_static_callable_call(
     callback_args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if !static_callable_call_lowers_directly(ctx, &target) {
+        return None;
+    }
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
             let sig = ctx.functions.get(&function_name).cloned();
-            begin_call_argument_evaluation(ctx);
-            let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
-            let php_type = call_return_type(ctx, &function_name, &operands);
+            let php_type = call_return_type(ctx, &function_name, &[]);
             let return_alias = ctx.return_alias_summaries.function(&function_name)
                 .cloned().unwrap_or(ReturnArgAlias::Unknown);
+            let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
+            // The callable form gets the same result staging the identical direct call gets: the
+            // argument roots and evaluation intermediates retire after the call and run PHP
+            // destructors that can throw.
+            let result_staging = prepublish_user_call_result(
+                ctx, sig.as_ref(), &return_alias, &php_type, expr.span,
+            );
+            begin_call_argument_evaluation(ctx);
+            let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             let roots = root_user_call_operands(
                 ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
@@ -37,12 +74,16 @@ pub(super) fn lower_static_callable_call(
                 effects_lookup::user_call_effects(&function_name),
                 Some(expr.span),
             );
-            let call = finish_reference_return_call(ctx, call, sig.as_ref(), expr.span);
+            let call = finish_reference_return_call(
+                ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
+            );
+            stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
             release_owned_call_arg_temporaries_with_roots(
                 ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), &roots, expr.span,
             );
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-            Some(call)
+            let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
+            Some(finish_reference_return_value(ctx, call, reference_staging, expr.span))
         }
         StaticCallableBinding::ExternFunction(function_name) => {
             let sig = ctx
@@ -56,11 +97,24 @@ pub(super) fn lower_static_callable_call(
             let data = ctx.intern_function_name(&function_name);
             let call = ctx.emit_value(
                 Op::ExternCall,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 php_type,
                 Op::ExternCall.default_effects(),
                 Some(expr.span),
+            );
+            // A statically resolved extern callable consumes its operands exactly like the
+            // direct extern call in `lower_function_call`, so a fresh owned argument, such
+            // as a string built for a `call_user_func('c_fn', ...)` or a first-class callable
+            // invocation, is released here instead of leaking once per call. The alias guard
+            // keeps a pass-through result alive, because an extern result may point into the
+            // very buffer this call passed in.
+            release_owned_call_arg_temporaries(
+                ctx,
+                &operands,
+                Some(call.value),
+                &ReturnArgAlias::Unknown,
+                expr.span,
             );
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
             Some(call)
@@ -81,42 +135,40 @@ pub(super) fn lower_static_callable_call(
                 &function_name,
                 source_prefers_extension_builtin(&function_name),
             );
-            let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
+            // Source-order argument evaluation publishes each owned argument before the next one
+            // is evaluated, so a later argument that throws cannot strand an earlier one. The
+            // ledger must be balanced on this path too: `emit_builtin_call_value` releases the
+            // final operands after a successful call, and only the intermediates it did not
+            // consume are retired here.
+            begin_call_argument_evaluation(ctx);
+            let mut operands =
+                lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
             let php_type = static_callable_builtin_result_type(
                 ctx,
                 &function_name,
                 &operands,
                 expr.span,
             );
-            Some(emit_builtin_call_value(
+            let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+            let call = emit_builtin_call_value(
                 ctx,
                 &function_name,
                 operands,
                 php_type,
                 expr.span,
                 None,
-            ))
+            );
+            retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+            Some(call)
         }
         StaticCallableBinding::Closure {
             name,
             signature,
             captures,
         } => {
-            // `LoadRefCell` is the conservative source marker for a capture whose stable
-            // cell is not present in this binding. It always covers by-reference captures,
-            // and can also match a by-value capture read from an already reference-bound
-            // local; descriptor fallback is safe for that extra case. Re-materializing a
-            // matched value for a later direct call asks the backend for the source local's
-            // current storage address. After `unset($source)`, however, that local has
-            // detached from the cell retained by the closure descriptor, so the direct call
-            // would read the cleared or rebound local instead of the captured cell. Until
-            // static bindings carry the stable captured-cell pointer, route this shape
-            // through the descriptor invocation.
-            if captures.iter().any(|capture| {
-                ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
-            }) {
-                return None;
-            }
+            // A capture without a stable cell already refused this binding above, so the direct
+            // call below can be lowered without abandoning any emitted instruction.
+            let reference_staging = begin_reference_return_call(ctx, Some(&signature), expr.span);
             begin_call_argument_evaluation(ctx);
             let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
@@ -135,13 +187,15 @@ pub(super) fn lower_static_callable_call(
                 effects_lookup::user_call_effects(&name),
                 Some(expr.span),
             );
-            let call = finish_reference_return_call(ctx, call, Some(&signature), expr.span);
+            let call = finish_reference_return_call(
+                ctx, call, Some(&signature), reference_staging.as_ref(), expr.span,
+            );
             release_owned_call_arg_temporaries_with_roots(
                 ctx, &arg_values, Some(call.value), &ReturnArgAlias::Unknown,
                 Some(&signature), &roots, expr.span,
             );
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-            Some(call)
+            Some(finish_reference_return_value(ctx, call, reference_staging, expr.span))
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
             Some(lower_static_method_call(ctx, &receiver, &method, callback_args, expr))
@@ -290,14 +344,100 @@ pub(super) fn closure_bind_property_return_type(
 /// cell pointer through. The call result is typed from the bound receiver's property so a
 /// by-reference array return binds correctly. Only the auto-captured `$this` shape (the
 /// `fn &() => $this->prop` form) is handled; other captures fall back to the generic path.
+/// The unbound descriptor the binding was derived from is not an operand of the direct call, but
+/// it owns the closure's captured environment until the call returns, so it is published in the
+/// unwind chain before the arguments are lowered and retired once the call is complete. A
+/// refused direct lowering retires it too, leaving no owner record and no leaked descriptor
+/// behind for the generic path the caller falls back to.
 pub(super) fn lower_bound_closure_immediate_call(
     ctx: &mut LoweringContext<'_, '_>,
     callee: &Expr,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let (bound, _closure_value) = build_bound_closure_binding(ctx, callee, expr)?;
-    lower_static_callable_call(ctx, bound, args, expr)
+    if !bound_closure_binding_shape_is_supported(ctx, callee) {
+        return None;
+    }
+    let (bound, closure_value) = build_bound_closure_binding(ctx, callee, expr)?;
+    if !static_callable_call_lowers_directly(ctx, &bound) {
+        // The bound binding carries a boxed `$this` value, never a `LoadRefCell` capture, so
+        // this is unreachable today. Retire the descriptor rather than leak it if it ever is.
+        let (_, owner) = root_owned_call_operand(ctx, closure_value, expr.span);
+        if let Some(slot) = owner {
+            retire_owned_call_operand(ctx, slot, expr.span);
+        }
+        return None;
+    }
+    // The copied result of a by-value call is produced by the direct lowering, but the
+    // descriptor's retirement below destroys the closure's captured environment and can throw.
+    // Stage the result OUTSIDE the descriptor record so that throw cannot strand it.
+    let result_staging = prepublish_static_callable_call_result(ctx, &bound, expr.span);
+    let (_, descriptor_owner) = root_owned_call_operand(ctx, closure_value, expr.span);
+    let result = lower_static_callable_call(ctx, bound, args, expr)
+        .expect("a directly callable bound closure lowers its call");
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    if let Some(slot) = descriptor_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    Some(take_prepublished_call_result(ctx, result_staging, result, expr.span))
+}
+
+/// Returns whether `build_bound_closure_binding` can complete without abandoning emitted IR.
+///
+/// Pure structural check. `closure_bind_property_return_type` already proves the callee is
+/// `Closure::bind(<closure literal whose body is `return $this->prop`>, $newThis, …)`. What is
+/// left is the capture count: a non-static closure whose body uses `$this` and declares no
+/// `use` list captures exactly `$this`, which is the single shape the direct lowering supports.
+/// Deciding it here keeps the closure literal from being lowered, abandoned and then lowered a
+/// second time by the caller's generic fallback.
+pub(super) fn bound_closure_binding_shape_is_supported(
+    ctx: &LoweringContext<'_, '_>,
+    callee: &Expr,
+) -> bool {
+    if closure_bind_property_return_type(ctx, callee).is_none() {
+        return false;
+    }
+    let ExprKind::StaticMethodCall { args: bind_args, .. } = &callee.kind else {
+        return false;
+    };
+    if bind_args.get(1).is_none() {
+        return false;
+    }
+    matches!(
+        bind_args.first().map(|arg| &arg.kind),
+        Some(ExprKind::Closure { captures, is_static, .. }) if captures.is_empty() && !is_static
+    )
+}
+
+/// Publishes result staging for a direct static-callable call whose result type is predictable.
+///
+/// Only the user-function and closure bindings are staged: their result type is read from the
+/// signature alone, so the staged slot and the emitted call provably agree. A builtin binding's
+/// result type depends on the lowered operands, and a static-method binding may be retyped by
+/// late static binding, so neither can be declared before the arguments exist.
+///
+/// An enclosing reference assignment is excluded as well. Its own staging already owns the cell
+/// the direct lowering hands back, and that raw cell is not the payload this slot would release.
+pub(super) fn prepublish_static_callable_call_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &StaticCallableBinding,
+    span: Span,
+) -> Option<PrepublishedCallResult> {
+    if ctx
+        .reference_call_context
+        .as_ref()
+        .is_some_and(|context| context.depth == ctx.expression_depth)
+    {
+        return None;
+    }
+    let result_type = match target {
+        StaticCallableBinding::UserFunction(name) => call_return_type(ctx, name, &[]),
+        StaticCallableBinding::Closure { signature, .. } => {
+            normalize_value_php_type(signature.return_type.codegen_repr())
+        }
+        _ => return None,
+    };
+    prepublish_call_result(ctx, &result_type, span)
 }
 
 /// Builds the static-callable binding for `Closure::bind(fn &() => $this->prop, $newThis, scope)`.
@@ -309,6 +449,10 @@ pub(super) fn lower_bound_closure_immediate_call(
 /// variable. `None` unless the call is the single auto-captured `$this` shape — the only form
 /// whose `$this` is fully known at compile time. Shared by the immediate-invoke path
 /// (`Closure::bind(...)()`) and the variable-assignment path (`$b = Closure::bind(...)`).
+///
+/// Both callers gate on `bound_closure_binding_shape_is_supported` first, so the `None` arms
+/// after the closure literal is lowered are unreachable defence rather than a live fallback that
+/// would abandon an emitted descriptor and re-evaluate the whole expression.
 pub(super) fn build_bound_closure_binding(
     ctx: &mut LoweringContext<'_, '_>,
     callee: &Expr,
@@ -373,6 +517,9 @@ pub(crate) fn lower_bound_closure_for_assignment(
     ctx: &mut LoweringContext<'_, '_>,
     value: &Expr,
 ) -> Option<LoweredValue> {
+    if !bound_closure_binding_shape_is_supported(ctx, value) {
+        return None;
+    }
     let (bound, closure_value) = build_bound_closure_binding(ctx, value, value)?;
     ctx.set_pending_static_callable_result(bound);
     Some(closure_value)

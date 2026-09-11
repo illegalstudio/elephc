@@ -29,22 +29,31 @@ pub(super) fn descriptor_callback_php_type_supported(php_type: &PhpType) -> bool
 }
 
 /// Builds the descriptor-invoker argument container for `call_user_func()`.
+///
+/// Every argument shape has a container form, so this never declines. Named arguments build a
+/// boxed hash, anything else builds an indexed array, and a spread mixed with named arguments
+/// goes to the hash too, where PHP's "spread before named" ordering keeps the positional keys
+/// contiguous. Callers depend on that totality, because the callback is already published in the
+/// unwind chain by the time the container is built and abandoning the lowering here would either
+/// leave an owner record behind or re-evaluate the callback expression on a fallback path.
 pub(super) fn lower_descriptor_invoker_arg_container_for_call_user_func(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     sig: Option<&FunctionSig>,
     span: Span,
-) -> Option<LoweredValue> {
+) -> LoweredValue {
     if crate::types::call_args::has_named_args(args) {
-        if args.iter().any(is_spread_arg) {
-            return None;
-        }
-        return Some(lower_named_descriptor_invoker_arg_container(ctx, args, sig, span));
+        return lower_named_descriptor_invoker_arg_container(ctx, args, sig, span);
     }
-    Some(lower_indexed_descriptor_invoker_arg_array(ctx, args, sig, span))
+    lower_indexed_descriptor_invoker_arg_array(ctx, args, sig, span)
 }
 
 /// Builds an indexed `array<mixed>` argument container, expanding positional spreads.
+///
+/// The array is published for the whole construction: it is the only owner of every argument
+/// already inserted, and a later argument expression can throw into a catch in this same frame.
+/// It is reloaded from the published slot after every insertion, because growth reallocates the
+/// payload and writes the new pointer back into that slot.
 pub(super) fn lower_indexed_descriptor_invoker_arg_array(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
@@ -61,10 +70,12 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    let owner = publish_constructed_container(ctx, array, span);
     let mut positional_index = 0usize;
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
             let source = lower_expr(ctx, inner);
+            let array = load_published_container(ctx, owner, array_ty.clone(), arg.span);
             lower_indexed_array_spread_into_array(ctx, array, source, Some(&elem_ty), arg.span);
             continue;
         }
@@ -74,6 +85,7 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
             let value = lower_expr(ctx, arg);
             coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
         };
+        let array = load_published_container(ctx, owner, array_ty.clone(), arg.span);
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -84,10 +96,15 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
         positional_index += 1;
     }
-    array
+    take_published_container(ctx, owner, array_ty, span)
 }
 
 /// Builds a boxed hash argument container for named `call_user_func()` args.
+///
+/// The hash is published exactly like the indexed container, and reloaded before every insertion.
+/// A spread is merged in with runtime numeric keys through the shared descriptor spread loop, so
+/// the typed builder covers `f(...$a, name: $x)` without abandoning the callback the caller has
+/// already published. Reference markers and the string-transfer rule stay signature-driven.
 pub(super) fn lower_named_descriptor_invoker_arg_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
@@ -102,13 +119,30 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
         Op::HashNew,
         Vec::new(),
         Some(Immediate::Capacity(args.len() as u32)),
-        hash_ty,
+        hash_ty.clone(),
         Op::HashNew.default_effects(),
         Some(span),
     );
+    let owner = publish_constructed_container(ctx, hash, span);
+    // PHP rejects a positional argument after unpacking, so the compile-time positional counter
+    // is only ever advanced before the first spread. From there the numbering is a runtime value
+    // the spread loop hands back.
     let mut next_positional_key = 0i64;
+    let mut spread_key: Option<LoweredValue> = None;
     for arg in args {
         let (key, value) = match &arg.kind {
+            ExprKind::Spread(inner) => {
+                let source = lower_expr(ctx, inner);
+                let start = match spread_key {
+                    Some(key) => key,
+                    None => emit_i64_at_span(ctx, next_positional_key, arg.span),
+                };
+                let hash = load_published_container(ctx, owner, hash_ty.clone(), arg.span);
+                spread_key = Some(lower_untyped_descriptor_invoker_spread_into_hash(
+                    ctx, hash, source, start, arg.span,
+                ));
+                continue;
+            }
             ExprKind::NamedArg { name, value } => {
                 let key = lower_string_literal(ctx, name, arg);
                 let param_index = sig.and_then(|sig| {
@@ -137,6 +171,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                 (key, value)
             }
         };
+        let hash = load_published_container(ctx, owner, hash_ty.clone(), arg.span);
         ctx.emit_void(
             Op::HashSet,
             vec![hash.value, key.value, value.value],
@@ -152,7 +187,10 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(arg.span));
         }
     }
-    ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span))
+    let hash = load_published_container(ctx, owner, hash_ty, span);
+    let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span));
+    retire_owned_call_operand(ctx, owner, span);
+    boxed
 }
 
 /// Returns the variable name when this literal argument should be passed by reference.

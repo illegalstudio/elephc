@@ -360,8 +360,8 @@ variable, a `finally` that rebinds the returned variable and falls through canno
 change what was returned. This mirrors PHP, which materializes the reference with
 `MAKE_REF` before the finally rather than re-reading the variable afterwards.
 
-Every accepted by-reference return source owns a transferable cell. A property slot
-already holds one; an ordinary addressable local is promoted in place first, which
+Managed by-reference return sources own a transferable cell. A promoted property
+slot already holds one; an ordinary addressable local is promoted in place first, which
 preserves the variable's identity. That promotion uses the DECLARED result's payload
 representation, not the local's narrower inferred storage: a concretely typed array
 local inside an `: array` function widens to `Mixed` before its cell exists, because
@@ -390,9 +390,9 @@ the program that raised it.
 
 That owner-zero rule has exactly one accepted exception, and it is checked against
 the runtime rather than assumed: an address that is an EXACT node of the active
-unmanaged-borrow chain is a live boxed `array_walk()` element, whose caller is the
-descriptor invoker. That invoker copies the pointee into an owned `Mixed`
-immediately after the call, before any cleanup can free the entry, so the return is
+unmanaged-borrow chain is a live boxed `array_walk()` element. Nested reference
+relays are permitted while that borrow is active; the enclosing descriptor invoker
+copies the final pointee into an owned `Mixed` before releasing the element, so the return is
 accepted with NO lease and still transports its own snapshot. Every other owner-zero
 address, including an ordinary array element relayed through a by-reference
 parameter, still fails closed, and the separate escape guards that reject publishing
@@ -416,10 +416,27 @@ generic `__rt_decref_any` entry, which dispatches heap kind 7 to
 `__rt_reference_cell_release`, never the callable-descriptor entry its payload type
 would otherwise select.
 
-A by-value use of the same call needs no record. It loads the payload, acquires it
-and retires the lease with no PHP code in between. The acquired copy is then an
-ordinary owned call result and shares whatever protection every other owned call
-result has.
+A by-value use of the same call publishes its own staging on the same terms, and
+for the same reason: the copy can only be taken once the caller's argument
+temporaries, evaluation intermediates and owning receiver have been retired, and
+each of those runs a destructor that can throw. Until then the lease is the only
+owner of the pointee, so its record is published before the arguments are
+evaluated and detached only after that cleanup, keeping the chain strictly LIFO.
+The payload is loaded at that point and the lease is retired immediately
+afterwards. The load is a COPY, not an alias of the lease: a boxed `Mixed`
+pointee is cloned rather than retained, because the lease keeps the callee's own
+mutable box and a later write through the same reference mutates it in place.
+Every other refcounted payload keeps the plain retain, which is exactly PHP's
+copy-on-write by-value array copy and preserves the alias and reference-writeback
+behavior a later write through the cell relies on. This is the same rule a
+by-value `return` of a reference-cell read applies, so the resource special case
+is handled by the runtime clone.
+
+Publication of that staging is mandatory, not opportunistic. Every call site
+resolves its callee signature BEFORE evaluating arguments, so there is no path on
+which a by-reference-returning call reaches its adoption point without a published
+record; lowering fails closed instead of falling back to the immediate unrooted
+copy it used to take.
 
 Owned by-value arguments of a reference-returning call are rooted like any other
 call's, including a fresh container materialized for an omitted by-reference default,
@@ -436,6 +453,57 @@ Refusals are collected in a thread-local sink that `lower_program` drains before
 validation. Collection is rollback-safe: the speculative region `stmt::repr_fixpoint`
 lowers and discards rolls its refusals back with it, and the guaranteed final lowering
 of that region records them again.
+
+Callable operands follow the same publication rule as call arguments. A callable
+descriptor's callback is published before the argument container is built, because
+building it runs PHP expressions, and a freshly evaluated callback (a callable
+array holding a `new` receiver, or a computed function name) is owned by nothing
+else. The callback record nests outside the container record and is retired last.
+An immediately invoked closure literal is called directly through its captured
+values rather than its descriptor, so that unused descriptor is published for the
+duration of the call and retired afterwards instead of being abandoned. A
+statically resolved extern or builtin callable runs the same argument ledger and
+the same post-call argument release as the identical direct call. The statically
+lowered `array_map()` fast path publishes its partially built result and reloads
+the current pointer after every push, and it applies only to source elements whose
+evaluation cannot be observed, because it interleaves element evaluation with
+callback invocation while PHP evaluates the whole source array first.
+
+Argument containers are published the same way whether they are built from a
+signature or not. A `call_user_func()` / `call_user_func_array()` container is
+rooted for its whole construction and reloaded from that slot after every
+insertion, because an insertion can reallocate the payload and because a later
+argument expression can throw while the container is the only owner of everything
+already inserted.
+
+Those builders are TOTAL. Every argument shape has a container form: named
+arguments build a boxed hash, anything else builds an indexed array, and a spread
+mixed with named arguments merges into the same hash with runtime numeric keys
+(PHP requires unpacking to precede explicit named arguments, so the positional
+numbering stays contiguous). Declining a shape after the callback has already been
+evaluated is not an option: the caller's fallback would evaluate that callback
+expression a second time and run its side effects twice. For the same reason a
+callback whose storage shape has no descriptor arm reuses the value that was
+already lowered rather than returning to the caller, and the bound-closure
+lowerings decide their whole structural shape before emitting anything.
+
+A call's own owned result is staged as well. Retiring the argument roots, the
+evaluation intermediates, the argument container, a descriptor callback or an
+owning receiver all run PHP destructors that can throw into a `catch` in the SAME
+frame, and until the staging holds it the result is only an SSA temporary that no
+record can see. The staging slot is a one-shot owned temporary that the frame
+prologue zero-initializes; it is published BEFORE every operand root of that call,
+the result is MOVED into it right after the call with no extra retain, and it is
+popped LAST, because the runtime's operand scope is a plain LIFO stack that cannot
+detach an arbitrary named record. On the normal path the slot is CLEARED rather
+than released, which transfers the single reference back to the expression's
+consumer; on the unwind path the record releases it exactly once, before the catch
+body runs. The slot is declared with the exact result type the call is emitted
+with. Two cases are deliberately excluded: a by-reference-returning callee, whose
+result is the transferred cell the reference staging already owns, and a callee
+whose summary says its result may be one of its arguments, because that argument's
+release is guarded by a runtime alias comparison and rooting both would release one
+shared reference twice.
 
 Ordinary descriptor calls box the referenced value before releasing the cell.
 Cell-owner lookup validates allocation boundaries before adopting an unknown

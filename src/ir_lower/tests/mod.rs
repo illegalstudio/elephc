@@ -43,6 +43,7 @@ mod static_callable_string_owners;
 mod reference_cells;
 mod reference_detach;
 mod reference_return_boundaries;
+mod callable_operand_owners;
 mod static_properties;
 mod synthetic_arrays;
 mod throwable_constructors;
