@@ -2488,3 +2488,26 @@ Native Sol inspected the log and made the scoped configuration and diagnostic
 changes. Cargo check --test web_tests, TOML parsing, exact override checks and
 diff hygiene pass. No local tests or repros execute. Completion within the new
 budget still requires the next exact-head CI run.
+
+### Partition the complete non-codegen workload before its job deadline
+
+All three non-codegen jobs on 60d0871ed exhaust the unchanged 45-minute job
+deadline, rather than being skipped because of the web failure. They select
+9,154 Linux or 9,125 macOS tests with one serial worker. The x86 and macOS logs
+reach test 3,686 after roughly 21 minutes; the only reported individual timeout
+passes its retry. The previous completed x86 and ARM runs already took about
+41 and 44 minutes respectively. Now-green structural tests also execute their
+previously unreachable five-target generation assertions, adding real coverage
+work. There is no evidence of an individual test hanging through the deadline.
+
+Split each platform's complete selection into four hash partitions. Keep one
+worker per runner, the existing filters, retries, fail-fast policy and 45-minute
+job limit. Preserve job IDs and every aggregate dependency. Enable passing-test
+status lines for these jobs so subsequent CI supplies progress and timings rather
+than long silent intervals. The benchmark remains intentionally main-only.
+
+Native Sol independently compared current and previous CI timings and reviewed
+the workflow change. YAML parsing and semantic comparison verify that unrelated
+jobs are untouched, all four partitions are present, and selection and gate
+semantics are preserved. Diff hygiene passes. No local tests execute; the next
+exact-head matrix must establish that all partitions complete successfully.

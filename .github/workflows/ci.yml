@@ -430,11 +430,17 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # More than 9,000 selected tests exceed a single serial job's 45-minute budget.
+  # Partition the complete selection while keeping each runner serial and bounded.
   non-codegen-tests-macos-aarch64:
-    name: Non-Codegen Tests (macos-aarch64)
+    name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-macos-aarch64
     runs-on: macos-14
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
 
@@ -456,14 +462,20 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/4 \
+            --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
   non-codegen-tests-linux-x86_64:
-    name: Non-Codegen Tests (linux-x86_64)
+    name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -484,14 +496,20 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/4 \
+            --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
   non-codegen-tests-linux-aarch64:
-    name: Non-Codegen Tests (linux-aarch64)
+    name: Non-Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-linux-aarch64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -512,6 +530,8 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/4 \
+            --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
