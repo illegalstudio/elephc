@@ -190,7 +190,7 @@ $date_sample = eval('$ts = mktime(0, 0, 0, 1, 2, 2024); return date("Y-m-d", $ts
 $strtotime_sample = eval('$ts = strtotime("2024-01-02 03:04:05"); return date("Y-m-d H:i:s", $ts);');
 $micro_time = eval('return microtime(true) > 1000000000 ? "ok" : "bad";');
 $realpath_cache = eval('return count(realpath_cache_get()) . ":" . realpath_cache_size();');
-$environment = eval('putenv("ELEPHC_EVAL_EXAMPLE=ok"); $value = getenv("ELEPHC_EVAL_EXAMPLE"); putenv("ELEPHC_EVAL_EXAMPLE"); return $value . ":" . (getenv("ELEPHC_EVAL_EXAMPLE") === "" ? "cleared" : "left");');
+$environment = eval('putenv("ELEPHC_EVAL_EXAMPLE=ok"); $value = getenv("ELEPHC_EVAL_EXAMPLE"); putenv("ELEPHC_EVAL_EXAMPLE"); return $value . ":" . (getenv("ELEPHC_EVAL_EXAMPLE") === false ? "cleared" : "left");');
 $sleeping = eval('usleep(0); return sleep(0) . ":awake";');
 $host_lookup = eval('return (strlen(gethostname()) > 0 ? "host" : "empty") . ":" . gethostbyname("127.0.0.1") . ":" . gethostbyname("not a host") . ":" . (strlen(gethostbyaddr("127.0.0.1")) > 0 ? "reverse" : "empty") . ":" . (gethostbyaddr("not-an-ip-address") === false ? "bad-ip" : "bad");');
 $protocol_services = eval('return getprotobyname("tcp") . ":" . getprotobynumber(17) . ":" . getservbyname("http", "tcp") . ":" . getservbyport(443, "tcp");');
