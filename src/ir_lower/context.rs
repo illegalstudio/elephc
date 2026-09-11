@@ -1489,12 +1489,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// throwing destructor. When it does not, the slot can
     /// STILL be widened to refcounted storage by a store lowered later that reaches
     /// this one through a loop back-edge (e.g. an inner `for` counter re-initialized
-    /// by the outer body but widened Int→Mixed by its checked-add update). The storage
-    /// type visible here is stale in that case, so inside loops a deferred
-    /// `release_local_slot` is emitted instead: the backend releases the occupant
-    /// using the final widened storage type, and `prune_untracked_release_local_slot_ops`
-    /// erases the op when the slot never widens (issue #534: without this, the
-    /// previous outer iteration's Mixed box leaked on every re-initialization).
+    /// by the outer body but widened Int→Mixed by its checked-add update). An eval barrier
+    /// can similarly restore a future local before its first syntactic store, whose type
+    /// may be widened only by a later store. The storage type visible here is stale in
+    /// either case, so a deferred `release_local_slot` is emitted: the backend releases
+    /// the occupant using the final widened storage type, and
+    /// `prune_untracked_release_local_slot_ops` erases the op when the slot never widens
+    /// (issue #534: without this, the previous outer iteration's Mixed box leaked on every
+    /// re-initialization).
     fn release_stored_local_value_before_overwrite(
         &mut self,
         name: &str,
@@ -1510,9 +1512,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
             return;
         }
-        if !tracked && self.loop_stack.is_empty() {
+        let eval_may_have_reloaded_slot = self.eval_barrier_active
+            && self.builder.local_kind(slot) == LocalKind::PhpLocal;
+        if !tracked && self.loop_stack.is_empty() && !eval_may_have_reloaded_slot {
             // Outside loops no back-edge can execute a later widening store before
-            // this one, so the untracked storage type is final for this path.
+            // this one, and no eval reload can have populated it, so the untracked
+            // storage type is final for this path.
             return;
         }
         self.emit_void(
@@ -1678,25 +1683,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
         // A loop-carried slot can exist globally without being definitely initialized
-        // on this CFG path. Release the runtime occupant before overwriting it.
+        // on this CFG path. An earlier eval barrier can likewise reload a future PHP local
+        // before lowering reaches its first syntactic store. Release either runtime occupant
+        // before overwriting it.
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && !self.loop_stack.is_empty()
+            && (!self.loop_stack.is_empty()
+                || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
         // A first syntactic store inside a loop body (main or function) can still
-        // overwrite a prior runtime iteration's value: the slot has no straight-line
-        // predecessor store so it is not in `initialized_slots`, but the loop back-edge
-        // makes it live on iterations 2+. Release the previous occupant so the old value
-        // is freed on reassign. Function cleanup locals (including returned slots) are
-        // zero-initialized in the prologue, so the first iteration safely releases a null
-        // slot; subsequent iterations release the prior value.
+        // overwrite a prior runtime iteration's value. The same is true after eval, whose
+        // backend inventory can reload a future PHP local before this store exists in EIR.
+        // Function cleanup locals (including returned slots) are zero-initialized in the
+        // prologue, so paths with no prior runtime occupant safely release a null slot.
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
-            && !self.loop_stack.is_empty()
+            && (!self.loop_stack.is_empty()
+                || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
@@ -1814,15 +1821,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         if local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && !self.loop_stack.is_empty()
+            && (!self.loop_stack.is_empty()
+                || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
-            self.release_stored_local_value(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, span);
         }
         if local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
-            && !self.loop_stack.is_empty()
+            && (!self.loop_stack.is_empty()
+                || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
-            self.release_stored_local_value(name, slot, span);
+            self.release_stored_local_value_before_overwrite(name, slot, span);
         }
         self.store_slot_with_op(slot, stored, Op::StoreLocal, span);
         self.set_local_type(name, php_type);

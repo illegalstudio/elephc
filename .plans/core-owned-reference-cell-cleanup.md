@@ -2388,3 +2388,26 @@ This changes diagnostics only, not the failing runtime ownership assertions.
 Native Sol updated both fixture-local extractors. Static diff checks and
 cargo check --tests pass. No local tests or repros execute; the dedicated CI job
 continues to supply the requested runtime evidence.
+
+### Retire eval-restored future locals before their first source assignment
+
+Fresh 8b49693d7 CI assembly confirms both remaining leaks share one cause. Eval
+synchronizes the final local inventory, including names whose first syntactic
+assignment comes later. The metadata target slot at rbp-736 receives an owned
+empty string during reload, then its first assignment overwrites it without a
+release. The instanceof probe does the same to named and dynamic at rbp-584 and
+rbp-616. This accounts for exactly three and six leaked strings respectively;
+the classifyStatic method is balanced and is not the leaking path.
+
+Extend first-store cleanup only for ordinary PHP locals after an eval barrier,
+including local-only foreach initialization. Retain the incoming value before
+zeroing and retiring the runtime occupant. Preserve deferred slot retirement
+when the first scalar store is later widened to Mixed. Leave eval inventories,
+hidden owners, ordinary barrier-free stores and reference rebinding unchanged.
+
+Add optimizer-resistant five-target structural regressions for first String and
+later-widened scalar stores, plus one single-compile heap regression covering both
+taken and skipped optional eval. Existing metadata and instanceof assertions stay
+intact. Native Sol agents traced, implemented and independently reviewed the
+change. Cargo check --tests, assembly-comment checks and diff hygiene pass.
+No local test or repro executes. Runtime confirmation remains assigned to CI.

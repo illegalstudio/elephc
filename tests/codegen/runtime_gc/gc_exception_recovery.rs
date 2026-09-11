@@ -160,6 +160,31 @@ unset($source);
     assert_eq!(compile_and_run_tagged(source), expected);
 }
 
+/// The first source assignment after optional eval retires any synchronized string owner.
+#[test]
+fn test_core_first_string_store_after_optional_eval_retires_synced_owner() {
+    let source = r#"<?php
+function assignStringAfterOptionalEval(string $source, bool $execute, string $text): string {
+    if ($execute) {
+        eval($source);
+    }
+    $assignedAfterEval = strtolower($text);
+    return $assignedAfterEval;
+}
+$source = 'return null; // ' . $argc;
+for ($i = 0; $i < 3; $i++) {
+    echo assignStringAfterOptionalEval($source, true, "KEPT"), "|";
+    echo assignStringAfterOptionalEval($source, false, "KEPT"), "|";
+}
+unset($source);
+"#;
+    let expected = "kept|kept|".repeat(3);
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Focused eval callable and metadata results release temporary cells without consuming objects.
 #[test]
 fn test_core_eval_callable_and_nonempty_metadata_results_balance_owners() {
