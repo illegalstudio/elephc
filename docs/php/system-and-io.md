@@ -31,6 +31,75 @@ sidebar:
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
 
+## The environment and the CLI superglobals
+
+`getenv()` reads the process environment live, so a `putenv()` made earlier in the
+same program is visible to it:
+
+```php
+putenv("APP_MODE=debug");
+echo getenv("APP_MODE");        // debug
+putenv("APP_MODE");             // a bare name REMOVES the variable
+var_dump(getenv("APP_MODE"));   // bool(false)
+```
+
+Called with no argument it answers the whole environment as a string-keyed array,
+and the optional `$local_only` argument is accepted and has no effect — in the CLI
+SAPI there is no environment separate from the process's, so both forms agree:
+
+```php
+$env = getenv();
+echo count($env), "\n";
+echo $env["PATH"], "\n";
+```
+
+A value containing `=` is split on the **first** one, as PHP does, so a variable
+whose value holds an `=` keeps its name and its whole value.
+
+### `$_ENV` and `$_SERVER`
+
+Both superglobals carry the environment in an ordinary compiled CLI program, and
+`$_SERVER` carries PHP's own CLI keys on top of it:
+
+| Key | Value |
+|---|---|
+| `argv` | the program's arguments, like `$argv` |
+| `argc` | the argument count, like `$argc` |
+| `PHP_SELF`, `SCRIPT_NAME`, `SCRIPT_FILENAME`, `PATH_TRANSLATED` | `$argv[0]` — a compiled program has no script at run time, so the thing that was actually invoked is the closest true answer |
+| `DOCUMENT_ROOT` | `""` |
+| `REQUEST_TIME`, `REQUEST_TIME_FLOAT` | the start time, as `time()` and `microtime(true)` |
+
+The five request superglobals (`$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`,
+`$_REQUEST`) stay empty arrays, exactly as they are under `php` on the command
+line. Under [`--web`](../beyond-php/web.md#request-input) `$_SERVER` describes the
+HTTP request instead.
+
+Seeding is pay-for-use: only the superglobals a program actually spells are built,
+which is what PHP's `auto_globals_jit` does for the same reason.
+
+`$_ENV` and `$_SERVER` are **snapshots taken before the program ran**, so a later
+`putenv()` does not reach them — only `getenv()`. PHP has the same asymmetry:
+
+```php
+putenv("LATE=1");
+var_dump(getenv("LATE"));        // string(1) "1"
+var_dump(isset($_ENV["LATE"]));  // bool(false)
+```
+
+#### Known limitation
+
+Reading an **element** of the nested `$_SERVER['argv']` does not work: the index
+returns a raw pointer as an `int` and `foreach` over it iterates zero times, while
+`count($_SERVER['argv'])` is correct. This is a general limitation of a typed
+array held inside a `mixed` value rather than anything specific to `argv`, and it
+predates the CLI superglobals. Read `$argv` directly, which is unaffected:
+
+```php
+foreach ($argv as $i => $arg) {   // correct
+    echo $i, ": ", $arg, "\n";
+}
+```
+
 ## PHP version surface
 
 elephc targets a PHP **language profile** selected by `--php-version`

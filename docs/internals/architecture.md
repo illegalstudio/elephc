@@ -454,12 +454,15 @@ crates/
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-instr/              Exact profiling instrumentation runtime
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
+├── elephc-monitoring-contract/ Typed monitoring policy shared by the compiler and every bridge
+├── elephc-pcntl/              Unix process control, wait, exec, priority, and signal bridge staticlib
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
 ├── elephc-probe/              Sampled profiling and authenticated service endpoint
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
-└── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
+├── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
+└── elephc-xml/                ext/xml and ext/xmlwriter bridge over the catalog's static libxml2
 ```
 
 ## ARM64 calling conventions

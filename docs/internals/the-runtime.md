@@ -282,7 +282,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (175 files, plus the `hash_sort/` target split, 2 files)
+**Source:** `src/codegen_support/runtime/arrays/` (176 files, plus the `hash_sort/` target split, 2 files)
 
 ### Core allocation
 
@@ -308,6 +308,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_array_push_refcounted` | `incref` borrowed heap payload, then append it as an 8-byte array element | `x0` = array, `x1` = heap ptr | `x0` = array |
 | `__rt_array_push_str` | Persist string + append to array (grows if needed) | `x0` = array, `x1`/`x2` = str | `x0` = array |
 | `__rt_sort_int` / `__rt_rsort_int` | In-place sort ascending or descending | `x0` = array | — |
+| `__rt_mixed_sort_require_scalars` | Guard `sort()` / `rsort()` on a runtime-typed (`Array(Mixed)`) array: walks every element first and terminates with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported` for a nested array, object, resource, or boxed callable, so an unsupported container is refused instead of ordered wrongly | `x0` = array | — |
 | `__rt_str_persist` | Copy string from concat_buf to heap (skips .data/heap) | `x1`/`x2` = str | `x1`/`x2` = heap str |
 
 Common copy-producing array/hash routines now also have dedicated `_refcounted` siblings for nested heap-backed payloads. These variants retain borrowed values before pushing or inserting them into freshly allocated arrays/hash tables, covering array literals with spreads plus `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, and `array_fill_keys`.
@@ -459,7 +460,7 @@ path for from a leaf helper.
 
 ## System routines
 
-**Source:** `src/codegen_support/runtime/system/` (43 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, `json_encode_str/`, and `unserialize/` subdirectories; 81 files recursively)
+**Source:** `src/codegen_support/runtime/system/` (46 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, `json_encode_str/`, and `unserialize/` subdirectories; 84 files recursively)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -507,6 +508,31 @@ Two globals hold the state:
 Fibers and generators run on their own 256 KiB mmap'd coroutine stack, which has nothing to do with the OS-thread stack, so `__rt_fiber_switch` swaps `_stack_limit` along with the exception and cleanup chain heads: switching *into* a fiber publishes `stack_base + guard page + reserve`, and switching back to the main context restores `_stack_limit_main`. A fiber whose stack allocation failed publishes zero, leaving the guard inert rather than comparing against a nonsensical address.
 
 The check itself lives in every compiled function prologue — see [The codegen](the-codegen.md).
+
+### PCNTL routines
+
+**Files:** `system/pcntl.rs`, `system/pcntl_data.rs`
+
+The `elephc-pcntl` bridge owns the syscalls; these helpers are the adapters that
+translate its stable C-ABI records into PHP values and drive PHP-visible signal
+handlers from the compiled side. The bridge never sees a PHP value and the runtime
+never declares a target's `struct rusage` or `siginfo_t` layout — the record shapes
+are elephc's own (`ElephcPcntlRUsage` is a fixed 17-word block), which is what keeps
+one bridge binary correct on macOS and Linux.
+
+| Routine | What it does |
+|---|---|
+| `__rt_pcntl_rusage_array` | Turn an `ElephcPcntlRUsage` record into PHP's `pcntl_wait()` resource-usage array |
+| `__rt_pcntl_siginfo_array` | Turn a captured siginfo snapshot into the array a handler's `$siginfo` parameter receives |
+| `__rt_pcntl_dispatch_pending` | Drain the pending-signal queue and invoke each registered PHP handler, replaying delivery counts preserved through a self-pipe overflow |
+| `__rt_pcntl_async_dispatch_preserving` | The same drain from an async-signals context, preserving the interrupted frame's in-flight result |
+| `__rt_pcntl_invoke_descriptor` | Call one handler through its callable descriptor |
+| `__rt_pcntl_abort_dispatch` | Stop the drain when a handler throws, so the exception unwinds the interrupted frame instead of the dispatcher |
+| `__rt_pcntl_release_handlers` | Release the registered handler records after `fork()` or daemonization, so an inherited copy cannot fire in the child |
+
+Compiled and eval'd handlers keep separate queues: a callable descriptor is private
+to the backend that made it, so the dispatcher routes a pending record only to the
+backend that registered its handler.
 
 ## Exception routines
 
