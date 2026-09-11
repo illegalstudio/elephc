@@ -149,6 +149,66 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_class_constant_defaults_release_inventory_leases)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# CI on 75f0f8910 terminated these two-compile eval fixtures on both macOS
+# attempts while both Linux targets passed. Keep the same bounded three-period
+# budget as their siblings above, without changing assertion or retry policies.
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_native_unchanged_mixed_references_release_activation_leases)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_native_unchanged_mixed_references_release_activation_leases)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::gc_exception_recovery::test_core_eval_catch_predicate_boxes_release_mismatched_and_unbound_throwables)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::gc_exception_recovery::test_core_eval_catch_predicate_boxes_release_mismatched_and_unbound_throwables)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::native_property_unset::test_core_eval_native_unset_destructor_exceptions_do_not_accumulate_owners)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::native_property_unset::test_core_eval_native_unset_destructor_exceptions_do_not_accumulate_owners)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_call_user_func_operands_release_after_success_and_throw)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_call_user_func_operands_release_after_success_and_throw)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_property_array_mutations_release_temporary_cells)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_property_array_mutations_release_temporary_cells)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::eval_closure_receivers::test_core_eval_closure_from_invokable_receiver_owners_release)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::eval_closure_receivers::test_core_eval_closure_from_invokable_receiver_owners_release)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::eval_closure_receivers::test_core_eval_closure_new_receiver_owners_release)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::eval_closure_receivers::test_core_eval_closure_new_receiver_owners_release)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+
 # This fixture compiles the web prelude together with native closures and opaque
 # eval handlers. Keep HTTP requests bounded in the fixture while allowing a cold
 # compiler/linker run to finish on shared macOS runners.

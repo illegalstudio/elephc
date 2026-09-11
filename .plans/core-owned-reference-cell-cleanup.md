@@ -2341,3 +2341,16 @@ guard fixture. Preserve the existing exact-output and heap-clean relay regressio
 Coordinator review corrected an intermediate discarded array-load hazard before
 commit. Cargo check --tests, assembly-comment alignment and diff hygiene pass.
 No local tests or repros execute; runtime confirmation remains assigned to CI.
+
+### Give the seven newly measured double-compile fixtures their bounded budget
+
+The previous five timeout corrections pass on 75f0f8910. Seven other eval GC
+fixtures now hit the exact 60-second macOS termination limit on both attempts,
+while both Linux targets pass. Six use the shared one-versus-five-iteration
+two-compile helper, and the catch-predicate test performs heap-debug plus tagged
+compilations. Assign only those exact names the existing 180-second budget in
+default and CI profiles. Keep retry counts, output checks and heap assertions.
+
+TOML parsing and diff hygiene pass. No local tests execute. The next CI must
+establish completion within that budget; this change does not mark the separate
+metadata leaks fixed or bypass their failures.
