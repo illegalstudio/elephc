@@ -12,6 +12,10 @@
 //! - `HashGetForWrite` is a lookup that also WRITES: it separates the container the
 //!   matching entry holds and republishes it into that entry's value slot, whose
 //!   address comes from `__rt_hash_get`'s entry-address output (issue #580).
+//! - `DescriptorArgSet` / `DescriptorArgKeyExists` share every one of those mechanics with
+//!   `HashSet` / `array_key_exists` and differ in exactly one place: the key is materialized
+//!   WITHOUT `__rt_hash_normalize_key`. A descriptor argument container keys parameter NAMES,
+//!   where `"12"` means `$12`, not position 12. Ordinary array writes keep PHP normalization.
 
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
@@ -324,6 +328,121 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     Ok(())
 }
 
+/// Whether a hash key goes through PHP's numeric-string normalization.
+///
+/// `Php` is every ordinary array and hash write. `RawString` exists only for descriptor
+/// argument containers, whose string keys are parameter names rather than PHP array keys.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum HashKeyNormalization {
+    /// `__rt_hash_normalize_key` decides: a numeric string becomes an integer key.
+    Php,
+    /// A string key stays a string key, byte for byte.
+    RawString,
+}
+
+/// Lowers a descriptor-invoker argument write, keeping numeric-string keys as names.
+///
+/// Identical to [`lower_hash_set`] apart from the key materialization, write-back included:
+/// `__rt_hash_set` persists a newly inserted string key and may grow the table, so the pointer
+/// it returns is stored back into the receiver's SSA slot AND into the frame slot the container
+/// was published in. A descriptor container is read through that published slot on every
+/// insertion, so a grown table that was not written back would be lost.
+pub(super) fn lower_descriptor_arg_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let value = expect_operand(inst, 2)?;
+    let hash_ty = ctx.value_php_type(hash)?;
+    require_hash(hash_ty.clone(), inst)?;
+    let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
+    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    if let Some(slot) = receiver.slot() {
+        ctx.release_mutated_source_local_owner(slot, hash)?;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_hash_set_aarch64_with(
+            ctx, hash, key, value, &value_ty, &storage_value_ty, HashKeyNormalization::RawString,
+        )?,
+        Arch::X86_64 => lower_hash_set_x86_64_with(
+            ctx, hash, key, value, &value_ty, &storage_value_ty, HashKeyNormalization::RawString,
+        )?,
+    }
+    ctx.store_result_value(hash)?;
+    receiver.store_back_value(ctx, hash)?;
+    ctx.writeback_global_array_source(hash)?;
+    Ok(())
+}
+
+/// Lowers a raw `array_key_exists` probe over a descriptor-invoker argument container.
+///
+/// The probe must read the same key space [`lower_descriptor_arg_set`] writes, otherwise a
+/// duplicate-name guard would report the NAME `"12"` absent from a container that carries it,
+/// because the probe normalized it to the integer key 12.
+pub(super) fn lower_descriptor_arg_key_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    require_hash(ctx.value_php_type(hash)?, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::RawString)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::RawString)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(hash, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+        }
+    }
+    // `__rt_hash_get` returns the found flag in the integer result register, which is exactly
+    // the Bool this op produces. The borrowed payload registers are deliberately discarded.
+    store_if_result(ctx, inst)
+}
+
+/// Lowers PHP's duplicate-name refusal, naming the key the caller actually supplied.
+///
+/// The name is a run-time value, so the message is composed by
+/// `__rt_throw_named_parameter_overwrite`, the helper the callable invoker's prevalidation walk
+/// already calls. It publishes `_exc_value` and tail-jumps to `__rt_throw_current`, which is the
+/// same unwinder `Terminator::Throw` enters: the `Error` is catchable in this very frame, and
+/// `__rt_exception_cleanup_frames` retires the descriptor's published owner records on the way.
+///
+/// The key is materialized through the descriptor key space, so a numeric-looking NAME reaches
+/// the message unchanged. Only the string arm is reachable, because the duplicate guard sits on
+/// the named branch of the unpack walk, and there a string key leaves the pointer in the key_lo
+/// register and the byte length in key_hi.
+pub(super) fn lower_throw_named_parameter_overwrite(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let key = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::RawString)?;
+            ctx.emitter.instruction("mov x0, x1");                              // key_lo is the parameter-name pointer
+            ctx.emitter.instruction("mov x1, x2");                              // key_hi is its byte length
+            abi::emit_call_label(ctx.emitter, "__rt_throw_named_parameter_overwrite");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::RawString)?;
+            ctx.emitter.instruction("mov rdi, rsi");                            // key_lo is the parameter-name pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // key_hi is its byte length
+            abi::emit_call_label(ctx.emitter, "__rt_throw_named_parameter_overwrite");
+        }
+    }
+    Ok(())
+}
+
 /// Lowers `unset($hash[$key])` for associative arrays through the shared hash-unset helper.
 ///
 /// Publishes a unique table before the removal can invoke a throwing or reentrant destructor.
@@ -561,7 +680,22 @@ fn lower_hash_set_aarch64(
     value_ty: &PhpType,
     storage_value_ty: &PhpType,
 ) -> Result<()> {
-    materialize_hash_key_aarch64(ctx, key)?;
+    lower_hash_set_aarch64_with(
+        ctx, hash, key, value, value_ty, storage_value_ty, HashKeyNormalization::Php,
+    )
+}
+
+/// Lowers an associative-array write for AArch64 targets under a chosen key normalization.
+fn lower_hash_set_aarch64_with(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+    storage_value_ty: &PhpType,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
+    materialize_hash_key_aarch64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     materialize_hash_value_aarch64(ctx, value, value_ty, storage_value_ty)?;
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
@@ -603,7 +737,22 @@ fn lower_hash_set_x86_64(
     value_ty: &PhpType,
     storage_value_ty: &PhpType,
 ) -> Result<()> {
-    materialize_hash_key_x86_64(ctx, key)?;
+    lower_hash_set_x86_64_with(
+        ctx, hash, key, value, value_ty, storage_value_ty, HashKeyNormalization::Php,
+    )
+}
+
+/// Lowers an associative-array write for x86_64 targets under a chosen key normalization.
+fn lower_hash_set_x86_64_with(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+    storage_value_ty: &PhpType,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
+    materialize_hash_key_x86_64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     materialize_hash_value_x86_64(ctx, value, value_ty, storage_value_ty)?;
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
@@ -711,12 +860,23 @@ fn emit_hash_append_key_scan_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&done_label);
 }
 
-/// Materializes an EIR value as a normalized hash key for AArch64.
+/// Materializes an EIR value as a PHP-normalized hash key for AArch64.
 pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    materialize_hash_key_aarch64_with(ctx, key, HashKeyNormalization::Php)
+}
+
+/// Materializes an EIR value as a hash key for AArch64 under a chosen key normalization.
+pub(super) fn materialize_hash_key_aarch64_with(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "x1", "x2")?;
-            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            if normalization == HashKeyNormalization::Php {
+                abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            }
             Ok(())
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
@@ -751,7 +911,7 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
             Ok(())
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            materialize_mixed_hash_key_aarch64(ctx, key)
+            materialize_mixed_hash_key_aarch64(ctx, key, normalization)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "hash key PHP type {:?}",
@@ -760,13 +920,24 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
     }
 }
 
-/// Materializes an EIR value as a normalized hash key for x86_64.
+/// Materializes an EIR value as a PHP-normalized hash key for x86_64.
 pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    materialize_hash_key_x86_64_with(ctx, key, HashKeyNormalization::Php)
+}
+
+/// Materializes an EIR value as a hash key for x86_64 under a chosen key normalization.
+pub(super) fn materialize_hash_key_x86_64_with(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "rax", "rdx")?;
-            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
-            ctx.emitter.instruction("mov rsi, rax");                            // move the normalized string-or-integer key low word into the hash ABI register
+            if normalization == HashKeyNormalization::Php {
+                abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            }
+            ctx.emitter.instruction("mov rsi, rax");                            // move the string-or-integer key low word into the hash ABI register
             Ok(())
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
@@ -801,7 +972,7 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
             Ok(())
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            materialize_mixed_hash_key_x86_64(ctx, key)
+            materialize_mixed_hash_key_x86_64(ctx, key, normalization)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "hash key PHP type {:?}",
@@ -854,6 +1025,7 @@ fn emit_undefined_hash_key_warning_x86_64(
 fn materialize_mixed_hash_key_aarch64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
+    normalization: HashKeyNormalization,
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
@@ -884,7 +1056,9 @@ fn materialize_mixed_hash_key_aarch64(
     emit_empty_string_hash_key_aarch64(ctx);                                   // null normalizes to the empty string "" hash key
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the string-key normalization path
     ctx.emitter.label(&string_key);
-    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+    if normalization == HashKeyNormalization::Php {
+        abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+    }
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -893,6 +1067,7 @@ fn materialize_mixed_hash_key_aarch64(
 fn materialize_mixed_hash_key_x86_64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
+    normalization: HashKeyNormalization,
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
@@ -927,9 +1102,11 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks scalar mixed keys as integers
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after scalar selection
     ctx.emitter.label(&string_key);
-    ctx.emitter.instruction("mov rax, rdi");                                    // move the unboxed string pointer into the hash normalizer input
-    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
-    ctx.emitter.instruction("mov rsi, rax");                                    // move normalized key_lo into the hash-set ABI register
+    ctx.emitter.instruction("mov rax, rdi");                                    // move the unboxed string pointer into the hash key low word
+    if normalization == HashKeyNormalization::Php {
+        abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+    }
+    ctx.emitter.instruction("mov rsi, rax");                                    // move key_lo into the hash-set ABI register
     ctx.emitter.label(&done);
     Ok(())
 }

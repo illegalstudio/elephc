@@ -27,6 +27,7 @@ mod closure_bind_owners;
 mod corpus;
 mod debug_info;
 mod descriptor_ownership;
+mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
 mod dynamic_spreads;
 mod effects;

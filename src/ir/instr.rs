@@ -630,6 +630,30 @@ pub enum Op {
     ArrayElemAddr,
     ArraySet,
     HashSet,
+    /// Writes one signature-unknown callable-descriptor argument WITHOUT PHP's numeric-string
+    /// key normalization.
+    ///
+    /// A descriptor argument container is not a PHP array: its string keys are PARAMETER NAMES,
+    /// and PHP binds `"12"` as the name `$12` rather than as position 12. `HashSet` would route
+    /// the key through `__rt_hash_normalize_key` and turn it into the integer 12, which is the
+    /// right answer for `$a["12"] = 1` and the wrong one here. Everything else, including string
+    /// key persistence and the grown-table write-back, is exactly `HashSet`.
+    DescriptorArgSet,
+    /// Probes a descriptor argument container for a raw, unnormalized key.
+    ///
+    /// The `array_key_exists` counterpart of `DescriptorArgSet`, and the read a duplicate-name
+    /// guard needs: it must see the same key space the write uses, so a container that already
+    /// carries the NAME `"12"` is not reported free because the probe normalized to integer 12.
+    DescriptorArgKeyExists,
+    /// Raises PHP's catchable `Named parameter $<name> overwrites previous argument` `Error`.
+    ///
+    /// The offending name is a RUNTIME value: a `Traversable` hands the unpack walk whatever its
+    /// `key()` returns, so the message cannot be a compile-time string. The single operand is
+    /// that key read in the descriptor key space, exactly as `DescriptorArgKeyExists` reads it,
+    /// and the text is composed by `__rt_throw_named_parameter_overwrite`, the same runtime
+    /// helper the callable invoker's prevalidation walk calls. The helper never returns, so the
+    /// emitting block ends `Unreachable`.
+    ThrowNamedParameterOverwrite,
     HashUnset,
     /// Writes PHP null into `container[key]`, releasing whatever was there.
     ///
@@ -977,7 +1001,9 @@ impl Op {
             | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
-            ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset => E::READS_HEAP,
+            ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset | DescriptorArgKeyExists => {
+                E::READS_HEAP
+            }
             ArrayGet | HashGet => E::READS_HEAP | E::MAY_WARN,
             // Not a pure read despite the name: the copy-on-write split rewrites the receiver's
             // element slot (and the receiver's own local slot), so it must never be treated as
@@ -1021,7 +1047,7 @@ impl Op {
             AcquireRefCell => E::all(),
             HashUnset | PropUnset | OffsetUnset => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP
                 | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArraySet | HashSet | ArrayPush | HashAppend
+            ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             PropSet => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP | E::WRITES_HEAP
@@ -1099,6 +1125,11 @@ impl Op {
             PrintValue => E::OUTPUT,
             ErrorSuppressBegin | ErrorSuppressEnd => E::READS_GLOBAL | E::WRITES_GLOBAL,
             ThrowException => E::MAY_THROW | E::WRITES_GLOBAL,
+            // Reads the key out of its boxed cell, allocates the composed message and the
+            // `Error` payload, publishes `_exc_value`, then unwinds.
+            ThrowNamedParameterOverwrite => {
+                E::MAY_THROW | E::READS_HEAP | E::ALLOC_HEAP | E::WRITES_GLOBAL
+            }
             ThrowError | ThrowErrorValue => {
                 E::MAY_THROW
                     | E::READS_GLOBAL
@@ -1296,6 +1327,9 @@ impl Op {
             ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",
+            DescriptorArgSet => "descriptor_arg_set",
+            DescriptorArgKeyExists => "descriptor_arg_key_exists",
+            ThrowNamedParameterOverwrite => "throw_named_parameter_overwrite",
             HashUnset => "hash_unset",
             SlotDetach => "slot_detach",
             ArrayPush => "array_push",

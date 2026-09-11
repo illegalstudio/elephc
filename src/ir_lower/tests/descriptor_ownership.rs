@@ -105,12 +105,19 @@ fn named_descriptor_arguments_release_persisted_strings_before_invocation_on_all
         let function = module.functions.iter().find(|function| function.name == "invoke_named_strings").unwrap();
         let invoke = function.instructions.iter().position(|inst| inst.op == Op::CallableDescriptorInvoke).unwrap();
         let writes = function.instructions[..invoke].iter().enumerate()
-            .filter(|(_, inst)| inst.op == Op::HashSet).collect::<Vec<_>>();
+            .filter(|(_, inst)| inst.op == Op::DescriptorArgSet).collect::<Vec<_>>();
         assert_eq!(writes.len(), 2, "{target}");
         for (index, write) in writes {
             let value = write.operands[2];
+            let load = function.instructions.iter().find(|inst| inst.result == Some(value))
+                .expect("a hash write borrows its published string operand");
+            assert_eq!(load.op, Op::LoadLocal, "{target}");
+            let slot = load.immediate.clone();
+            assert!(function.instructions[..index].iter().any(|inst| {
+                inst.op == Op::PushCallOperandOwner && inst.immediate == slot
+            }), "{target}: a guard can unwind through the argument's owner");
             assert!(function.instructions[index + 1..invoke].iter().any(|inst| {
-                inst.op == Op::Release && inst.operands == [value]
+                inst.op == Op::ReleaseLocalSlot && inst.immediate == slot
             }), "{target}: copied argument must be retired before invoking the callback");
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();

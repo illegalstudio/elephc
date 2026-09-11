@@ -18,6 +18,13 @@
 //!   offsets beyond the signed 9-bit `ldur`/`stur` immediate range.
 //! - Reference-returning descriptors copy the pointee into an owned Mixed result before retiring
 //!   the returned cell lease.
+//! - A `PublicRaw` associative container is VALIDATED before a single argument is staged, by one
+//!   walk in container order: a position after a name, a name colliding with a position already
+//!   walked, and a name no parameter can accept are all catchable `Error`s, each reported at the
+//!   entry that causes it so the message matches PHP's precedence. Validating first is what makes
+//!   them catchable: once arguments are on the temporary stack and in the owner slots, there is
+//!   no safe point to unwind from. The collision rule re-reads the container prefix instead of
+//!   remembering positions in a bitset, so no signature length silently escapes the check.
 
 mod argument_owners;
 mod owned_value_args;
@@ -777,6 +784,10 @@ fn emit_loaded_assoc_array_callback_call(
             hash_reg, sig, &shape, count_reg, emitter, ctx, data,
         );
     }
+    // -- reject an unbindable container before any argument is staged --
+    if ctx.arg_mode == InvokerArgMode::PublicRaw {
+        emit_reject_invalid_named_arguments(hash_reg, sig, &shape, emitter, ctx, data);
+    }
     let mut arg_types = Vec::new();
 
     // -- marshal each visible regular via hash lookup --
@@ -1465,7 +1476,436 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
     }
 }
 
+/// Rejects a `PublicRaw` argument container no signature binding can accept.
+///
+/// ONE walk, in the container's own insertion order, classifying every entry exactly once. The
+/// order is the whole point: PHP reports the FIRST entry it cannot bind, so a sweep that went
+/// parameter by parameter and probed the container reported the wrong one of two errors whenever
+/// both were present. Every rule is still checked BEFORE the first argument is staged, because a
+/// throw after that would have to unwind past half-filled argument owner slots and a temporary
+/// stack that already carries pushed values.
+///
+/// The three rules, each raised at the offending entry:
+/// - An integer key that follows any string key is
+///   `Cannot use positional argument after named argument`.
+/// - A string key naming a visible regular parameter whose own positional key ALREADY arrived is
+///   `Named parameter $<name> overwrites previous argument`. Binding takes the name and would
+///   otherwise drop the positional entry without a word. "Already arrived" is literal: a
+///   positional key that comes LATER is the ordering error above, and PHP reports that instead.
+/// - A string key no visible regular parameter declares is `Unknown named parameter $<name>`,
+///   for a non-variadic callee only. A variadic callee keeps those entries: its tail collector
+///   copies every unconsumed name into the variadic hash.
+///
+/// "Its own positional key already arrived" is answered by re-walking the container from the
+/// start up to the entry being classified and looking for that one integer key, not by a bitset:
+/// a bitset would have to fix a width, and a width is a semantic limit on how long a signature
+/// may be before the rule quietly stops applying. The rescan is quadratic in the number of
+/// entries and allocation-free, which is the right trade for a check that runs once per call,
+/// only for a container that actually carries a name, and only up to the first name that matches
+/// a declared parameter.
+///
+/// The container register (`x20`/`r13`) and the actual-argument count (`x21`/`r14`) are read but
+/// never written, so the marshalling that follows still sees exactly what it computed.
+fn emit_reject_invalid_named_arguments(
+    hash_base_reg: &str,
+    sig: &FunctionSig,
+    shape: &InvokerParamShape,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+    data: &mut DataSection,
+) {
+    // Scratch frame, 16-byte aligned so every call below keeps the stack ABI.
+    const SCRATCH_BYTES: usize = 64;
+    const CURSOR_OFF: usize = 0;
+    const KEY_PTR_OFF: usize = 8;
+    const KEY_LEN_OFF: usize = 16;
+    const NAMED_SEEN_OFF: usize = 24;
+    /// Cursor the CURRENT entry was fetched with, which bounds the prefix rescan.
+    const ENTRY_CURSOR_OFF: usize = 32;
+    /// Cursor of the prefix rescan itself, kept apart from the outer walk's own cursor.
+    const SCAN_CURSOR_OFF: usize = 40;
+    /// Visible regular parameter index the current name matched, the key the rescan looks for.
+    const MATCH_INDEX_OFF: usize = 48;
+
+    let loop_label = ctx.next_label("invoker_named_scan_loop");
+    let numeric_label = ctx.next_label("invoker_named_scan_numeric");
+    let ordered_label = ctx.next_label("invoker_named_scan_ordered");
+    let collision_label = ctx.next_label("invoker_named_scan_collision");
+    let rescan_label = ctx.next_label("invoker_named_scan_rescan");
+    let next_label = ctx.next_label("invoker_named_scan_next");
+    let done_label = ctx.next_label("invoker_named_scan_done");
+    let alias_labels: Vec<String> = (0..shape.visible_regular)
+        .map(|index| ctx.next_label(&format!("invoker_named_scan_alias_{index}")))
+        .collect();
+    let stack_reg = match emitter.target.arch {
+        Arch::AArch64 => "sp",
+        Arch::X86_64 => "rsp",
+    };
+
+    abi::emit_reserve_temporary_stack(emitter, SCRATCH_BYTES);
+    for offset in [CURSOR_OFF, NAMED_SEEN_OFF] {
+        abi::emit_store_zero_to_address(emitter, stack_reg, offset);
+    }
+
+    emitter.label(&loop_label);
+    emit_named_scan_fetch_entry(
+        hash_base_reg,
+        stack_reg,
+        NamedScanEntrySlots {
+            cursor_off: CURSOR_OFF,
+            entry_cursor_off: ENTRY_CURSOR_OFF,
+            key_ptr_off: KEY_PTR_OFF,
+            key_len_off: KEY_LEN_OFF,
+        },
+        &done_label,
+        &numeric_label,
+        emitter,
+    );
+
+    // -- string key: it binds a declared name, feeds the variadic tail, or is refused --
+    emit_named_scan_mark_named_seen(stack_reg, NAMED_SEEN_OFF, emitter);
+    for index in 0..shape.visible_regular {
+        let Some((param_name, _)) = sig.params.get(index) else { continue };
+        let Some(matched) = alias_labels.get(index) else { continue };
+        emit_branch_if_key_matches_param(
+            param_name, KEY_PTR_OFF, KEY_LEN_OFF, matched, emitter, data,
+        );
+    }
+    if sig.variadic.is_none() {
+        emit_named_scan_key_pair_to_args(KEY_PTR_OFF, KEY_LEN_OFF, emitter);
+        abi::emit_call_label(emitter, "__rt_throw_unknown_named_parameter");
+    }
+    abi::emit_jump(emitter, &next_label);
+
+    // -- a matched name records WHICH parameter it named, then asks for its positional twin --
+    for (index, alias_label) in alias_labels.iter().enumerate() {
+        emitter.label(alias_label);
+        emit_named_scan_record_matched_index(
+            stack_reg, MATCH_INDEX_OFF, index, &collision_label, emitter,
+        );
+    }
+
+    // -- a declared name collides only with a positional key this walk already passed --
+    if !alias_labels.is_empty() {
+        emitter.label(&collision_label);
+        emit_named_scan_prefix_positional_probe(
+            hash_base_reg,
+            stack_reg,
+            NamedScanProbeSlots {
+                entry_cursor_off: ENTRY_CURSOR_OFF,
+                scan_cursor_off: SCAN_CURSOR_OFF,
+                match_index_off: MATCH_INDEX_OFF,
+                key_ptr_off: KEY_PTR_OFF,
+                key_len_off: KEY_LEN_OFF,
+            },
+            &rescan_label,
+            &next_label,
+            emitter,
+        );
+    }
+
+    // -- integer key: legal only before the first name, and nothing to remember when it is --
+    emitter.label(&numeric_label);
+    emit_named_scan_reject_positional_after_named(NAMED_SEEN_OFF, &ordered_label, emitter);
+
+    emitter.label(&next_label);
+    abi::emit_jump(emitter, &loop_label);
+    emitter.label(&done_label);
+    abi::emit_release_temporary_stack(emitter, SCRATCH_BYTES);
+}
+
+/// Scratch slots the per-entry fetch reads and writes.
+struct NamedScanEntrySlots {
+    /// Cursor the next fetch resumes from.
+    cursor_off: usize,
+    /// Cursor the current entry was fetched WITH, saved before the fetch overwrites it.
+    entry_cursor_off: usize,
+    /// Current entry key pointer, or its integer key value.
+    key_ptr_off: usize,
+    /// Current entry key byte length, `-1` for an integer key.
+    key_len_off: usize,
+}
+
+/// Scratch slots the prefix rescan reads and writes.
+struct NamedScanProbeSlots {
+    /// Upper bound of the rescan: the cursor the classified entry was fetched with.
+    entry_cursor_off: usize,
+    /// The rescan's own cursor.
+    scan_cursor_off: usize,
+    /// Integer key the rescan is looking for.
+    match_index_off: usize,
+    /// Classified entry key pointer, reloaded for the refusal message.
+    key_ptr_off: usize,
+    /// Classified entry key byte length, reloaded for the refusal message.
+    key_len_off: usize,
+}
+
+/// Advances the container walk by one entry and saves that entry's key in the scratch frame.
+///
+/// The cursor the fetch STARTS from is saved first, because that value is what bounds a later
+/// prefix rescan: re-walking from `0` and stopping once the rescan's own cursor reaches it visits
+/// exactly the entries before this one. `__rt_hash_iter_next` is a pure read, so the second walk
+/// over an unmodified container reproduces the first walk's cursor sequence exactly.
+///
+/// Leaves through `done_label` at the `-1` end sentinel and through `numeric_label` when the
+/// entry carries an integer key, which `__rt_hash_iter_next` marks with a `-1` key length and
+/// reports through the key-pointer register.
+fn emit_named_scan_fetch_entry(
+    hash_base_reg: &str,
+    stack_reg: &str,
+    slots: NamedScanEntrySlots,
+    done_label: &str,
+    numeric_label: &str,
+    emitter: &mut Emitter,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x0, {}", hash_base_reg));         // pass the argument hash to the entry walk
+            abi::emit_load_temporary_stack_slot(emitter, "x1", slots.cursor_off);
+            abi::emit_store_to_address(emitter, "x1", stack_reg, slots.entry_cursor_off);
+            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            emitter.instruction("cmn x0, #1");                                  // did the iterator return the -1 end sentinel?
+            emit_named_scan_branch(emitter, true, done_label);
+            abi::emit_store_to_address(emitter, "x0", stack_reg, slots.cursor_off);
+            abi::emit_store_to_address(emitter, "x1", stack_reg, slots.key_ptr_off);
+            abi::emit_store_to_address(emitter, "x2", stack_reg, slots.key_len_off);
+            emitter.instruction("cmn x2, #1");                                  // key length -1 marks a positional integer key
+            emit_named_scan_branch(emitter, true, numeric_label);
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rdi, {}", hash_base_reg));        // pass the argument hash to the entry walk
+            abi::emit_load_temporary_stack_slot(emitter, "rsi", slots.cursor_off);
+            abi::emit_store_to_address(emitter, "rsi", stack_reg, slots.entry_cursor_off);
+            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            emitter.instruction("cmp rax, -1");                                 // did the iterator return the -1 end sentinel?
+            emit_named_scan_branch(emitter, true, done_label);
+            abi::emit_store_to_address(emitter, "rax", stack_reg, slots.cursor_off);
+            abi::emit_store_to_address(emitter, "rdi", stack_reg, slots.key_ptr_off);
+            abi::emit_store_to_address(emitter, "rdx", stack_reg, slots.key_len_off);
+            emitter.instruction("cmp rdx, -1");                                 // key length -1 marks a positional integer key
+            emit_named_scan_branch(emitter, true, numeric_label);
+        }
+    }
+}
+
+/// Emits one conditional branch that reaches any label this walk can emit.
+///
+/// AArch64 `b.eq`/`b.ne` carry a +/-1 MiB displacement, and this walk emits a comparison and an
+/// alias block for every declared parameter, so a long enough signature moves its own labels out
+/// of that range. Inverting the condition over an unconditional `b` restores the +/-128 MiB
+/// range, the detour `abi::emit_branch_if_int_result_nonzero` takes for the same reason. An
+/// x86_64 `jcc` is already a rel32 branch and needs no detour.
+fn emit_named_scan_branch(emitter: &mut Emitter, on_equal: bool, label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let skip = if on_equal { "b.ne 1f" } else { "b.eq 1f" };
+            emitter.instruction(skip);                                          // fall through when this branch is not taken
+            emitter.instruction(&format!("b {}", label));                       // branch with the wider unconditional range
+            emitter.label("1");
+        }
+        Arch::X86_64 => {
+            let taken = if on_equal { "je" } else { "jne" };
+            emitter.instruction(&format!("{} {}", taken, label));               // take the branch the compared flags select
+        }
+    }
+}
+
+/// Records that a name has been seen, which closes the container to further positional entries.
+fn emit_named_scan_mark_named_seen(stack_reg: &str, named_seen_off: usize, emitter: &mut Emitter) {
+    let flag_reg = match emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_load_int_immediate(emitter, flag_reg, 1);
+    abi::emit_store_to_address(emitter, flag_reg, stack_reg, named_seen_off);
+}
+
+/// Loads the saved key pointer and byte length into the two name-taking helpers' argument pair.
+fn emit_named_scan_key_pair_to_args(key_ptr_off: usize, key_len_off: usize, emitter: &mut Emitter) {
+    let name_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let len_reg = abi::int_arg_reg_name(emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(emitter, name_reg, key_ptr_off);
+    abi::emit_load_temporary_stack_slot(emitter, len_reg, key_len_off);
+}
+
+/// Saves the visible regular index a name matched, then hands over to the shared rescan.
+///
+/// One block per parameter, three instructions each, instead of one rescan per parameter: the
+/// index is the only thing the rescan needs from the match, so it travels through the frame.
+fn emit_named_scan_record_matched_index(
+    stack_reg: &str,
+    match_index_off: usize,
+    index: usize,
+    collision_label: &str,
+    emitter: &mut Emitter,
+) {
+    let index_reg = match emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_load_int_immediate(emitter, index_reg, index as i64);
+    abi::emit_store_to_address(emitter, index_reg, stack_reg, match_index_off);
+    abi::emit_jump(emitter, collision_label);
+}
+
+/// Refuses the matched name when its own positional key already arrived earlier in the container.
+///
+/// Re-walks the container from the start and stops as soon as its cursor reaches the one the
+/// classified entry was fetched with, so only STRICTLY EARLIER entries are examined. That bound
+/// is what keeps the precedence right: a positional key that arrives LATER is the ordering
+/// refusal, reported when the outer walk reaches it, not a collision reported here.
+///
+/// Falls through to `skip_label` when no earlier entry carries the matching integer key.
+fn emit_named_scan_prefix_positional_probe(
+    hash_base_reg: &str,
+    stack_reg: &str,
+    slots: NamedScanProbeSlots,
+    rescan_label: &str,
+    skip_label: &str,
+    emitter: &mut Emitter,
+) {
+    abi::emit_store_zero_to_address(emitter, stack_reg, slots.scan_cursor_off);
+    emitter.label(rescan_label);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x1", slots.scan_cursor_off);
+            abi::emit_load_temporary_stack_slot(emitter, "x9", slots.entry_cursor_off);
+            emitter.instruction("cmp x1, x9");                                  // has the rescan reached the entry being classified?
+            emit_named_scan_branch(emitter, true, skip_label);
+            emitter.instruction(&format!("mov x0, {}", hash_base_reg));         // pass the argument hash to the prefix walk
+            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            emitter.instruction("cmn x0, #1");                                  // did the prefix walk end before that entry?
+            emit_named_scan_branch(emitter, true, skip_label);
+            abi::emit_store_to_address(emitter, "x0", stack_reg, slots.scan_cursor_off);
+            emitter.instruction("cmn x2, #1");                                  // key length -1 marks a positional integer key
+            emit_named_scan_branch(emitter, false, rescan_label);
+            abi::emit_load_temporary_stack_slot(emitter, "x9", slots.match_index_off);
+            emitter.instruction("cmp x1, x9");                                  // is this the position the matched name also binds?
+            emit_named_scan_branch(emitter, false, rescan_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "rsi", slots.scan_cursor_off);
+            abi::emit_load_temporary_stack_slot(emitter, "r10", slots.entry_cursor_off);
+            emitter.instruction("cmp rsi, r10");                                // has the rescan reached the entry being classified?
+            emit_named_scan_branch(emitter, true, skip_label);
+            emitter.instruction(&format!("mov rdi, {}", hash_base_reg));        // pass the argument hash to the prefix walk
+            abi::emit_call_label(emitter, "__rt_hash_iter_next");
+            emitter.instruction("cmp rax, -1");                                 // did the prefix walk end before that entry?
+            emit_named_scan_branch(emitter, true, skip_label);
+            abi::emit_store_to_address(emitter, "rax", stack_reg, slots.scan_cursor_off);
+            emitter.instruction("cmp rdx, -1");                                 // key length -1 marks a positional integer key
+            emit_named_scan_branch(emitter, false, rescan_label);
+            abi::emit_load_temporary_stack_slot(emitter, "r10", slots.match_index_off);
+            emitter.instruction("cmp rdi, r10");                                // is this the position the matched name also binds?
+            emit_named_scan_branch(emitter, false, rescan_label);
+        }
+    }
+    emit_named_scan_key_pair_to_args(slots.key_ptr_off, slots.key_len_off, emitter);
+    abi::emit_call_label(emitter, "__rt_throw_named_parameter_overwrite");
+    abi::emit_jump(emitter, skip_label);
+}
+
+/// Refuses an integer key that arrives after a name, the way PHP refuses it.
+///
+/// A legal integer key needs nothing recorded: the prefix rescan reads the container itself when
+/// a later name asks whether its own position already arrived.
+fn emit_named_scan_reject_positional_after_named(
+    named_seen_off: usize,
+    ordered_label: &str,
+    emitter: &mut Emitter,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x9", named_seen_off);
+            emitter.instruction("cmp x9, #0");                                  // has any name been seen in this container yet?
+            emit_named_scan_branch(emitter, true, ordered_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "r10", named_seen_off);
+            emitter.instruction("test r10, r10");                               // has any name been seen in this container yet?
+            emit_named_scan_branch(emitter, true, ordered_label);
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_throw_positional_after_named");
+    emitter.label(ordered_label);
+}
+
+/// Branches to `matched_label` when the saved string key spells one declared parameter name.
+///
+/// The sibling of `emit_skip_if_key_matches_param`, which reads the variadic collector's own
+/// fixed scratch offsets. This one takes them, because the two walks size their frames
+/// differently and a shared constant would tie them together for no reason.
+///
+/// The taken branch goes through `emit_named_scan_branch`: one of these is emitted per declared
+/// parameter, so the distance to `matched_label` grows with the signature and a bare AArch64
+/// `b.ne` would eventually not reach it.
+fn emit_branch_if_key_matches_param(
+    param_name: &str,
+    key_ptr_off: usize,
+    key_len_off: usize,
+    matched_label: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let (key_label, key_len) = data.add_string(param_name.as_bytes());
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x1", key_ptr_off);
+            abi::emit_load_temporary_stack_slot(emitter, "x2", key_len_off);
+            abi::emit_symbol_address(emitter, "x3", &key_label);
+            abi::emit_load_int_immediate(emitter, "x4", key_len as i64);
+            abi::emit_call_label(emitter, "__rt_hash_key_eq");
+            emitter.instruction("cmp x0, #0");                                  // did __rt_hash_key_eq report a name match?
+            emit_named_scan_branch(emitter, false, matched_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "rdi", key_ptr_off);
+            abi::emit_load_temporary_stack_slot(emitter, "rsi", key_len_off);
+            abi::emit_symbol_address(emitter, "rdx", &key_label);
+            abi::emit_load_int_immediate(emitter, "rcx", key_len as i64);
+            abi::emit_call_label(emitter, "__rt_hash_key_eq");
+            emitter.instruction("test rax, rax");                               // did __rt_hash_key_eq report a name match?
+            emit_named_scan_branch(emitter, false, matched_label);
+        }
+    }
+}
+
+/// Probes the argument hash for one positional integer key, keeping only the found flag.
+fn emit_numeric_hash_probe(hash_base_reg: &str, numeric_idx: usize, emitter: &mut Emitter) {
+    let key_ptr_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let key_len_reg = abi::int_arg_reg_name(emitter.target, 2);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("mov x0, {}", hash_base_reg)), // pass the descriptor hash as the probe subject
+        Arch::X86_64 => emitter.instruction(&format!("mov rdi, {}", hash_base_reg)), // pass the descriptor hash as the probe subject
+    }
+    abi::emit_load_int_immediate(emitter, key_ptr_reg, numeric_idx as i64);
+    abi::emit_load_int_immediate(emitter, key_len_reg, -1);
+    abi::emit_call_label(emitter, "__rt_hash_get");
+}
+
+/// Probes the argument hash for one parameter name, keeping only the found flag.
+fn emit_named_hash_probe(
+    hash_base_reg: &str,
+    key_label: &str,
+    key_len: usize,
+    emitter: &mut Emitter,
+) {
+    let key_ptr_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let key_len_reg = abi::int_arg_reg_name(emitter.target, 2);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("mov x0, {}", hash_base_reg)), // pass the descriptor hash as the probe subject
+        Arch::X86_64 => emitter.instruction(&format!("mov rdi, {}", hash_base_reg)), // pass the descriptor hash as the probe subject
+    }
+    abi::emit_symbol_address(emitter, key_ptr_reg, key_label);
+    abi::emit_load_int_immediate(emitter, key_len_reg, key_len as i64);
+    abi::emit_call_label(emitter, "__rt_hash_get");
+}
+
 /// Looks up a named or numeric associative argument.
+///
+/// The name wins when both exist, which is only reachable for an `EvalPrebound` container:
+/// `emit_reject_invalid_named_arguments` has already turned that combination into a catchable
+/// `Error` for every public one.
 fn emit_hash_lookup_for_param_or_index(
     hash_base_reg: &str,
     param_name: Option<&str>,
@@ -1474,43 +1914,19 @@ fn emit_hash_lookup_for_param_or_index(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) {
-    let key_ptr_reg = abi::int_arg_reg_name(emitter.target, 1);
-    let key_len_reg = abi::int_arg_reg_name(emitter.target, 2);
     let found_label = param_name.map(|_| ctx.next_label("invoker_assoc_key_found"));
 
     if let Some(name) = param_name {
         // -- try the declared parameter name as a string key --
         let (key_label, key_len) = data.add_string(name.as_bytes());
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!("mov x0, {}", hash_base_reg));     // pass the argument hash as the __rt_hash_get subject
-                abi::emit_symbol_address(emitter, key_ptr_reg, &key_label);
-                abi::emit_load_int_immediate(emitter, key_len_reg, key_len as i64);
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!("mov rdi, {}", hash_base_reg));    // pass the argument hash as the __rt_hash_get subject
-                abi::emit_symbol_address(emitter, key_ptr_reg, &key_label);
-                abi::emit_load_int_immediate(emitter, key_len_reg, key_len as i64);
-            }
-        }
-        abi::emit_call_label(emitter, "__rt_hash_get");
+        emit_named_hash_probe(hash_base_reg, &key_label, key_len, emitter);
         if let Some(found_label) = &found_label {
             abi::emit_branch_if_int_result_nonzero(emitter, found_label);
         }
     }
 
     // -- fall back to the positional numeric key --
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(                                   // pass the argument hash for the numeric-index lookup
-            &format!("mov x0, {}", hash_base_reg)
-        ),
-        Arch::X86_64 => emitter.instruction(                                    // pass the argument hash for the numeric-index lookup
-            &format!("mov rdi, {}", hash_base_reg)
-        ),
-    }
-    abi::emit_load_int_immediate(emitter, key_ptr_reg, numeric_idx as i64);
-    abi::emit_load_int_immediate(emitter, key_len_reg, -1);
-    abi::emit_call_label(emitter, "__rt_hash_get");
+    emit_numeric_hash_probe(hash_base_reg, numeric_idx, emitter);
     if let Some(found_label) = found_label {
         emitter.label(&found_label);
     }

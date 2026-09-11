@@ -52,22 +52,18 @@ pub(super) fn lower_expr_call_from_value(
 
 /// Lowers explicit named arguments for signature-unknown descriptor invocations.
 ///
-/// Every argument shape has a runtime container form, so this never declines: a sole spread is
-/// passed through as the container, named arguments build a boxed hash, and anything else builds
-/// an indexed array. Callers rely on that totality, because the callback is already published in
+/// Every argument shape has a runtime container form, so this never declines: named arguments
+/// and spreads build a key-normalized boxed hash, and plain positional arguments build an
+/// indexed array. Callers rely on that totality, because the callback is already published in
 /// the unwind chain by the time the container is built and there is no shape to fall back to.
 pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     span: Span,
 ) -> LoweredValue {
-    if let [Expr { kind: ExprKind::Spread(source), .. }] = args {
-        // The descriptor invoker already accepts raw or boxed argument arrays and
-        // validates their runtime keys. Preserve a sole spread as that container,
-        // including declared PHP arrays whose physical representation is Mixed.
-        return lower_expr(ctx, source);
-    }
-    if crate::types::call_args::has_named_args(args) {
+    if crate::types::call_args::has_named_args(args)
+        || descriptor_args_need_runtime_unpack_keys(args)
+    {
         return lower_untyped_descriptor_invoker_hash_container(ctx, args, span);
     }
     lower_untyped_descriptor_invoker_indexed_container(ctx, args, span)
@@ -91,17 +87,6 @@ pub(super) fn lower_untyped_descriptor_invoker_indexed_container(
     );
     let owner = publish_constructed_container(ctx, array, span);
     for arg in args {
-        if let ExprKind::Spread(inner) = &arg.kind {
-            let source = lower_expr(ctx, inner);
-            let array = load_published_container(
-                ctx,
-                owner,
-                array_ty.clone(),
-                arg.span,
-            );
-            lower_indexed_array_spread_into_array(ctx, array, source, Some(&elem_ty), arg.span);
-            continue;
-        }
         let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
         let array = load_published_container(
             ctx,
@@ -140,67 +125,21 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
         Some(span),
     );
     let owner = publish_constructed_container(ctx, hash, span);
-    let mut next_positional_key = emit_i64_at_span(ctx, 0, span);
+    let state = begin_descriptor_unpack(ctx, owner, hash_ty.clone(), span);
     for arg in args {
         match &arg.kind {
             ExprKind::NamedArg { name, value } => {
                 let key = lower_string_literal(ctx, name, arg);
                 let value = lower_untyped_descriptor_invoker_arg_value(ctx, value);
-                let hash = load_published_container(
-                    ctx,
-                    owner,
-                    hash_ty.clone(),
-                    arg.span,
-                );
-                ctx.emit_void(
-                    Op::HashSet,
-                    vec![hash.value, key.value, value.value],
-                    None,
-                    Op::HashSet.default_effects(),
-                    Some(arg.span),
-                );
+                bind_descriptor_unpack_named(ctx, &state, key, value, arg.span);
             }
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
-                let hash = load_published_container(
-                    ctx,
-                    owner,
-                    hash_ty.clone(),
-                    arg.span,
-                );
-                next_positional_key = lower_untyped_descriptor_invoker_spread_into_hash(
-                    ctx,
-                    hash,
-                    source,
-                    next_positional_key,
-                    arg.span,
-                );
+                lower_descriptor_unpack_source(ctx, &state, source, arg.span);
             }
             _ => {
-                let key = next_positional_key;
                 let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
-                let hash = load_published_container(
-                    ctx,
-                    owner,
-                    hash_ty.clone(),
-                    arg.span,
-                );
-                ctx.emit_void(
-                    Op::HashSet,
-                    vec![hash.value, key.value, value.value],
-                    None,
-                    Op::HashSet.default_effects(),
-                    Some(arg.span),
-                );
-                let one = emit_i64_at_span(ctx, 1, arg.span);
-                next_positional_key = ctx.emit_value(
-                    Op::IAdd,
-                    vec![key.value, one.value],
-                    None,
-                    PhpType::Int,
-                    Op::IAdd.default_effects(),
-                    Some(arg.span),
-                );
+                bind_descriptor_unpack_positional(ctx, &state, value, arg.span);
             }
         }
     }
@@ -208,99 +147,6 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
     let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span));
     retire_owned_call_operand(ctx, owner, span);
     boxed
-}
-
-/// Copies an indexed spread source into a descriptor-invoker hash with numeric keys.
-pub(super) fn lower_untyped_descriptor_invoker_spread_into_hash(
-    ctx: &mut LoweringContext<'_, '_>,
-    hash: LoweredValue,
-    source: LoweredValue,
-    start_key: LoweredValue,
-    span: Span,
-) -> LoweredValue {
-    let source_elem_ty = match ctx.builder.value_php_type(source.value).codegen_repr() {
-        PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
-        _ => PhpType::Mixed,
-    };
-    let len = ctx.emit_value(
-        Op::ArrayLen,
-        vec![source.value],
-        None,
-        PhpType::Int,
-        Op::ArrayLen.default_effects(),
-        Some(span),
-    );
-    let zero = emit_i64_at_span(ctx, 0, span);
-    let header = ctx.builder.create_named_block("descriptor.spread.next", vec![(IrType::I64, PhpType::Int)]);
-    let body = ctx.builder.create_named_block("descriptor.spread.body", Vec::new());
-    let exit = ctx.builder.create_named_block("descriptor.spread.exit", Vec::new());
-    ctx.builder.terminate(Terminator::Br { target: header, args: vec![zero.value] });
-
-    ctx.builder.position_at_end(header);
-    let index = ctx.builder.block_param(header, 0);
-    let has_next = ctx.emit_value(
-        Op::ICmp,
-        vec![index, len.value],
-        Some(Immediate::CmpPredicate(CmpPredicate::Slt)),
-        PhpType::Bool,
-        Op::ICmp.default_effects(),
-        Some(span),
-    );
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: has_next.value,
-        then_target: body,
-        then_args: Vec::new(),
-        else_target: exit,
-        else_args: Vec::new(),
-    });
-
-    ctx.builder.position_at_end(body);
-    let key = ctx.emit_value(
-        Op::IAdd,
-        vec![start_key.value, index],
-        None,
-        PhpType::Int,
-        Op::IAdd.default_effects(),
-        Some(span),
-    );
-    let value = ctx.emit_value(
-        Op::ArrayGet,
-        vec![source.value, index],
-        None,
-        source_elem_ty,
-        Op::ArrayGet.default_effects(),
-        Some(span),
-    );
-    let value = coerce_descriptor_invoker_mixed_value(ctx, value, span);
-    ctx.emit_void(
-        Op::HashSet,
-        vec![hash.value, key.value, value.value],
-        None,
-        Op::HashSet.default_effects(),
-        Some(span),
-    );
-    release_value_after_retaining_insert(ctx, Some(&PhpType::Mixed), value, span);
-    let one = emit_i64_at_span(ctx, 1, span);
-    let next = ctx.emit_value(
-        Op::IAdd,
-        vec![index, one.value],
-        None,
-        PhpType::Int,
-        Op::IAdd.default_effects(),
-        Some(span),
-    );
-    ctx.builder.terminate(Terminator::Br { target: header, args: vec![next.value] });
-
-    ctx.builder.position_at_end(exit);
-    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
-    ctx.emit_value(
-        Op::IAdd,
-        vec![start_key.value, len.value],
-        None,
-        PhpType::Int,
-        Op::IAdd.default_effects(),
-        Some(span),
-    )
 }
 
 /// Lowers one untyped descriptor argument, preserving variables as ref markers.

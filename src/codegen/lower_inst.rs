@@ -282,6 +282,11 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashGetSilent => hashes::lower_hash_get(ctx, &inst, false),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
+        Op::DescriptorArgSet => hashes::lower_descriptor_arg_set(ctx, &inst),
+        Op::DescriptorArgKeyExists => hashes::lower_descriptor_arg_key_exists(ctx, &inst),
+        Op::ThrowNamedParameterOverwrite => {
+            hashes::lower_throw_named_parameter_overwrite(ctx, &inst)
+        }
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
         Op::OffsetUnset => offset_unset::lower_offset_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),

@@ -616,7 +616,7 @@ fn validate_opcode_rules(
         | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr | AdoptRefCellPtr
         | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue | PrintValue | WriteStdout
         | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn
-        | PtrCheckNonnull => {
+        | ThrowNamedParameterOverwrite | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
         ReleaseUnlessAliases => {
@@ -682,7 +682,7 @@ fn validate_opcode_rules(
             )
         }
         HashLen | HashGet | HashGetSilent | HashIsset | HashSet | HashAppend | HashEnsureUnique
-        | HashCloneShallow => {
+        | HashCloneShallow | DescriptorArgSet | DescriptorArgKeyExists => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
         // `SlotDetach` is the one array op that accepts either storage: it nulls `container[key]`
