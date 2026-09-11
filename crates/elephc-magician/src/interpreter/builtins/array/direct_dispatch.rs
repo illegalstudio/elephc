@@ -47,7 +47,7 @@ pub(in crate::interpreter) fn eval_builtin_array_declared_call(
         "array_slice" => super::array_slice::eval_array_slice_declared_call(args, context, scope, values),
         "array_unique" => super::array_unique::eval_array_unique_declared_call(args, context, scope, values),
         "array_values" => super::array_values::eval_array_values_declared_call(args, context, scope, values),
-        "count" => super::count::eval_count_declared_call(args, context, scope, values),
+        "count" | "sizeof" => super::count::eval_count_declared_call(args, context, scope, values),
         "current" => super::current::eval_current_declared_call(args, context, scope, values),
         "key" => super::key::eval_key_declared_call(args, context, scope, values),
         "range" => super::range::eval_range_declared_call(args, context, scope, values),

@@ -5538,6 +5538,17 @@ eval('echo count($bag); echo ":"; echo count($bag, COUNT_RECURSIVE); echo ":"; e
     assert_eq!(out, "count:5:count:5:count:5");
 }
 
+/// Verifies eval `sizeof()` is PHP's `count()` alias, including named `$mode`.
+#[test]
+fn test_eval_sizeof_alias_of_count() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo sizeof([1, [2, 3], 4]); echo ":"; echo SIZEOF([1, [2, 3], 4], mode: COUNT_RECURSIVE); echo ":"; echo function_exists("sizeof");');
+"#,
+    );
+    assert_eq!(out, "3:5:1");
+}
+
 /// Verifies eval dispatches `ArrayAccess` reads, writes, append, probes, and unset on AOT objects.
 #[test]
 fn test_eval_dispatches_aot_array_access_objects() {

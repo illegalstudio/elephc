@@ -56,7 +56,7 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ChunkSplit,
     /// Dispatches `clamp(...)`.
     Clamp,
-    /// Dispatches `count(...)`.
+    /// Dispatches `count(...)` and `sizeof(...)`.
     Count,
     /// Dispatches core callable, constant, process-control, and debug-output builtins.
     Core,
