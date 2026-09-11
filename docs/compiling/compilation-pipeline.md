@@ -155,5 +155,6 @@ intermediate artifact:
   only; when `#[Export]` is present it also lowers EIR and runs cdylib
   call-graph safety without emitting code.
 - [`--emit-ir`](output-and-diagnostics.md#--emit-ir) prints EIR (after `ir-opt`) and stops.
-- [`--emit-asm`](output-and-diagnostics.md#--emit-asm) writes assembly without linking.
+- [`--emit-asm`](output-and-diagnostics.md#--emit-asm) writes assembly and stops before
+  runtime-object preparation, native assembly, or linking.
 - [`--timings`](output-and-diagnostics.md#--timings) prints how long each phase took.
