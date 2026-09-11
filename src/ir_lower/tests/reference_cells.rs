@@ -110,6 +110,11 @@ consumeNormalizedArray();
 }
 
 /// Native omitted references use managed cells and scoped owners on every supported ABI.
+///
+/// Both original default containers keep their own unwind owner, and the call's own owned
+/// result is staged in a SEPARATE record that encloses them: it is published first and retired
+/// last, which is the only nesting the runtime's LIFO pop can express. Counting records alone
+/// would accept a missing argument root as soon as any other record was added.
 #[test]
 fn omitted_reference_defaults_have_managed_unwind_leases_on_every_target() {
     let source = r#"<?php
@@ -133,8 +138,33 @@ unset($callback);
         );
         let caller = module.functions.iter()
             .find(|function| function.name == "callDefaultReferences").unwrap();
-        assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::PushCallOperandOwner).count(),
-            2, "{name}: both original default arrays need unwind owners");
+        let pushes = caller.instructions.iter().enumerate()
+            .filter_map(|(index, inst)| match (inst.op, &inst.immediate) {
+                (Op::PushCallOperandOwner, Some(Immediate::LocalSlot(slot))) => Some((index, *slot)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let local = |slot: crate::ir::LocalSlotId| &caller.locals[slot.as_raw() as usize];
+        let defaults = pushes.iter().copied()
+            .filter(|(_, slot)| local(*slot).kind == LocalKind::HiddenTemp)
+            .collect::<Vec<_>>();
+        assert_eq!(defaults.len(), 2, "{name}: both original default arrays need unwind owners");
+        let results = pushes.iter().copied()
+            .filter(|(_, slot)| local(*slot).kind == LocalKind::OwnedTemp
+                && local(*slot).php_type.codegen_repr() == crate::types::PhpType::Callable)
+            .collect::<Vec<_>>();
+        assert_eq!(results.len(), 1, "{name}: the call's own result is staged exactly once");
+        assert_eq!(pushes.len(), defaults.len() + results.len(), "{name}: no unaccounted owners");
+        let (result_push, result_slot) = results[0];
+        let detached = |slot: crate::ir::LocalSlotId| caller.instructions.iter()
+            .position(|inst| inst.op == Op::PopCallOperandOwner
+                && inst.immediate == Some(Immediate::LocalSlot(slot)))
+            .unwrap_or_else(|| panic!("{name}: slot {} is never detached", slot.as_raw()));
+        let result_pop = detached(result_slot);
+        for (push, slot) in &defaults {
+            assert!(*push > result_push, "{name}: the result record must enclose every argument root");
+            assert!(detached(*slot) < result_pop, "{name}: argument roots retire inside the result record");
+        }
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let caller_asm = asm.split_once("callDefaultReferences:\n").unwrap().1;
         let call = caller_asm.lines().find(|line| {

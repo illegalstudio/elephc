@@ -247,19 +247,24 @@ fn emit_runtime_callable_invoker_impl(
 }
 
 /// Boxes the target result into the invoker's uniform Mixed return cell.
-/// String results have one independent owner: either transferred by a proven
-/// owning callee or copied before the concat offset is restored. Mixed-element
-/// arrays likewise transfer their returned container owner into the box. Other
-/// result shapes retain the existing borrowed boxing contract.
+/// Every refcounted representation TRANSFERS its owner into the box. A compiled callee
+/// hands its caller exactly one owned reference; `acquire_borrowed_return_value` retains a
+/// borrowed property/element/static source before returning, and a returned local's slot is
+/// excluded from epilogue cleanup; and nothing in this wrapper releases that reference after
+/// boxing. Retaining instead of transferring therefore stranded one reference on every object,
+/// callable, hash, iterable and non-Mixed array returned through a descriptor invoker, which is
+/// why a freshly returned object survived its caller with its destructor unrun. String results
+/// reach this point already normalized to one independent owner. Scalars own nothing and keep
+/// the plain boxing path.
 fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
     let repr = ret_ty.codegen_repr();
     match &repr {
-        PhpType::Str => {
-            emit_box_current_owned_value_as_mixed(emitter, &repr);
-        }
-        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
-            emit_box_current_owned_value_as_mixed(emitter, &repr);
-        }
+        PhpType::Str
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Object(_)
+        | PhpType::Callable => emit_box_current_owned_value_as_mixed(emitter, &repr),
         _ => emit_box_current_value_as_mixed(emitter, &repr),
     }
 }
@@ -2619,6 +2624,35 @@ mod tests {
                     < asm.find("__rt_decref_array").unwrap(),
                 "{name}",
             );
+        }
+    }
+
+    /// Refcounted invoker results transfer the callee's owner into their returned Mixed box.
+    #[test]
+    fn invoker_refcounted_results_transfer_the_callee_owner_on_all_targets() {
+        let cases = [
+            (PhpType::Object("Payload".to_string()), "__rt_decref_object"),
+            (
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Str),
+                    value: Box::new(PhpType::Mixed),
+                },
+                "__rt_decref_hash",
+            ),
+            (PhpType::Callable, "__rt_callable_descriptor_release"),
+        ];
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for (ty, release) in &cases {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emit_boxed_invoker_return(&mut emitter, ty);
+                let asm = emitter.output();
+                assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}: {ty:?}");
+                assert_eq!(asm.matches(release).count(), 1, "{name}: {ty:?}");
+                assert!(
+                    asm.find("__rt_mixed_from_value").unwrap() < asm.find(release).unwrap(),
+                    "{name}: {ty:?}",
+                );
+            }
         }
     }
 

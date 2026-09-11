@@ -372,9 +372,8 @@ echo ':', addNamedSpread(), ':', addNamedSpread();
 
 /// A `call_user_func_array()` reference-marker container releases its partial contents in frame.
 ///
-/// A `callable` parameter carries no signature, so every literal variable in the argument array
-/// becomes a reference marker and the marker-preserving builder is used. The element already in
-/// that container has to be reachable from the unwind a later element expression starts.
+/// A published CUFA container protects earlier items even when its inferred callback signature
+/// has no by-reference parameters. Rooting cannot depend on whether reference markers are needed.
 #[test]
 fn test_core_call_user_func_array_container_releases_partial_contents_before_a_same_frame_catch() {
     let source = r#"<?php
@@ -534,8 +533,8 @@ function buildThroughMethodWithSameFrameCatch(): string {
 }
 echo buildWithSameFrameCatch(), ':', buildThroughMethodWithSameFrameCatch();
 "#;
-    let out = compile_and_run_with_heap_debug(source);
-    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\nassembly:\n{}", out.stdout, out.stderr, asm);
     assert_eq!(
         out.stdout,
         "argument|result|caught|fn:argument|result|caught|method",
@@ -743,17 +742,24 @@ echo copyLeaseWithSameFrameCatch(), ':', copyMethodLeaseWithSameFrameCatch();
 /// The lease keeps the callee's own mutable box, and a later write through the same reference
 /// mutates that box in place. A by-value use must not observe that write, so the copy clones the
 /// box the way an ordinary by-value `return` of a reference-cell read does.
+///
+/// The property is declared `array`, not `mixed`: a declared PHP `array` is a `Union` whose
+/// codegen representation is already the boxed `Mixed` cell this exercises, while `mixed` is
+/// rejected by the array-push property checker before the lowering under test ever runs. The
+/// in-place write goes through a reference alias for the same reason; a direct `$o->prop[] = …`
+/// is refused for a declared-`array` property too.
 #[test]
 fn test_core_by_value_reference_lease_detaches_a_boxed_pointee() {
     let source = r#"<?php
 class MixedBox {
-    public mixed $value = [1, 'two'];
-    public function &current(): mixed { return $this->value; }
+    public array $value = [1, 'two'];
+    public function &current(): array { return $this->value; }
 }
 function copyMixedLease(): string {
     $source = new MixedBox();
     $copy = $source->current();
-    $source->value[] = 3;
+    $alias = &$source->value;
+    $alias[] = 3;
     return count($copy) . ':' . count($source->value);
 }
 echo copyMixedLease();

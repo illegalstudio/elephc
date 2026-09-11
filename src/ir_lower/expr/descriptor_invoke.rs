@@ -137,7 +137,7 @@ pub(super) fn lower_dynamic_call_user_func_array(
     // The decision between the ref-marker builder and a plain array expression is made from the
     // argument SYNTAX, before either one emits anything, so the callback can be published first.
     let callback = root_descriptor_callback(ctx, callback, PhpType::Mixed, expr.span);
-    let arg_array = match descriptor_invoker_ref_marker_array_items(ctx, arg_array_expr, signature.as_ref()) {
+    let arg_array = match descriptor_invoker_ref_marker_array_items(arg_array_expr) {
         Some(items) => lower_descriptor_invoker_arg_array_for_call_user_func_array(
             ctx,
             &items,
@@ -229,16 +229,23 @@ pub(super) fn function_sig_from_extern_for_descriptor(sig: &ExternFunctionSig) -
     }
 }
 
-/// Returns the literal `call_user_func_array()` items that need invoker reference markers.
+/// Returns the literal `call_user_func_array()` items the published builder must construct.
 ///
-/// This is a pure syntactic decision: an array literal with no spread and at least one literal
-/// variable bound to a by-reference parameter. Callers consult it BEFORE publishing the callback,
-/// so choosing between the marker builder and a plain array expression never abandons emitted
+/// This is a pure syntactic decision; a spread-free array literal; taken BEFORE the callback is
+/// published, so choosing between the builder and a plain array expression never abandons emitted
 /// instructions.
+///
+/// It deliberately does NOT require a by-reference item. The builder is what publishes the
+/// container in the operand-owner chain and reloads it after every insertion, so a later item
+/// expression that throws cannot strand the items already inserted. Tying that to reference
+/// markers meant the decision moved with the CALLEE's signature: the checker back-propagates a
+/// bound closure's signature onto a `callable` parameter
+/// (`Checker::register_bound_callable_param_sig`), every parameter is then by value, and
+/// `call_user_func_array($callback, [$c, new Marker(), failing()])` fell back to an unrooted
+/// `array_new` literal that leaked its whole partial contents on the throw. Marker preservation
+/// is unaffected; the builder still asks `invoker_ref_arg_variable` per item.
 pub(super) fn descriptor_invoker_ref_marker_array_items(
-    ctx: &LoweringContext<'_, '_>,
     arg_array: &Expr,
-    sig: Option<&FunctionSig>,
 ) -> Option<Vec<Expr>> {
     let ExprKind::ArrayLiteral(items) = &arg_array.kind else {
         return None;
@@ -246,11 +253,7 @@ pub(super) fn descriptor_invoker_ref_marker_array_items(
     if items.iter().any(is_spread_arg) {
         return None;
     }
-    items
-        .iter()
-        .enumerate()
-        .any(|(index, item)| invoker_ref_arg_variable(ctx, sig, index, item).is_some())
-        .then(|| items.clone())
+    Some(items.clone())
 }
 
 /// Builds an invoker argument array that preserves by-reference literal variables.
