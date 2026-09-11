@@ -8,6 +8,8 @@
 //! Key details:
 //! - `define("NAME", value)` updates the per-function lowering context in source
 //!   order so later `ConstRef` expressions can keep precise PHP metadata.
+//! - Literal `defined("NAME")` folds using global constants plus scope-aware
+//!   `Class::CONST` existence from class/interface/enum metadata.
 
 use crate::ir::{Immediate, Op, Ownership};
 use crate::ir_lower::context::{value_ir_type, LoweredValue, LoweringContext};
@@ -35,6 +37,10 @@ pub(super) fn register_static_define_call(
 }
 
 /// Lowers `defined("NAME")` to a compile-time boolean when the name is literal.
+///
+/// Global names use prescanned `define()`/`const` metadata. `Class::CONST`
+/// strings also succeed when the member is visible from the current lexical
+/// class scope, including inherited and implemented-interface constants.
 pub(super) fn lower_static_defined_call(
     ctx: &mut LoweringContext<'_, '_>,
     name: &Name,
@@ -47,7 +53,7 @@ pub(super) fn lower_static_defined_call(
     let ExprKind::StringLiteral(constant_name) = &args[0].kind else {
         return None;
     };
-    let exists = ctx.constant_value(constant_name).is_some();
+    let exists = literal_constant_is_defined(ctx, constant_name);
     if !exists && (ctx.has_eval_barrier() || ctx.eval_executed()) {
         // Barrier-free AOT evals can still define constants dynamically; the
         // probe needs the eval context, so make sure its slot exists.
@@ -69,6 +75,18 @@ pub(super) fn lower_static_defined_call(
         PhpType::Bool,
         expr,
     ))
+}
+
+/// Returns true when a literal `defined()` name exists as a global or class-like constant.
+fn literal_constant_is_defined(ctx: &LoweringContext<'_, '_>, constant_name: &str) -> bool {
+    ctx.constant_value(constant_name).is_some()
+        || crate::types::class_like_constant_is_defined(
+            ctx.classes,
+            ctx.interfaces,
+            ctx.enums,
+            constant_name,
+            ctx.current_class.as_deref(),
+        )
 }
 
 /// Lowers `constant("NAME")` to exactly the EIR a bare `NAME` reference produces.

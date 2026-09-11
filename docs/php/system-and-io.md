@@ -19,7 +19,7 @@ sidebar:
 | `getenv()` | `getenv($name = null, $local_only = false): string\|array\|false` | Get one environment variable, or — with no argument — the whole environment as a string-keyed array. Answers `false` for a name that is not set, and `""` for one set to the empty string. `$local_only` is accepted and has no effect: there is no environment here separate from the process's |
 | `putenv()` | `putenv($assignment): bool` | Set an environment variable (`KEY=VALUE`), or remove it when the argument has no `=` |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
-| `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |
+| `defined()` | `defined($name): bool` | Check whether a string-literal global or `Class::CONST` name is defined |
 | `constant()` | `constant($name): mixed` | Value of a global constant named by a string literal. AOT has no runtime constant table, so a dynamic name, a `Foo::BAR` class constant, and an unknown name are compile errors |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
 | `phpversion()` | `phpversion(?string $extension = null): string\|false` | Get the targeted PHP language version, or one extension's version (`false` if it is not loaded) |
@@ -133,7 +133,7 @@ Inside `eval()`, the interpreter has no access to `--php-version` or `--web` and
 reports the default profile: `PHP_VERSION` `"8.5.0"`, `PHP_SAPI` `"cli"`. On a
 default-profile CLI binary that is identical to the compiled surface.
 
-`define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode.
+`define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode. The literal may name a global constant or a `Class::CONST` class, interface, or enum member; missing class-like types or members are `false`. Class-constant existence follows PHP visibility: public from any scope, private only from the declaring class, and protected from classes in the same inheritance family (a parent method can see a child's protected constant). Lookup stops at the first inherited declaration, so an inaccessible shadow does not fall through. `self::` and `parent::` use the lexical class. Remaining gaps: `static::` is not late-bound and currently folds to `false`; `self::`/`parent::` outside a class currently return `false` instead of PHP's Error; trait-imported constants and eval-mode class-constant names are not resolved.
 
 `php_uname()` supports PHP's standard one-character modes:
 

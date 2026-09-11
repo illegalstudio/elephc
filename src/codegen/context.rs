@@ -1229,6 +1229,17 @@ impl<'a> FunctionContext<'a> {
             .any(|candidate| candidate.trim_start_matches('\\') == normalized)
     }
 
+    /// Returns the lexical class scope used for `defined('Class::CONST')` visibility.
+    ///
+    /// Prefers `Function::lexical_class` (methods and nested closures). Falls back
+    /// to the class prefix of the EIR function name, matching
+    /// `runtime_metadata::current_function_class`.
+    pub(super) fn defined_class_scope(&self) -> Option<&str> {
+        self.function.lexical_class.as_deref().or_else(|| {
+            super::runtime_metadata::current_function_class(self.function)
+        })
+    }
+
     /// Returns the frame offset assigned to a value by Phase 04 placement.
     fn value_offset(&self, value: ValueId) -> Result<usize> {
         self.placement

@@ -289,12 +289,28 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_phpversion(ctx: &mut Functio
 }
 
 /// Lowers `defined("NAME")` for compile-time string constant names.
+///
+/// Direct calls usually fold in EIR. This path still answers `Class::CONST`
+/// names from module class/interface/enum metadata so registry and other
+/// const-string `defined()` calls match PHP existence and visibility checks.
 pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "defined", 1)?;
     let value = expect_operand(inst, 0)?;
     let constant_name = const_string_operand(ctx, value)?;
-    emit_static_bool(ctx, ctx.has_global_name(&constant_name));
+    emit_static_bool(ctx, literal_constant_is_defined(ctx, &constant_name));
     store_if_result(ctx, inst)
+}
+
+/// Returns true when a const-string `defined()` name exists as a global or class-like constant.
+fn literal_constant_is_defined(ctx: &FunctionContext<'_>, constant_name: &str) -> bool {
+    ctx.has_global_name(constant_name)
+        || crate::types::class_like_constant_is_defined(
+            &ctx.module.class_infos,
+            &ctx.module.interface_infos,
+            &ctx.module.enum_infos,
+            constant_name,
+            ctx.defined_class_scope(),
+        )
 }
 
 /// Compile-time-known set of "loaded" PHP extensions for `extension_loaded()` and the regular
