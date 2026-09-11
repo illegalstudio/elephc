@@ -99,42 +99,74 @@ try { call_user_func_array($selected, []); } catch (ArgumentCountError $e) { ech
     }
 }
 
-/// Releases callable argument containers, original object values, results, and arity throwables.
-#[test]
-fn test_mbstring_mime_decode_callable_ownership() {
-    let mut failures = Vec::new();
-    for eval in [false, true] {
-        for (case, call) in [
-            ("scalar", "$decode(123);"),
-            ("success", "$decode(new OwnedMimeHeader());"),
-            ("evaluation", "try { $decode(new OwnedMimeHeader(), failingMimeArgument()); } catch (Exception) {}"),
-            ("spread_evaluation", "try { $decode(...[new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader()], failingMimeArgument()); } catch (Exception) {}"),
-            ("arity", "try { $decode([], new OwnedMimeHeader()); } catch (ArgumentCountError) {}"),
-            ("type", "try { $decode([new OwnedMimeHeader()]); } catch (TypeError) {}"),
-        ] {
-            let mut residual = Vec::new();
-            for count in [1, 16] {
-                let calls = call.repeat(count);
-                let body = format!(r#"
+const MIME_CALLABLE_OWNERSHIP_CASES: [(&str, &str); 6] = [
+    ("scalar", "$decode(123);"),
+    ("success", "$decode(new OwnedMimeHeader());"),
+    (
+        "evaluation",
+        "try { $decode(new OwnedMimeHeader(), failingMimeArgument()); } catch (Exception) {}",
+    ),
+    (
+        "spread_evaluation",
+        "try { $decode(...[new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader()], failingMimeArgument()); } catch (Exception) {}",
+    ),
+    (
+        "arity",
+        "try { $decode([], new OwnedMimeHeader()); } catch (ArgumentCountError) {}",
+    ),
+    (
+        "type",
+        "try { $decode([new OwnedMimeHeader()]); } catch (TypeError) {}",
+    ),
+];
+
+/// Releases owners for one callable path at both the one-call and repeated-call counts.
+fn check_mbstring_mime_decode_callable_ownership(eval: bool, case_index: usize) {
+    let (case, call) = MIME_CALLABLE_OWNERSHIP_CASES[case_index];
+    let mut residual = Vec::new();
+    for count in [1, 16] {
+        let calls = call.repeat(count);
+        let body = format!(r#"
 class OwnedMimeHeader {{ public function __toString(): string {{ return "=?UTF-8?Q?caf=C3=A9?="; }} }}
 function failingMimeArgument(): string {{ throw new Exception("argument failed"); }}
 $decode = $argc > 0 ? "mb_decode_mimeheader" : "mb_strlen";
 {calls}
 echo "done";
 "#);
-                let output = compile_and_run_with_gc_stats(&program(&body, eval));
-                assert!(output.success, "{}", output.stderr);
-                assert_eq!(output.stdout, "done");
-                let (allocated, freed) = parse_gc_stats(&output.stderr);
-                residual.push(allocated as i64 - freed as i64);
-            }
-            if residual[0] != residual[1] {
-                failures.push(format!("case={case}, eval={eval}: {residual:?}"));
-            }
-        }
+        let output = compile_and_run_with_gc_stats(&program(&body, eval));
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "done");
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        residual.push(allocated as i64 - freed as i64);
     }
-    assert!(failures.is_empty(), "MIME callable owners leaked: {}", failures.join("; "));
+    assert_eq!(
+        residual[0], residual[1],
+        "MIME callable owners leaked: case={case}, eval={eval}: {residual:?}"
+    );
 }
+
+macro_rules! mime_callable_ownership_test {
+    ($name:ident, $eval:literal, $case_index:literal) => {
+        /// Checks one callable path so its two-count leak comparison has an independent timeout.
+        #[test]
+        fn $name() {
+            check_mbstring_mime_decode_callable_ownership($eval, $case_index);
+        }
+    };
+}
+
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_native_scalar, false, 0);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_native_success, false, 1);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_native_evaluation, false, 2);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_native_spread_evaluation, false, 3);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_native_arity, false, 4);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_native_type, false, 5);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_eval_scalar, true, 0);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_eval_success, true, 1);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_eval_evaluation, true, 2);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_eval_spread_evaluation, true, 3);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_eval_arity, true, 4);
+mime_callable_ownership_test!(test_mbstring_mime_decode_callable_ownership_eval_type, true, 5);
 
 /// Destroys temporary arguments in PHP parameter order after success, arity failure, and unpacking.
 #[test]
@@ -178,19 +210,16 @@ echo $decode(string: "=?UTF-8?Q?B?="), "\n";
     }
 }
 
-/// Releases partial callback argument containers when a later source expression throws.
-#[test]
-fn test_mbstring_mime_decode_call_user_func_argument_failure_ownership() {
-    let mut failures = Vec::new();
-    for eval in [false, true] {
-        for (case, call) in [
-            ("indexed", "call_user_func($decode, new PartialMimeHeader(), failingMimeArgument());"),
-            ("literal", "call_user_func_array($decode, [$retained, new PartialMimeHeader(), failingMimeArgument()]);"),
-        ] {
-            let mut residual = Vec::new();
-            for count in [1, 4] {
-                let calls = format!("try {{ {call} }} catch (Exception) {{}}").repeat(count);
-                let body = format!(r#"
+/// Releases partial callback argument containers for one invocation form and execution mode.
+fn check_mbstring_mime_decode_call_user_func_argument_failure_ownership(
+    eval: bool,
+    case: &str,
+    call: &str,
+) {
+    let mut residual = Vec::new();
+    for count in [1, 4] {
+        let calls = format!("try {{ {call} }} catch (Exception) {{}}").repeat(count);
+        let body = format!(r#"
 class PartialMimeHeader {{ public function __toString(): string {{ return "header"; }} }}
 function failingMimeArgument(): string {{ throw new Exception("argument failed"); }}
 $decode = $argc > 0 ? "mb_decode_mimeheader" : "mb_strlen";
@@ -198,19 +227,54 @@ $retained = 1;
 {calls}
 echo "done";
 "#);
-                let output = compile_and_run_with_gc_stats(&program(&body, eval));
-                assert!(output.success, "case={case}, eval={eval}: {}", output.stderr);
-                assert_eq!(output.stdout, "done");
-                let (allocated, freed) = parse_gc_stats(&output.stderr);
-                residual.push(allocated as i64 - freed as i64);
-            }
-            if residual[0] != residual[1] {
-                failures.push(format!("case={case}, eval={eval}: {residual:?}"));
-            }
-        }
+        let output = compile_and_run_with_gc_stats(&program(&body, eval));
+        assert!(output.success, "case={case}, eval={eval}: {}", output.stderr);
+        assert_eq!(output.stdout, "done");
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        residual.push(allocated as i64 - freed as i64);
     }
-    assert!(failures.is_empty(), "Partial MIME callback owners leaked: {}", failures.join("; "));
+    assert_eq!(
+        residual[0], residual[1],
+        "Partial MIME callback owners leaked: case={case}, eval={eval}: {residual:?}"
+    );
 }
+
+macro_rules! mime_argument_failure_ownership_test {
+    ($name:ident, $eval:literal, $case:literal, $call:literal) => {
+        /// Checks one partial-argument path at both original repetition counts.
+        #[test]
+        fn $name() {
+            check_mbstring_mime_decode_call_user_func_argument_failure_ownership(
+                $eval, $case, $call,
+            );
+        }
+    };
+}
+
+mime_argument_failure_ownership_test!(
+    test_mbstring_mime_decode_call_user_func_argument_failure_ownership_native_indexed,
+    false,
+    "indexed",
+    "call_user_func($decode, new PartialMimeHeader(), failingMimeArgument());"
+);
+mime_argument_failure_ownership_test!(
+    test_mbstring_mime_decode_call_user_func_argument_failure_ownership_native_literal,
+    false,
+    "literal",
+    "call_user_func_array($decode, [$retained, new PartialMimeHeader(), failingMimeArgument()]);"
+);
+mime_argument_failure_ownership_test!(
+    test_mbstring_mime_decode_call_user_func_argument_failure_ownership_eval_indexed,
+    true,
+    "indexed",
+    "call_user_func($decode, new PartialMimeHeader(), failingMimeArgument());"
+);
+mime_argument_failure_ownership_test!(
+    test_mbstring_mime_decode_call_user_func_argument_failure_ownership_eval_literal,
+    true,
+    "literal",
+    "call_user_func_array($decode, [$retained, new PartialMimeHeader(), failingMimeArgument()]);"
+);
 
 /// Encodes the same header through named calls, closures, dynamic callbacks, and positional spreads.
 #[test]

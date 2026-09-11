@@ -116,6 +116,6 @@ fn drain_shim() -> String {
 }
 
 /// Invokes the actual collector without requiring a PHP-visible gc_collect_cycles builtin.
-pub(super) fn collect_shim() -> String {
+pub(in crate::codegen::runtime_gc) fn collect_shim() -> String {
     drain_shim().replace("__rt_mbstring_release_catalog", "__rt_gc_collect_cycles")
 }

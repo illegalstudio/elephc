@@ -106,6 +106,11 @@ fn validate_shared_eval_coverage(by_name: &HashMap<String, usize>) {
 
 /// Validates static spec invariants before the registry is exposed.
 fn validate_declared_builtin_spec(spec: &EvalBuiltinSpec) {
+    assert!(
+        !spec.source_arguments || spec.direct.is_some(),
+        "eval builtin {} requires source arguments but has no direct hook",
+        spec.name
+    );
     let expected_param_names = spec.params.len() + usize::from(spec.variadic.is_some());
     assert_eq!(
         expected_param_names,
@@ -245,6 +250,13 @@ pub(in crate::interpreter) fn eval_raw_declared_builtin_spec(
 /// Returns whether a PHP-visible builtin has migrated into the declarative registry.
 pub(in crate::interpreter) fn eval_declared_builtin_exists(name: &str) -> bool {
     eval_declared_builtin_spec(name).is_some()
+}
+
+/// Returns whether direct syntax must preserve this builtin's source expressions.
+pub(in crate::interpreter) fn eval_declared_builtin_requires_source_arguments(
+    name: &str,
+) -> bool {
+    eval_declared_builtin_spec(name).is_some_and(|spec| spec.source_arguments)
 }
 
 /// Returns stable canonical names for builtins in the declarative registry.

@@ -789,7 +789,11 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
             );
             abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
             emitter.instruction(&format!("cbz x0, {}", null_label));            // null static storage reads as PHP null
-            emitter.instruction("bl __rt_incref");                              // retain the stored Mixed cell for the eval caller
+            if slot.ty.is_php_array() {
+                emitter.instruction("bl __rt_mixed_clone");                     // detach the array zval so eval writes preserve static COW aliases
+            } else {
+                emitter.instruction("bl __rt_incref");                          // retain the stored Mixed cell for the eval caller
+            }
             emitter.instruction(&format!("b {}", done_label));                  // skip null materialization after a retained hit
             emitter.label(&null_label);
             let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
@@ -836,7 +840,11 @@ fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStatic
             abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
             emitter.instruction("test rax, rax");                               // check whether static storage holds a Mixed cell
             emitter.instruction(&format!("jz {}", null_label));                 // null static storage reads as PHP null
-            emitter.instruction("call __rt_incref");                            // retain the stored Mixed cell for the eval caller
+            if slot.ty.is_php_array() {
+                emitter.instruction("call __rt_mixed_clone");                   // detach the array zval so eval writes preserve static COW aliases
+            } else {
+                emitter.instruction("call __rt_incref");                        // retain the stored Mixed cell for the eval caller
+            }
             emitter.instruction(&format!("jmp {}", done_label));                // skip null materialization after a retained hit
             emitter.label(&null_label);
             let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");

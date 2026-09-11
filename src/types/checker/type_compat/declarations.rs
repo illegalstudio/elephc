@@ -130,7 +130,11 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<PhpType, CompileError> {
-        let ty = self.resolve_type_expr(type_expr, span)?;
+        let ty = if matches!(type_expr, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("array")) {
+            PhpType::php_array()
+        } else {
+            self.resolve_type_expr(type_expr, span)?
+        };
         if matches!(ty, PhpType::Void) {
             return Err(CompileError::new(
                 span,

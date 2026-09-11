@@ -8,6 +8,7 @@
 //! Key details:
 //! - Exception matching and unwinding must keep handler-stack, call-frame cleanup, and class metadata invariants aligned.
 
+mod boxed_owner;
 mod cleanup_frames;
 mod call_operand_owner;
 mod boxed_owner;
@@ -26,6 +27,7 @@ mod throw_current;
 mod uncaught_report;
 
 pub use class_implements::emit_class_implements_interface;
+pub use boxed_owner::emit_throwable_boxed_owners;
 pub use cleanup_frames::emit_exception_cleanup_frames;
 pub use call_operand_owner::emit_cleanup_call_operand_owner;
 pub use boxed_owner::emit_throwable_boxed_owners;

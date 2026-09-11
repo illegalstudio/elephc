@@ -33,20 +33,18 @@ fn test_mbstring_ascii_case_origin_ownership() {
     }
 }
 
-/// Call-array reference owners are released after successful and throwing eval callbacks.
-#[test]
-fn test_mbstring_eval_call_array_reference_ownership() {
-    for failing in [false, true] {
-        let mut residual = Vec::new();
-        for count in [1, 24] {
-            let body = if failing { "mb_strlen($arg, \"invalid-encoding\");" } else { "return 1;" };
-            let call = if failing {
-                "try { call_user_func_array($callback, $arguments); } catch (ValueError) {}\n"
-            } else {
-                "call_user_func_array($callback, $arguments);\n"
-            };
-            let calls = call.repeat(count);
-            let source = format!(r#"<?php
+/// Checks call-array reference ownership at both original repetition counts.
+fn check_mbstring_eval_call_array_reference_ownership(failing: bool) {
+    let mut residual = Vec::new();
+    for count in [1, 24] {
+        let body = if failing { "mb_strlen($arg, \"invalid-encoding\");" } else { "return 1;" };
+        let call = if failing {
+            "try { call_user_func_array($callback, $arguments); } catch (ValueError) {}\n"
+        } else {
+            "call_user_func_array($callback, $arguments);\n"
+        };
+        let calls = call.repeat(count);
+        let source = format!(r#"<?php
 $source = $argc > 0 ? '
 function reference_callback(&$arg) {{ {body} }}
 $callback = "reference_callback";
@@ -57,14 +55,25 @@ echo json_encode(mb_convert_encoding($arguments, "UTF-8", "UTF-8"));
 ' : '';
 eval($source);
 "#);
-            let output = compile_and_run_with_gc_stats(&source);
-            assert!(output.success, "{}", output.stderr);
-            assert_eq!(output.stdout, r#"["source"]"#);
-            let (allocated, freed) = parse_gc_stats(&output.stderr);
-            residual.push(allocated as i64 - freed as i64);
-        }
-        assert_eq!(residual[0], residual[1], "call-array owners survived callback cleanup, failing={failing}");
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, r#"["source"]"#);
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        residual.push(allocated as i64 - freed as i64);
     }
+    assert_eq!(residual[0], residual[1], "call-array owners survived callback cleanup, failing={failing}");
+}
+
+/// Releases call-array reference owners after successful eval callbacks.
+#[test]
+fn test_mbstring_eval_call_array_reference_ownership_success() {
+    check_mbstring_eval_call_array_reference_ownership(false);
+}
+
+/// Releases call-array reference owners after throwing eval callbacks.
+#[test]
+fn test_mbstring_eval_call_array_reference_ownership_failure() {
+    check_mbstring_eval_call_array_reference_ownership(true);
 }
 
 /// Native typed callbacks write through persistent references and leave orphan array copies independent.

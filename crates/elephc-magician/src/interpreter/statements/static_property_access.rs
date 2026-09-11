@@ -801,6 +801,13 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                         values,
                     );
                 }
+                super::instance_property_access::validate_eval_native_array_property_assignment(
+                    &declaring_class,
+                    property_name,
+                    value,
+                    context,
+                    values,
+                )?;
                 if let Some(target) = context
                     .static_property_alias(&declaring_class, property_name)
                     .cloned()
@@ -848,6 +855,13 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
             );
         }
         if is_static {
+            super::instance_property_access::validate_eval_native_array_property_assignment(
+                &declaring_class,
+                property_name,
+                value,
+                context,
+                values,
+            )?;
             if let Some(target) = context
                 .static_property_alias(&declaring_class, property_name)
                 .cloned()

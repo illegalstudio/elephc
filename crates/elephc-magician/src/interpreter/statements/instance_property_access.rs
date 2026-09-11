@@ -225,10 +225,10 @@ pub(crate) fn eval_property_set_result(
                 return eval_throw_property_access_error(
                     &declaring_class,
                     property_name,
-                    write_visibility,
+                    value,
                     context,
                     values,
-                );
+                )?;
             }
             if !is_static {
                 validate_native_readonly_property_write(

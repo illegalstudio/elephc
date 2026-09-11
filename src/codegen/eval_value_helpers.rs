@@ -12,6 +12,34 @@ use super::{abi, emit::Emitter, platform::Arch};
 use crate::ir::{Module, Op, Ownership, Terminator, ValueDef};
 use crate::types::PhpType;
 
+/// Preserves the PHP array constraint while lowering other bridge metadata to its ABI type.
+pub(super) fn bridge_storage_type(ty: &PhpType) -> PhpType {
+    if ty.is_php_array() {
+        ty.clone()
+    } else {
+        ty.codegen_repr()
+    }
+}
+
+/// Rejects non-array boxed inputs without transferring ownership or changing their storage.
+/// The borrowed cell enters in the integer result register; callers reload it after this check.
+pub(super) fn emit_require_php_array(emitter: &mut Emitter, fail_label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("bl __rt_mixed_unbox");                         // inspect the boxed argument without acquiring or consuming owners
+            emitter.instruction("sub x0, x0, #4");                              // map packed and hash tags to the contiguous range zero through one
+            emitter.instruction("cmp x0, #1");                                  // only PHP array payloads satisfy an array declaration
+            emitter.instruction(&format!("b.hi {fail_label}"));                 // reject scalar, null, callable, and object payloads
+        }
+        Arch::X86_64 => {
+            emitter.instruction("call __rt_mixed_unbox");                       // inspect the boxed argument without changing its ownership
+            emitter.instruction("sub rax, 4");                                  // map packed and hash tags to the contiguous range zero through one
+            emitter.instruction("cmp rax, 1");                                  // only PHP array payloads satisfy an array declaration
+            emitter.instruction(&format!("ja {fail_label}"));                   // reject scalar, null, callable, and object payloads
+        }
+    }
+}
+
 /// Borrows a normalized argument cell from the private indexed array retained by the Rust caller.
 /// The caller must validate arity first and keep that array alive through native dispatch.
 pub(super) fn emit_borrowed_eval_argument(
@@ -100,5 +128,60 @@ pub(super) fn native_method_returns_owned_value(
             returned
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::{AppleVariant, Arch, Platform, Target};
+    use crate::types::PhpType;
+
+    use super::{bridge_storage_type, emit_require_php_array};
+
+    /// Preserves only the exact PHP array property contract as boxed bridge storage.
+    #[test]
+    fn bridge_storage_preserves_only_php_array_contract() {
+        let php_array = PhpType::php_array();
+        assert_eq!(bridge_storage_type(&php_array), php_array);
+        assert_eq!(
+            bridge_storage_type(&PhpType::Union(vec![PhpType::Int, PhpType::Str])),
+            PhpType::Mixed,
+        );
+    }
+
+    /// Rejects every boxed tag outside the packed-or-hash array range on all targets.
+    #[test]
+    fn php_array_requirement_checks_both_array_tags_without_ownership_calls() {
+        for target in supported_targets() {
+            let mut emitter = Emitter::new(target);
+            emit_require_php_array(&mut emitter, "php_array_type_error");
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_mixed_unbox"), "{target:?}: {asm}");
+            assert!(asm.contains("php_array_type_error"), "{target:?}: {asm}");
+            assert!(!asm.contains("__rt_incref"), "{target:?}: {asm}");
+            assert!(!asm.contains("__rt_decref"), "{target:?}: {asm}");
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(asm.contains("sub x0, x0, #4"), "{target:?}: {asm}");
+                    assert!(asm.contains("cmp x0, #1"), "{target:?}: {asm}");
+                }
+                Arch::X86_64 => {
+                    assert!(asm.contains("sub rax, 4"), "{target:?}: {asm}");
+                    assert!(asm.contains("cmp rax, 1"), "{target:?}: {asm}");
+                }
+            }
+        }
+    }
+
+    /// Returns every supported target for bridge ABI assertions.
+    fn supported_targets() -> [Target; 5] {
+        [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ]
     }
 }

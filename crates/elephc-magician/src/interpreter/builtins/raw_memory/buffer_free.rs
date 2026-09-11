@@ -13,6 +13,7 @@ use super::super::super::*;
 eval_builtin! {
     contract: "buffer_free",
     area: RawMemory,
+    source_arguments: true,
     direct: BufferFree,
     values: BufferFree,
 }

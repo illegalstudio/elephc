@@ -19,7 +19,7 @@ mod snapshot;
 mod reference_fill;
 
 #[path = "mbstring_capture_hash/reference_begin.rs"]
-mod reference_begin;
+pub(in crate::codegen::runtime_gc) mod reference_begin;
 
 #[path = "mbstring_capture_hash/query_remove.rs"]
 mod query_remove;
@@ -321,7 +321,7 @@ fn function_symbol(assembly: &str, name: &str) -> String {
 }
 
 /// Replaces exactly one marked helper body while preserving all unrelated emitted code and data.
-fn replace_function(assembly: &str, name: &str, body: &str) -> String {
+pub(in crate::codegen::runtime_gc) fn replace_function(assembly: &str, name: &str, body: &str) -> String {
     let marker = format!("@fn name={name} symbol=");
     let marker_start = assembly.find(&marker).expect("typed capture test function was not emitted");
     let start = assembly[..marker_start].rfind('\n').map_or(0, |offset| offset + 1);

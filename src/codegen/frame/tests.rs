@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Fixtures inspect both supported ABIs so runtime calls never precede later argument saves.
+//! - Eval fixtures cover implicit process-superglobal ownership across all supported targets.
 
 use super::*;
 use crate::codegen::generate_user_asm_from_ir;

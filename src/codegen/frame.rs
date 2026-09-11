@@ -759,7 +759,9 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
         if ctx.module.extern_globals.contains_key(&name) {
             continue;
         }
-        let ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
+        let ty = if name == "argv" {
+            argv_array_type()
+        } else if ctx.module.web && crate::superglobals::is_superglobal(&name) {
             crate::superglobals::superglobal_type().codegen_repr()
         } else {
             PhpType::Mixed

@@ -46,7 +46,9 @@ pub fn allocate(func: &Function) -> ValuePlacement {
         }
         offset += bytes;
         slot_of.insert(value_id, offset);
-        if value.ownership == Ownership::MaybeOwned && is_direct_php_call_result(func, value_id) {
+        if value.ownership == Ownership::MaybeOwned
+            && publishes_runtime_ownership_status(func, value_id)
+        {
             offset += 8;
             runtime_return_ownership_slot_of.insert(value_id, offset);
         }
@@ -198,5 +200,39 @@ mod tests {
         assert_eq!(placement.slot(result), Some(8));
         assert_eq!(placement.runtime_return_ownership_slot(result), Some(16));
         assert_eq!(placement.total_slot_bytes, 16);
+    }
+
+    /// Verifies a Mixed-to-string cast reserves a spill for its per-tag ownership marker.
+    #[test]
+    fn allocates_runtime_ownership_slot_for_mixed_string_cast() {
+        let mut function = Function::new("test".to_string(), IrType::Str, PhpType::Str);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let source = builder
+            .emit(
+                Op::LoadGlobal,
+                Vec::new(),
+                Some(Immediate::GlobalName(DataId::from_raw(0))),
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Borrowed,
+            )
+            .expect("load_global produces a value");
+        let result = builder
+            .emit(
+                Op::Cast,
+                vec![source],
+                Some(Immediate::CastTarget(IrType::Str)),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::MaybeOwned,
+            )
+            .expect("cast produces a value");
+
+        let placement = allocate(&function);
+
+        assert_eq!(placement.runtime_return_ownership_slot(result), Some(32));
     }
 }

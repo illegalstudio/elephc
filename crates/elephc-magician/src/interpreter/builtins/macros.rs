@@ -14,6 +14,7 @@ macro_rules! eval_builtin {
     (
         contract: $contract:literal,
         area: $area:ident,
+        $(source_arguments: $source_arguments:tt,)?
         direct: $direct:tt,
         values: $values:tt $(,)?
     ) => {
@@ -21,11 +22,20 @@ macro_rules! eval_builtin {
             $crate::interpreter::builtins::spec::EvalBuiltinBinding {
                 id: elephc_builtin_contract::BuiltinId::from_canonical_name($contract),
                 area: $crate::interpreter::builtins::spec::EvalArea::$area,
+                source_arguments: eval_builtin!(@source_arguments $($source_arguments)?),
                 direct: eval_builtin!(@direct $direct),
                 values: eval_builtin!(@values $values),
                 home_file: file!(),
             }
         }
+    };
+
+    (@source_arguments true) => {
+        true
+    };
+
+    (@source_arguments) => {
+        false
     };
 
     (@direct none) => {

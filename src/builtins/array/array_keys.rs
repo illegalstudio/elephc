@@ -63,12 +63,10 @@ fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
 /// Returns the key-array type for an `array_keys` call.
 ///
 /// An indexed array produces `Array<Int>`; an associative array produces
-/// `Array<key>`; a `Mixed` value produces `Array<Mixed>` because its runtime key kind
-/// (int for indexed storage, int-or-string for hash storage) is only known once the box is
-/// opened. Every other argument type is rejected — `array_keys(42)` and `array_keys("s")`
-/// remain compile errors. The argument is re-inferred here to drive the return type; the
-/// registry already inferred it once for side effects, and arity is pre-validated by the
-/// registry.
+/// `Array<key>`; `Mixed` and the declared-array storage union produce `Array<Mixed>` because
+/// their runtime key kind is known only once the box is opened. Every other argument type is
+/// rejected. The argument is re-inferred here to drive the return type; the registry already
+/// inferred it once for side effects, and arity is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if ty.is_php_array() {

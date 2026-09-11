@@ -16,7 +16,7 @@ use elephc_builtin_contract::RuntimeBuiltinId;
 mod aot_local;
 
 #[path = "invoke/deferred.rs"]
-mod deferred;
+pub(in crate::codegen::runtime_gc) mod deferred;
 
 /// Completes shared captures after destructive initialization, retaining live settings and deferred owners.
 #[test]

@@ -285,6 +285,20 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
     if callee_has_by_value_container_param(callee) {
         return false;
     }
+    // A real PHP frame owns a lifetime-tracked by-value parameter before a source-level
+    // assignment releases and replaces it. The inliner binds that slot as a borrow instead,
+    // so transplanting the same write would release the caller's value and leave the new
+    // owner in a cleanup-excluded slot. Keep the call boundary until the splice can reproduce
+    // the parameter-prologue retain and path-sensitive return transfer.
+    if callee_mutates_lifetime_tracked_parameter(callee) {
+        return false;
+    }
+    // A directly returned non-parameter local transfers its frame-owned value at the real
+    // return boundary. The current splice marks the slot cleanup-excluded, but its continuation
+    // parameter cannot distinguish that owner from a borrowed directly returned parameter.
+    if callee_returns_lifetime_tracked_non_parameter_slot(callee) {
+        return false;
+    }
     if has_exception_handlers(callee) {
         return false;
     }
@@ -504,6 +518,13 @@ fn site_is_inlinable(callee: &Function, has_result: bool) -> bool {
     }
     if has_result && !saw_value {
         return false; // result consumed but callee returns void
+    }
+    if !has_result
+        && Ownership::php_type_needs_lifetime_tracking(&callee.return_php_type.codegen_repr())
+    {
+        // Dropping a scalar return is harmless. Dropping a lifetime-tracked return while
+        // translating it to a zero-argument branch would abandon the callee's result owner.
+        return false;
     }
     true
 }

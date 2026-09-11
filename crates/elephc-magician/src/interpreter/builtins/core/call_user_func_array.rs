@@ -15,6 +15,7 @@ use super::func_args::eval_literal_func_args_callback;
 eval_builtin! {
     contract: "call_user_func_array",
     area: Core,
+    source_arguments: true,
     direct: Core,
     values: Core,
 }
