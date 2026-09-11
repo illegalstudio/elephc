@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Assignments mutate the host process environment for the current eval process.
+//! - PHP's syntax guard raises a catchable `ValueError` before host environment APIs run.
 
 use super::*;
 
@@ -27,15 +28,23 @@ pub(in crate::interpreter) fn eval_builtin_putenv(
         return Err(EvalStatus::RuntimeFatal);
     };
     let assignment = eval_expr(assignment, context, scope, values)?;
-    eval_putenv_result(assignment, values)
+    eval_putenv_result(assignment, context, values)
 }
 
-/// Applies one `putenv()` assignment to the host environment.
+/// Validates and applies one `putenv()` assignment to the host environment.
 pub(in crate::interpreter) fn eval_putenv_result(
     assignment: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let assignment = values.string_bytes(assignment)?;
+    if assignment.is_empty() || assignment[0] == b'=' {
+        return eval_throw_builtin_value_error(
+            "putenv(): Argument #1 ($assignment) must have a valid syntax",
+            context,
+            values,
+        );
+    }
     if let Some(separator) = assignment.iter().position(|byte| *byte == b'=') {
         let name = String::from_utf8_lossy(&assignment[..separator]);
         let value = String::from_utf8_lossy(&assignment[separator + 1..]);

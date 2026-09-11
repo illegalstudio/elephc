@@ -226,7 +226,7 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
             let [assignment] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_putenv_result(*assignment, values)
+            eval_putenv_result(*assignment, context, values)
         }
         "long2ip" => {
             let [value] = evaluated_args else {

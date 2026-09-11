@@ -2535,6 +2535,31 @@ echo getenv("ELEPHC_TEST_VAR");
     assert_eq!(out, "hello");
 }
 
+/// Verifies empty and leading-equals assignments throw PHP's exact catchable `ValueError`.
+#[test]
+fn test_putenv_rejects_invalid_assignment_syntax() {
+    let out = compile_and_run(
+        r#"<?php
+function probe_putenv_syntax(string $assignment): void {
+    try {
+        putenv($assignment);
+        echo "accepted";
+    } catch (ValueError $error) {
+        echo get_class($error) . "|" . $error->getMessage();
+    }
+    echo "\n";
+}
+probe_putenv_syntax("");
+probe_putenv_syntax("=");
+probe_putenv_syntax("=value");
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|putenv(): Argument #1 ($assignment) must have a valid syntax\n".repeat(3)
+    );
+}
+
 /// Verifies that `putenv("NAME")` without an equals sign removes the variable,
 /// matching PHP rather than leaving the previous value in the environment.
 #[test]
