@@ -1095,12 +1095,10 @@ fn assert_asm_contains_ordered(asm: &str, needles: &[&str]) {
 
 /// Pins `__rt_resource_type_name` inside the REAL generated runtime, on both targets.
 ///
-/// The end-to-end tests above can only run on the host, and `--emit-asm --target
-/// linux-x86_64` cannot complete on an aarch64 host (the runtime cache is assembled with
-/// the host `as`, which rejects `xor eax, eax`). Generating the runtime text directly is
-/// therefore the mechanism that gives the x86_64 body real coverage here, and it proves
-/// something the emitter unit tests cannot: that the helper is actually REGISTERED in
-/// `emit_runtime` and that the two literals it names exist in the data section.
+/// The end-to-end tests above can only run on the host. Generating runtime text directly
+/// gives the x86_64 runtime body real coverage without assembling or linking it, and it
+/// proves something the emitter unit tests cannot: that the helper is actually REGISTERED
+/// in `emit_runtime` and that the two literals it names exist in the data section.
 #[test]
 fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
     for (target_name, closed_label, open_needles, closed_needles, end_label) in [

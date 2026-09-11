@@ -5,7 +5,7 @@
 //! - `crate::pipeline::compile()` after EIR lowering and optimization.
 //!
 //! Key details:
-//! - Runtime feature selection, bridge planning, assembly emission, and linking preserve their original order.
+//! - Assembly-only output returns before runtime-object preparation, native resolution, assembly, and linking.
 
 use std::collections::{HashMap, HashSet};
 

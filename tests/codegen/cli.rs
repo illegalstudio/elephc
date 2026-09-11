@@ -835,6 +835,12 @@ fn test_cli_emit_asm_does_not_require_target_assembler() {
         !dir.join("main.o").exists() && !dir.join("main").exists(),
         "cross-target --emit-asm must not assemble or link"
     );
+    let runtime_cache = dir.join("cache-root").join("elephc");
+    assert!(
+        !runtime_cache.exists(),
+        "cross-target --emit-asm must not prepare a runtime object cache at {}",
+        runtime_cache.display()
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
