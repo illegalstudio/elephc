@@ -1293,6 +1293,8 @@ fn web_gc_stats_are_emitted_per_request() {
 #[test]
 fn web_eval_superglobal_reload_releases_replaced_owners() {
     let dir = make_test_dir("web_eval_superglobal_owners");
+    let started = Instant::now();
+    eprintln!("web eval superglobal owners: compiling web and eval fixture");
     let source = r#"<?php
 $snapshot = $_GET;
 $code = '$_GET = $_GET; // ' . $_GET['token'];
@@ -1305,6 +1307,7 @@ unset($snapshot); unset($code); unset($remove);
 echo "cleared";
 "#;
     let bin = compile_web_with_flags(&dir, source, "app", &["--gc-stats"]);
+    eprintln!("web eval superglobal owners: fixture compiled in {:?}", started.elapsed());
     let addr = format!("127.0.0.1:{}", free_port());
     let stderr_path = dir.join("server.stderr");
     let stderr_file = fs::File::create(&stderr_path).expect("create server stderr capture");
@@ -1314,9 +1317,14 @@ echo "cleared";
         .spawn().expect("spawn eval superglobal server"));
     wait_until_ready(&addr);
     for rounds in [1, 2, 4, 8] {
+        let request_started = Instant::now();
         let response = http_get_with_timeout(&addr, &format!("/?token=owned&rounds={rounds}"), Duration::from_secs(10))
             .expect("superglobal reload request must complete");
         assert!(response.ends_with("owned:owned|cleared"), "response: {response:?}");
+        eprintln!(
+            "web eval superglobal owners: rounds={rounds} completed in {:?}",
+            request_started.elapsed(),
+        );
     }
     child.kill().expect("stop eval superglobal server");
     child.wait().expect("reap eval superglobal server");

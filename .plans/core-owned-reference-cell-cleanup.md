@@ -2471,3 +2471,20 @@ ordinary target shards; this final cleanup changes no production code or test
 assertions. Workflow YAML validation and diff hygiene pass. The full matrix on
 the final cleanup commit must still complete in CI. No local tests were run and
 the PR remains unmerged on feat/core-align.
+
+### Bound and diagnose the web eval superglobal fixture independently
+
+Run 34575831695 on 60d0871ed passes every codegen and eval shard, but its macOS
+web shard terminates web_eval_superglobal_reload_releases_replaced_owners at
+60.010 and 60.024 seconds. The remaining red Build & Test job is the aggregate,
+not a second failing assertion. Neither web attempt identifies the active phase.
+
+Give only this exact web test the existing sibling web+eval fixture's 180-second
+budget in both nextest profiles. Preserve its four bounded HTTP requests and all
+GC stability assertions. Record compilation and per-request elapsed times so a
+future timeout exposes its phase instead of suggesting an unproven runtime fix.
+
+Native Sol inspected the log and made the scoped configuration and diagnostic
+changes. Cargo check --test web_tests, TOML parsing, exact override checks and
+diff hygiene pass. No local tests or repros execute. Completion within the new
+budget still requires the next exact-head CI run.

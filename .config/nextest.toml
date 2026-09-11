@@ -231,6 +231,17 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(web_resets_core_handlers_between_requests)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# This ownership fixture likewise compiles the web prelude with opaque eval and
+# then drives several requests. Both retries on macOS CI reached nextest's exact
+# 60s termination boundary without a test panic or server diagnostic.
+[[profile.default.overrides]]
+filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
 # also rebuild the optional system-client archive on a cold local cache.
 [[profile.default.overrides]]
