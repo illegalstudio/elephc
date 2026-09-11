@@ -342,11 +342,11 @@ Key observations:
 - `echo "big\n"` → load string address + length, then `svc` to write to stdout
 - The string literal lives in the `.data` section, referenced by label `_str_0`
 
-## Phase 17: Runtime preparation, assembly, and linking
+## Phase 17: Assembly output, runtime preparation, and linking
 
 **Tools:** native `as` and `ld` (or the equivalent system toolchain)
 
-elephc first prepares the shared runtime object, then writes the user assembly to a `.s` file, and finally invokes the system tools.
+elephc first writes the user assembly to a `.s` file. `--emit-asm` stops there, without preparing a runtime object or requiring an assembler. Final artifact builds continue through runtime preparation and the system toolchain.
 
 The runtime is not reassembled on every compile. elephc caches a pre-assembled runtime object under the user's cache directory (typically `~/.cache/elephc/`) using the compiler version, target, heap size, and generated runtime assembly hash in the cache key. If a matching object already exists, the compile reuses it directly.
 
@@ -354,9 +354,9 @@ The user program still gets its own assembly file. If `--source-map` is enabled,
 
 In normal compile mode, the toolchain flow is:
 
-1. Prepare or reuse the cached runtime object
-2. Write the program assembly to `file.s`
-3. Optionally write `file.map`
+1. Write the program assembly to `file.s`
+2. Optionally write `file.map`
+3. Prepare or reuse the cached runtime object
 4. Assemble `file.s` into `file.o`
 5. Link `file.o` together with the cached runtime object, any required optional
    bridge archives, and system libraries into the final executable

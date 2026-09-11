@@ -36,8 +36,9 @@ the boundary contract and the static-linking distinction.
 
 ### `--emit-asm`
 
-Writes the generated assembly next to the source instead of assembling and
-linking a binary. Useful for inspecting exactly what the backend produced.
+Writes the generated assembly next to the source and stops before runtime-object
+preparation, native assembly, or linking. No assembler for the selected target
+is required. Useful for inspecting exactly what the backend produced.
 
 ```bash
 elephc --emit-asm hello.php

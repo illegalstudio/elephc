@@ -821,6 +821,7 @@ fn test_cli_emit_asm_does_not_require_target_assembler() {
         .arg("--target")
         .arg(target)
         .arg("--emit-asm")
+        .arg("--timings")
         .arg(&php_path)
         .output()
         .expect("failed to run cross-target elephc CLI with --emit-asm");
@@ -830,10 +831,32 @@ fn test_cli_emit_asm_does_not_require_target_assembler() {
         "cross-target elephc --emit-asm failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Writing assembly"),
+        "emit-asm should report its final output phase: {stderr}"
+    );
+    for skipped_phase in [
+        "Preparing runtime object",
+        "Assembling object file",
+        "Linking native output",
+        "Runtime cache:",
+    ] {
+        assert!(
+            !stderr.contains(skipped_phase),
+            "emit-asm unexpectedly reported `{skipped_phase}`: {stderr}"
+        );
+    }
     assert!(dir.join("main.s").exists(), "expected target assembly output");
     assert!(
         !dir.join("main.o").exists() && !dir.join("main").exists(),
         "cross-target --emit-asm must not assemble or link"
+    );
+    let runtime_cache = dir.join("cache-root").join("elephc");
+    assert!(
+        !runtime_cache.exists(),
+        "cross-target --emit-asm must not prepare a runtime object cache at {}",
+        runtime_cache.display()
     );
 
     let _ = fs::remove_dir_all(&dir);

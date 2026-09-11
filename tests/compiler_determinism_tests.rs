@@ -43,8 +43,8 @@ fn unique_test_id() -> usize {
 /// Every run compiles the SAME file in the SAME directory: the compiler bakes the
 /// canonicalized source path into the output (`__FILE__`, `Throwable::getFile()`),
 /// so compiling copies in sibling directories would report a path difference as a
-/// reproducibility failure. Runs also share one cache root, so the runtime object
-/// is built once; the assembly under test is regenerated from scratch regardless.
+/// reproducibility failure. The isolated cache root ensures a regression cannot
+/// populate the user's runtime-object cache; the assembly is regenerated each run.
 fn emit_asm_repeatedly(name: &str, source: &str, runs: usize) -> Vec<String> {
     let dir = std::env::temp_dir().join(format!(
         "elephc_determinism_{}_{}_{}",
