@@ -70,6 +70,79 @@ echo "done";
     assert_eq!(compile_and_run_tagged(source), expected);
 }
 
+/// An active element borrow relayed through a nested by-reference return is still copied out.
+///
+/// The relay's own frame sees only a by-reference parameter, so its acquisition boundary asks the
+/// runtime: the address owns no managed cell, but it IS an exact node of the active borrow chain,
+/// so the return is accepted with no lease instead of raising the owner-zero `Error`. The invoker
+/// then copies the pointee into an owned `Mixed` before anything can free the entry.
+#[test]
+fn test_core_boxed_array_walk_relays_an_active_element_borrow_through_a_nested_return() {
+    let source = r#"<?php
+function &boxedWalkInnerRelay(mixed &$value): mixed {
+    return $value;
+}
+function &boxedWalkOuterRelay(mixed &$value): mixed {
+    $value = "relayed";
+    $inner = &boxedWalkInnerRelay($value);
+    return $inner;
+}
+function boxedWalkRelayInput(): array { return ["value" => "start"]; }
+
+$items = boxedWalkRelayInput();
+$callback = "boxedWalkOuterRelay";
+array_walk($items, $callback);
+echo $items["value"], "|";
+unset($callback, $items);
+echo "done";
+"#;
+    let expected = "relayed|done";
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{assembly}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}\n{assembly}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
+/// A borrowed element return keeps the address the `return` named across a rebinding `finally`.
+///
+/// The acquisition publishes the SELECTED address as its own snapshot, separately from the
+/// managed lease it did not take. A fallthrough `finally` that rebinds the returned variable to
+/// an unrelated managed cell therefore cannot change which storage the invoker copies out.
+#[test]
+fn test_core_boxed_array_walk_borrowed_return_survives_a_rebinding_finally() {
+    let source = r#"<?php
+function boxedWalkFinallySeed(): mixed { return "rebound"; }
+function &boxedWalkFinallyRelay(mixed &$value): mixed {
+    $value = "selected";
+    $other = boxedWalkFinallySeed();
+    try {
+        return $value;
+    } finally {
+        $value = &$other;
+    }
+}
+function boxedWalkFinallyConsumer(mixed &$value): void {
+    $copied = boxedWalkFinallyRelay($value);
+    echo $copied, "|";
+}
+function boxedWalkFinallyInput(): array { return ["value" => "start"]; }
+
+$items = boxedWalkFinallyInput();
+$callback = "boxedWalkFinallyConsumer";
+array_walk($items, $callback);
+echo $items["value"], "|";
+unset($callback, $items);
+echo "done";
+"#;
+    let expected = "selected|selected|done";
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{assembly}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}\n{assembly}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
 /// A reference-returning callback may mutate an entry because its result is copied into owned Mixed.
 #[test]
 fn test_core_boxed_array_walk_copies_reference_returning_callback_value() {

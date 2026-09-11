@@ -598,8 +598,18 @@ fn validate_opcode_rules(
         | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner => {
             check_count(inst_id, inst, 0, "0")
         }
+        AcquireRefCell => {
+            check_count(inst_id, inst, 1, "1")?;
+            let result = inst.result.ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::I64
+                || !matches!(inst.result_php_type, PhpType::Pointer(_))
+            {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            Ok(())
+        }
         StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty
-        | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr | AdoptRefCellPtr | AcquireRefCell
+        | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr | AdoptRefCellPtr
         | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue | PrintValue | WriteStdout
         | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn
         | PtrCheckNonnull => {
@@ -1125,6 +1135,12 @@ fn validate_switch_case(
 }
 
 /// Validates return terminator type and normal-return compatibility.
+///
+/// A by-reference-returning function transports a raw reference-cell ADDRESS, not a value of
+/// its declared result type, so `PhpType::Pointer` results are accepted there regardless of the
+/// declared shape. Lowering obtains that address from `Op::AcquireRefCell`; this check rejects
+/// payload-shaped returns even when their type matches the PHP declaration. Payload layout
+/// compatibility and address provenance are separate lowering/runtime obligations.
 fn validate_return(
     function: &Function,
     block: BlockId,
@@ -1137,10 +1153,20 @@ fn validate_return(
     match value {
         Some(value_id) => {
             validate_use(function, value_id, block, None, dominators)?;
-            let actual = function
+            let returned = function
                 .value(value_id)
-                .ok_or(ValidationError::UnknownValue(value_id))?
-                .ir_type;
+                .ok_or(ValidationError::UnknownValue(value_id))?;
+            let actual = returned.ir_type;
+            if function.flags.by_ref_return {
+                return if actual == IrType::I64 && matches!(returned.php_type, PhpType::Pointer(_)) {
+                    Ok(())
+                } else {
+                    Err(ValidationError::ReturnTypeMismatch {
+                        expected: IrType::I64,
+                        actual: Some(actual),
+                    })
+                };
+            }
             if actual == function.return_type {
                 Ok(())
             } else {

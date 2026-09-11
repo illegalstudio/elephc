@@ -189,29 +189,55 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
     Ok(())
 }
 
-/// Retains a returned managed cell and retires any return owner superseded by a finally clause.
+/// Snapshots the returned cell address, leases it when it is managed, and retires a superseded lease.
+///
+/// The instruction produces TWO distinct things, and keeping them apart is the whole point:
+///
+/// - Its `Pointer` SSA result is the address selected here, ONCE. The return terminator reads
+///   that snapshot, so a `finally` that rebinds the returned variable and falls through cannot
+///   make the validated address and the returned reference disagree.
+/// - Its `ReturnRefCell` slot is the optional MANAGED lease, used only for cleanup. The
+///   retained replacement is published into it before the superseded lease is retired, because
+///   that retirement can run a throwing payload destructor.
 ///
 /// `__rt_reference_cell_owner` answers zero for every address that is not an exact live managed
 /// cell allocation, which includes an array-interior element address relayed into this frame
 /// through a by-reference parameter. Lowering cannot always settle that provenance statically:
-/// the caller's binding may be a branch away, or in another function entirely, so this
-/// boundary fails CLOSED: a zero owner raises the catchable
-/// `__rt_borrowed_reference_return_error` instead of retaining nothing and returning a null or
-/// soon-to-be-freed interior pointer to the caller. Accepted references, whose place owns a
-/// managed cell, are unaffected: the lookup answers the cell itself.
+/// the caller's binding may be a branch away, or in another function entirely, so this boundary
+/// fails CLOSED. The single exception is an address that is an EXACT node of the active
+/// unmanaged-borrow chain, which is a live boxed `array_walk()` element the descriptor invoker
+/// copies into an owned `Mixed` immediately after the call, before anything can free the entry.
+/// That case publishes a zero lease and still returns the snapshot; every other zero owner
+/// raises the catchable `__rt_borrowed_reference_return_error` instead of handing the caller a
+/// null or soon-to-be-freed interior pointer.
 pub(super) fn lower_acquire_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let pointer = expect_operand(inst, 0)?;
     let owner = expect_local_slot(inst)?;
     let owner_offset = ctx.local_offset(owner)?;
+    let captured = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module("acquire_ref_cell must publish the captured cell address")
+    })?;
     if !materialize_returned_local_ref_cell(ctx, pointer)? {
         ctx.load_value_to_reg(pointer, abi::int_result_reg(ctx.emitter))?;
     }
+    // Publish the selected address before any helper call can replace the result register.
+    ctx.store_int_result_value(captured)?;
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
     let owned = ctx.next_label("reference_return_owner_present");
+    let publish = ctx.next_label("reference_return_lease_publish");
+    let borrowed = ctx.next_label("reference_return_active_borrow");
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &owned);
+    ctx.load_value_to_reg(captured, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &borrowed);
     abi::emit_call_label(ctx.emitter, "__rt_borrowed_reference_return_error");
+    ctx.emitter.label(&borrowed);
+    // An active element borrow owns no cell, so this frame leases nothing for it.
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &publish);
     ctx.emitter.label(&owned);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.label(&publish);
     let previous = abi::secondary_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, previous, owner_offset);
     // Publish the retained replacement before retirement can run a throwing destructor.
@@ -245,11 +271,9 @@ pub(in crate::codegen) fn materialize_returned_local_ref_cell(
                 "reference return load has no local slot",
             ));
         };
-        if !ctx.local_ref_cell_representation_is_definite(slot) {
-            return Err(CodegenIrError::unsupported(
-                "by-reference return from a path-dependent local reference",
-            ));
-        }
+        // A promotion or finally rebind can make the slot's representation path-dependent.
+        // Resolve the address from its runtime state here, before finally executes. The
+        // acquiring boundary then verifies that the selected address has a managed owner.
         ctx.materialize_local_storage_address(slot, abi::int_result_reg(ctx.emitter))?;
         return Ok(true);
     }

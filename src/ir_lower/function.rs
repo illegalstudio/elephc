@@ -1453,6 +1453,18 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>) {
         ctx.builder.terminate(Terminator::Return { value: None });
         return;
     }
+    if ctx.by_ref_return {
+        // A by-reference result is a raw CELL ADDRESS the caller dereferences and may alias.
+        // A fallthrough has no accepted reference to transport, and the default placeholder
+        // would be a null or zero word the caller would read as a cell, so this path fails
+        // closed with the same catchable `Error` the run-time provenance guard raises.
+        crate::ir_lower::stmt::lower_throw_access_error(
+            ctx,
+            "Cannot return a reference from a path that has no by-reference return",
+            crate::span::Span::dummy(),
+        );
+        return;
+    }
     ctx.emit_eval_scope_finalizer(None);
     let value = emit_default_return_value(ctx);
     ctx.builder

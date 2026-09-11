@@ -709,7 +709,9 @@ pub enum Op {
     BindRefCellPtr,
     /// Adopts a returned cell owner into an alias/owner slot pair without retaining it twice.
     AdoptRefCellPtr,
-    /// Retains a managed reference cell for return, retiring a previous owner overridden by finally.
+    /// Snapshots a reference-cell address as Pointer/I64 and retains its optional managed owner.
+    /// Operand: addressed local/property; immediate: ReturnRefCell cleanup slot. Active bounded
+    /// borrows publish a zero owner, never their interior address, into that cleanup slot.
     AcquireRefCell,
     DynamicPropGet,
     DynamicPropSet,

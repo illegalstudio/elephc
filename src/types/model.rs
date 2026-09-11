@@ -198,6 +198,26 @@ impl PhpType {
         }
     }
 
+    /// Returns whether a reference cell can be read with either payload representation.
+    ///
+    /// Object class names do not change pointer storage; semantic return compatibility is
+    /// checked separately. Container element layouts still matter even when both outer
+    /// values are pointers, so comparing only their EIR heap kind would be too permissive.
+    pub(crate) fn reference_payload_compatible(&self, expected: &PhpType) -> bool {
+        match (self.codegen_repr(), expected.codegen_repr()) {
+            (PhpType::Object(_), PhpType::Object(_)) => true,
+            (PhpType::Array(actual), PhpType::Array(expected)) => {
+                actual.reference_payload_compatible(&expected)
+            }
+            (
+                PhpType::AssocArray { key: actual_key, value: actual_value },
+                PhpType::AssocArray { key: expected_key, value: expected_value },
+            ) => actual_key.reference_payload_compatible(&expected_key)
+                && actual_value.reference_payload_compatible(&expected_value),
+            (actual, expected) => actual == expected,
+        }
+    }
+
     /// Returns true if this is an indexed array of a scalar (int/float/bool) element type.
     ///
     /// The hash-based builtins accept such indexed inputs by converting them to integer-keyed

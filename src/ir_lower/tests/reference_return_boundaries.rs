@@ -463,7 +463,9 @@ echo $alias;
 ///
 /// Nothing in the callee's frame can tell whether the caller bound an array element or a managed
 /// cell, so the accepted lowering carries the owner-zero guard that fails closed instead of
-/// handing back an interior address.
+/// handing back an interior address. The element source is `Mixed` so the relay's shared
+/// `mixed &` parameter contract is satisfied and the program reaches that RUN-TIME guard instead
+/// of a by-reference storage rejection in the checker.
 #[test]
 fn relayed_reference_parameter_returns_guard_owner_lookup_on_every_target() {
     let source = r#"<?php
@@ -471,7 +473,7 @@ function &relayReferenceParameter(mixed &$slot): mixed {
     return $slot;
 }
 function relayThroughElementAlias(): void {
-    $numbers = [1, 2];
+    $numbers = [1, 'two'];
     $borrowed = &$numbers[0];
     $alias = &relayReferenceParameter($borrowed);
     echo $alias;
@@ -602,12 +604,15 @@ bindStagedReference($argc);
 /// and successive lowering runs on the same thread must not see each other's records.
 #[test]
 fn refusals_survive_re_lowering_and_do_not_leak_between_runs() {
+    // The `if` statement stores a string into an int-element array, so the representation fixed
+    // point lowers it speculatively, discards that lowering, and lowers it again. The refused
+    // reference return sits INSIDE that statement, which is what the rollback has to survive.
     let source = r#"<?php
 function &refusedInsideConvertedStatement(int $choice): mixed {
     $numbers = [1, 2];
     $slot = &$numbers[0];
-    $slot = 'text';
     if ($choice > 0) {
+        $numbers[1] = 'text';
         return $slot;
     }
     return $slot;
@@ -628,4 +633,232 @@ echo $alias;
         Path::new("."),
         Target::detect_host(),
     );
+}
+
+/// Object class covariance does not change reference-cell payload storage.
+#[test]
+fn object_reference_returns_preserve_compatible_class_storage_on_every_target() {
+    let source = r#"<?php
+class ReferenceStorageBase { public string $label = 'child'; }
+class ReferenceStorageChild extends ReferenceStorageBase {}
+function &covariantLocalReference(): ReferenceStorageBase {
+    $value = new ReferenceStorageChild();
+    return $value;
+}
+$alias = &covariantLocalReference();
+echo $alias->label;
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// An acquisition publishes its selected address SEPARATELY from the managed lease it took.
+///
+/// The two are different things and the split is what makes both correctness properties hold:
+/// the `Pointer` SSA result is the snapshot the return terminator transports, while the
+/// `ReturnRefCell` slot is only the cleanup owner. The emitted guard order is the other half:
+/// the owner lookup runs first, an owner-zero address is probed against the active
+/// unmanaged-borrow chain, and only a non-matching address reaches the catchable error.
+#[test]
+fn reference_return_acquisitions_publish_a_pointer_snapshot_on_every_target() {
+    let source = r#"<?php
+function &snapshotReference(): string {
+    $value = 'snapshot';
+    return $value;
+}
+$alias = &snapshotReference();
+echo $alias;
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let callee = module
+            .functions
+            .iter()
+            .find(|function| function.name.eq_ignore_ascii_case("snapshotReference"))
+            .expect("the snapshotting callee is lowered");
+        let acquisition = callee
+            .instructions
+            .iter()
+            .find(|inst| inst.op == Op::AcquireRefCell)
+            .expect("the returned cell is acquired before the frame exits");
+        let captured = acquisition
+            .result
+            .expect("the acquisition publishes the address it selected");
+        let value = callee.value(captured).expect("the captured address is a value");
+        assert_eq!(
+            value.ir_type,
+            crate::ir::IrType::I64,
+            "{name}: a reference-cell address is one machine word"
+        );
+        assert!(
+            matches!(value.php_type, crate::types::PhpType::Pointer(_)),
+            "{name}: the by-reference return transports an address, not the declared payload"
+        );
+        let Some(crate::ir::Immediate::LocalSlot(owner)) = acquisition.immediate else {
+            panic!("{name}: the acquisition names its managed lease slot");
+        };
+        assert_eq!(
+            callee.locals[owner.as_raw() as usize].kind,
+            LocalKind::ReturnRefCell,
+            "{name}: the lease lives in the frame's reference-return owner slot"
+        );
+        let returned = callee
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator {
+                Some(Terminator::Return { value: Some(value) }) => Some(*value),
+                _ => None,
+            })
+            .expect("the callee returns a value");
+        assert_eq!(
+            returned, captured,
+            "{name}: the return transports the acquisition's snapshot, not a re-read cell"
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let lookup = assembly
+            .find("__rt_reference_cell_owner")
+            .expect("the acquisition asks for the address's managed owner");
+        let borrow = assembly
+            .find("__rt_reference_cell_is_unmanaged_borrow")
+            .expect("an owner-zero address is probed against the active borrow chain");
+        let guard = assembly
+            .find("__rt_borrowed_reference_return_error")
+            .expect("a non-matching owner-zero address fails closed");
+        assert!(
+            lookup < borrow && borrow < guard,
+            "{name}: owner lookup {lookup} < borrow probe {borrow} < guard {guard}"
+        );
+    }
+}
+
+/// A concretely typed array local widens to the declared payload BEFORE its cell is created.
+///
+/// The caller dereferences the transferred cell with the representation of the callee's declared
+/// result, which for a general PHP `array` is `Mixed`. Widening after the cell existed would
+/// leave the caller's alias pointing at the pre-widening storage, and returning the narrow cell
+/// would make the caller read the payload with the wrong shape.
+#[test]
+fn typed_array_reference_returns_widen_to_the_declared_payload_on_every_target() {
+    let source = r#"<?php
+function &widenedArrayReference(): array {
+    $values = [1, 2];
+    return $values;
+}
+$alias = &widenedArrayReference();
+echo count($alias);
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let callee = module
+            .functions
+            .iter()
+            .find(|function| function.name.eq_ignore_ascii_case("widenedArrayReference"))
+            .expect("the widening callee is lowered");
+        let widened = callee
+            .instructions
+            .iter()
+            .position(|inst| inst.op == Op::MixedBox)
+            .expect("the concrete array local is widened to the declared Mixed payload");
+        let promotion = callee
+            .instructions
+            .iter()
+            .position(|inst| inst.op == Op::PromoteLocalRefCell)
+            .expect("the widened local is promoted to a managed cell");
+        let acquisition = callee
+            .instructions
+            .iter()
+            .position(|inst| inst.op == Op::AcquireRefCell)
+            .expect("the promoted cell is leased to the caller");
+        assert!(
+            widened < promotion && promotion < acquisition,
+            "{name}: widen {widened} < promote {promotion} < acquire {acquisition}"
+        );
+        let Some(crate::ir::Immediate::LocalSlotPair { first, .. }) =
+            callee.instructions[promotion].immediate
+        else {
+            panic!("{name}: promotion names the local slot it rewrites");
+        };
+        assert_eq!(
+            callee.locals[first.as_raw() as usize].php_type.codegen_repr(),
+            crate::types::PhpType::Mixed,
+            "{name}: the cell's payload matches what the caller reads back through it"
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// A by-reference path with no accepted return fails closed instead of handing back a raw null.
+///
+/// A missing declared result means the checker runs no return-coverage analysis, so an inferred
+/// non-void by-reference function can still fall through. The result register carries a cell
+/// ADDRESS the caller dereferences and may alias, so the placeholder a by-value return would use
+/// is not safe here; that path raises a catchable `Error` and every value-carrying return still
+/// transports an acquired address.
+#[test]
+fn by_reference_fallthrough_paths_fail_closed_on_every_target() {
+    let source = r#"<?php
+class FallthroughReferenceSource { public string $text = 'present'; }
+function &optionalReference(FallthroughReferenceSource $source, int $choice) {
+    if ($choice > 0) {
+        return $source->text;
+    }
+}
+$source = new FallthroughReferenceSource();
+$alias = &optionalReference($source, $argc);
+echo $alias;
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let callee = module
+            .functions
+            .iter()
+            .find(|function| function.name.eq_ignore_ascii_case("optionalReference"))
+            .expect("the partially returning callee is lowered");
+        assert!(
+            callee
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator, Some(Terminator::Throw { .. }))),
+            "{name}: the path without an accepted reference raises a catchable Error"
+        );
+        for block in &callee.blocks {
+            let Some(Terminator::Return { value: Some(value) }) = &block.terminator else {
+                continue;
+            };
+            let producer = callee
+                .instructions
+                .iter()
+                .find(|inst| inst.result == Some(*value))
+                .unwrap_or_else(|| panic!("{name}: a returned address has a producing instruction"));
+            assert_eq!(
+                producer.op,
+                Op::AcquireRefCell,
+                "{name}: only an acquired cell address is returned by reference"
+            );
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
 }

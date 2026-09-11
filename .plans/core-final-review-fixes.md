@@ -6,8 +6,9 @@ branch `feat/core-align`.
 ## Checklist
 
 - [x] Close unsupported descriptor and non-reference call reference assignment.
-- [x] Ensure accepted reference-return sources have a transferable managed owner.
-- [x] Preserve the selected reference cell across fallthrough finally rebinding.
+- [ ] Ensure reference-return sources have a managed owner or a bounded active borrow.
+- [ ] Preserve the selected reference cell across fallthrough finally rebinding.
+- [ ] Align returned property payload guards with bound-closure signature specialization.
 - [x] Publish returned reference leases before throwing caller cleanup and root value arguments.
 - [ ] Protect copied by-value reference-call results during throwing caller cleanup.
 - [ ] Release successful static extern callable argument temporaries.
@@ -67,3 +68,64 @@ below, and checklist items must not imply that unexecuted tests passed.
   reference-returning call. It is assigned to the callable ownership batch.
 - Read-only backtrace review found hidden-parameter handling and prebound eval
   argument-count loss, so detection changes must include those transport fixes.
+
+### Reference-safety CI and independent review feedback
+
+- Commit `2b309b89e0ec91d35f7aa13147adf6a357c8ff62` was pushed to #893.
+- CI run `34596358463`, Linux x86_64 shard 9/16, failed the new fallthrough-finally
+  regression with `by-reference return from a path-dependent local reference`.
+  The shared local-address helper already handles dynamic representations; the
+  additional static refusal in the reference materializer is too restrictive.
+- A separate read-only Claude review found the established boxed `array_walk`
+  reference-return callback can no longer copy its active borrowed element. The
+  return boundary must distinguish an active bounded borrow from an arbitrary
+  ownerless address and snapshot the selected pointer independently of its lease.
+- CI also confirmed that failure in Linux x86_64 shard 6/16. Other failed shards
+  expose a typed `Array` versus boxed `Mixed` reference-return payload mismatch
+  and a relay fixture rejected before reaching the guard because it passes
+  `int` storage to a `mixed &` parameter. These need implementation and fixture
+  corrections, respectively, without weakening reference storage validation.
+- The affected checklist items are reopened until these corrections are reviewed
+  and their CI regressions pass. No local test or repro was executed.
+- Callable ownership implementation is in progress with Claude Opus 5. The
+  coordinator is reviewing intermediate diffs but has not accepted that batch.
+
+### Callable ownership first pass
+
+- Claude completed the first implementation pass for extern/builtin callable
+  arguments, early descriptor callbacks, IIFE descriptors, partial static map
+  results, and ordinary by-value reference-return lease staging.
+- Coordinator: `cargo check --locked -p elephc --tests` passed without warnings
+  in 15.65 seconds. No test or PHP/compiler repro was executed.
+- The batch remains unaccepted. Typed CUF/CUFA containers and owned results during
+  callback/descriptor retirement still need unwind-visible roots. Late fallback
+  decisions must not reevaluate callbacks. Regression sources need same-frame
+  catch coverage, and the nearby `Closure::call` path needs the shared helper.
+- Final CI run `34596358463` failed. The additional non-codegen fixture for
+  diagnostic rollback is rejected by the checker for int-to-string reassignment;
+  its source must still exercise rollback using supported storage.
+- Claude is correcting the reference-return CI failures next. No concurrent
+  delegated writer runs in this worktree.
+
+### Reference CI correction, second review
+
+- Claude separated the selected `Pointer` SSA from the optional managed return
+  lease, admitted only exact active boxed-walk borrows, promoted ordinary local
+  array payloads to their declared Mixed shape, and corrected the invalid fixtures.
+- Coordinator review made pointer result/return validation explicit, removed the
+  late-rematerialization fallback, preserved compatible object-class storage, and
+  made the borrowed-finally regression observe the actual copied return value.
+- `cargo check --locked -p elephc --tests` passed after the first review corrections
+  in 18.26 seconds. The later final-state check passed in 17.19 seconds with one
+  unused-helper warning from the concurrently incomplete callable batch, which
+  is excluded from this reference CI commit. No tests ran.
+- Assembly-comment checks passed on the changed return/local-cell emitters.
+- A separate property-payload guard draft revealed that bound closures currently
+  specialize only the callable signature, not the compiled closure's return type.
+  That draft was withdrawn to preserve existing bound-string reference controls.
+  The property/closure specialization correction remains explicitly required and
+  has a bounded Claude task prepared; it is not counted as complete.
+- Callable completion is now delegated to Claude. Its read-only design review
+  confirmed prepublished owned-result slots and Mixed pointee cloning are needed.
+  Proposed example fixtures were screened for genuine same-frame catch behavior
+  and valid spread/named ordering before assigning the implementation.

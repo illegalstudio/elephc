@@ -518,6 +518,19 @@ of an array element is caught at run time instead: the return raises a catchable
 `Cannot return a reference to storage that has no independent reference cell`, rather than
 handing back an address the array may free.
 
+The same `Error` is raised when a by-reference function without a declared result type
+falls off the end of a path that returned nothing. A by-reference result is an address
+the caller dereferences and may alias, so that path fails closed instead of handing back
+the null placeholder an ordinary return would use. Declare a result type to have the
+missing return reported at compile time instead.
+
+An ordinary local can be boxed into the declared result's `Mixed` representation before
+its reference cell is created, including a typed array local returned as PHP `array`.
+An already shared local cell, including a by-reference parameter, is not widened:
+incompatible payload layouts are rejected at compile time. Compatible object class
+types still share the same pointer layout. This guard is a compiler subset limit, not
+a PHP restriction on reference returns.
+
 ## Variadic functions
 
 ```php

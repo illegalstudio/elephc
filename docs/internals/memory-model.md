@@ -345,23 +345,40 @@ the new cell before retiring the previous local, which may own the source object
 Cloning separates a singleton cell and shares one with live aliases, excluding
 temporary collector pins when making that decision.
 
-Resolved reference-returning callees retain a cell lease before local cleanup.
-The lease lives in a `ReturnRefCell` slot: normal return transfers it, while an
-exception during epilogue cleanup releases it. The return terminator reads the
-pointer back out of that same slot, so the retained owner and the returned
-reference are one snapshot taken where the `return` ran. A `finally` that rebinds
-the returned variable and falls through therefore cannot make them disagree, and a
-second `return` inside the `finally` replaces the lease and releases the superseded
-one. This mirrors PHP, which materializes the reference with `MAKE_REF` before the
-finally rather than re-reading the variable afterwards.
+Resolved reference-returning callees produce two distinct things at the `return`,
+and keeping them apart is what makes the boundary correct. `AcquireRefCell`
+materializes the returned cell address ONCE and publishes it as a typed `Pointer`
+SSA result; the return terminator transports that snapshot. Separately, when the
+address owns a managed cell, the retained owner goes into a `ReturnRefCell` lease
+slot: normal return transfers it, while an exception during epilogue cleanup
+releases it, and a second `return` inside a `finally` publishes its replacement
+before retiring the superseded lease, because that retirement can run a throwing
+payload destructor.
+
+Because the returned reference is the snapshot rather than a re-read of the
+variable, a `finally` that rebinds the returned variable and falls through cannot
+change what was returned. This mirrors PHP, which materializes the reference with
+`MAKE_REF` before the finally rather than re-reading the variable afterwards.
 
 Every accepted by-reference return source owns a transferable cell. A property slot
 already holds one; an ordinary addressable local is promoted in place first, which
-preserves the variable's identity. A source whose cell this frame can see is not
+preserves the variable's identity. That promotion uses the DECLARED result's payload
+representation, not the local's narrower inferred storage: a concretely typed array
+local inside an `: array` function widens to `Mixed` before its cell exists, because
+the caller dereferences the cell with the declared shape and a later write through
+either alias has to keep meaning. A by-reference parameter cannot be widened, since
+its storage belongs to the caller, so a payload representation that disagrees with
+the declared result is refused instead. A source whose cell this frame can see is not
 one of those is refused during lowering with a source diagnostic instead of being
 lowered as a value. Those refusals describe this lowering's subset, not PHP: PHP
 does return references to array elements and to other reference-returning calls,
 and the refusal exists only because no owning cell can be transferred for them yet.
+
+A by-reference function whose declared result is missing runs no return-coverage
+analysis in the checker, so an inferred non-void one can still fall through. The
+result register carries a cell ADDRESS the caller dereferences and may alias, so
+that path raises the same catchable `Error` rather than handing back the null
+placeholder a by-value return would use.
 
 Provenance the frame cannot see is settled at run time. A function returning its own
 by-reference parameter may have been handed an array-interior address by its caller,
@@ -370,6 +387,17 @@ a zero owner raises the catchable `__rt_borrowed_reference_return_error` rather 
 retaining nothing and publishing a null or soon-to-be-freed interior pointer. The
 message is separate from the `array_walk()` borrow escape so the diagnostic matches
 the program that raised it.
+
+That owner-zero rule has exactly one accepted exception, and it is checked against
+the runtime rather than assumed: an address that is an EXACT node of the active
+unmanaged-borrow chain is a live boxed `array_walk()` element, whose caller is the
+descriptor invoker. That invoker copies the pointee into an owned `Mixed`
+immediately after the call, before any cleanup can free the entry, so the return is
+accepted with NO lease and still transports its own snapshot. Every other owner-zero
+address, including an ordinary array element relayed through a by-reference
+parameter, still fails closed, and the separate escape guards that reject publishing
+such a borrow into a property, a promoted constructor property or a closure capture
+are unaffected.
 
 The caller either adopts the lease for reference assignment or acquires the
 contained value and retires the lease. Both adoptions happen immediately after the

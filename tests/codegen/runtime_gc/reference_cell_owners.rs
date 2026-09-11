@@ -673,7 +673,9 @@ bindOmittedDefault();
 ///
 /// The callee cannot see where its by-reference parameter came from, so the owner lookup answers
 /// zero at run time and the guard raises an `Error` rather than publishing an interior address
-/// the array would free underneath the caller.
+/// the array would free underneath the caller. The element is `Mixed` so the relay's shared
+/// `mixed &` parameter contract holds and the program reaches that run-time guard. No boxed
+/// `array_walk()` borrow is active here, so the owner-zero path has no accepted exception.
 #[test]
 fn test_core_relayed_element_reference_return_fails_closed() {
     let source = r#"<?php
@@ -681,7 +683,7 @@ function &relayReferenceParameter(mixed &$slot): mixed {
     return $slot;
 }
 function relayThroughElementAlias(): void {
-    $numbers = [1, 2];
+    $numbers = [1, 'two'];
     $borrowed = &$numbers[0];
     try {
         $alias = &relayReferenceParameter($borrowed);

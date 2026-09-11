@@ -20,20 +20,6 @@ use super::context::FunctionContext;
 use super::frame;
 use super::{CodegenIrError, Result};
 
-/// Returns the frame's reference-return lease slot, when lowering created one.
-///
-/// The slot is the single `LocalKind::ReturnRefCell` local `ir_lower` declares for a
-/// by-reference return; `acquire_ref_cell` publishes the retained cell pointer into it before
-/// any `finally` body runs, and `emit_function_return_epilogue` clears it once the pointer has
-/// been handed to the caller.
-fn reference_return_lease_slot(ctx: &FunctionContext<'_>) -> Option<crate::ir::LocalSlotId> {
-    ctx.function
-        .locals
-        .iter()
-        .find(|local| local.kind == crate::ir::LocalKind::ReturnRefCell)
-        .map(|local| local.id)
-}
-
 /// Lowers one EIR terminator.
 pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator) -> Result<()> {
     match term {
@@ -55,21 +41,21 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 // (`$x = &f()` aliases it). The pointer is a single machine word regardless of
                 // the aliased element type, so place it in the integer result register rather
                 // than splitting a `Str`/`Float` declared return across the string/float regs.
-                let int_reg = abi::int_result_reg(ctx.emitter);
-                let lease = reference_return_lease_slot(ctx);
-                if let Some(lease) = lease {
-                    // The lease slot holds the exact pointer `acquire_ref_cell` retained for
-                    // this return. Reading it here, instead of rematerializing the returned
-                    // variable's CURRENT cell, is what keeps the retained owner and the
-                    // returned reference identical when a fallthrough `finally` rebound that
-                    // variable in between (PHP snapshots the same way, with `MAKE_REF` before
-                    // the finally). A later return inside the finally replaces the lease and
-                    // releases the superseded one, so the last acquire still wins.
-                    let offset = ctx.local_offset(lease)?;
-                    abi::load_at_offset(ctx.emitter, int_reg, offset);
-                } else if !super::lower_inst::local_stores::materialize_returned_local_ref_cell(ctx, *value)? {
-                    ctx.load_value_to_reg(*value, int_reg)?;
+                // The returned value is the `Pointer` SSA result `acquire_ref_cell` published:
+                // the exact address it selected and validated, read back here as a SNAPSHOT.
+                // Loading it, instead of rematerializing the returned variable's CURRENT cell,
+                // is what keeps the acquisition and the returned reference identical when a
+                // fallthrough `finally` rebound that variable in between (PHP snapshots the
+                // same way, with `MAKE_REF` before the finally). The frame's lease slot is the
+                // separate managed OWNER, which a superseding return replaces and cleanup
+                // retires; a borrowed cell leaves it zero while still returning this snapshot.
+                if !matches!(ctx.value_php_type(*value)?, PhpType::Pointer(_)) {
+                    return Err(CodegenIrError::invalid_module(
+                        "by-reference return requires a captured pointer value",
+                    ));
                 }
+                let int_reg = abi::int_result_reg(ctx.emitter);
+                ctx.load_value_to_reg(*value, int_reg)?;
                 frame::emit_function_return_epilogue(ctx, None);
                 return Ok(());
             }

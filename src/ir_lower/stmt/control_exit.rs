@@ -77,7 +77,9 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
 /// The refusals here are early diagnostics for provenance this frame can see. Provenance it
 /// cannot see, such as an alias relayed in through a by-reference parameter, is caught by
 /// the owner-zero guard in `codegen::lower_inst::local_stores::lower_acquire_ref_cell`, which
-/// raises a catchable `Error` instead of publishing an interior address.
+/// raises a catchable `Error` instead of publishing an interior address. Its one exception is
+/// an EXACT active `array_walk()` element borrow, whose caller is the descriptor invoker and
+/// copies the pointee before any cleanup runs.
 fn lower_reference_return(
     ctx: &mut LoweringContext<'_, '_>,
     value_expr: Option<&Expr>,
@@ -108,7 +110,17 @@ fn lower_reference_return(
                     );
                     return;
                 }
-                ctx.promote_local_ref_cell(name, Some(span));
+                promote_local_to_reference_return_payload(ctx, name, span);
+            }
+            if !reference_return_payload_matches(ctx, name) {
+                refuse_reference_return(
+                    ctx,
+                    span,
+                    "Unsupported by-reference return: this variable's reference cell stores a \
+                     different payload representation than the declared by-reference result, so \
+                     the caller would read the aliased storage with the wrong shape",
+                );
+                return;
             }
             let value = ctx.load_local(name, Some(span));
             if ctx.builder.value_defining_op(value.value) != Some(Op::LoadRefCell) {
@@ -135,11 +147,11 @@ fn lower_reference_return(
                 Some(span),
             );
             let owning_receiver = ctx.value_is_owning_temporary(object);
-            acquire_reference_return_owner(ctx, cell_ptr, span);
+            let captured = acquire_reference_return_owner(ctx, cell_ptr, span);
             if owning_receiver {
                 crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
             }
-            terminate_return(ctx, Some(cell_ptr.value));
+            terminate_return(ctx, Some(captured.value));
         }
         Some(_) => {
             if let Some(value_expr) = value_expr {
@@ -174,39 +186,80 @@ fn refuse_reference_return(ctx: &mut LoweringContext<'_, '_>, span: Span, messag
     ctx.builder.terminate(Terminator::Unreachable);
 }
 
-/// Retains the returned cell in the frame's reference-return lease slot.
+/// Promotes an ordinary local to a cell whose payload matches the declared by-reference result.
 ///
-/// `AcquireRefCell` materializes the cell address ONCE, stores the retained pointer in the
-/// lease slot, and retires whatever lease a superseded return left there. The return
-/// terminator then reads that same slot, so a `finally` that rebinds the returned variable and
-/// falls through cannot make the retained owner and the returned pointer disagree.
+/// The caller dereferences the transferred cell with the representation of the callee's DECLARED
+/// result, so a local whose inferred storage is narrower than that (a concretely typed array
+/// local inside a `: array` function, whose declared payload representation is `Mixed`) has to be
+/// widened BEFORE the cell is created. Widening afterwards would rewrite the local's storage
+/// without the caller's alias following it, and returning the narrow cell would make the caller
+/// read the aliased storage with the wrong shape.
+fn promote_local_to_reference_return_payload(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: Span,
+) {
+    if ctx.return_php_type.codegen_repr() == PhpType::Mixed
+        && ctx.local_type(name).codegen_repr() != PhpType::Mixed
+    {
+        ctx.promote_local_mixed_ref_cell(name, Some(span));
+        return;
+    }
+    ctx.promote_local_ref_cell(name, Some(span));
+}
+
+/// Returns whether a local's cell payload agrees with the declared by-reference result shape.
+///
+/// A by-reference parameter aliases storage this frame does not own, so it cannot be widened:
+/// when its payload representation disagrees with the declared result, the only sound outcome is
+/// a refusal. Alias writes through the returned reference keep their meaning precisely because
+/// both sides now agree on one representation.
+fn reference_return_payload_matches(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    ctx.local_type(name).reference_payload_compatible(&ctx.return_php_type)
+}
+
+/// Retains the returned cell in the frame's lease slot and yields the address it captured.
+///
+/// `AcquireRefCell` materializes the cell address ONCE and publishes it as a typed `Pointer`
+/// SSA result, which the return terminator transports. Reading that snapshot, instead of
+/// rematerializing the returned variable's CURRENT cell, is what keeps the acquisition and the
+/// returned reference identical when a fallthrough `finally` rebinds that variable in between
+/// (PHP snapshots the same way, with `MAKE_REF` before the finally).
+///
+/// The `ReturnRefCell` slot it also writes is only the optional managed LEASE: it holds the
+/// retained owner so cleanup can retire it, and a superseded lease left by an earlier return is
+/// retired after the replacement is published, because that retirement can run a throwing
+/// destructor. An accepted address that owns no managed cell, which is the active
+/// `array_walk()` element borrow the descriptor invoker copies out immediately, publishes a
+/// zero lease and is still returned through the snapshot.
 fn acquire_reference_return_owner(
     ctx: &mut LoweringContext<'_, '_>,
     cell_ptr: LoweredValue,
     span: Span,
-) {
+) -> LoweredValue {
     let owner = ctx.declare_local_with_kind(
         "__eir_reference_return_owner",
         PhpType::Pointer(None),
         crate::ir::LocalKind::ReturnRefCell,
     );
-    ctx.emit_void(
+    ctx.emit_value(
         Op::AcquireRefCell,
         vec![cell_ptr.value],
         Some(Immediate::LocalSlot(owner)),
+        PhpType::Pointer(None),
         Op::AcquireRefCell.default_effects(),
         Some(span),
-    );
+    )
 }
 
-/// Acquires the reference-return lease and terminates with the cell it captured.
+/// Acquires the reference-return lease and terminates with the address it captured.
 fn acquire_and_return_reference_cell(
     ctx: &mut LoweringContext<'_, '_>,
     cell_ptr: LoweredValue,
     span: Span,
 ) {
-    acquire_reference_return_owner(ctx, cell_ptr, span);
-    terminate_return(ctx, Some(cell_ptr.value));
+    let captured = acquire_reference_return_owner(ctx, cell_ptr, span);
+    terminate_return(ctx, Some(captured.value));
 }
 
 /// Lowers a return expression with contextual array-literal element storage when available.
