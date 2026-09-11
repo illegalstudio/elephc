@@ -487,6 +487,36 @@ jobs:
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
+  core-eval-ownership-diagnostics:
+    name: Core eval ownership diagnostics (PR 893)
+    # Temporary fast feedback for the two remaining PR 893 leaks. The ordinary
+    # sharded matrix still runs both tests. Remove this job before review.
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 893
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Run the two eval ownership regressions
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(codegen_tests) and (test(=codegen::runtime_gc::gc_exception_recovery::test_core_eval_metadata_queries_balance_native_and_borrowed_object_inputs) or test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_post_eval_dynamic_class_name_target_balances_detached_strings))' \
+            --no-fail-fast --retries 0 -j 1
+
   non-codegen-tests-linux-aarch64:
     name: Non-Codegen Tests (linux-aarch64)
     needs: build-archive-linux-aarch64

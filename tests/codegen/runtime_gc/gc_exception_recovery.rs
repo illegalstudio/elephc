@@ -17,13 +17,36 @@ fn bounded_user_function_assembly(assembly: &str, function: &str) -> String {
         return "<function assembly not found>".to_string();
     };
     let mut body = label;
+    let mut eval_context_ready = None;
     for line in tail.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with(".globl ") || trimmed.starts_with(".global ") {
-            break;
-        }
         let line = line.split_once(" // ").map_or(line, |(instruction, _)| instruction);
         let line = line.split_once(" # ").map_or(line, |(instruction, _)| instruction);
+        let trimmed = line.trim_start();
+        if matches!(
+            trimmed.split_whitespace().next(),
+            Some(".globl" | ".global")
+        ) {
+            break;
+        }
+        if let Some(ready) = eval_context_ready.as_deref() {
+            if trimmed == format!("{ready}:") {
+                body.push_str("    <eval context initialization omitted>\n");
+                body.push_str(line);
+                body.push('\n');
+                eval_context_ready = None;
+            }
+            continue;
+        }
+        if trimmed
+            .split_whitespace()
+            .last()
+            .is_some_and(|target| target.contains("_eval_context_ready_"))
+        {
+            eval_context_ready = trimmed
+                .split_whitespace()
+                .last()
+                .map(str::to_string);
+        }
         if !line.trim().is_empty()
             && !line.trim_start().starts_with("//")
             && !matches!(line.trim_start().as_bytes().first(), Some(b'#'))
@@ -32,7 +55,19 @@ fn bounded_user_function_assembly(assembly: &str, function: &str) -> String {
             body.push('\n');
         }
     }
-    body.chars().take(128_000).collect()
+    if body.chars().count() <= 128_000 {
+        return body;
+    }
+    let head = body.chars().take(63_500).collect::<String>();
+    let tail = body
+        .chars()
+        .rev()
+        .take(63_500)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    format!("{head}\n<user function middle omitted>\n{tail}")
 }
 
 /// Failed and matched native catch predicates release the temporary boxes used to query eval.

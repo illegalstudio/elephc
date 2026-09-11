@@ -2354,3 +2354,24 @@ default and CI profiles. Keep retry counts, output checks and heap assertions.
 TOML parsing and diff hygiene pass. No local tests execute. The next CI must
 establish completion within that budget; this change does not mark the separate
 metadata leaks fixed or bypass their failures.
+
+### Expose post-registration ownership code and run the two probes early in CI
+
+The 75f0f8910 diagnostic reached its 128K cap inside native constant registration,
+before eval execution. Repeated context-initialization blocks also mean that a
+plain tail would hide earlier metadata calls. Omit each initialization block from
+its branch to its exact ready label, retaining all actual call and cleanup paths.
+Use a bounded head/tail fallback and the emitted case-folded classifystatic symbol.
+Both leaks remain unproven; no production ownership patch is inferred from the
+incomplete old dump.
+
+Add a temporary PR-893-only diagnostic job using the existing Linux x86_64 test
+archive. It runs exactly the two metadata regressions immediately after that
+archive is ready, without changing their normal sharded matrix coverage. Remove
+this temporary job before marking the PR ready for review. This shortens evidence
+latency while respecting the user's no-local-tests constraint. An explicit
+exception for the two local tests was requested but has not been granted.
+
+Native Sol repaired both diagnostic extractors. Cargo check --tests, workflow YAML
+and dependency validation, assembly-comment alignment and diff hygiene pass. No
+local tests or repros execute. The next exact-head CI supplies runtime evidence.
