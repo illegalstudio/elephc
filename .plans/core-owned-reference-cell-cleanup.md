@@ -2425,3 +2425,17 @@ compiles only once and keeps the normal budget.
 TOML and workflow YAML parse successfully; the archive dependency and diff hygiene
 checks pass. No local test executes. Remove the temporary early job after it has
 confirmed the repair, before presenting the PR for review.
+
+### Keep the named-coercion fixture observable through AST optimization
+
+The 7dcb370da early job passes both original leak regressions, the new future-local
+heap and structural cases, and the reference-return cases. Its only two failures
+are the library and binary instances of the named-coercion fixture. Both sink
+functions had empty bodies, so fixed-point effect analysis let DCE remove the
+call the assertion attempted to inspect. Make both sinks echo their scalar
+parameter, preserving the declared string/callable coercion paths and every
+ownership assertion. Print textual EIR if the call cannot be located again.
+
+Native Sol confirmed the optimizer path and adjusted the fixture. Cargo check
+--tests --features curl, assembly-comment checks and diff hygiene pass. No local
+test or repro executes. CI must confirm both instances of the retained call.

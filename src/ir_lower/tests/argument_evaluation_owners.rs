@@ -413,8 +413,8 @@ function evaluationCallbackSecond(): int { return 2; }
 class MixedArgumentSource {
     public mixed $text = "owned";
 }
-function takeNamedString(int $later, string $text): void {}
-function takeNamedCallable(int $later, callable $callback): void {}
+function takeNamedString(int $later, string $text): void { echo $later; }
+function takeNamedCallable(int $later, callable $callback): void { echo $later; }
 function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $code): void {
     $callback = $choice > 0 ? evaluationCallbackFirst(...) : evaluationCallbackSecond(...);
     eval($code);
@@ -500,7 +500,11 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
                         .eq_ignore_ascii_case("takeNamedCallable"))
                     .then_some((index, operand))
             })
-            .expect("guarded callable must reach the named call");
+            .unwrap_or_else(|| panic!(
+                "{target}: guarded callable must reach the named call\nfunction names={:?}\n{}",
+                module.data.function_names,
+                crate::ir::print_function(function),
+            ));
         let callable_source = forwarding_source(callback_operand);
         let callable_value = function.value(callable_source).unwrap();
         assert_eq!(callable_value.php_type, crate::types::PhpType::Callable, "{target}");
