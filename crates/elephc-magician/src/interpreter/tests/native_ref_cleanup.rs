@@ -125,6 +125,52 @@ fn native_function_binding_releases_partial_default_materialization() {
     assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
 }
 
+/// A named-only call over an earlier missing required slot retires every binding it already made.
+///
+/// `f(b: 1)` against `f($a, $b)` reaches the required-slot count through the NAMED slot alone, so
+/// the refusal happens after slot `$b` is already bound. Both the bound regular slots and the
+/// surplus list must be reclaimed there; the caller operand itself is borrowed and stays live.
+#[test]
+fn native_function_binding_releases_named_args_when_an_earlier_required_slot_is_missing() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let caller = values.string("second").unwrap();
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 2);
+    assert!(function.set_param_name(0, "a"));
+    assert!(function.set_param_name(1, "b"));
+    let outcome = bind_evaluated_native_function_args(
+        &function,
+        vec![EvaluatedCallArg { name: Some("b".into()), value: caller, ref_target: None }],
+        &mut context, &mut values,
+    );
+    assert!(matches!(outcome, Err(EvalStatus::RuntimeFatal)));
+    assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1);
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 1);
+    assert!(values.releases.is_empty(), "a borrowed caller operand must not be released here");
+}
+
+#[test]
+fn variadic_native_function_binding_releases_named_args_with_an_earlier_required_hole() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let caller = values.string("second").unwrap();
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 3);
+    assert!(function.set_param_name(0, "a"));
+    assert!(function.set_param_name(1, "b"));
+    assert!(function.set_param_name(2, "rest"));
+    assert!(function.set_variadic_index(2));
+    let outcome = bind_evaluated_native_function_args(
+        &function,
+        vec![EvaluatedCallArg { name: Some("b".into()), value: caller, ref_target: None }],
+        &mut context,
+        &mut values,
+    );
+    assert!(matches!(outcome, Err(EvalStatus::RuntimeFatal)));
+    assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1);
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 1);
+    assert!(values.releases.is_empty(), "a borrowed caller operand must not be released here");
+}
+
 /// Failed marker allocation rolls back both earlier slots and the current raw or boxed lease.
 #[test]
 fn native_function_staging_releases_partial_markers_and_payloads() {

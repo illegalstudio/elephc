@@ -158,10 +158,16 @@ fn bind_evaluated_native_function_args_with_mode(
         release_native_bound_arg_owners(surplus_args, context, values);
         return Err(status);
     }
-    let Some(mut bound_args) = bound_args.into_iter().collect::<Option<Vec<_>>>() else {
+    // A hole left here means an earlier required regular slot stayed unbound, as a named-only
+    // call such as `f(b: 1)` against `f($a, $b)` leaves it. The already bound regular slots own
+    // their cells just like the surplus ones, so reclaim BOTH before refusing the call; dropping
+    // the slot vector would strand every owner it still holds.
+    if bound_args.iter().any(Option::is_none) {
+        release_partial_native_bindings(&mut bound_args, context, values);
         release_native_bound_arg_owners(surplus_args, context, values);
         return Err(EvalStatus::RuntimeFatal);
-    };
+    }
+    let mut bound_args = bound_args.into_iter().flatten().collect::<Vec<_>>();
     bound_args.extend(surplus_args);
     let named_keys = vec![None; bound_args.len()];
     finish_native_function_binding(
@@ -369,7 +375,8 @@ fn bind_evaluated_native_variadic_function_args(
         return Err(status);
     }
 
-    let Some(mut bound_args) = regular_args.into_iter().collect::<Option<Vec<_>>>() else {
+    if regular_args.iter().any(Option::is_none) {
+        release_partial_native_bindings(&mut regular_args, context, values);
         release_native_bound_arg_owners(variadic_args, context, values);
         release_native_bound_arg_owners(
             named_variadic_args.into_iter().map(|(_, bound)| bound),
@@ -377,7 +384,8 @@ fn bind_evaluated_native_variadic_function_args(
             values,
         );
         return Err(EvalStatus::RuntimeFatal);
-    };
+    }
+    let mut bound_args = regular_args.into_iter().flatten().collect::<Vec<_>>();
     bound_args.extend(variadic_args);
     // Positional entries keep their own container index, so every string key lands after them.
     // That order is exactly what the invoker's one-pass container validation accepts: an integer
