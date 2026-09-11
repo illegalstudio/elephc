@@ -402,10 +402,10 @@ function exerciseSpread(string $text): void {
     }
 }
 
-/// Named Mixed coercions borrow evaluation slots and never release the ledger's stored lease.
+/// Named Mixed string coercions and guarded callable reads retire their distinct owners once.
 #[test]
 fn mixed_named_string_and_callable_coercions_do_not_double_retire_evaluation_owners() {
-    use crate::ir::{Immediate, LocalKind, Op, ValueDef};
+    use crate::ir::{Immediate, LocalKind, Op, Ownership, ValueDef};
 
     let source = r#"<?php
 function evaluationCallbackFirst(): int { return 1; }
@@ -419,7 +419,9 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
     $callback = $choice > 0 ? evaluationCallbackFirst(...) : evaluationCallbackSecond(...);
     eval($code);
     takeNamedString(text: $source->text, later: 1);
-    takeNamedCallable(later: 2, callback: $callback);
+    if (is_callable($callback)) {
+        takeNamedCallable(later: 2, callback: $callback);
+    }
 }
 "#;
     for target in [
@@ -477,17 +479,6 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
             string_evaluation_pins[0].1,
             target,
         );
-        let callable_unbox = function.instructions.iter().find_map(|inst| {
-            (inst.op == Op::MixedUnbox
-                && inst.result_php_type == crate::types::PhpType::Callable
-                && inst.operands.first().is_some_and(|source| {
-                    matches!(
-                        function.value(*source).unwrap().php_type.codegen_repr(),
-                        crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)
-                    )
-                }))
-                .then_some(inst.result?)
-        }).expect("named callable must be extracted from widened Mixed storage");
         let forwarding_source = |mut value| loop {
             let ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else {
                 break value;
@@ -500,11 +491,40 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
         };
         let (call_index, callback_operand) = function.instructions.iter().enumerate()
             .find_map(|(index, inst)| {
+                let Some(Immediate::Data(callee)) = inst.immediate else {
+                    return None;
+                };
                 let operand = inst.operands.get(1).copied()?;
-                (inst.op == Op::Call && forwarding_source(operand) == callable_unbox)
+                (inst.op == Op::Call
+                    && module.data.function_names[callee.as_raw() as usize]
+                        .eq_ignore_ascii_case("takeNamedCallable"))
                     .then_some((index, operand))
             })
-            .expect("extracted callable must reach the named call");
+            .expect("guarded callable must reach the named call");
+        let callable_source = forwarding_source(callback_operand);
+        let callable_value = function.value(callable_source).unwrap();
+        assert_eq!(callable_value.php_type, crate::types::PhpType::Callable, "{target}");
+        assert_eq!(callable_value.ownership, Ownership::Owned, "{target}");
+        let ValueDef::Instruction { inst: producer, .. } = callable_value.def else {
+            panic!("{target}: the guarded callable must have a storage-read producer");
+        };
+        let producer = function.instruction(producer).unwrap();
+        // A guard may expose a typed local read directly, while parameter normalization may
+        // emit an explicit MixedUnbox. Both must detach an owned descriptor from boxed storage.
+        match producer.op {
+            Op::LoadLocal => {
+                let Some(Immediate::LocalSlot(slot)) = producer.immediate else {
+                    panic!("{target}: typed callable read must identify its local storage");
+                };
+                assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(),
+                    crate::types::PhpType::Mixed, "{target}: guard must not erase widened storage");
+            }
+            Op::MixedUnbox => {
+                let source = function.value(producer.operands[0]).unwrap();
+                assert_eq!(source.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+            }
+            other => panic!("{target}: expected an owned boxed callable extraction, got {other:?}"),
+        }
         let callable_root = function.instructions[..call_index].iter().find_map(|store| {
             if store.op != Op::StoreLocal || store.operands != [callback_operand] {
                 return None;

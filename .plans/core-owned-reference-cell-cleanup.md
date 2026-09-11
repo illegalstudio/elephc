@@ -2308,3 +2308,18 @@ exclude runtime bodies. This adds no extra compile/run cycle and no runtime
 payload inspection. Native Sol implemented this test-only diagnostic for the
 next CI evidence. Cargo check --tests, assembly-comment alignment and diff hygiene
 pass. No tests or repros execute locally. Both leaks remain open pending CI.
+
+### Narrow the callable fixture before crossing its declared parameter boundary
+
+CI on 75f0f8910 shows the named-coercion fixture either rejected by the checker
+after opaque eval or expecting a MixedUnbox that its actual read path lacks.
+Guard the callable with is_callable before passing it to a declared callable
+parameter. Keep its physical slot Mixed and require an independently owned
+descriptor, whether extraction is a typed local read or an explicit MixedUnbox.
+Correlate that producer with the actual named call and its published final root.
+The string evaluation pin still has exactly one retirement. Existing explicit
+MixedUnbox call-surface coverage remains unchanged.
+
+Cargo check --tests, exporter build, documentation and target-boundary audits,
+assembly-comment alignment and diff hygiene pass. Generated docs are unchanged.
+No local tests execute; CI must run these strengthened storage-owner assertions.
