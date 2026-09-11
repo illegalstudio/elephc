@@ -12,5 +12,6 @@ use super::*;
 
 mod try_pruning;
 mod catch_pruning;
+mod destructor_catches;
 mod finally_paths;
 mod tail_paths;

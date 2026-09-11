@@ -372,3 +372,33 @@ below, and checklist items must not imply that unexecuted tests passed.
 - The descriptor spread and destructor-analysis drafts remain separate,
   uncommitted work. Grok is checking a narrow optimizer refinement before the
   coordinator completes that draft's review.
+
+### Destructor-aware catch preservation, reviewed with Grok
+
+- `42af2d8ee00436059473c5894d8306cb3a98d363` is pushed. CI `34619373366`
+  and PDO `34619373509` are queued on that count-cleanup head.
+- Reviewed the completed destructor-analysis draft against its call sites and
+  hierarchy metadata. Implicit retirement contributes throws at call operands,
+  discarded values, rebinding and frame teardown. Exact class storage proofs
+  reject dynamic/eval property tables; opaque eval and unsummarized destructors
+  keep the analysis conservative. Scalar-only frame controls retain precision.
+- Grok corrected the missing field in the unit-test `If` pattern. Its parser
+  inspection disproved the suspected nested operand in named-local increment:
+  those AST variants contain `String`, while complex lvalues desugar to writes.
+  Retained the typed guard and direct proof regressions, without inventing a
+  behavior change for the named-local path. Read both its full report and edits.
+- The coordinator also fixed the shared reference walk over enum methods and
+  constants. An enum cannot declare its own destructor, but its methods can run
+  eval or declare classes with destructors. Added direct detector regression
+  sources and corrected overly broad documentation claims about closed programs
+  and nonliteral callable retirement.
+- Added same-frame destructor regressions and five-target EIR/emitter fixtures,
+  including nonthrowing and disjoint-class controls. The original failing
+  direct-call and IIFE assertions remain unchanged.
+- `cargo check --locked -p elephc -p elephc-magician --tests` passed without
+  warnings in 16.34s. No local tests, PHP/compiler repros or formatters ran.
+- The remaining descriptor draft has a confirmed IteratorAggregate ownership
+  hole. Grok's source-bundle review independently identified it, but its proposed
+  nested cleanup sequence would release an old owner before publishing the new
+  one. That proposal is not accepted as-is. Iterator publication and numeric
+  string-key handling remain open before the descriptor draft can be committed.

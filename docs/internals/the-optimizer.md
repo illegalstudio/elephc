@@ -261,6 +261,7 @@ Current dead-code-elimination coverage includes:
 - source-order handler subtraction for unknown throws, including the PHP `Throwable = Exception | Error` root partition, so a later handler is removed once earlier catches exhaust its remaining domain without assuming arbitrary interfaces or open class families are closed
 - caught-variable domains preserved through nested `try` blocks and simple local aliases/reassignments, allowing `throw $e` to retain the incoming exact or constrained class while writes through unknown paths invalidate that fact conservatively
 - shadowed `catch` clauses whose exception types are already fully covered by earlier handlers, including all later handlers after `catch (Throwable ...)`
+- implicit destructor execution routed through that same typed model, so a `__destruct` that throws keeps the handler it can actually reach (see "Destructor throws" below)
 - shadowed `switch` patterns whose match points are already covered by earlier case labels, including full-case removal or fallthrough-body merging when no entry pattern remains
 - internal `if` regions pruned when outer pure variable guards or strict boolean checks already determine a nested branch outcome, with guard invalidation on relevant local writes to stay conservative
 - guard-based pruning now also understands simple pure `&&` / `||` combinations, so contradictions like `if ($a && $b) { if (!$a || !$b) ... }` can be removed without needing constant folding first
@@ -468,6 +469,92 @@ try {
 ```
 
 Because every `match` arm produces the same known pure / non-throwing callable, the optimizer can prove that the `catch` path is dead and avoid emitting the `pow` branch at all.
+
+### Destructor throws
+
+PHP runs `__destruct` implicitly, and a destructor that throws raises a perfectly ordinary
+catchable exception. The site that retires the last owner of an object is therefore a throw
+site, even though nothing at that site is written as a `throw`. The exception-flow analysis
+models those sites so a `catch` that a destructor can actually reach is never pruned.
+
+The model is deliberately bounded and conservative:
+
+- It is **gated on a program-wide destructor summary**. A closed program without a throwing
+  destructor keeps that summary empty. Opaque eval and unsummarized destructor declarations
+  make it conservative instead of assuming there are no implicit throws.
+- The summary is the union of every summarized `__destruct` body, so a destructor that throws
+  one exact class still routes through ordinary first-match handler matching: a `catch` for a
+  disjoint class is still removed.
+- Destructor **enumeration is proven**, not assumed. A `__destruct` supplied by a trait,
+  declared without a body, declared inside a conditional branch, or declared inside a closure
+  body never reaches the summary collector, so the summary widens to the unknown `Throwable`
+  domain instead of silently claiming the program has no destructor throws. A reachable `eval`
+  widens it the same way: its source is opaque, so it can define a class with a throwing
+  destructor that no AST in the program mentions. That check reads the SOURCE, so a capability
+  forced on from the command line with no `eval` call or `'eval'` string anywhere leaves
+  nothing to find.
+- A `new C()` temporary names an **exact** runtime class, so its own destructor resolves
+  through the parent chain precisely, and a subclass source routes the subclass override rather
+  than the parent's destructor. `new self()` and `new parent()` are early-bound and stay exact;
+  `new static()` is **not**, because late static binding can instantiate a subclass whose
+  destructor throws something else. A value of a **declared** type can likewise name a
+  subclass, so object, `mixed`, `iterable`, and `callable` positions use the program-wide
+  summary. Declared scalar types contribute nothing, which is the precision that keeps
+  scalar-returning callees from resurrecting a handler.
+- Destroying an object also retires the **instance storage it owns**: declared, inherited,
+  and promoted properties, and the container children they hold. "This class declares no
+  `__destruct`" is not a proof that its children are quiet, so that term is dropped only when
+  the whole layout is provably non-heap scalar. A class with dynamic property storage
+  (`#[\AllowDynamicProperties]`, inherited or declared, or eval-visible property storage) has
+  no such layout proof at all: an instance can hold an object under a name no declaration
+  mentions.
+- The attributed sites are: call and constructor operands, a retired call receiver, a discarded
+  expression-statement or `echo` value, a retired callable literal, a write that rebinds
+  storage (including `unset`), and a callable frame's own scope teardown.
+- A **callable literal** written at a call site is created and retired there, so it retires
+  what it binds: explicit `use` captures by value and by reference, an arrow function's
+  implicit captures (which the AST does not list, so any arrow function is conservative), the
+  implicit `$this` a non-static closure written inside a class body binds, and the receiver a
+  first-class callable binds. A `(new C())->m(...)` receiver is exact. Nonliteral callees
+  retain conservative call summaries, including their possible retirement.
+- Borrowed views are not assumed harmless. A variable passed as an argument can become the last
+  owned reference as soon as another argument or the callee rebinds its source, and this pass
+  has no ownership proof to the contrary, so it uses the gated program-wide summary there.
+
+### The scope-cleanup proof
+
+A callable frame drops its remaining owners when it returns, so by default every callable
+summary unions the program-wide destructor summary. That default is sound but coarse: it would
+erase all exact-class distinction in any program with two unrelated destructor types, and would
+charge a purely scalar helper for a destructor it can never touch.
+
+The summary is therefore omitted for a callable whose frame is **proven** to own nothing
+destructible. The proof is deliberately narrow and has two halves, both required:
+
+- *Signature*: every parameter is declared with a non-heap scalar type and passed by value, and
+  there is no variadic parameter. An untyped parameter is not proven, because it can hold an
+  object.
+- *Body*: no statement binds unproven frame storage. Named-local increments are a scalar-only
+  exception. Assignments, `list()` unpacking, `foreach`
+  loop variables, `global`, `static`, a `catch` variable, `extract()`, `eval()`, and any call
+  with an lvalue argument (a possible by-reference out-parameter) all refuse the proof, as does
+  any statement or expression form the whitelist has not been taught. Tracking *which* local
+  holds what would need a dataflow this AST pass does not have, and getting that wrong would be
+  unsound rather than merely imprecise.
+
+Two things are deliberately outside this term. `$this` is not charged to the callee frame: the
+receiver is owned by the caller, and a `(new C())->m()` temporary is already attributed to the
+call site, so charging it twice would gain nothing and make every instance method unprovable.
+And an object's own property storage is retired when the OBJECT is destroyed, not when one of
+its methods returns, so it belongs to the exact-class retirement term above rather than here.
+
+The bound is honest rather than complete: a callable containing any rebinding write keeps
+unioning the program-wide summary at that write, because rebinding retires whatever the target
+previously held and this pass cannot say what that was.
+
+The precision cost is concentrated in programs with possible destructor throws, including
+opaque eval or unsummarized declarations. Unproven retirement sites retain the corresponding
+handlers.
 
 ## Why there are six passes
 

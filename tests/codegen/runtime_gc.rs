@@ -44,6 +44,7 @@ mod core_builtins;
 mod dynamic_property_cycles;
 mod gc_exception_recovery;
 mod destructor_cleanup;
+mod destructor_catch_cleanup;
 mod callback_argument_cleanup;
 mod argument_evaluation_owners;
 mod call_coercion_owners;
