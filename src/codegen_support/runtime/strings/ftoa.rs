@@ -71,9 +71,8 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     emitter.bl_c("snprintf");                                                   // format the double at 14 significant digits
 
     // -- destination cursor inside _concat_buf --
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat write offset
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x13, x11, x10");                                   // result start = concat_buf + offset
     emitter.instruction("mov x12, x13");                                        // x12 = write cursor, x13 = result start
     emitter.instruction("add x14, sp, #8");                                     // x14 = read cursor into the snprintf scratch
@@ -144,10 +143,9 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     emitter.label("__rt_ftoa_finish");
     emitter.instruction("sub x2, x12, x13");                                    // result length = cursor - start
     emitter.instruction("mov x1, x13");                                         // result pointer = start of the emitted text
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // reload the original concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
     emitter.instruction("add x10, x10, x2");                                    // advance it past the emitted bytes
-    emitter.instruction("str x10, [x9]");                                       // publish the updated concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat offset (ctx-relative in ctx mode)
 
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
@@ -181,8 +179,8 @@ fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // SysV variadic ABI: one SIMD register is live for the double argument
     emitter.instruction("call snprintf");                                       // format the double at 14 significant digits
 
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat write offset
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");              // current concat write offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r8");
     emitter.instruction("lea r10, [r8 + r9]");                                  // result start = concat_buf + offset
     emitter.instruction("mov r11, r10");                                        // r11 = write cursor, r10 = result start
     emitter.instruction("lea rsi, [rbp - 56]");                                 // rsi = read cursor into the snprintf scratch
@@ -254,9 +252,9 @@ fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r10");                                        // result pointer = start of the emitted text
     emitter.instruction("mov rdx, r11");                                        // write cursor, one past the last byte
     emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload the original concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // reload the original concat offset
     emitter.instruction("add r8, rdx");                                         // advance it past the emitted bytes
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r8");             // publish the updated concat offset
 
     emitter.instruction("add rsp, 64");                                         // release the local scratch area before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -314,9 +312,8 @@ pub fn emit_ftoa_repr(emitter: &mut Emitter) {
 
     // -- write "[-]XXX" straight into the concat buffer and publish the cursor --
     emitter.label("__rt_ftoa_repr_emit");
-    abi::emit_symbol_address(emitter, "x15", "_concat_off");
-    emitter.instruction("ldr x16, [x15]");                                      // current concat write offset
-    abi::emit_symbol_address(emitter, "x17", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x16");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x17");
     emitter.instruction("add x1, x17, x16");                                    // result start = concat_buf + offset
     emitter.instruction("mov x11, x1");                                         // x11 = write cursor, x1 = result start
     emitter.instruction("tbz x9, #63, __rt_ftoa_repr_body");                    // skip the sign byte for non-negative values
@@ -328,7 +325,7 @@ pub fn emit_ftoa_repr(emitter: &mut Emitter) {
     emitter.instruction("strb w14, [x11], #1");                                 // emit the third literal byte
     emitter.instruction("sub x2, x11, x1");                                     // result length = cursor - start
     emitter.instruction("add x16, x16, x2");                                    // advance the concat cursor past the literal
-    emitter.instruction("str x16, [x15]");                                      // publish the updated concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x16"); // publish the updated concat offset (ctx-relative in ctx mode)
     emitter.instruction("ret");                                                 // return pointer (x1) and length (x2)
 }
 
@@ -368,8 +365,8 @@ fn emit_ftoa_repr_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 70");                                         // ASCII 'F' as the third literal byte
 
     emitter.label("__rt_ftoa_repr_emit_x");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // current concat write offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");             // current concat write offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("lea rax, [r11 + r10]");                                // result start = concat_buf + offset
     emitter.instruction("mov r8, rax");                                         // r8 = write cursor, rax = result start
     emitter.instruction("test r9, r9");                                         // is the sign bit set?
@@ -384,7 +381,7 @@ fn emit_ftoa_repr_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r8");                                         // write cursor, one past the last byte
     emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
     emitter.instruction("add r10, rdx");                                        // advance the concat cursor past the literal
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r10");            // publish the updated concat offset
     emitter.instruction("ret");                                                 // return pointer (rax) and length (rdx)
 }
 

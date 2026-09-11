@@ -12,8 +12,27 @@ use super::*;
 /// Verifies a suspended Fiber's recursion accounting is isolated from the main
 /// context. Each traversal stays below the 4 MiB guard, while their combined
 /// live-frame charge exceeds it when a context switch leaks the Fiber budget.
+///
+/// The fixture compiles IN-PROCESS (the `compile_and_run` harness drives the
+/// elephc library directly), and a function with 128 live locals pushes the
+/// compiler's recursive passes past the 2 MiB default test-thread stack — the
+/// same Span-width constraint AGENTS.md documents. CI already raises
+/// `RUST_MIN_STACK` to 32 MiB, but a bare local `cargo test` run must not
+/// depend on that environment variable, so the body runs on a dedicated
+/// 32 MiB stack.
 #[test]
 fn test_suspended_fiber_recursion_budget_does_not_leak_to_main() {
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(suspended_fiber_recursion_budget_body)
+        .expect("spawn the large-stack test thread")
+        .join()
+        .expect("the large-stack test thread must not panic");
+}
+
+/// Body of `test_suspended_fiber_recursion_budget_does_not_leak_to_main`,
+/// separated so it can run on a dedicated large stack.
+fn suspended_fiber_recursion_budget_body() {
     const LIVE_LOCALS: usize = 128;
     const DEPTH: usize = 10;
 

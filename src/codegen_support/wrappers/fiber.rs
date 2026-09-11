@@ -196,6 +196,10 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     let saved_count_offset = 32;
     let saved_array_offset = 40;
     let saved_argbox_offset = 48;
+    // The start-argument count lives in the frame rather than in r14: r14 is the
+    // reserved runtime-context register, this wrapper reaches compiled PHP code
+    // through the descriptor invoker, and r12/r13/r15/rbx all already have a job.
+    let start_count_offset = 56;
     let missing_label = format!("{}_missing_invoker", label);
     let loop_label = format!("{}_copy_args", label);
     let copy_done_label = format!("{}_args_done", label);
@@ -218,11 +222,17 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
         runtime::FIBER_CALLABLE_OFFSET
     )); // r13 = callable descriptor stored on the Fiber
     emitter.instruction(&format!(
-        "mov r14, QWORD PTR [r12 + {}]",
+        "mov rax, QWORD PTR [r12 + {}]",
         runtime::FIBER_START_ARG_COUNT_OFFSET
-    )); // r14 = number of boxed start() values to forward
-    emit_allocate_descriptor_start_arg_array_x86_64(emitter);
-    emit_copy_fiber_start_args_to_array_x86_64(emitter, &loop_label, &copy_done_label);
+    )); // number of boxed start() values to forward
+    abi::store_at_offset(emitter, "rax", start_count_offset);
+    emit_allocate_descriptor_start_arg_array_x86_64(emitter, start_count_offset);
+    emit_copy_fiber_start_args_to_array_x86_64(
+        emitter,
+        &loop_label,
+        &copy_done_label,
+        start_count_offset,
+    );
     emit_box_descriptor_start_arg_array(emitter, "r15", "rsi");
 
     emitter.instruction("mov rbx, rsi");                                        // keep the boxed argument array alive across the descriptor invocation
@@ -257,10 +267,11 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
 }
 
 /// Allocates the Mixed-pointer argument array used by an x86_64 descriptor invoker.
-fn emit_allocate_descriptor_start_arg_array_x86_64(emitter: &mut Emitter) {
+fn emit_allocate_descriptor_start_arg_array_x86_64(emitter: &mut Emitter, count_offset: usize) {
     emitter.instruction("mov rdi, 4");                                          // default descriptor argument-array capacity
-    emitter.instruction("cmp r14, 4");                                          // does the actual start() arity exceed the small-array default?
-    emitter.instruction("cmova rdi, r14");                                      // use the actual arity when it is larger than four
+    abi::load_at_offset(emitter, "rax", count_offset);                          // the start() arity, parked in the frame (r14 is the ctx register)
+    emitter.instruction("cmp rax, 4");                                          // does the actual start() arity exceed the small-array default?
+    emitter.instruction("cmova rdi, rax");                                      // use the actual arity when it is larger than four
     emitter.instruction("mov rsi, 8");                                          // descriptor argument arrays store boxed Mixed pointers
     emitter.instruction("call __rt_array_new");                                 // allocate the descriptor invoker argument array
     emitter.instruction("mov r15, rax");                                        // keep the argument array pointer across element retains
@@ -272,10 +283,12 @@ fn emit_copy_fiber_start_args_to_array_x86_64(
     emitter: &mut Emitter,
     loop_label: &str,
     done_label: &str,
+    count_offset: usize,
 ) {
     emitter.instruction("xor ebx, ebx");                                        // start copying at start_args[0]
     emitter.label(loop_label);
-    emitter.instruction("cmp rbx, r14");                                        // have all supplied start() arguments been copied?
+    abi::load_at_offset(emitter, "rax", count_offset);                          // the start() arity, parked in the frame (r14 is the ctx register)
+    emitter.instruction("cmp rbx, rax");                                        // have all supplied start() arguments been copied?
     emitter.instruction(&format!("jae {}", done_label));                        // leave the copy loop once index >= count
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r12 + rbx * 8 + {}]",
@@ -286,7 +299,8 @@ fn emit_copy_fiber_start_args_to_array_x86_64(
     emitter.instruction("add rbx, 1");                                          // advance to the next supplied start() argument
     emitter.instruction(&format!("jmp {}", loop_label));                        // continue copying boxed start() arguments
     emitter.label(done_label);
-    emitter.instruction("mov QWORD PTR [r15], r14");                            // publish the argument array length after all payload slots are initialized
+    abi::load_at_offset(emitter, "rax", count_offset);                          // the start() arity, parked in the frame (r14 is the ctx register)
+    emitter.instruction("mov QWORD PTR [r15], rax");                            // publish the argument array length after all payload slots are initialized
 }
 
 /// Spills visible parameters and hidden arguments from the Fiber's argument storage
@@ -612,26 +626,26 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     abi::emit_frame_prologue(emitter, frame_size);
     abi::store_at_offset(emitter, "r12", saved_fiber_offset); // preserve the caller's r12 before caching the Fiber pointer
     abi::store_at_offset(emitter, "r13", saved_callable_offset); // preserve the caller's r13 before caching the callable entry
-    abi::store_at_offset(emitter, "r14", saved_descriptor_offset); // preserve the caller's r14 before caching the descriptor
-    abi::store_at_offset(emitter, "r15", saved_tail_count_offset); // preserve the caller's r15 before caching variadic tail count
+    abi::store_at_offset(emitter, "r15", saved_descriptor_offset); // preserve the caller's r15 before caching the descriptor
+    abi::store_at_offset(emitter, "r14", saved_tail_count_offset); // preserve the caller's r14 (reserved ctx register) before caching variadic tail count
     abi::store_at_offset(emitter, "rbx", saved_tail_index_offset); // preserve the caller's rbx before using it as a tail copy index
     emitter.instruction("mov r12, rdi");                                        // r12 = Fiber object passed by __rt_fiber_entry
     emitter.instruction(&format!(
         "mov r13, QWORD PTR [r12 + {}]",
         runtime::FIBER_CALLABLE_OFFSET
     )); // r13 = callable descriptor stored on the Fiber
-    emitter.instruction("mov r14, r13");                                        // r14 = descriptor pointer kept for hidden capture reloads
+    emitter.instruction("mov r15, r13");                                        // r15 = descriptor pointer kept for hidden capture reloads (r14 is the reserved ctx register)
     callable_descriptor::emit_load_entry_from_descriptor(emitter, "r13", "r13");
 
-    spill_wrapper_args_x86_64(emitter, wrapper, &arg_types, "r14");
+    spill_wrapper_args_x86_64(emitter, wrapper, &arg_types, "r15");
     let overflow_bytes = materialize_spilled_args_for_closure_call_x86_64(emitter, &arg_types);
     abi::emit_call_reg(emitter, "r13");
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the Fiber callback returns
     box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
 
     abi::load_at_offset(emitter, "rbx", saved_tail_index_offset);
-    abi::load_at_offset(emitter, "r15", saved_tail_count_offset);
-    abi::load_at_offset(emitter, "r14", saved_descriptor_offset);
+    abi::load_at_offset(emitter, "r14", saved_tail_count_offset); // restore the caller's r14 (reserved ctx register) last-but-one
+    abi::load_at_offset(emitter, "r15", saved_descriptor_offset); // restore the caller's r15 after the wrapper's descriptor scratch
     abi::load_at_offset(emitter, "r13", saved_callable_offset);
     abi::load_at_offset(emitter, "r12", saved_fiber_offset);
     abi::emit_frame_restore(emitter, frame_size);
@@ -666,6 +680,16 @@ fn spill_wrapper_args_x86_64(
         visible
     };
 
+    // The variadic tail spill above reuses the descriptor register (r15) as
+    // its tail counter, so the descriptor pointer must be reloaded from the
+    // Fiber object before the hidden-capture loop reads through it.
+    if hidden_start < arg_types.len() {
+        emitter.instruction(&format!(
+            "mov {}, QWORD PTR [r12 + {}]",
+            descriptor_reg,
+            runtime::FIBER_CALLABLE_OFFSET
+        )); // reload the callable descriptor from the Fiber object
+    }
     for (idx, ty) in arg_types.iter().enumerate().skip(hidden_start) {
         let slot_offset = frame_arg_slot_offset(idx);
         spill_descriptor_hidden_arg_x86_64(

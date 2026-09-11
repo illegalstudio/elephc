@@ -18,3 +18,18 @@ docs/superpowers/
 /bundle.tar
 /bundle.tar.gz
 /bundle.tar.bz2
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/
+
+# Kage repository memory: the verified packets are committed and shared, every
+# other entry (indexes, code graph, structural/observation caches, daemon and
+# store state, reports) is local and regenerable (run `kage refresh`).
+.agent_memory/*
+!.agent_memory/packets/
+.agent_memory/packets/*
+!.agent_memory/packets/*.md
+# ...except the auto-generated repo maps: their titles carry the WORKTREE name
+# (`<worktree>-repo-overview`), so they say nothing in another checkout and one
+# lands per worktree. Regenerated on demand like the rest of the local state.
+.agent_memory/packets/repo_map-*.md

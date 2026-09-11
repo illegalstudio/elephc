@@ -97,6 +97,7 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [The Code Generator](internals/the-codegen.md) — checked AST to EIR, then target assembly
 - [The EIR Design](internals/the-ir.md) — PHP-shaped intermediate representation used by codegen and `--emit-ir`
 - [The Runtime](internals/the-runtime.md) — hand-written assembly routines
+- [Runtime Context Register (spike)](internals/runtime-ctx-register.md) — reserved x28/r14 for per-context runtime state, `--rt-ctx`, measured cost, fiber trap, M0 path
 - [Eval Runtime Architecture](internals/eval-runtime.md) — literal AOT planning, scope synchronization, Magician fallback, and bridge ABI
 - [Memory Model](internals/memory-model.md) — stack frames, heap, reference counting
 - [Architecture](internals/architecture.md) — module map, calling conventions

@@ -2361,3 +2361,263 @@ fn test_export_attribute_warns_and_is_ignored_in_executable_mode() {
 
     fs::remove_dir_all(&dir).ok();
 }
+
+/// A C host that parks a sentinel in the reserved ctx register, calls across the
+/// library boundary, and reports whether it came back.
+///
+/// The probe is module-level assembly, not inline asm with a register variable:
+/// clang happily spills an explicit `register ... asm("x28")` around the call
+/// and reloads it afterwards, so the C-level version of this test passes even
+/// against a library that clobbers the register.
+const CTX_ABI_HOST_C: &str = r#"
+#include <stdio.h>
+#include <stdint.h>
+
+int32_t elephc_init(void);
+uint64_t probe_add_i64(int64_t a, int64_t b);
+
+#define SENTINEL 0x1234567890ABCDEFULL
+
+/* Mach-O prefixes C symbols with an underscore and ELF does not, so the name the
+   assembly calls differs by platform. Hardcoding the Mach-O spelling passed on macOS
+   and failed the linux-aarch64 shard with
+   `undefined reference to \`_add_i64\`` — a link error, so the sentinel never ran at all. */
+#if defined(__APPLE__)
+#define CSYM(name) "_" name
+#else
+#define CSYM(name) name
+#endif
+
+#if defined(__aarch64__)
+__asm__(
+"    .text\n"
+"    .globl _probe_add_i64\n"
+"    .globl probe_add_i64\n"
+"    .align 2\n"
+"_probe_add_i64:\n"
+"probe_add_i64:\n"
+"    sub sp, sp, #32\n"
+"    stp x29, x30, [sp, #16]\n"
+"    add x29, sp, #16\n"
+"    str x28, [sp, #0]\n"
+"    movz x28, #0xCDEF\n"
+"    movk x28, #0x90AB, lsl #16\n"
+"    movk x28, #0x5678, lsl #32\n"
+"    movk x28, #0x1234, lsl #48\n"
+"    bl " CSYM("add_i64") "\n"
+"    mov x0, x28\n"
+"    ldr x28, [sp, #0]\n"
+"    ldp x29, x30, [sp, #16]\n"
+"    add sp, sp, #32\n"
+"    ret\n"
+);
+#elif defined(__x86_64__)
+__asm__(
+"    .text\n"
+"    .globl probe_add_i64\n"
+"probe_add_i64:\n"
+"    push %rbp\n"
+"    mov %rsp, %rbp\n"
+"    push %r14\n"
+"    push %r15\n"
+"    movabs $0x1234567890ABCDEF, %r14\n"
+"    call " CSYM("add_i64") "\n"
+"    mov %r14, %rax\n"
+"    pop %r15\n"
+"    pop %r14\n"
+"    pop %rbp\n"
+"    ret\n"
+);
+#endif
+
+int main(void) {
+    if (elephc_init() != 0) {
+        fprintf(stderr, "init failed\n");
+        return 1;
+    }
+    uint64_t after = probe_add_i64(40, 2);
+    if (after != SENTINEL) {
+        printf("CLOBBERED %016llx\n", (unsigned long long) after);
+        return 2;
+    }
+    printf("PRESERVED\n");
+    return 0;
+}
+"#;
+
+/// A C host that exercises the context pool directly, since no PHP program can reach it.
+const CTX_POOL_HOST_C: &str = r#"
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+int32_t elephc_init(void);
+
+/* The runtime defines these with their names spelled exactly, so an ordinary C
+   declaration misses on Mach-O, where the compiler prepends its own underscore:
+   `__rt_ctx_release` in C becomes `___rt_ctx_release`. An explicit asm label pins the
+   symbol on both formats. */
+void *__rt_ctx_acquire(void *arena_base, uint64_t arena_size) __asm__("__rt_ctx_acquire");
+void __rt_ctx_release(void *ctx) __asm__("__rt_ctx_release");
+
+#define SLOTS 8
+#define ARENA 4096
+
+int main(void) {
+    if (elephc_init() != 0) { printf("INIT-FAILED\n"); return 1; }
+
+    static unsigned char arenas[SLOTS + 1][ARENA];
+
+    void *first = __rt_ctx_acquire(arenas[0], ARENA);
+    void *second = __rt_ctx_acquire(arenas[1], ARENA);
+    if (first == NULL || second == NULL) { printf("ACQUIRE-NULL\n"); return 1; }
+    if (first == second) { printf("SAME-SLOT-TWICE\n"); return 1; }
+
+    /* Releasing hands the slot back; the next acquire must be able to take it. */
+    __rt_ctx_release(first);
+    void *again = __rt_ctx_acquire(arenas[2], ARENA);
+    if (again != first) { printf("RELEASED-SLOT-NOT-REUSED\n"); return 1; }
+
+    /* Fill the pool: two are held (again, second), so SLOTS-2 remain. */
+    void *held[SLOTS];
+    int n = 0;
+    for (int i = 0; i < SLOTS; i++) {
+        void *c = __rt_ctx_acquire(arenas[3], ARENA);
+        if (c == NULL) { break; }
+        held[n++] = c;
+    }
+    if (n != SLOTS - 2) { printf("EXPECTED-%d-FREE-GOT-%d\n", SLOTS - 2, n); return 1; }
+    if (__rt_ctx_acquire(arenas[4], ARENA) != NULL) { printf("OVERSUBSCRIBED\n"); return 1; }
+
+    /* And a full pool recovers once something is handed back. */
+    __rt_ctx_release(held[0]);
+    if (__rt_ctx_acquire(arenas[5], ARENA) == NULL) { printf("NO-RECOVERY\n"); return 1; }
+
+    printf("POOL-OK\n");
+    return 0;
+}
+"#;
+
+/// THE CONTEXT POOL HANDS OUT DISTINCT SLOTS, REUSES RELEASED ONES, AND REFUSES WHEN FULL.
+///
+/// `__rt_ctx_acquire` / `__rt_ctx_release` are new assembly that no PHP program can reach,
+/// so the only honest test drives them from C against the static archive. What it pins is
+/// the contract the M1 bridge will depend on: two acquires never return the same slot, a
+/// released slot becomes available again, the pool refuses rather than overcommitting, and
+/// it recovers after a release.
+///
+/// What it CANNOT test is the part the atomics are for — two threads racing for the last
+/// slot. That is why the claim uses `ldaxr`/`stlxr` and `lock cmpxchg` now rather than when
+/// M1 arrives: a plain load/store pair would pass this test exactly as well.
+#[test]
+fn test_rt_ctx_pool_hands_out_distinct_slots_and_reuses_released_ones() {
+    let dir = make_test_dir("elephc_ctx_pool");
+    fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "staticlib", "auth.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "--rt-ctx staticlib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let host = compile_linked_c_host(&dir, CTX_POOL_HOST_C, "ctx-pool-host", "auth");
+    let run = Command::new(&host).output().expect("failed to run the ctx pool host");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "POOL-OK",
+        "the context pool broke its contract (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// THE STATICLIB ARM CARRIES THE SAME ABI CONTRACT, AND WAS NEVER PROBED.
+///
+/// The cdylib arm has been green since round 3, and `.plans/sandbox-threads.md` listed
+/// the staticlib as still unprobed — the two emit kinds build their export wrappers
+/// through different paths, so "the cdylib preserves the register" says nothing about
+/// the archive a host links directly.
+///
+/// Same sentinel as the cdylib test: a module-level assembly probe parks a known value
+/// in the ctx register, calls the export, and reports whether the value survived. It is
+/// module-level assembly rather than a C `register … asm("x28")` variable because clang
+/// spills and reloads such a variable around the call, which makes the C version pass
+/// against a library that clobbers the register.
+#[test]
+fn test_rt_ctx_staticlib_export_preserves_the_hosts_ctx_register() {
+    let dir = make_test_dir("elephc_staticlib_rt_ctx_abi");
+    fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "staticlib", "auth.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "--rt-ctx staticlib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        dir.join("libauth.a").exists(),
+        "expected the archive the host links directly against"
+    );
+
+    let host = compile_linked_c_host(&dir, CTX_ABI_HOST_C, "ctx-abi-static-host", "auth");
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run the ctx ABI static host");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "PRESERVED",
+        "a --rt-ctx staticlib export clobbered the host's callee-saved ctx register \
+         (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// The ctx register (`x28` AArch64 / `r14` x86_64) is callee-saved, so a library
+/// export that publishes elephc's `_rt_ctx` pointer into it borrows a register
+/// the HOST owns. Every return path must hand the host's value back — the same
+/// contract the FFI callback trampoline already carries.
+///
+/// Without the save/restore pair the host gets elephc's context pointer in place
+/// of its own value, corrupting whatever the caller kept there: an ABI break no
+/// PHP-level test can see.
+#[test]
+fn test_rt_ctx_cdylib_export_preserves_the_hosts_ctx_register() {
+    let dir = make_test_dir("elephc_cdylib_rt_ctx_abi");
+    fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "auth.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "--rt-ctx cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let host = compile_linked_c_host(&dir, CTX_ABI_HOST_C, "ctx-abi-host", "auth");
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run the ctx ABI host");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "PRESERVED",
+        "a --rt-ctx export clobbered the host's callee-saved ctx register (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}

@@ -45,10 +45,9 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve collector locals for heap bounds, scan pointers, and incoming counts
 
     // -- capture heap bounds once for the current collection pass --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r8");
     emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // save the heap base so every collector pass can restart from the same managed heap window
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the current heap bump offset before capturing the initial heap end
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r9"); // r9 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("lea r9, [r8 + r9]");                                   // compute the initial heap end from the heap base plus bump offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save the initial heap end for all x86_64 metadata, root, and free scans
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // initialize the outer scan pointer to the heap base for the clear pass

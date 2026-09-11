@@ -17,6 +17,7 @@
 //! - All helpers append at the current `_concat_off`, advance it past the bytes
 //!   written, and return the slice pointer/length in the string result registers
 //!   (`x1`/`x2` on AArch64, `rax`/`rdx` on x86_64).
+use crate::codegen_support::abi::emit_symbol_address;
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -40,7 +41,6 @@ pub(crate) fn emit_serialize(emitter: &mut Emitter) {
 
 /// AArch64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
 fn emit_serialize_aarch64(emitter: &mut Emitter) {
-    use crate::codegen_support::abi::emit_symbol_address;
 
     emitter.blank();
     emitter.comment("--- runtime: serialize_mixed (unbox a Mixed cell, then serialize) ---");
@@ -92,9 +92,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #32]");                                   // save the high payload word across helper calls
 
     // -- compute the current concat_buf write position --
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
-    emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // compute the absolute write pointer
     emitter.instruction("str x11, [sp, #0]");                                   // save the serialized-slice start pointer
     emitter.instruction("str x11, [sp, #8]");                                   // save the running write pointer
@@ -158,9 +157,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // inner Mixed pointer = saved low payload word
     emitter.instruction("bl __rt_serialize_mixed");                             // unbox and serialize the nested value
     emitter.label("__rt_serialize_after_container");
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // reload the offset advanced by the container serializer
-    emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // recompute the running write pointer
     emitter.instruction("str x11, [sp, #8]");                                   // persist the write pointer for the finalizer
     emitter.instruction("b __rt_serialize_done");                               // finish the serialized value
@@ -204,10 +202,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("strb w12, [x11, #1]");                                 // write the marker separator
     emitter.instruction("add x11, x11, #2");                                    // advance past "i:"
     emitter.instruction("str x11, [sp, #8]");                                   // save the write pointer before formatting digits
-    emit_symbol_address(emitter, "x10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x10");
     emitter.instruction("sub x12, x11, x10");                                   // compute the absolute offset for the digit scratch
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("str x12, [x9]");                                       // point itoa scratch at the current write position
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x12");
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the integer payload
     emitter.instruction("bl __rt_itoa");                                        // format the integer -> x1=digit ptr, x2=digit len
     emit_serialize_copy_run_aarch64(emitter, "__rt_serialize_int"); // copy the digits to the write pos
@@ -226,10 +223,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("strb w12, [x11, #1]");                                 // write the marker separator
     emitter.instruction("add x11, x11, #2");                                    // advance past "s:"
     emitter.instruction("str x11, [sp, #8]");                                   // save the write pointer before formatting the length
-    emit_symbol_address(emitter, "x10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x10");
     emitter.instruction("sub x12, x11, x10");                                   // compute the absolute offset for the length scratch
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("str x12, [x9]");                                       // point itoa scratch at the current write position
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x12");
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the byte length from the high payload word
     emitter.instruction("bl __rt_itoa");                                        // format the byte length -> x1=digit ptr, x2=digit len
     emit_serialize_copy_run_aarch64(emitter, "__rt_serialize_strlen"); // copy the length digits
@@ -312,17 +308,15 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x11, [sp, #8]");                                   // save the write pointer
     emitter.instruction("b __rt_serialize_float_semi");                         // append the terminating semicolon
     emitter.label("__rt_serialize_float_finite");
-    emit_symbol_address(emitter, "x10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x10");
     emitter.instruction("sub x12, x11, x10");                                   // compute the absolute offset for the float digits
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("str x12, [x9]");                                       // point the float formatter at the current write position
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x12");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the raw float bit pattern
     emitter.instruction("fmov d0, x9");                                         // move the bits into the FP argument register
     emitter.instruction("mov w0, #69");                                         // exponent marker 'E' (serialize uppercase layout)
     emitter.instruction("bl __rt_json_ftoa");                                   // append the shortest round-trip digits in place
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // reload the offset advanced by the formatter
-    emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // recompute the write pointer after the digits
     emitter.instruction("str x11, [sp, #8]");                                   // save the write pointer
     emitter.label("__rt_serialize_float_semi");
@@ -336,10 +330,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     // -- finalize: update _concat_off and return the slice pointer/length --
     emitter.label("__rt_serialize_done");
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the final write pointer
-    emit_symbol_address(emitter, "x10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x10");
     emitter.instruction("sub x12, x11, x10");                                   // compute the absolute end offset
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("str x12, [x9]");                                       // publish the advanced concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x12");
     emitter.instruction("ldr x1, [sp, #0]");                                    // result pointer = serialized-slice start
     emitter.instruction("sub x2, x11, x1");                                     // result length = end pointer - start pointer
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
@@ -354,9 +347,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the value across the itoa call
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current write offset
-    emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x12, x11, x10");                                   // compute the write target pointer
     emitter.instruction("str x12, [sp, #8]");                                   // save the write target across the itoa call
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the value to format
@@ -372,10 +364,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_serialize_uint_copy");                          // continue copying digits
     emitter.label("__rt_serialize_uint_done");
     emitter.instruction("add x11, x11, x2");                                    // advance the write pointer past the digits
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emit_symbol_address(emitter, "x10", "_concat_buf");
+        crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x10");
     emitter.instruction("sub x12, x11, x10");                                   // compute the new absolute offset
-    emitter.instruction("str x12, [x9]");                                       // publish the advanced offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x12"); // publish the advanced offset (ctx-relative in ctx mode)
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate the digit-helper frame
     emitter.instruction("ret");                                                 // return with digits appended
@@ -516,9 +507,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
 
     // -- __rt_concat_append: append x1 raw bytes from x0 into _concat_buf at _concat_off --
     emitter.label_global("__rt_concat_append");
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // current write offset
-    emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // write target pointer
     emitter.instruction("mov x12, #0");                                         // byte cursor = 0
     emitter.label("__rt_concat_append_loop");
@@ -530,7 +520,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_concat_append_loop");                           // continue copying
     emitter.label("__rt_concat_append_done");
     emitter.instruction("add x10, x10, x1");                                    // advance the write offset by the run
-    emitter.instruction("str x10, [x9]");                                       // persist the new write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // persist the new write offset (ctx-relative in ctx mode)
     emitter.instruction("ret");                                                 // return with the bytes appended
 
     // -- __rt_serialize_pstr: append a serialized string s:len:"bytes"; (x0=ptr, x1=len) --
@@ -584,16 +574,14 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9, x1, lsl #3]");                           // __serialize method symbol (0 if none)
     emitter.instruction("cbz x10, __rt_serialize_object_sleep");                // no __serialize → try __sleep, else property walk
     emitter.instruction("str x10, [sp, #16]");                                  // park the __serialize target across the call
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // capture the write offset just after the O:...:\"name\": prefix
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
     emitter.instruction("str x10, [sp, #24]");                                  // save it so any method scratch can be rewound away
     emitter.instruction("ldr x0, [sp, #0]");                                    // $this receiver for the method call
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the __serialize target
     emitter.instruction("blr x10");                                             // call __serialize($this) -> x0 = array (bare pointer)
     emitter.instruction("str x0, [sp, #32]");                                   // save the returned array pointer
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved post-prefix offset
-    emitter.instruction("str x10, [x9]");                                       // rewind, discarding any concat scratch the method left
+        emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved post-prefix offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // rewind the concat scratch (ctx-relative in ctx mode)
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the returned array pointer
     emitter.instruction("ldur x9, [x0, #-8]");                                  // load its heap kind word
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the heap kind (2=indexed, 3=hash)
@@ -636,16 +624,14 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9, x1, lsl #3]");                           // __sleep method symbol (0 if none)
     emitter.instruction("cbz x10, __rt_serialize_object_default");              // no __sleep → walk every property
     emitter.instruction("str x10, [sp, #16]");                                  // park the __sleep target across the call
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // capture the post-prefix write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
     emitter.instruction("str x10, [sp, #24]");                                  // save it for the scratch rewind
     emitter.instruction("ldr x0, [sp, #0]");                                    // $this receiver
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the __sleep target
     emitter.instruction("blr x10");                                             // call __sleep($this) -> x0 = names array (indexed)
     emitter.instruction("str x0, [sp, #32]");                                   // save the names array pointer
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved post-prefix offset
-    emitter.instruction("str x10, [x9]");                                       // rewind away any method scratch
+        emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved post-prefix offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // rewind the concat scratch (ctx-relative in ctx mode)
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the names array pointer
     emitter.instruction("ldr x0, [x0]");                                        // names count = indexed-array header word
     emitter.instruction("str x0, [sp, #24]");                                   // save the names count
@@ -880,8 +866,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
 /// undoing the generic per-value increment for an array key (keys do not consume
 /// a PHP reference index). Clobbers x9/x10.
 fn emit_uncount_key_aarch64(emitter: &mut Emitter) {
-    use crate::codegen_support::abi::emit_symbol_address;
-    emit_symbol_address(emitter, "x9", "_ser_value_counter");
+        emit_symbol_address(emitter, "x9", "_ser_value_counter");
     emitter.instruction("ldr x10, [x9]");                                       // load the running value counter
     emitter.instruction("sub x10, x10, #1");                                    // a key does not consume an index
     emitter.instruction("str x10, [x9]");                                       // publish the corrected counter
@@ -890,17 +875,15 @@ fn emit_uncount_key_aarch64(emitter: &mut Emitter) {
 /// Emits an AArch64 sequence that appends fixed literal bytes at the current
 /// `_concat_off`, advancing the offset (clobbers x9-x12).
 fn emit_append_literal_aarch64(emitter: &mut Emitter, bytes: &[u8], what: &str) {
-    use crate::codegen_support::abi::emit_symbol_address;
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current write offset
-    emit_symbol_address(emitter, "x11", "_concat_buf");
+        crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // compute the write target pointer
     for (i, b) in bytes.iter().enumerate() {
         emitter.instruction(&format!("mov w12, #{}", b));                       // literal byte for {what}
         emitter.instruction(&format!("strb w12, [x11, #{}]", i));               // write the literal byte
     }
     emitter.instruction(&format!("add x10, x10, #{}", bytes.len()));            // advance the offset
-    emitter.instruction("str x10, [x9]");                                       // publish the advanced offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the advanced offset (ctx-relative in ctx mode)
     let _ = what;
 }
 
@@ -927,7 +910,6 @@ fn emit_serialize_copy_run_aarch64(emitter: &mut Emitter, prefix: &str) {
 
 /// x86_64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
 fn emit_serialize_x86_64(emitter: &mut Emitter) {
-    use crate::codegen_support::abi::emit_symbol_address;
 
     emitter.blank();
     emitter.comment("--- runtime: serialize_mixed (unbox a Mixed cell, then serialize) ---");
@@ -978,9 +960,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the high payload word across helper calls
 
     // -- compute the current concat_buf write position --
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the current concat-buffer offset
-    emit_symbol_address(emitter, "r11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("add r11, r10");                                        // compute the absolute write pointer
     emitter.instruction("mov QWORD PTR [rbp - 8], r11");                        // save the serialized-slice start pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the running write pointer
@@ -1043,9 +1024,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // inner Mixed pointer = saved low payload word
     emitter.instruction("call __rt_serialize_mixed");                           // unbox and serialize the nested value
     emitter.label("__rt_serialize_after_container");
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // reload the offset advanced by the container serializer
-    emit_symbol_address(emitter, "r11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("add r11, r10");                                        // recompute the running write pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // persist the write pointer for the finalizer
     emitter.instruction("jmp __rt_serialize_done");                             // finish the serialized value
@@ -1082,11 +1062,10 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11 + 1], 58");                          // ASCII ':'
     emitter.instruction("add r11, 2");                                          // advance past "i:"
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the write pointer before formatting digits
-    emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("mov rcx, r11");                                        // copy the write pointer for the offset computation
     emitter.instruction("sub rcx, r10");                                        // compute the absolute offset for the digit scratch
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r10], rcx");                            // point itoa scratch at the current write position
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the integer payload
     emitter.instruction("call __rt_itoa");                                      // format the integer -> rax=digit ptr, rdx=digit len
     emit_serialize_copy_run_x86_64(emitter, "__rt_serialize_int"); // copy the digits to the write pos
@@ -1102,11 +1081,10 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11 + 1], 58");                          // ASCII ':'
     emitter.instruction("add r11, 2");                                          // advance past "s:"
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the write pointer before formatting length
-    emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("mov rcx, r11");                                        // copy the write pointer for the offset computation
     emitter.instruction("sub rcx, r10");                                        // compute the absolute offset for the length scratch
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r10], rcx");                            // point itoa scratch at the current write position
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the byte length from the high payload word
     emitter.instruction("call __rt_itoa");                                      // format the byte length -> rax=digit ptr, rdx=digit len
     emit_serialize_copy_run_x86_64(emitter, "__rt_serialize_strlen"); // copy the length digits
@@ -1176,18 +1154,16 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the write pointer
     emitter.instruction("jmp __rt_serialize_float_semi");                       // append the terminating semicolon
     emitter.label("__rt_serialize_float_finite");
-    emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("mov rcx, r11");                                        // copy the write pointer for the offset computation
     emitter.instruction("sub rcx, r10");                                        // compute the absolute offset for the float digits
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r10], rcx");                            // point the float formatter at the write position
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the raw float bit pattern
     emitter.instruction("movq xmm0, r9");                                       // move the bits into the FP argument register
     emitter.instruction("mov edi, 69");                                         // exponent marker 'E' (serialize uppercase layout)
     emitter.instruction("call __rt_json_ftoa");                                 // append the shortest round-trip digits in place
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // reload the offset advanced by the formatter
-    emit_symbol_address(emitter, "r11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("add r11, r10");                                        // recompute the write pointer after the digits
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the write pointer
     emitter.label("__rt_serialize_float_semi");
@@ -1200,11 +1176,10 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     // -- finalize: update _concat_off and return the slice pointer/length --
     emitter.label("__rt_serialize_done");
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the final write pointer
-    emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("mov rcx, r11");                                        // copy the end pointer for the offset computation
     emitter.instruction("sub rcx, r10");                                        // compute the absolute end offset
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r10], rcx");                            // publish the advanced concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // result pointer = serialized-slice start
     emitter.instruction("mov rdx, r11");                                        // copy the end pointer for the length computation
     emitter.instruction("sub rdx, rax");                                        // result length = end pointer - start pointer
@@ -1220,9 +1195,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 32");                                         // small frame for the digit helper
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the value across the itoa call
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the current write offset
-    emit_symbol_address(emitter, "r11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("add r11, r10");                                        // compute the write target pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the write target across the itoa call
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the value to format
@@ -1240,11 +1214,10 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_serialize_uint_copy");                        // continue copying digits
     emitter.label("__rt_serialize_uint_done");
     emitter.instruction("add r11, r8");                                         // advance the write pointer past the digits
-    emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("mov rcx, r11");                                        // copy the end pointer
     emitter.instruction("sub rcx, r9");                                         // compute the new absolute offset
-    emit_symbol_address(emitter, "r9", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r9], rcx");                             // publish the advanced offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");
     emitter.instruction("add rsp, 32");                                         // deallocate the digit-helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with digits appended
@@ -1384,9 +1357,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
 
     // -- __rt_concat_append: append rsi raw bytes from rdi into _concat_buf at _concat_off --
     emitter.label_global("__rt_concat_append");
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // current write offset
-    emit_symbol_address(emitter, "r11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("add r11, r10");                                        // write target pointer
     emitter.instruction("xor rcx, rcx");                                        // byte cursor = 0
     emitter.label("__rt_concat_append_loop");
@@ -1398,8 +1370,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_concat_append_loop");                         // continue copying
     emitter.label("__rt_concat_append_done");
     emitter.instruction("add r10, rsi");                                        // advance the write offset by the run
-    emit_symbol_address(emitter, "r9", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // persist the new write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r10");
     emitter.instruction("ret");                                                 // return with the bytes appended
 
     // -- __rt_serialize_pstr: append a serialized string s:len:"bytes"; (rdi=ptr, rsi=len) --
@@ -1454,16 +1425,14 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // does the class define __serialize?
     emitter.instruction("jz __rt_serialize_object_sleep");                      // no → try __sleep, else property walk
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // park the __serialize target across the call
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // capture the write offset after the O:...:\"name\": prefix
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save it so method scratch can be rewound away
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // $this receiver for the method call
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the __serialize target
     emitter.instruction("call r10");                                            // __serialize($this) -> rax = array (bare pointer)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the returned array pointer
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // rewind, discarding any concat scratch the method left
+        emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rax"); // rewind the concat scratch (ctx-relative in ctx mode)
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the returned array pointer
     emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load its heap kind word
     emitter.instruction("and rcx, 0xff");                                       // isolate the heap kind (2=indexed, 3=hash)
@@ -1506,16 +1475,14 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // does the class define __sleep?
     emitter.instruction("jz __rt_serialize_object_default");                    // no → walk every property
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // park the __sleep target across the call
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // capture the post-prefix write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save it for the scratch rewind
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // $this receiver
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the __sleep target
     emitter.instruction("call r10");                                            // __sleep($this) -> rax = names array (indexed)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the names array pointer
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // rewind away any method scratch
+        emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rax"); // rewind the concat scratch (ctx-relative in ctx mode)
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the names array pointer
     emitter.instruction("mov rax, QWORD PTR [rax]");                            // names count = indexed-array header word
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the names count
@@ -1759,8 +1726,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
 /// the generic per-value increment for an array key (keys do not consume a PHP
 /// reference index). Clobbers r10/rax.
 fn emit_uncount_key_x86_64(emitter: &mut Emitter) {
-    use crate::codegen_support::abi::emit_symbol_address;
-    emit_symbol_address(emitter, "r10", "_ser_value_counter");
+        emit_symbol_address(emitter, "r10", "_ser_value_counter");
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the running value counter
     emitter.instruction("sub rax, 1");                                          // a key does not consume an index
     emitter.instruction("mov QWORD PTR [r10], rax");                            // publish the corrected counter
@@ -1769,17 +1735,14 @@ fn emit_uncount_key_x86_64(emitter: &mut Emitter) {
 /// Emits an x86_64 sequence that appends fixed literal bytes at the current
 /// `_concat_off`, advancing the offset (clobbers r9-r11).
 fn emit_append_literal_x86_64(emitter: &mut Emitter, bytes: &[u8], what: &str) {
-    use crate::codegen_support::abi::emit_symbol_address;
-    emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the current write offset
-    emit_symbol_address(emitter, "r11", "_concat_buf");
+        crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("add r11, r10");                                        // compute the write target pointer
     for (i, b) in bytes.iter().enumerate() {
         emitter.instruction(&format!("mov BYTE PTR [r11 + {}], {}", i, b));     // literal byte for {what}
     }
     emitter.instruction(&format!("add r10, {}", bytes.len()));                  // advance the offset
-    emit_symbol_address(emitter, "r9", "_concat_off");
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the advanced offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r10");
     let _ = what;
 }
 

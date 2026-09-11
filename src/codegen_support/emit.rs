@@ -29,6 +29,15 @@ pub struct Emitter {
     /// This is deliberately independent from position-independent addressing:
     /// PIC is a relocation choice, while boundary recovery is an ABI contract.
     pub cdylib_boundary: bool,
+    /// When `true`, runtime helpers route per-context state (heap bump offset,
+    /// free list, small bins, concat scratch) through the reserved ctx register
+    /// (`x28` AArch64 / `r14` x86_64) instead of global `.comm` symbols.
+    ///
+    /// Sandbox-threads spike mode: selected by `RuntimeFeatures::ctx_register`,
+    /// mirrored here so shared emitters can branch per emission. The Emitter
+    /// flag is authoritative for runtime text; the feature bit drives emission
+    /// selection and the runtime-cache key.
+    pub ctx_register: bool,
     /// When `true`, macOS runtime emission is prepared for per-symbol dead
     /// stripping: `label()` records each internal label name in
     /// `internal_labels` so the final assembly can rename them to Mach-O
@@ -58,6 +67,7 @@ impl Emitter {
             platform: target.platform,
             pic_data_refs: false,
             cdylib_boundary: false,
+            ctx_register: false,
             dead_strip: false,
             internal_labels: HashSet::new(),
             current_text_section: None,

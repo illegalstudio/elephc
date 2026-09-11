@@ -162,7 +162,7 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 96");                                         // reserve local storage plus callee-saved register spills while keeping nested calls 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 72], r12");                       // preserve r12 because the owned-insert probe logic reuses it as a long-lived scratch register
     emitter.instruction("mov QWORD PTR [rbp - 80], r13");                       // preserve r13 because the owned-insert probe logic reuses it as a long-lived scratch register
-    emitter.instruction("mov QWORD PTR [rbp - 88], r14");                       // preserve r14 because insertion-order linking reuses it as a callee-saved scratch register
+    emitter.instruction("mov QWORD PTR [rbp - 88], r15");                       // preserve r15 because insertion-order linking reuses it as a callee-saved scratch register
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the destination hash-table pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the owned key pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the owned key length across helper calls and probe iterations
@@ -221,8 +221,8 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // store the runtime value tag into the selected hash entry
     emitter.instruction("mov r13, QWORD PTR [r10 + 32]");                       // load the previous insertion-order tail slot from the hash header
     emitter.instruction("mov QWORD PTR [r12 + 48], r13");                       // link the new entry back to the previous tail slot
-    emitter.instruction("mov r14, -1");                                         // materialize the end-of-chain sentinel for the inserted tail entry
-    emitter.instruction("mov QWORD PTR [r12 + 56], r14");                       // initialize the new entry next-pointer as the tail sentinel
+    emitter.instruction("mov r15, -1");                                         // materialize the end-of-chain sentinel for the inserted tail entry
+    emitter.instruction("mov QWORD PTR [r12 + 56], r15");                       // initialize the new entry next-pointer as the tail sentinel
     emitter.instruction("cmp r13, -1");                                         // detect the first insertion so the hash header head/tail can be initialized together
     emitter.instruction("jne __rt_hash_insert_owned_link_tail");                // existing tables need an extra step to wire the previous tail forward to the inserted slot
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the inserted slot index to seed the insertion-order head pointer
@@ -231,12 +231,12 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_insert_owned_bump_count");               // skip the previous-tail forward-link update on the very first insertion
 
     emitter.label("__rt_hash_insert_owned_link_tail");
-    emitter.instruction("mov r14, r13");                                        // copy the previous tail slot index before scaling it into a byte offset
-    emitter.instruction("shl r14, 6");                                          // convert the previous tail slot index into a 64-byte entry offset
-    emitter.instruction("add r14, r10");                                        // advance from the hash-table base pointer to the previous tail entry block
-    emitter.instruction("add r14, 40");                                         // skip the fixed hash header to land on the previous tail entry
+    emitter.instruction("mov r15, r13");                                        // copy the previous tail slot index before scaling it into a byte offset
+    emitter.instruction("shl r15, 6");                                          // convert the previous tail slot index into a 64-byte entry offset
+    emitter.instruction("add r15, r10");                                        // advance from the hash-table base pointer to the previous tail entry block
+    emitter.instruction("add r15, 40");                                         // skip the fixed hash header to land on the previous tail entry
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the inserted slot index for the previous-tail forward-link store
-    emitter.instruction("mov QWORD PTR [r14 + 56], r11");                       // update the previous tail entry to point at the inserted slot as its logical successor
+    emitter.instruction("mov QWORD PTR [r15 + 56], r11");                       // update the previous tail entry to point at the inserted slot as its logical successor
     emitter.instruction("mov QWORD PTR [r10 + 32], r11");                       // publish the inserted slot as the new insertion-order tail in the hash header
 
     emitter.label("__rt_hash_insert_owned_bump_count");
@@ -244,7 +244,7 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, 1");                                          // increment the live-entry count after claiming a previously empty hash slot
     emitter.instruction("mov QWORD PTR [r10], r11");                            // store the updated live-entry count back into the hash header
     emitter.instruction("mov rax, r10");                                        // return the destination hash-table pointer after a successful owned insertion
-    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the owned-insert helper
+    emitter.instruction("mov r15, QWORD PTR [rbp - 88]");                       // restore the caller's r15 before leaving the owned-insert helper
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the owned-insert helper
     emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the owned-insert helper
     emitter.instruction("add rsp, 96");                                         // release the local spill area that held the saved table/key/value tuple
@@ -259,7 +259,7 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag for the existing key slot
     emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // overwrite the stored runtime value tag in the existing hash entry
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged destination hash-table pointer after an in-place value overwrite
-    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the owned-overwrite path
+    emitter.instruction("mov r15, QWORD PTR [rbp - 88]");                       // restore the caller's r15 before leaving the owned-overwrite path
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the owned-overwrite path
     emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the owned-overwrite path
     emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the owned-overwrite path

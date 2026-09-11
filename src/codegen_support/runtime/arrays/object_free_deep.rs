@@ -35,11 +35,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_object_free_deep_done");                  // skip null objects
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the object below the heap buffer?
     emitter.instruction("b.lo __rt_object_free_deep_done");                     // skip non-heap pointers
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the object at or beyond the heap end?
     emitter.instruction("b.hs __rt_object_free_deep_done");                     // skip invalid pointers

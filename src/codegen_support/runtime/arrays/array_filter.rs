@@ -155,7 +155,7 @@ fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved source array, destination array, and kept element state
     emitter.instruction("push r12");                                            // preserve the callback address register because the filter loop calls through it repeatedly
     emitter.instruction("push r13");                                            // preserve the source-index register because the loop keeps it live across callback invocations
-    emitter.instruction("push r14");                                            // preserve the destination-length register because kept-element count survives callback invocations
+    emitter.instruction("push r15");                                            // preserve the destination-length register because kept-element count survives callback invocations
     emitter.instruction("sub rsp, 56");                                         // reserve local slots for filter bookkeeping, mode, and optional callback environment
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the filtering loop
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the source array pointer so the loop can reload it after callback calls
@@ -176,7 +176,7 @@ fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate the destination array that will store the kept scalar elements
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the destination array pointer for the loop body and final return path
     emitter.instruction("xor r13d, r13d");                                      // start the source index at zero before scanning the source array
-    emitter.instruction("xor r14d, r14d");                                      // start the destination kept-element count at zero before the first callback
+    emitter.instruction("xor r15d, r15d");                                      // start the destination kept-element count at zero before the first callback
 
     emitter.label("__rt_array_filter_loop");
     emitter.instruction("cmp r13, QWORD PTR [rbp - 40]");                       // stop once the source index reaches the saved source-array length
@@ -210,8 +210,8 @@ fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_array_filter_skip");                           // skip copying the element when the callback returned zero / false
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the destination array pointer after the callback clobbered caller-saved registers
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the kept source element saved before the callback invocation
-    emitter.instruction("mov QWORD PTR [r10 + r14 * 8 + 24], r11");             // copy the kept scalar element into the next destination-array slot
-    emitter.instruction("add r14, 1");                                          // advance the destination kept-element count after storing a kept value
+    emitter.instruction("mov QWORD PTR [r10 + r15 * 8 + 24], r11");             // copy the kept scalar element into the next destination-array slot
+    emitter.instruction("add r15, 1");                                          // advance the destination kept-element count after storing a kept value
 
     emitter.label("__rt_array_filter_skip");
     emitter.instruction("add r13, 1");                                          // advance the source index after examining the current source element
@@ -219,9 +219,9 @@ fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_filter_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the destination array pointer for final length publication and return
-    emitter.instruction("mov QWORD PTR [rax], r14");                            // publish the number of kept elements as the destination array logical length
+    emitter.instruction("mov QWORD PTR [rax], r15");                            // publish the number of kept elements as the destination array logical length
     emitter.instruction("add rsp, 56");                                         // release the filter local bookkeeping slots before restoring callee-saved registers
-    emitter.instruction("pop r14");                                             // restore the caller destination-length callee-saved register
+    emitter.instruction("pop r15");                                             // restore the caller destination-length callee-saved register
     emitter.instruction("pop r13");                                             // restore the caller source-index callee-saved register
     emitter.instruction("pop r12");                                             // restore the caller callback callee-saved register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the filtered array pointer

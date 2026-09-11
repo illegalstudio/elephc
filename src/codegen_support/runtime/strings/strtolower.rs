@@ -37,9 +37,8 @@ pub fn emit_strtolower(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // compute destination pointer
     emitter.instruction("mov x10, x9");                                         // save destination start for return value
     emitter.instruction("mov x11, x2");                                         // copy length as loop counter
@@ -61,7 +60,7 @@ pub fn emit_strtolower(emitter: &mut Emitter) {
     // -- update concat_off and return --
     emitter.label("__rt_strtolower_done");
     emitter.instruction("add x8, x8, x2");                                      // advance offset by string length
-    emitter.instruction("str x8, [x6]");                                        // store updated offset to _concat_off
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x8"); // publish the updated concat offset (ctx-relative in ctx mode)
     emitter.instruction("mov x1, x10");                                         // return new pointer (start of lowered copy)
 
     // -- restore frame and return --

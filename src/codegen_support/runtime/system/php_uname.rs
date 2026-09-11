@@ -77,9 +77,8 @@ fn emit_php_uname_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x8, [sp, #16]");                                   // reload the accepted mode byte after libc returns
 
     // -- set up concat-backed transient string storage for the result --
-    abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x7, [x6]");                                        // load the current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x7");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     emitter.instruction("add x9, x9, x7");                                      // compute the destination cursor for the returned uname string
     emitter.instruction("mov x1, x9");                                          // remember the result start pointer for the string return value
     emitter.instruction("mov x2, #0");                                          // initialize the returned uname string length to zero bytes
@@ -198,9 +197,9 @@ fn emit_aarch64_copy_field(
 /// releases the stack frame, and returns with x1 = result ptr, x2 = result length.
 fn emit_aarch64_done(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_done");
-    emitter.instruction("ldr x7, [x6]");                                        // reload the concat-buffer write offset from before this result
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x7"); // reload the concat-buffer write offset from before this result (ctx-relative in ctx mode)
     emitter.instruction("add x7, x7, x2");                                      // advance the concat-buffer offset by the returned uname length
-    emitter.instruction("str x7, [x6]");                                        // publish the updated concat-buffer write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x7"); // publish the updated concat-buffer write offset (ctx-relative in ctx mode)
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the caller frame pointer and return address
     emitter.instruction("add sp, sp, #1536");                                   // release the stack-backed utsname storage
     emitter.instruction("ret");                                                 // return the selected uname string in x1/x2
@@ -251,9 +250,8 @@ fn emit_php_uname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the accepted mode byte after libc returns
 
     // -- set up concat-backed transient string storage for the result --
-    abi::emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r11");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("lea r9, [r9 + r11]");                                  // compute the destination cursor for the returned uname string
     emitter.instruction("mov rax, r9");                                         // remember the result start pointer for the string return value
     emitter.instruction("xor edx, edx");                                        // initialize the returned uname string length to zero bytes
@@ -392,9 +390,9 @@ fn emit_x86_64_copy_field(
 /// restores rbp, and returns with rax = result ptr, rdx = result length.
 fn emit_x86_64_done(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_done");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // reload the concat-buffer write offset from before this result
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r11");  // reload the concat-buffer write offset from before this result
     emitter.instruction("add r11, rdx");                                        // advance the concat-buffer offset by the returned uname length
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the updated concat-buffer write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r11"); // publish the updated concat-buffer write offset
     emitter.instruction("add rsp, 640");                                        // release the stack-backed utsname storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the selected uname string in rax/rdx

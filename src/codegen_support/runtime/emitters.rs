@@ -12,8 +12,8 @@ mod managed;
 mod platform;
 
 use super::{
-    bcmath, callables, curl, diagnostics, exceptions, generators, numeric, round_mode, strings,
-    system,
+    bcmath, callables, ctx, curl, diagnostics, exceptions, generators, numeric, round_mode,
+    strings, system,
 };
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
@@ -25,6 +25,14 @@ use crate::codegen_support::RuntimeFeatures;
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     diagnostics::emit_diagnostics(emitter);
+
+    // Per-context state publication. Emitted before every helper that may read
+    // ctx-relative state; gated on the ctx-register spike feature.
+    if features.ctx_register {
+        ctx::emit_rt_ctx_init(emitter);
+        // The pool the M1 bridge calls to give a spawned task its own context.
+        ctx::emit_rt_ctx_pool(emitter);
+    }
 
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all
     // branch into `__rt_php_float_to_int` for PHP's float→int rules.

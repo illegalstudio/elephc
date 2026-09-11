@@ -43,11 +43,10 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
 
     // -- reject null, non-heap, freed, and non-refcounted values --
     emitter.instruction("cbz x0, __rt_gc_mark_reachable_done");                 // ignore null roots
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the pointer below the heap buffer?
     emitter.instruction("b.lo __rt_gc_mark_reachable_done");                    // only heap pointers can be marked
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the pointer at or beyond the heap end?
     emitter.instruction("b.hs __rt_gc_mark_reachable_done");                    // invalid pointers are ignored
@@ -271,11 +270,10 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     // -- reject null, non-heap, freed, and non-refcounted values --
     emitter.instruction("test rax, rax");                                       // ignore null roots because they do not identify a heap-backed graph node
     emitter.instruction("jz __rt_gc_mark_reachable_done");                      // null roots need no traversal work
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r8");
     emitter.instruction("cmp rax, r8");                                         // is the candidate pointer below the managed heap buffer?
     emitter.instruction("jb __rt_gc_mark_reachable_done");                      // only heap-backed values participate in cycle traversal
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the current heap bump offset before computing the managed heap end
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r9"); // r9 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("lea r9, [r8 + r9]");                                   // compute the current heap end from the heap base plus bump offset
     emitter.instruction("cmp rax, r9");                                         // is the candidate pointer at or beyond the current heap end?
     emitter.instruction("jae __rt_gc_mark_reachable_done");                     // pointers outside the live heap window are ignored

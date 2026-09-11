@@ -443,6 +443,7 @@ Elephc CLI process, not a signed iOS application bundle.
 | `--no-ir-opt` | — | — | `ELEPHC_IR_OPT=off` | Shorthand for `--ir-opt=off`. |
 | `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan, or stack-only fallback. |
 | `--null-repr=sentinel\|tagged` | `sentinel`, `tagged` | `tagged` | `ELEPHC_NULL_REPR` | Representation for null-capable scalar slots. |
+| `--rt-ctx` | — | off | — | Route per-context runtime state (heap bump offset, free list, small bins, concat scratch) through the reserved context register (`x28` on AArch64, `r14` on x86_64) instead of global symbols. Sandbox-threads spike mode; the runtime object is cached separately per mode. Validated on both architectures: legacy heap symbols are omitted from ctx builds, so any unrouted helper fails at link time. |
 
 See [Optimization and codegen controls](optimization.md).
 

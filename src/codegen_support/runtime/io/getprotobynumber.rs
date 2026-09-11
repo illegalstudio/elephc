@@ -168,8 +168,9 @@ fn emit_getprotobynumber_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("push r12");                                            // save callee-saved register (name start)
     emitter.instruction("push r13");                                            // save callee-saved register (query number)
-    emitter.instruction("push r14");                                            // save callee-saved register (name length)
+    emitter.instruction("push r14");                                            // save callee-saved register (unused here, kept so the spill offset and the call alignment below stay put)
     emitter.instruction("push r15");                                            // save callee-saved register (parsed number)
+    emitter.instruction("sub rsp, 16");                                         // one spill slot (16 keeps the call alignment this helper already had)
     emitter.instruction("mov r13, rdi");                                        // r13 = query number, survives the load call
     emitter.instruction("call __rt_protoent_load");                             // read /etc/protocols, rax=buffer rdx=count
     emitter.instruction("mov r8, rax");                                         // r8 = scan cursor
@@ -223,8 +224,12 @@ fn emit_getprotobynumber_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r8");                                              // advance to the next name byte
     emitter.instruction("jmp __rt_gpbnum_namescan");                            // keep scanning the name
     emitter.label("__rt_gpbnum_nameend");
-    emitter.instruction("mov r14, r8");                                         // copy the name end pointer
-    emitter.instruction("sub r14, r12");                                        // r14 = name length
+    // The name length goes to the frame, not to r14: r14 is the reserved
+    // runtime-context register, and every other callee-saved register here is
+    // already spoken for.
+    emitter.instruction("mov rax, r8");                                         // copy the name end pointer
+    emitter.instruction("sub rax, r12");                                        // rax = name length
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // park the name length for the match below
 
     // -- skip the whitespace between the name and the number --
     emitter.label("__rt_gpbnum_skipws1");
@@ -269,7 +274,7 @@ fn emit_getprotobynumber_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match: copy the name into owned heap storage and return it --
     emitter.instruction("mov rax, r12");                                        // transient name pointer into the file buffer
-    emitter.instruction("mov rdx, r14");                                        // transient name length
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // transient name length (the spill slot, not r14)
     emitter.instruction("call __rt_str_persist");                               // duplicate into owned heap storage, rax=ptr rdx=len
     emitter.instruction("jmp __rt_gpbnum_return");                              // share the common epilogue
 
@@ -294,6 +299,7 @@ fn emit_getprotobynumber_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // zero length for the not-found case
 
     emitter.label("__rt_gpbnum_return");
+    emitter.instruction("add rsp, 16");                                         // release the name-length spill slot
     emitter.instruction("pop r15");                                             // restore callee-saved register
     emitter.instruction("pop r14");                                             // restore callee-saved register
     emitter.instruction("pop r13");                                             // restore callee-saved register

@@ -10,9 +10,7 @@
 //!   Linux reads it from the `nodename` field of `uname`'s `struct utsname`.
 //!   The result is written into the shared concat buffer.
 
-use crate::codegen_support::abi::emit_symbol_address;
 use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
-use crate::codegen_support::abi;
 
 /// gethostname: return the system host name.
 /// Input:  (none)
@@ -37,9 +35,8 @@ pub fn emit_gethostname(emitter: &mut Emitter) {
         emitter.instruction("str w9, [sp, #4]");                                // mib[1]
         emitter.instruction("mov x9, #256");                                    // available buffer space
         emitter.instruction("str x9, [sp, #8]");                                // sysctl length in/out parameter
-        emit_symbol_address(emitter, "x9", "_concat_off");
-        emitter.instruction("ldr x10, [x9]");                                   // current concat-buffer offset
-        emit_symbol_address(emitter, "x11", "_concat_buf");
+        crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+        crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
         emitter.instruction("add x12, x11, x10");                               // result write pointer
         emitter.instruction("str x12, [sp, #16]");                              // save the result pointer
         emitter.instruction("add x0, sp, #0");                                  // &mib
@@ -53,10 +50,9 @@ pub fn emit_gethostname(emitter: &mut Emitter) {
         emitter.instruction("b.eq __rt_gethostname_fail");                      // report an empty name on failure
         emitter.instruction("ldr x2, [sp, #8]");                                // returned length, including the NUL
         emitter.instruction("sub x2, x2, #1");                                  // drop the trailing NUL
-        emit_symbol_address(emitter, "x9", "_concat_off");
-        emitter.instruction("ldr x10, [x9]");                                   // concat-buffer offset
+        crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
         emitter.instruction("add x10, x10, x2");                                // reserve the host-name bytes
-        emitter.instruction("str x10, [x9]");                                   // publish the updated offset
+        crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat offset (ctx-relative in ctx mode)
         emitter.instruction("ldr x1, [sp, #16]");                               // result pointer
         emitter.instruction("add sp, sp, #32");                                 // release the scratch
         emitter.instruction("ret");                                             // return the host name
@@ -71,9 +67,8 @@ pub fn emit_gethostname(emitter: &mut Emitter) {
         emitter.instruction("sub sp, sp, #416");                                // scratch for the 390-byte struct utsname
         emitter.instruction("add x0, sp, #16");                                 // &utsname
         emitter.syscall(160);
-        emit_symbol_address(emitter, "x9", "_concat_off");
-        emitter.instruction("ldr x10, [x9]");                                   // current concat-buffer offset
-        emit_symbol_address(emitter, "x11", "_concat_buf");
+        crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+        crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
         emitter.instruction("add x12, x11, x10");                               // result write pointer
         emitter.instruction("add x13, sp, #16");                                // utsname base
         emitter.instruction("add x13, x13, #65");                               // nodename field offset
@@ -87,7 +82,7 @@ pub fn emit_gethostname(emitter: &mut Emitter) {
         emitter.label("__rt_gethostname_copy_done");
         emitter.instruction("ldr x10, [x9]");                                   // concat-buffer offset (x9 still holds _concat_off)
         emitter.instruction("add x10, x10, x2");                                // reserve the host-name bytes
-        emitter.instruction("str x10, [x9]");                                   // publish the updated offset
+        crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat offset (ctx-relative in ctx mode)
         emitter.instruction("mov x1, x12");                                     // result pointer
         emitter.instruction("add sp, sp, #416");                                // release the scratch
         emitter.instruction("ret");                                             // return the host name
@@ -106,8 +101,8 @@ fn emit_gethostname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rbp - 400]");                                // &utsname
     emitter.instruction("mov eax, 63");                                         // Linux x86_64 syscall 63 = uname
     emitter.instruction("syscall");                                             // read the system information
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");              // current concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");                    // concat-buffer base address
     emitter.instruction("lea r11, [r10 + r9]");                                 // result write pointer
     emitter.instruction("lea r8, [rbp - 400]");                                 // utsname base
     emitter.instruction("add r8, 65");                                          // nodename field offset
@@ -121,7 +116,7 @@ fn emit_gethostname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gethostname_copy_x86");                       // continue copying
     emitter.label("__rt_gethostname_copy_done_x86");
     emitter.instruction("add r9, rdx");                                         // reserve the host-name bytes
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");             // publish the updated offset
     emitter.instruction("mov rax, r11");                                        // result pointer
     emitter.instruction("add rsp, 416");                                        // release the scratch
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

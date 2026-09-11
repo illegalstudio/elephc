@@ -972,7 +972,7 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     // Read 3 bytes.
     emitter.instruction("movzx r13d, BYTE PTR [rax + r9]");                     // byte 0
     emitter.instruction("inc r9");                                              // advance the read cursor
-    emitter.instruction("movzx r14d, BYTE PTR [rax + r9]");                     // byte 1
+    emitter.instruction("movzx esi, BYTE PTR [rax + r9]");                     // byte 1
     emitter.instruction("inc r9");                                              // advance the read cursor
     emitter.instruction("movzx r15d, BYTE PTR [rax + r9]");                     // byte 2
     emitter.instruction("inc r9");                                              // advance the read cursor
@@ -986,14 +986,14 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r13");                                        // stage bits before extracting the next output byte
     emitter.instruction("and rcx, 3");                                          // mask the bits needed for the next encoded byte
     emitter.instruction("shl rcx, 4");                                          // shift bits into the position required by the output byte
-    emitter.instruction("mov r8, r14");                                         // stage bits before extracting the next output byte
+    emitter.instruction("mov r8, rsi");                                         // stage bits before extracting the next output byte
     emitter.instruction("shr r8, 4");                                           // extract the next sextet or byte from the accumulated bits
     emitter.instruction("or rcx, r8");                                          // merge the extracted bits into the accumulator
     emitter.instruction("movzx ecx, BYTE PTR [r12 + rcx]");                     // load the base64 alphabet byte for the sextet
     emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // write encoded output into the scratch buffer
     emitter.instruction("inc r10");                                             // advance the write cursor
     // char 2: ((b1 & 15) << 2) | (b2 >> 6)
-    emitter.instruction("mov rcx, r14");                                        // stage bits before extracting the next output byte
+    emitter.instruction("mov rcx, rsi");                                        // stage bits before extracting the next output byte
     emitter.instruction("and rcx, 15");                                         // mask the bits needed for the next encoded byte
     emitter.instruction("shl rcx, 2");                                          // shift bits into the position required by the output byte
     emitter.instruction("mov r8, r15");                                         // stage bits before extracting the next output byte
@@ -1017,7 +1017,7 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     // 2-byte tail: 3 chars + '='
     emitter.instruction("movzx r13d, BYTE PTR [rax + r9]");                     // load the next byte from the stream buffer
     emitter.instruction("inc r9");                                              // advance the read cursor
-    emitter.instruction("movzx r14d, BYTE PTR [rax + r9]");                     // load the next byte from the stream buffer
+    emitter.instruction("movzx esi, BYTE PTR [rax + r9]");                     // load the next byte from the stream buffer
     emitter.instruction("inc r9");                                              // advance the read cursor
     emitter.instruction("mov rcx, r13");                                        // stage bits before extracting the next output byte
     emitter.instruction("shr rcx, 2");                                          // extract the next sextet or byte from the accumulated bits
@@ -1027,13 +1027,13 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r13");                                        // stage bits before extracting the next output byte
     emitter.instruction("and rcx, 3");                                          // mask the bits needed for the next encoded byte
     emitter.instruction("shl rcx, 4");                                          // shift bits into the position required by the output byte
-    emitter.instruction("mov r8, r14");                                         // stage bits before extracting the next output byte
+    emitter.instruction("mov r8, rsi");                                         // stage bits before extracting the next output byte
     emitter.instruction("shr r8, 4");                                           // extract the next sextet or byte from the accumulated bits
     emitter.instruction("or rcx, r8");                                          // merge the extracted bits into the accumulator
     emitter.instruction("movzx ecx, BYTE PTR [r12 + rcx]");                     // load the base64 alphabet byte for the sextet
     emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // write encoded output into the scratch buffer
     emitter.instruction("inc r10");                                             // advance the write cursor
-    emitter.instruction("mov rcx, r14");                                        // stage bits before extracting the next output byte
+    emitter.instruction("mov rcx, rsi");                                        // stage bits before extracting the next output byte
     emitter.instruction("and rcx, 15");                                         // mask the bits needed for the next encoded byte
     emitter.instruction("shl rcx, 2");                                          // shift bits into the position required by the output byte
     emitter.instruction("movzx ecx, BYTE PTR [r12 + rcx]");                     // load the base64 alphabet byte for the sextet

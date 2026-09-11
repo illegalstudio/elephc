@@ -33,7 +33,7 @@
 //!   resulting VALUE is reproduced here.
 
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::{abi, platform::Arch};
+use crate::codegen_support::platform::Arch;
 
 /// Emits `__rt_str_inc_dec` for the active target.
 ///
@@ -157,7 +157,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the delta to tell the two empty-string rules apart
     emitter.instruction("cmp x3, #0");                                          // is this a decrement of the empty string?
     emitter.instruction("b.lt __rt_sid_empty_dec");                             // decrementing the empty string yields PHP's int(-1)
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     emitter.instruction("mov w10, #49");                                        // ASCII '1' is the whole result of incrementing the empty string
     emitter.instruction("strb w10, [x9]");                                      // materialize the one-byte result in the shared scratch buffer
     emitter.instruction("mov x1, x9");                                          // pass the scratch pointer as the boxing helper's string payload
@@ -185,9 +185,8 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
 
     // -- copy the operand into scratch, leaving one spare byte for a 'z' -> 'aa' growth --
     emitter.label("__rt_sid_carry");
-    abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load the current shared scratch write offset
-    abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // compute the scratch cursor for this result
     emitter.instruction("add x9, x9, #16");                                     // keep a header-sized gap so the heap-kind probe never reads before the buffer
     emitter.instruction("ldr x10, [sp, #0]");                                   // x10 = source cursor over the operand string
@@ -396,7 +395,7 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sid_empty_x86");
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // is this a decrement of the empty string?
     emitter.instruction("jl __rt_sid_empty_dec_x86");                           // decrementing the empty string yields PHP's int(-1)
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r8");
     emitter.instruction("mov BYTE PTR [r8], 49");                               // ASCII '1' is the whole result of incrementing the empty string
     emitter.instruction("mov rdi, r8");                                         // pass the scratch pointer as the boxing helper's string payload
     emitter.instruction("mov rsi, 1");                                          // the incremented empty string is exactly one byte long
@@ -422,9 +421,8 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
 
     // -- copy the operand into scratch, leaving one spare byte for a 'z' -> 'aa' growth --
     emitter.label("__rt_sid_carry_x86");
-    abi::emit_symbol_address(emitter, "rcx", "_concat_off");
-    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // load the current shared scratch write offset
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "rcx");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r8");
     emitter.instruction("add r8, rcx");                                         // compute the scratch cursor for this result
     emitter.instruction("add r8, 16");                                          // keep a header-sized gap so the heap-kind probe never reads before the buffer
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // r9 = source cursor over the operand string

@@ -182,7 +182,7 @@ fn emit_array_filter_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved source array, destination array, and candidate payload
     emitter.instruction("push r12");                                            // preserve the callback address register because the filter loop calls through it repeatedly
     emitter.instruction("push r13");                                            // preserve the source-index register because the loop keeps it live across callback invocations
-    emitter.instruction("push r14");                                            // preserve the destination-length register because kept-element count survives callback invocations
+    emitter.instruction("push r15");                                            // preserve the destination-length register because kept-element count survives callback invocations
     emitter.instruction("sub rsp, 72");                                         // reserve local slots for refcounted-filter bookkeeping, mode, and optional callback environment
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the filtering loop
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the source array pointer so the loop can reload it after callback and append helper calls
@@ -205,7 +205,7 @@ fn emit_array_filter_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate the destination array that will retain the kept refcounted payloads
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the destination array pointer for the filtering loop and final return path
     emitter.instruction("xor r13d, r13d");                                      // start the source index at zero before scanning the source array
-    emitter.instruction("xor r14d, r14d");                                      // start the destination kept-element count at zero before the first callback
+    emitter.instruction("xor r15d, r15d");                                      // start the destination kept-element count at zero before the first callback
 
     emitter.label("__rt_array_filter_ref_loop");
     emitter.instruction("cmp r13, QWORD PTR [rbp - 40]");                       // stop once the source index reaches the saved source-array length
@@ -275,7 +275,7 @@ fn emit_array_filter_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload the borrowed payload to retain and append into the destination array
     emitter.instruction("call __rt_array_push_refcounted");                     // retain the kept payload and append it into the destination array, returning the possibly-grown array pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // persist the destination array pointer after the refcounted append helper may have reallocated storage
-    emitter.instruction("add r14, 1");                                          // advance the destination kept-element count after retaining and appending a payload
+    emitter.instruction("add r15, 1");                                          // advance the destination kept-element count after retaining and appending a payload
     emitter.instruction("jmp __rt_array_filter_ref_skip");                      // advance to the next source element
     emitter.label("__rt_array_filter_ref_keep_str");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload destination array pointer for string append
@@ -283,7 +283,7 @@ fn emit_array_filter_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // reload kept source string length
     emitter.instruction("call __rt_array_push_str");                            // copy and append the kept string into the destination array
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // persist destination pointer after the string append helper may grow it
-    emitter.instruction("add r14, 1");                                          // advance the destination kept-element count after appending a string
+    emitter.instruction("add r15, 1");                                          // advance the destination kept-element count after appending a string
 
     emitter.label("__rt_array_filter_ref_skip");
     emitter.instruction("add r13, 1");                                          // advance the source index after examining the current source payload
@@ -291,9 +291,9 @@ fn emit_array_filter_refcounted_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_filter_ref_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the destination array pointer for final length publication and return
-    emitter.instruction("mov QWORD PTR [rax], r14");                            // publish the number of kept payloads as the destination array logical length
+    emitter.instruction("mov QWORD PTR [rax], r15");                            // publish the number of kept payloads as the destination array logical length
     emitter.instruction("add rsp, 72");                                         // release the refcounted-filter local bookkeeping slots before restoring callee-saved registers
-    emitter.instruction("pop r14");                                             // restore the caller destination-length callee-saved register
+    emitter.instruction("pop r15");                                             // restore the caller destination-length callee-saved register
     emitter.instruction("pop r13");                                             // restore the caller source-index callee-saved register
     emitter.instruction("pop r12");                                             // restore the caller callback callee-saved register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the filtered array pointer

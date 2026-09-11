@@ -9,9 +9,7 @@
 //! - Each octet is written without leading zeros; the result is a borrowed
 //!   `_concat_buf` slice, matching `__rt_itoa`'s string-result convention.
 
-use crate::codegen_support::abi::emit_symbol_address;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-use crate::codegen_support::abi;
 
 /// long2ip: format the low 32 bits of an integer as `A.B.C.D`.
 /// Input:  x0 = IP integer
@@ -27,9 +25,8 @@ pub fn emit_long2ip(emitter: &mut Emitter) {
     emitter.label_global("__rt_long2ip");
 
     // -- record the result start inside the concat buffer --
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
-    emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x12, x11, x10");                                   // compute the result start pointer
     emitter.instruction("mov x13, x12");                                        // x13 is the running write cursor
 
@@ -42,10 +39,9 @@ pub fn emit_long2ip(emitter: &mut Emitter) {
     // -- return the slice and publish the new concat-buffer offset --
     emitter.instruction("sub x2, x13, x12");                                    // result length = cursor - start
     emitter.instruction("mov x1, x12");                                         // result pointer = start
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // reload the concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
     emitter.instruction("add x10, x10, x2");                                    // advance it past the formatted address
-    emitter.instruction("str x10, [x9]");                                       // publish the updated concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat-buffer offset (ctx-relative in ctx mode)
     emitter.instruction("ret");                                                 // return the dotted-quad string slice
 }
 
@@ -97,8 +93,8 @@ fn emit_long2ip_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: long2ip ---");
     emitter.label_global("__rt_long2ip");
 
-    abi::emit_symbol_address(emitter, "rax", "_concat_buf");                    // concat-buffer base address
-    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // current concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "rax");                    // concat-buffer base address
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "rcx");             // current concat-buffer offset
     emitter.instruction("lea r11, [rax + rcx]");                                // r11 = result start pointer
     emitter.instruction("mov r10, r11");                                        // r10 is the running write cursor
 
@@ -110,9 +106,9 @@ fn emit_long2ip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r10");                                        // cursor
     emitter.instruction("sub rdx, r11");                                        // result length = cursor - start
     emitter.instruction("mov rax, r11");                                        // result pointer = start
-    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "rcx");             // reload the concat-buffer offset
     emitter.instruction("add rcx, rdx");                                        // advance it past the formatted address
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "rcx");            // publish the updated offset
     emitter.instruction("ret");                                                 // return the dotted-quad string slice
 }
 

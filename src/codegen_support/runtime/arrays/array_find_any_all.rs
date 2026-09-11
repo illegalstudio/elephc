@@ -117,10 +117,10 @@ fn emit_array_find_any_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("push r12");                                            // preserve the callback address across the loop
     emitter.instruction("push r13");                                            // preserve the element register across the callback
-    emitter.instruction("push r14");                                            // preserve the environment across the callback
+    emitter.instruction("push r15");                                            // preserve the environment across the callback
     emitter.instruction("sub rsp, 40");                                         // reserve local slots for array/mode/length/value_type/index
     emitter.instruction("mov r12, rdi");                                        // r12 = callback address (callee-saved)
-    emitter.instruction("mov r14, rdx");                                        // r14 = optional environment (callee-saved)
+    emitter.instruction("mov r15, rdx");                                        // r15 = optional environment (callee-saved)
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the array pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // save the mode selector
     emitter.instruction("mov rax, QWORD PTR [rsi]");                            // load the array length
@@ -137,9 +137,9 @@ fn emit_array_find_any_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the array pointer
     emitter.instruction("mov r13, QWORD PTR [r10 + rax * 8 + 24]");             // load element[i] into the callee-saved element register
     emitter.instruction("mov rdi, r13");                                        // pass the element as the first callback argument
-    emitter.instruction("test r14, r14");                                       // is an environment present?
+    emitter.instruction("test r15, r15");                                       // is an environment present?
     emitter.instruction("jz __rt_array_find_any_all_call");                     // no environment keeps the one-argument callback ABI
-    emitter.instruction("mov rsi, r14");                                        // pass the environment as the second callback argument
+    emitter.instruction("mov rsi, r15");                                        // pass the environment as the second callback argument
     emitter.label("__rt_array_find_any_all_call");
     emitter.instruction("call r12");                                            // call the predicate callback; truthy result in rax
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the mode selector
@@ -187,7 +187,7 @@ fn emit_array_find_any_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // boolean result: false
     emitter.label("__rt_array_find_any_all_ret");
     emitter.instruction("add rsp, 40");                                         // release the local slots
-    emitter.instruction("pop r14");                                             // restore the environment register
+    emitter.instruction("pop r15");                                             // restore the environment register
     emitter.instruction("pop r13");                                             // restore the element register
     emitter.instruction("pop r12");                                             // restore the callback register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

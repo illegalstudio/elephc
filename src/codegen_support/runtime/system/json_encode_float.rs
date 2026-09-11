@@ -86,16 +86,15 @@ pub(crate) fn emit_json_encode_float(emitter: &mut Emitter) {
     // lives in concat_buf at concat_off-len, so writing two bytes at the
     // current concat_off and bumping concat_off + len keeps the slice
     // contiguous.
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_concat_off");
-    emitter.instruction("ldr x11, [x10]");                                      // load the current concat-buffer offset (one past the formatted slice)
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x11");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x12");
     emitter.instruction("add x12, x12, x11");                                   // compute the address of the next free byte
     emitter.instruction("mov w13, #46");                                        // ASCII '.'
     emitter.instruction("strb w13, [x12]");                                     // emit the decimal point
     emitter.instruction("mov w13, #48");                                        // ASCII '0'
     emitter.instruction("strb w13, [x12, #1]");                                 // emit the trailing zero
     emitter.instruction("add x11, x11, #2");                                    // advance the concat offset by the appended bytes
-    emitter.instruction("str x11, [x10]");                                      // republish the concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x11"); // republish the concat-buffer offset (ctx-relative in ctx mode)
     emitter.instruction("add x2, x2, #2");                                      // grow the result length to cover the appended `.0`
 
     emitter.label("__rt_json_encode_float_done");
@@ -163,13 +162,13 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_encode_float_scan_x");                   // continue scanning
 
     emitter.label("__rt_json_encode_float_append_dot_zero_x");
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // load the current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");              // load the current concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");                    // materialize the concat-buffer base
     emitter.instruction("add r10, r9");                                         // compute the address of the next free byte
     emitter.instruction("mov BYTE PTR [r10], 46");                              // emit the decimal point
     emitter.instruction("mov BYTE PTR [r10 + 1], 48");                          // emit the trailing zero
     emitter.instruction("add r9, 2");                                           // advance the concat offset by the appended bytes
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // republish the concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9");             // republish the concat-buffer offset
     emitter.instruction("add rdx, 2");                                          // grow the result length to cover the appended `.0`
 
     emitter.label("__rt_json_encode_float_done_x");

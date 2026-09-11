@@ -53,7 +53,7 @@ pub fn emit_shell_exec(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save FILE* on stack
 
     // -- set up output buffer using concat_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     emitter.instruction("str x9, [sp, #8]");                                    // save buffer start ptr
     emitter.instruction("mov x10, #0");                                         // x10 = bytes written counter
     emitter.instruction("str x10, [sp, #16]");                                  // save counter on stack
@@ -112,7 +112,7 @@ fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did popen succeed and return a readable pipe?
     emitter.instruction("je __rt_shell_exec_empty");                            // failed pipes map to the empty PHP string result
 
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r8");
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // save the concat scratch buffer pointer so the read loop can append output bytes
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // initialize the shell output length counter at zero bytes
 

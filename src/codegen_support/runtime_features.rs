@@ -94,10 +94,19 @@ pub struct RuntimeFeatures {
     /// `RuntimeFnId::Opendir` — the only producer of resource kind 4.
     ///
     /// Scope cleanup releases such a handle through `__rt_closedir`, whose two paths (libc `DIR*`
-    /// and the `glob://` handle minted by `__rt_opendir_glob`) between them imported `closedir`,
+    /// and the glob:// handle minted by `__rt_opendir_glob`) between them imported `closedir`,
     /// `globfree` and `close`. Those three plus `pclose` were every libc import a trivial program
     /// had apart from the `getrlimit` stack probe.
     pub directory_resource: bool,
+    /// True when the runtime routes per-context state (concat scratch, heap bump
+    /// offset, free list, small bins) through the reserved ctx register
+    /// (`x28` AArch64 / `r14` x86_64) instead of global `.comm` symbols.
+    ///
+    /// Spike feature for the sandbox-threads plan: the emitted runtime installs
+    /// `__rt_ctx_init` in the main prologue and every ctx-gated helper reads its
+    /// mutable state relative to the ctx register, so a future per-thread
+    /// context only swaps the register contents.
+    pub ctx_register: bool,
 }
 
 impl RuntimeFeatures {
@@ -129,6 +138,7 @@ impl RuntimeFeatures {
             | ((self.generator as u64) << 9)
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
+            | ((self.ctx_register as u64) << 12)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -146,6 +156,7 @@ impl RuntimeFeatures {
             generator: false,
             popen_resource: false,
             directory_resource: false,
+            ctx_register: false,
         }
     }
 
@@ -165,6 +176,9 @@ impl RuntimeFeatures {
             generator: true,
             popen_resource: true,
             directory_resource: true,
+            // Deliberately excluded from `all()`: the ctx-register runtime is a
+            // spike mode selected explicitly, never a default full-feature build.
+            ctx_register: false,
         }
     }
 }
@@ -1278,6 +1292,7 @@ mod tests {
             generator: false,
             popen_resource: false,
             directory_resource: false,
+            ctx_register: false,
         })
         .iter()
         .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));

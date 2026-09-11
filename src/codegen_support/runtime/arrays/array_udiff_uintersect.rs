@@ -106,11 +106,11 @@ fn emit_array_udiff_uintersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("push r12");                                            // preserve the comparator address across the loops
     emitter.instruction("push r13");                                            // preserve the environment across the comparator calls
-    emitter.instruction("push r14");                                            // preserve the mode selector across the comparator calls
+    emitter.instruction("push r15");                                            // preserve the mode selector across the comparator calls
     emitter.instruction("sub rsp, 48");                                         // reserve local slots for arr1/arr2/result/i/j/element
     emitter.instruction("mov r12, rdi");                                        // r12 = comparator address (callee-saved)
     emitter.instruction("mov r13, rcx");                                        // r13 = optional environment (callee-saved)
-    emitter.instruction("mov r14, r8");                                         // r14 = mode (0 = udiff, 1 = uintersect)
+    emitter.instruction("mov r15, r8");                                         // r15 = mode (0 = udiff, 1 = uintersect)
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save arr1 pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save arr2 pointer
     emitter.instruction("mov rdi, QWORD PTR [rsi + 8]");                        // rdi = arr1 capacity for the result allocation
@@ -145,11 +145,11 @@ fn emit_array_udiff_uintersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the advanced inner index
     emitter.instruction("jmp __rt_array_udiff_uintersect_inner");               // continue scanning arr2
     emitter.label("__rt_array_udiff_uintersect_present");
-    emitter.instruction("test r14, r14");                                       // is the mode udiff (0)?
+    emitter.instruction("test r15, r15");                                       // is the mode udiff (0)?
     emitter.instruction("jz __rt_array_udiff_uintersect_advance");              // udiff drops elements present in arr2
     emitter.instruction("jmp __rt_array_udiff_uintersect_push");                // uintersect keeps elements present in arr2
     emitter.label("__rt_array_udiff_uintersect_absent");
-    emitter.instruction("test r14, r14");                                       // is the mode udiff (0)?
+    emitter.instruction("test r15, r15");                                       // is the mode udiff (0)?
     emitter.instruction("jz __rt_array_udiff_uintersect_push");                 // udiff keeps elements absent from arr2
     emitter.instruction("jmp __rt_array_udiff_uintersect_advance");             // uintersect drops elements absent from arr2
     emitter.label("__rt_array_udiff_uintersect_push");
@@ -164,7 +164,7 @@ fn emit_array_udiff_uintersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_udiff_uintersect_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // rax = result array pointer
     emitter.instruction("add rsp, 48");                                         // release the local slots
-    emitter.instruction("pop r14");                                             // restore the mode register
+    emitter.instruction("pop r15");                                             // restore the mode register
     emitter.instruction("pop r13");                                             // restore the environment register
     emitter.instruction("pop r12");                                             // restore the comparator register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

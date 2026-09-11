@@ -454,9 +454,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish legacy serialization frame
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver across item unboxing
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current concat-buffer offset
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("str x11, [sp, #72]");                                  // save concat-buffer base for final offset update
     emitter.instruction("add x12, x11, x10");                                   // compute start pointer for this serialized string
     emitter.instruction("str x12, [sp, #32]");                                  // save string start pointer
@@ -574,8 +573,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #72]");                                   // reload concat-buffer base
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload final output cursor
     emitter.instruction("sub x11, x10, x9");                                    // compute new global concat-buffer offset
-    abi::emit_symbol_address(emitter, "x12", "_concat_off");
-    emitter.instruction("str x11, [x12]");                                      // publish updated concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x11");
     emitter.instruction("ldr x1, [sp, #32]");                                   // return serialized string pointer
     emitter.instruction("sub x2, x10, x1");                                     // return serialized string length
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
@@ -1402,6 +1400,8 @@ fn emit_pop_x86_64(emitter: &mut Emitter) {
 /// to the caller. Throws RuntimeException on an empty list.
 fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_shift");
+    emitter.instruction("push rbx");                                        // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
+    emitter.instruction("push rax");                                        // pad to the SysV 16-byte call alignment while rbx is parked
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read current storage length
     emitter.instruction("test r10, r10");                                       // is the list empty?
@@ -1413,15 +1413,17 @@ fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r12, r10");                                        // have all live elements been shifted left?
     emitter.instruction("jge __rt_spl_dll_shift_done");                         // finish once cursor reaches old length
     emitter.instruction("mov r13, QWORD PTR [r11 + r12 * 8]");                  // load next Mixed pointer
-    emitter.instruction("mov r14, r12");                                        // copy source index for destination calculation
-    emitter.instruction("sub r14, 1");                                          // destination index is one slot earlier
-    emitter.instruction("mov QWORD PTR [r11 + r14 * 8], r13");                  // move Mixed pointer down by one slot
+    emitter.instruction("mov rbx, r12");                                        // copy source index for destination calculation
+    emitter.instruction("sub rbx, 1");                                          // destination index is one slot earlier
+    emitter.instruction("mov QWORD PTR [r11 + rbx * 8], r13");                  // move Mixed pointer down by one slot
     emitter.instruction("add r12, 1");                                          // advance shift cursor
     emitter.instruction("jmp __rt_spl_dll_shift_loop");                         // continue compacting storage
     emitter.label("__rt_spl_dll_shift_done");
     emitter.instruction("sub r10, 1");                                          // compute new storage length
     emitter.instruction("mov QWORD PTR [r9], r10");                             // persist shortened length
     emitter.instruction("mov QWORD PTR [r11 + r10 * 8], 0");                    // clear stale tail slot
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad WITHOUT touching rax: this helper returns the removed cell there
+    emitter.instruction("pop rbx");                                             // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return removed Mixed cell
     emitter.label("__rt_spl_dll_shift_empty");
     emit_throw_exception_x86_64(
@@ -1448,6 +1450,8 @@ fn emit_unshift_x86_64(emitter: &mut Emitter) {
 /// and throws OutOfRangeException on invalid index.
 fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_insert");
+    emitter.instruction("push rbx");                                        // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
+    emitter.instruction("push rax");                                        // pad to the SysV 16-byte call alignment while rbx is parked
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for insertion state
     emitter.instruction("mov rbp, rsp");                                        // establish insertion frame
     emitter.instruction("sub rsp, 48");                                         // reserve receiver, index, value, storage, and length spills
@@ -1492,19 +1496,21 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_insert_shift_loop");
     emitter.instruction("cmp r13, r12");                                        // has cursor reached insertion index?
     emitter.instruction("jle __rt_spl_dll_insert_store");                       // stop once insertion slot is free
-    emitter.instruction("mov r14, r13");                                        // copy destination index for source calculation
-    emitter.instruction("sub r14, 1");                                          // source index is one slot before cursor
-    emitter.instruction("mov r15, QWORD PTR [r11 + r14 * 8]");                  // load Mixed pointer being shifted right
+    emitter.instruction("mov rbx, r13");                                        // copy destination index for source calculation
+    emitter.instruction("sub rbx, 1");                                          // source index is one slot before cursor
+    emitter.instruction("mov r15, QWORD PTR [r11 + rbx * 8]");                  // load Mixed pointer being shifted right
     emitter.instruction("mov QWORD PTR [r11 + r13 * 8], r15");                  // store Mixed pointer one slot to the right
     emitter.instruction("sub r13, 1");                                          // move shift cursor left
     emitter.instruction("jmp __rt_spl_dll_insert_shift_loop");                  // continue shifting until insert slot opens
     emitter.label("__rt_spl_dll_insert_store");
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload owned Mixed value to insert
-    emitter.instruction("mov QWORD PTR [r11 + r12 * 8], r14");                  // store owned Mixed value in insertion slot
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 24]");                       // reload owned Mixed value to insert
+    emitter.instruction("mov QWORD PTR [r11 + r12 * 8], rbx");                  // store owned Mixed value in insertion slot
     emitter.instruction("add r10, 1");                                          // increase storage length
     emitter.instruction("mov QWORD PTR [r9], r10");                             // persist new storage length
     emitter.instruction("add rsp, 48");                                         // release insertion state
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad; never `pop rax` here (audited by sysv_call_alignment)
+    emitter.instruction("pop rbx");                                             // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_insert_range_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected Mixed value before throwing
@@ -1663,8 +1669,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish legacy serialization frame
     emitter.instruction("sub rsp, 96");                                         // reserve receiver, cursor, payload, and loop spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver across item unboxing
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize concat-buffer base
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");             // load current concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");                    // materialize concat-buffer base
     emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // save concat-buffer base for final offset update
     emitter.instruction("lea r12, [r11 + r10]");                                // compute start pointer for serialized string
     emitter.instruction("mov QWORD PTR [rbp - 32], r12");                       // save serialized string start pointer
@@ -1787,7 +1793,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload final output cursor
     emitter.instruction("mov r12, r11");                                        // copy final cursor for global offset calculation
     emitter.instruction("sub r12, r10");                                        // compute new concat-buffer offset
-    abi::emit_store_reg_to_symbol(emitter, "r12", "_concat_off", 0);            // publish updated concat-buffer offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r12");            // publish updated concat-buffer offset
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return serialized string pointer
     emitter.instruction("mov rdx, r11");                                        // copy final cursor for length calculation
     emitter.instruction("sub rdx, rax");                                        // return serialized string length
@@ -2339,6 +2345,8 @@ fn emit_offset_index_prefix_x86_64(
 /// logical offset to physical slot. Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
+    emitter.instruction("push rbx");                                        // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
+    emitter.instruction("push rax");                                        // pad to the SysV 16-byte call alignment while rbx is parked
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offsetSet
     emitter.instruction("mov rbp, rsp");                                        // establish offsetSet frame
     emitter.instruction("sub rsp, 64");                                         // reserve receiver, offset, value, tag, payload, and storage spills
@@ -2360,12 +2368,12 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 0");                                          // reject negative offsets
     emitter.instruction("jl __rt_spl_dll_offset_set_range_throw");              // negative offsets are out of range
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver
-    emitter.instruction(&format!("mov r14, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits for logical index mapping
+    emitter.instruction(&format!("mov rbx, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits for logical index mapping
     emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("mov r11, QWORD PTR [r9]");                             // read storage length
     emitter.instruction("cmp r10, r11");                                        // compare explicit offset with length
     emitter.instruction("jae __rt_spl_dll_offset_set_range_throw");             // explicit offsets at/past length are out of range
-    emitter.instruction(&format!("test r14, {}", ITER_MODE_LIFO));              // does logical indexing run in LIFO order?
+    emitter.instruction(&format!("test rbx, {}", ITER_MODE_LIFO));              // does logical indexing run in LIFO order?
     emitter.instruction("jz __rt_spl_dll_offset_set_physical_index_ready");     // FIFO offsets already match physical storage
     emitter.instruction("mov r10, r11");                                        // start converting logical LIFO offset to physical offset
     emitter.instruction("sub r10, QWORD PTR [rbp - 40]");                       // compute one-based physical offset
@@ -2412,6 +2420,8 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_set_done");
     emitter.instruction("add rsp, 64");                                         // release offsetSet frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad; never `pop rax` here (audited by sysv_call_alignment)
+    emitter.instruction("pop rbx");                                             // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -2421,6 +2431,8 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
 /// Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_unset");
+    emitter.instruction("push rbx");                                        // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
+    emitter.instruction("push rax");                                        // pad to the SysV 16-byte call alignment while rbx is parked
     emit_offset_index_prefix_x86_64(
         emitter,
         "__rt_spl_dll_offset_unset_type_throw",
@@ -2440,10 +2452,10 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_unset_shift_loop");
     emitter.instruction("cmp r13, r11");                                        // have all following elements shifted left?
     emitter.instruction("jge __rt_spl_dll_offset_unset_shrink");                // shrink once compaction is complete
-    emitter.instruction("mov r14, QWORD PTR [r12 + r13 * 8]");                  // load next Mixed pointer
+    emitter.instruction("mov rbx, QWORD PTR [r12 + r13 * 8]");                  // load next Mixed pointer
     emitter.instruction("mov r15, r13");                                        // copy source index for destination calculation
     emitter.instruction("sub r15, 1");                                          // compute destination index
-    emitter.instruction("mov QWORD PTR [r12 + r15 * 8], r14");                  // shift Mixed pointer left by one slot
+    emitter.instruction("mov QWORD PTR [r12 + r15 * 8], rbx");                  // shift Mixed pointer left by one slot
     emitter.instruction("add r13, 1");                                          // advance compaction cursor
     emitter.instruction("jmp __rt_spl_dll_offset_unset_shift_loop");            // continue compaction
     emitter.label("__rt_spl_dll_offset_unset_shrink");
@@ -2453,6 +2465,8 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_unset_done");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad; never `pop rax` here (audited by sysv_call_alignment)
+    emitter.instruction("pop rbx");                                             // restore the caller's callee-saved rbx value before returning
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_offset_unset_type_throw");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame before throwing
@@ -2507,8 +2521,7 @@ fn emit_throw_exception_aarch64(
     emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
     emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
-    abi::emit_symbol_address(emitter, "x9", "_exc_value");
-    emitter.instruction("str x0, [x9]");                                        // publish the active exception object
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the active exception object
     emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
 }
 

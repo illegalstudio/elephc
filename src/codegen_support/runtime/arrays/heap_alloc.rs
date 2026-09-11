@@ -74,7 +74,11 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — search from the <=32-byte bin upward
     emitter.instruction("mov x13, #24");                                        // requests up to 64 bytes start at the largest small-bin class
     emitter.label("__rt_heap_alloc_small_bins");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_small_bins");
+    // -- ctx mode: the small-bin heads live at a fixed offset inside _rt_ctx (x28) --
+    emitter.instruction(&format!(
+        "add x9, x28, #{}",
+        crate::codegen_support::runtime::ctx::CTX_HEAP_SMALL_BINS_OFFSET
+    )); // x9 = base of the per-context small-bin head array
     emitter.instruction("add x9, x9, x13");                                     // x9 = address of the first candidate bin head
     emitter.label("__rt_heap_alloc_small_bin_loop");
     emitter.instruction("mov x16, x9");                                         // x16 tracks the previous next-pointer slot while scanning this bin
@@ -82,11 +86,13 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x16]");                                      // x10 = current cached block header or null when this bin is exhausted
     emitter.instruction("cbz x10, __rt_heap_alloc_small_bin_next_class");       // try the next larger bin when this bin has no fitting block
     // -- reject cached entries that escaped the live heap window before dereferencing them --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x12");
     emitter.instruction("cmp x10, x12");                                        // does the cached block point below the heap buffer base?
     emitter.instruction("b.lo __rt_heap_alloc_small_bin_drop_tail");            // wild pointer: truncate the chain, its next link cannot be trusted
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_heap_off");
-    emitter.instruction("ldr x14, [x14]");                                      // load the current heap bump offset before deriving the live heap end
+    emitter.instruction(&format!(
+        "ldr x14, [x28, #{}]",
+        crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
+    )); // load the per-context heap bump offset before deriving the live heap end
     emitter.instruction("add x14, x12, x14");                                   // x14 = current live heap end
     emitter.instruction("cmp x10, x14");                                        // does the cached block point at or beyond the live heap end?
     emitter.instruction("b.hs __rt_heap_alloc_small_bin_drop_tail");            // wild pointer: truncate the chain past the live heap window
@@ -133,17 +139,22 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     // -- walk the general free list looking for first-fit block --
     // x0 = requested size, x9 = prev_next_addr, x10 = current block header
     emitter.label("__rt_heap_alloc_fl_start");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_free_list");
+    emitter.instruction(&format!(
+        "add x9, x28, #{}",
+        crate::codegen_support::runtime::ctx::CTX_HEAP_FREE_LIST_OFFSET
+    )); // x9 = address of the per-context free-list head slot
     emitter.instruction("ldr x10, [x9]");                                       // x10 = first free block header (0 if empty)
 
     // -- walk the free list looking for first-fit block --
     emitter.label("__rt_heap_alloc_fl_loop");
     emitter.instruction("cbz x10, __rt_heap_alloc_bump");                       // no free block found, fall through to bump
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x12");
     emitter.instruction("cmp x10, x12");                                        // reject free-list pointers that point before the heap buffer
     emitter.instruction("b.lo __rt_heap_alloc_fl_drop_tail");                   // drop the rest of a chain once it leaves the heap buffer
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
-    emitter.instruction("ldr x13, [x13]");                                      // load the current heap bump offset before deriving the live heap end
+    emitter.instruction(&format!(
+        "ldr x13, [x28, #{}]",
+        crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
+    )); // load the per-context heap bump offset before deriving the live heap end
     emitter.instruction("add x13, x12, x13");                                   // x13 = current live heap end
     emitter.instruction("cmp x10, x13");                                        // reject free-list pointers at or beyond the live heap end
     emitter.instruction("b.hs __rt_heap_alloc_fl_drop_tail");                   // truncate a chain that has escaped the live heap window
@@ -232,19 +243,20 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.label("__rt_heap_alloc_bump");
 
     // -- load current heap offset --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_off");
-    emitter.instruction("ldr x10, [x9]");                                       // x10 = current heap offset
+    emitter.instruction(&format!(
+        "ldr x10, [x28, #{}]",
+        crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
+    )); // x10 = per-context heap offset
 
     // -- bounds check: offset + 16 + requested <= heap_max --
     emitter.instruction("add x12, x10, x0");                                    // x12 = offset + requested size
     emitter.instruction("add x12, x12, #16");                                   // x12 = offset + requested + header (16 bytes)
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_max");
-    emitter.instruction("ldr x13, [x13]");                                      // x13 = heap max size in bytes
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x13");
     emitter.instruction("cmp x12, x13");                                        // does the allocation fit (unsigned, so a wrapped size stays above the limit)?
     emitter.instruction("b.hi __rt_heap_exhausted");                            // no — fatal error
 
     // -- compute base address of heap buffer --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x11");
 
     // -- write header and bump offset --
     emitter.instruction("add x14, x11, x10");                                   // x14 = buf + offset (header location)
@@ -254,7 +266,10 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x14, #8]");                                  // initialize heap kind to raw until a typed constructor overwrites it
     emitter.instruction("add x10, x10, x0");                                    // advance offset by requested size
     emitter.instruction("add x10, x10, #16");                                   // advance offset by header size
-    emitter.instruction("str x10, [x9]");                                       // store updated offset to _heap_off
+    emitter.instruction(&format!(
+        "str x10, [x28, #{}]",
+        crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
+    )); // store the advanced per-context bump offset
     emitter.instruction("add x0, x14, #16");                                    // return user pointer = header + 16
     emitter.instruction("mov x10, x14");                                        // reuse the common allocation-accounting path with the new block header pointer
     emitter.instruction("b __rt_heap_alloc_count");                             // count alloc/live/peak stats and return
@@ -337,7 +352,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jbe __rt_heap_alloc_small_bins");                      // yes — search from the <=32-byte bin upward
     emitter.instruction("mov r8, 24");                                          // remaining cached requests start at the <=64-byte bin offset
     emitter.label("__rt_heap_alloc_small_bins");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
+    crate::codegen_support::runtime::ctx::emit_small_bins_address(emitter, "r9"); // r9 = small-bin head array base
     emitter.instruction("add r9, r8");                                          // r9 = address of the first candidate small-bin head slot
     emitter.label("__rt_heap_alloc_small_bin_loop");
     emitter.instruction("mov rcx, r9");                                         // rcx tracks the previous next-pointer slot while scanning this bin
@@ -346,11 +361,10 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // did this bin scan run out of cached blocks?
     emitter.instruction("jz __rt_heap_alloc_small_bin_next_class");             // try the next larger bin when this bin has no fitting block
     // -- reject cached entries that escaped the live heap window before dereferencing them --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "rdx");
     emitter.instruction("cmp r10, rdx");                                        // does the cached block point below the heap buffer base?
     emitter.instruction("jb __rt_heap_alloc_small_bin_drop_tail");              // wild pointer: truncate the chain, its next link cannot be trusted
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_off");
-    emitter.instruction("mov rsi, QWORD PTR [rsi]");                            // load the current heap bump offset before deriving the live heap end
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "rsi"); // rsi = current heap bump offset
     emitter.instruction("add rsi, rdx");                                        // rsi = current live heap end
     emitter.instruction("cmp r10, rsi");                                        // does the cached block point at or beyond the live heap end?
     emitter.instruction("jae __rt_heap_alloc_small_bin_drop_tail");             // wild pointer: truncate the chain past the live heap window
@@ -397,16 +411,15 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 
     // -- walk the general free list looking for a first-fit block --
     emitter.label("__rt_heap_alloc_fl_start");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_free_list");
+    crate::codegen_support::runtime::ctx::emit_free_list_address(emitter, "r9"); // r9 = free-list head slot address
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // r10 = current free-list block header or null if the list is empty
     emitter.label("__rt_heap_alloc_fl_loop");
     emitter.instruction("test r10, r10");                                       // did the free-list walk run out of blocks?
     emitter.instruction("jz __rt_heap_alloc_bump");                             // yes — fall back to bump allocation from the heap buffer
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r8");
     emitter.instruction("cmp r10, r8");                                         // reject free-list pointers that point before the heap buffer
     emitter.instruction("jb __rt_heap_alloc_fl_drop_tail");                     // drop the rest of a chain once it leaves the heap buffer
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rcx", "_heap_off");
-    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // load the current heap bump offset before deriving the live heap end
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "rcx"); // rcx = current heap bump offset
     emitter.instruction("add rcx, r8");                                         // rcx = current live heap end
     emitter.instruction("cmp r10, rcx");                                        // reject free-list pointers at or beyond the live heap end
     emitter.instruction("jae __rt_heap_alloc_fl_drop_tail");                    // truncate a chain that has escaped the live heap window
@@ -490,22 +503,20 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 
     // -- no reusable block found; bump allocate from the heap buffer --
     emitter.label("__rt_heap_alloc_bump");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current bump offset from the heap state
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r10"); // r10 = current bump offset
     emitter.instruction("mov rcx, r10");                                        // preserve the current bump offset while computing the tentative allocation end
     emitter.instruction("add rcx, rax");                                        // add the requested payload size to the current bump offset
     emitter.instruction("add rcx, 16");                                         // include the uniform 16-byte header in the tentative allocation end
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity in bytes
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8");
     emitter.instruction("cmp rcx, r8");                                         // does the bump allocation still fit inside the configured heap capacity?
     emitter.instruction("ja __rt_heap_exhausted");                              // no — report heap exhaustion and terminate
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r11");
     emitter.instruction("lea r10, [r11 + r10]");                                // compute the new block header address inside the heap buffer
     emitter.instruction("mov DWORD PTR [r10], eax");                            // write the requested payload size into the new block header
     emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // initialize the new block refcount to one
     emitter.instruction(&format!("mov r8, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0))); // materialize the x86_64 heap marker for the freshly bumped block
     emitter.instruction("mov QWORD PTR [r10 + 8], r8");                         // stamp the new block as an owned raw heap allocation
-    emitter.instruction("mov QWORD PTR [r9], rcx");                             // persist the advanced bump offset after carving out this block
+    crate::codegen_support::runtime::ctx::emit_heap_off_store(emitter, "rcx"); // persist the advanced bump offset after carving out this block
     emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer instead of the header address
     emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the shared allocation-accounting path for bumped blocks
 
@@ -565,6 +576,55 @@ mod tests {
         assert!(asm.contains("__rt_heap_alloc_size_overflow:\n"));
     }
 
+    /// Verifies the ctx-register allocator reads heap state through the reserved
+    /// ctx register (x28 on AArch64) instead of materializing `_heap_off`,
+    /// `_heap_free_list`, and `_heap_small_bins` as global symbols.
+    ///
+    /// This is the sandbox-threads spike's core routing assertion: with the mode
+    /// on, per-context heap state must be addressable purely relative to x28 so a
+    /// second context only needs a different x28 value.
+    #[test]
+    fn ctx_mode_heap_allocator_reads_state_through_ctx_register() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emitter.ctx_register = true;
+        emit_heap_alloc(&mut emitter);
+        let asm = emitter.output();
+
+        // The bump path reads the heap offset through x28.
+        assert!(
+            asm.contains(&format!(
+                "ldr x10, [x28, #{}]",
+                crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
+            )),
+            "ctx-mode bump path must read _heap_off through x28:\n{asm}"
+        );
+        // The free-list walk derives its head slot address from x28 (keeping x9
+        // as the mutable prev-slot pointer the unlink paths write through).
+        assert!(
+            asm.contains(&format!(
+                "add x9, x28, #{}",
+                crate::codegen_support::runtime::ctx::CTX_HEAP_FREE_LIST_OFFSET
+            )),
+            "ctx-mode free-list walk must derive _heap_free_list from x28:\n{asm}"
+        );
+        // The small-bin scan derives its bin heads from x28.
+        assert!(
+            asm.contains(&format!(
+                "add x9, x28, #{}",
+                crate::codegen_support::runtime::ctx::CTX_HEAP_SMALL_BINS_OFFSET
+            )),
+            "ctx-mode small-bin scan must derive _heap_small_bins from x28:\n{asm}"
+        );
+        // And no ctx-mode access may materialize the legacy global symbols.
+        for legacy in ["_heap_off", "_heap_free_list", "_heap_small_bins"] {
+            assert!(
+                !asm.contains(&format!("adrp x9, {legacy}"))
+                    && !asm.contains(&format!("add x9, x9, {legacy}")),
+                "ctx-mode allocator must not materialize legacy symbol {legacy}:\n{asm}"
+            );
+        }
+    }
+
     /// Verifies PIC allocators recover through the cdylib boundary instead of exiting.
     #[test]
     fn pic_heap_allocator_routes_exhaustion_to_cdylib_boundary() {
@@ -593,5 +653,56 @@ mod tests {
         assert!(asm.contains("cmp rax, r10\n"));
         assert!(asm.contains("ja __rt_heap_alloc_size_overflow\n"));
         assert!(asm.contains("__rt_heap_alloc_size_overflow:\n"));
+    }
+
+    /// Verifies the ctx-register x86_64 allocator reads AND writes heap state
+    /// through the reserved ctx register (r14): the bump load, the bump store,
+    /// the free-list head, and the small-bin base must all be r14-relative,
+    /// and none of the legacy heap symbols may appear.
+    #[test]
+    fn ctx_mode_x86_64_heap_allocator_routes_state_through_r14() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emitter.ctx_register = true;
+        emit_heap_alloc(&mut emitter);
+        let asm = emitter.output();
+                // The bump path reads the heap offset through r14.
+        assert!(
+            asm.contains(&format!(
+                "mov r10, QWORD PTR [r14 + {}]",
+                crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
+            )),
+            "ctx-mode x86_64 bump load must read through r14:\n{asm}"
+        );
+        // The bump path stores the advanced offset through r14.
+        assert!(
+            asm.contains(&format!(
+                "mov QWORD PTR [r14 + {}], rcx",
+                crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET
+            )),
+            "ctx-mode x86_64 bump store must write through r14:\n{asm}"
+        );
+        // The free-list walk derives its head slot address from r14.
+        assert!(
+            asm.contains(&format!(
+                "lea r9, [r14 + {}]",
+                crate::codegen_support::runtime::ctx::CTX_HEAP_FREE_LIST_OFFSET
+            )),
+            "ctx-mode x86_64 free-list walk must derive its head from r14:\n{asm}"
+        );
+        // The small-bin scan derives its bin base from r14.
+        assert!(
+            asm.contains(&format!(
+                "lea r9, [r14 + {}]",
+                crate::codegen_support::runtime::ctx::CTX_HEAP_SMALL_BINS_OFFSET
+            )),
+            "ctx-mode x86_64 small-bin scan must derive its base from r14:\n{asm}"
+        );
+        // And no legacy heap symbol may be referenced at all.
+        for legacy in ["_heap_off", "_heap_free_list", "_heap_small_bins"] {
+            assert!(
+                !asm.contains(&format!("rip + {legacy}")),
+                "ctx-mode x86_64 allocator must not reference legacy symbol {legacy}:\n{asm}"
+            );
+        }
     }
 }

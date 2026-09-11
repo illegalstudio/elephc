@@ -62,7 +62,7 @@ pub fn emit_concat(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #40]");                                   // save result start pointer on stack
 
     // -- stamp heap-backed results so __rt_str_persist can take them over in place --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x6");
     emitter.instruction("sub x7, x0, x6");                                      // compute the candidate scratch offset of the reservation
     emitter.instruction(&format!("mov x8, #{}", CONCAT_BUF_CAPACITY));          // load the concat scratch capacity in bytes
     emitter.instruction("cmp x7, x8");                                          // is the reservation outside the shared scratch window (unsigned)?
@@ -135,7 +135,7 @@ fn emit_concat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save result start pointer for return
 
     // -- stamp heap-backed results so __rt_str_persist can take them over in place --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r8");
     emitter.instruction("mov r9, rax");                                         // copy the reservation before deriving its candidate scratch offset
     emitter.instruction("sub r9, r8");                                          // compute the candidate scratch offset of the reservation
     emitter.instruction(&format!("cmp r9, {}", CONCAT_BUF_CAPACITY));           // is the reservation outside the shared scratch window (unsigned)?

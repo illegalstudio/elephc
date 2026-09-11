@@ -84,8 +84,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
 
     // Publish the new exception object via _exc_value and longjmp to the
     // active catch handler through the standard throw helper.
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_exc_value");
-    emitter.instruction("str x0, [x9]");                                        // _exc_value = JsonException pointer
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0); // _exc_value = JsonException pointer
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address before tail-call
     emitter.instruction("add sp, sp, #32");                                     // release the helper scratch frame before tail-call
     emitter.instruction("b __rt_throw_current");                                // tail-call the standard exception unwinder

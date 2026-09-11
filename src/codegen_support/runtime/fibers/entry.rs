@@ -40,6 +40,13 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fiber_entry ---");
     emitter.label_global("__rt_fiber_entry");
 
+    // -- ctx mode: re-publish the per-context state pointer --
+    // The fake initial frame is deliberately zeroed, so the first switch into
+    // this fiber restores x28 = 0. Every heap/concat access inside the fiber
+    // goes through the ctx register, so it must be re-installed from the
+    // single _rt_ctx instance before any allocation can run.
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+
     // -- establish a tiny frame on this fiber's fresh stack --
     emitter.instruction("sub sp, sp, #16");                                     // reserve a minimal scratch frame on the fiber stack
     emitter.instruction("str x29, [sp, #0]");                                   // store a zero-equivalent FP slot for diagnostic walkers
@@ -140,6 +147,11 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_entry ---");
     emitter.label_global("__rt_fiber_entry");
+
+    // -- ctx mode: re-publish the per-context state pointer (r14) --
+    // The zeroed fake initial frame restores r14 = 0 on the first switch, and
+    // every heap/concat access inside the fiber reads through r14.
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
 
     // -- establish a tiny frame on this fiber's fresh stack --
     emitter.instruction("push rbp");                                            // preserve a zero-equivalent caller frame pointer slot for walkers

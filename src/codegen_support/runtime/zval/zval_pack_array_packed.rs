@@ -216,7 +216,8 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     // -- set up stack frame and read the elephc indexed array header --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 96");                                         // reserve header/loop slots
+    emitter.instruction("sub rsp, 112");                                        // ROUNDED UP to a 16-byte multiple: the rbx spill slot added 8 bytes to a frame that was already aligned, which left every call in this body on a stack SysV forbids (pinned by `every_x86_64_runtime_call_site_is_sysv_aligned`)
+    emitter.instruction("mov QWORD PTR [rbp - 88], rbx");                       // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the elephc array pointer
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the element count
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the length
@@ -260,11 +261,11 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_zval_pack_array_packed_loop_done");           // exit the loop once every element is packed
 
     // -- compute the element address: elements_base + i * elem_size --
-    emitter.instruction("mov r14, QWORD PTR [rbp - 48]");                       // load the elements base
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 48]");                       // load the elements base
     emitter.instruction("mov r15, QWORD PTR [rbp - 24]");                       // load the element size
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // reload the loop index
     emitter.instruction("imul rax, r15");                                       // i * elem_size (rdx:rax, but values fit in rax)
-    emitter.instruction("add r14, rax");                                        // r14 = element address
+    emitter.instruction("add rbx, rax");                                        // rbx = element address
 
     // -- dispatch on the value_type to stage (tag, lo, hi) for pack_element --
     emitter.instruction("mov r15, QWORD PTR [rbp - 32]");                       // reload the value_type
@@ -287,43 +288,43 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_zval_pack_array_packed_vt_null");             // unknown kinds pack as null
 
     emitter.label("__rt_zval_pack_array_packed_vt_int");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = integer value
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = integer value
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("xor eax, eax");                                        // tag = 0 (int)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_float");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = float bits
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = float bits
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("mov eax, 2");                                          // tag = 2 (float)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_bool");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = bool payload
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = bool payload
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("mov eax, 3");                                          // tag = 3 (bool)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_mixed");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = nested mixed cell pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = nested mixed cell pointer
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("mov eax, 7");                                          // tag = 7 (nested)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_idxarr");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = nested indexed-array pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = nested indexed-array pointer
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("mov eax, 4");                                          // tag = 4 (indexed array)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_hasharr");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = nested associative-array pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = nested associative-array pointer
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("mov eax, 5");                                          // tag = 5 (associative array)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_tagged");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = tagged payload
-    emitter.instruction("mov rax, QWORD PTR [r14 + 8]");                        // tag = tagged runtime tag
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = tagged payload
+    emitter.instruction("mov rax, QWORD PTR [rbx + 8]");                        // tag = tagged runtime tag
     emitter.instruction("xor rsi, rsi");                                        // hi = 0
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_str");
-    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = string pointer
-    emitter.instruction("mov rsi, QWORD PTR [r14 + 8]");                        // hi = string length
+    emitter.instruction("mov rdi, QWORD PTR [rbx]");                            // lo = string pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbx + 8]");                        // hi = string length
     emitter.instruction("mov eax, 1");                                          // tag = 1 (string)
     emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
     emitter.label("__rt_zval_pack_array_packed_vt_null");
@@ -375,7 +376,8 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 40], rcx");                       // store nNextFreeElement at offset 40 (64-bit)
     emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // pDestructor = NULL
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // return the HashTable pointer
-    emitter.instruction("add rsp, 96");                                         // release the local slots
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 88]");                       // restore the caller's callee-saved rbx value
+    emitter.instruction("add rsp, 112");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the zend_array pointer in rax
 }

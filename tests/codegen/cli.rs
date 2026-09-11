@@ -10,6 +10,568 @@
 
 use crate::support::*;
 
+/// A PHP program broad enough to drag most user-codegen emitters into the
+/// assembly: closures behind runtime callbacks, `call_user_func_array`, static
+/// properties on a late-bound receiver, generators, fibers, string building,
+/// and the array helpers that invoke a callable.
+const CTX_USER_CODEGEN_FIXTURE: &str = r#"<?php
+class Holder {
+    public static int $count = 0;
+    public static string $label = 'x';
+    public static function bump(int $by): int { static::$count += $by; return static::$count; }
+}
+class Child extends Holder { public static int $count = 100; }
+
+function apply(callable $f, array $xs): array { return array_map($f, $xs); }
+
+$nums = [5, 3, 9, 1];
+usort($nums, fn($a, $b) => $a <=> $b);
+$sum = array_reduce($nums, fn($c, $v) => $c + $v, 0);
+$even = array_filter($nums, fn($v) => $v % 2 === 0);
+array_walk($nums, function ($v) use (&$sum) { $sum += $v; });
+$doubled = apply(fn($v) => $v * 2, $nums);
+
+$args = [2];
+$viaCufa = call_user_func_array([Holder::class, 'bump'], $args);
+$viaChild = Child::bump(3);
+
+$gen = (function () { foreach ([1, 2, 3] as $v) { yield $v; } })();
+$fromGen = 0;
+foreach ($gen as $v) { $fromGen += $v; }
+
+$fiber = new Fiber(function (int $seed) { Fiber::suspend($seed + 1); return $seed + 2; });
+$suspended = $fiber->start(7);
+$fiber->resume();
+
+$text = sprintf('%s-%d', Holder::$label, $sum) . implode(',', $doubled);
+echo strlen($text), count($even), $viaCufa, $viaChild, $fromGen, $suspended, $fiber->getReturn();
+"#;
+
+/// The reserved ctx register is a WHOLE-PROGRAM contract, not a runtime-only one.
+///
+/// The runtime audit (`x86_64_ctx_runtime_never_scratches_the_ctx_register`) scans
+/// the generated runtime and nothing else, so USER codegen was free to borrow the
+/// register — and did. `runtime_callable_invoker` used r14 as its tag register and
+/// then called the PHP callable through it, so every `usort`/`array_filter`/
+/// `array_reduce`/`array_walk`/`array_any` with a closure ran its callback with a
+/// type tag where the context pointer belongs, and died on the first heap access.
+/// Five SIGSEGVs on linux-x86_64 that no local check saw: the host suite compiles
+/// for AArch64, and the runtime audit does not read user code.
+///
+/// This compiles a deliberately broad program for x86_64 and applies the same
+/// sanctioned-shape rule to what comes out.
+/// Removes every `[...]` memory operand that addresses through `register`.
+///
+/// What remains is the instruction's register operands, which is where a reserved register
+/// can actually be lost. `cmp rsp, QWORD PTR [r14 + 128]` becomes `cmp rsp, QWORD PTR`,
+/// naming r14 nowhere — it only read through it. `mov r14, rax` is untouched and still
+/// names it, because that one overwrites the context pointer.
+fn strip_memory_operands_using(line: &str, register: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        let Some(close) = rest[open..].find(']') else {
+            break;
+        };
+        let operand = &rest[open..open + close + 1];
+        out.push_str(&rest[..open]);
+        // Keep an operand that does NOT use the register: it may still name it elsewhere.
+        if !operand
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| token == register)
+        {
+            out.push_str(operand);
+        }
+        rest = &rest[open + close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// THE ROLE RULE ACCEPTS EVERY CTX ACCESS AND STILL REFUSES EVERY BORROW.
+///
+/// The scan below judges whether `r14` survives once the memory operands that merely
+/// address through it are removed. That rule replaced an enumerated allowlist of
+/// mnemonics, which called `cmp rsp, QWORD PTR [r14 + N]` a violation seventeen times the
+/// moment the stack guard started reading this context's floor — a correct instruction the
+/// list had no entry for.
+///
+/// A looser rule is worthless, so this pins both directions on shapes that actually occur.
+/// Note the last refusal: `mov r14, QWORD PTR [rax]` installs whatever `rax` held as the
+/// context pointer, and the old allowlist SANCTIONED it, because it began with
+/// `mov r14, QWORD PTR [`. Widening the rule closed that hole rather than opening one.
+#[test]
+fn the_ctx_register_role_rule_separates_access_from_borrowing() {
+    let reads_through_it = [
+        "cmp rsp, QWORD PTR [r14 + 128]",
+        "mov rax, QWORD PTR [r14 + 72]",
+        "lea r8, [r14 + 4096]",
+        "mov QWORD PTR [r14 + 176], 0",
+        "add QWORD PTR [r14 + 144], 1",
+    ];
+    for line in reads_through_it {
+        let remainder = strip_memory_operands_using(line, "r14");
+        let still_named = remainder
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| matches!(token, "r14" | "r14d" | "r14w" | "r14b"));
+        assert!(
+            !still_named,
+            "`{line}` only reads per-context state through r14; the rule must accept it \
+             (left `{remainder}`)"
+        );
+    }
+
+    let borrows_it = [
+        "mov r14, rax",
+        "xor r14d, r14d",
+        "add r14, 8",
+        "movzx r14d, BYTE PTR [rsi]",
+        // The one the previous allowlist waved through.
+        "mov r14, QWORD PTR [rax]",
+    ];
+    for line in borrows_it {
+        let remainder = strip_memory_operands_using(line, "r14");
+        let still_named = remainder
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| matches!(token, "r14" | "r14d" | "r14w" | "r14b"));
+        assert!(
+            still_named,
+            "`{line}` overwrites the context pointer; the rule must still catch it \
+             (left `{remainder}`)"
+        );
+    }
+}
+
+#[test]
+fn test_cli_rt_ctx_user_codegen_never_scratches_the_ctx_register() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_user_codegen");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, CTX_USER_CODEGEN_FIXTURE).expect("failed to write the fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args(["--target", "linux-x86_64"])
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the user-codegen fixture");
+    assert!(
+        output.status.success(),
+        "--rt-ctx --target linux-x86_64 --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read the emitted assembly");
+    let mut offenders: Vec<String> = Vec::new();
+    for raw in asm.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('.') || line.ends_with(':')
+        {
+            continue;
+        }
+        let line = line.split('#').next().unwrap_or(line).trim();
+        let mentions_r14 = line
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| matches!(token, "r14" | "r14d" | "r14w" | "r14b"));
+        if !mentions_r14 {
+            continue;
+        }
+        // THE RULE IS ABOUT THE REGISTER'S ROLE, NOT THE MNEMONIC. Reading per-context
+        // state THROUGH r14 is the whole point of ctx mode, and the set of instructions
+        // that do it grows: routing the stack guard added `cmp rsp, QWORD PTR [r14 + N]`,
+        // which an enumerated allowlist of `mov`/`lea` called a violation 17 times. What
+        // must never happen is r14 becoming a DESTINATION — that is what loses the
+        // context. So strip the memory operands that merely address through it, and judge
+        // what is left.
+        let without_ctx_addressing = strip_memory_operands_using(line, "r14");
+        let still_names_r14 = without_ctx_addressing
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| matches!(token, "r14" | "r14d" | "r14w" | "r14b"));
+        let sanctioned = !still_names_r14
+            // The publication itself, and the whole-register save/restore pair a foreign
+            // entry uses. A restore must come from the frame, not from an arbitrary
+            // pointer: `mov r14, QWORD PTR [rax]` would install whatever rax held.
+            || line == "push r14"
+            || line == "pop r14"
+            || line.starts_with("lea r14, [rip + _rt_ctx]")
+            || line.starts_with("mov r14, QWORD PTR [rbp")
+            || line.starts_with("mov r14, QWORD PTR [rsp")
+            // r14 as a SOURCE — saving it, or comparing against it — never loses it.
+            || line.ends_with(", r14");
+        if !sanctioned {
+            offenders.push(line.to_string());
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "--rt-ctx user codegen borrowed r14, the reserved context register \
+         ({} offenders). Compiled PHP reads per-context state through it, so a \
+         callback invoked with a borrowed r14 faults on its first heap access:\n{}",
+        offenders.len(),
+        offenders.join("\n")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--rt-ctx` selects the ctx-register runtime mode: the emitted main entry
+/// must install the per-context state pointer by calling `__rt_ctx_init`
+/// before any user statement runs.
+#[test]
+fn test_cli_rt_ctx_main_calls_ctx_init() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_main_init");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").expect("failed to write the rt-ctx fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx program");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read rt-ctx assembly");
+    assert!(
+        asm.contains("bl __rt_ctx_init") || asm.contains("call __rt_ctx_init"),
+        "--rt-ctx main prologue must call __rt_ctx_init:\n{}",
+        asm.lines().take(40).collect::<Vec<_>>().join("\n")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A full `--rt-ctx` build links and runs end to end: the ctx-routed heap
+/// allocator must serve real allocations (array + string) driven through the
+/// reserved ctx register, proving the mode executable on the host target.
+/// The program also reads `$argc`/`$argv`: the ctx-init helper runs before
+/// argc/argv are spilled in the main prologue, so a clobber there would
+/// surface here as garbage arguments (spike review, B5).
+#[test]
+fn test_cli_rt_ctx_binary_runs_and_allocates() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_binary_run");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\n$a = [10, 20, 30];\n$s = 'x' . 'y' . 'z';\necho count($a) + strlen($s);\n",
+    )
+    .expect("failed to write the rt-ctx run fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx run fixture");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx failed to compile and link: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bin = dir.join("main");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("failed to run the rt-ctx binary");
+    assert!(
+        run.status.success(),
+        "rt-ctx binary exited with {}: {}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "6",
+        "rt-ctx allocation-driven program must print 6 (count 3 + strlen 3)"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `__rt_ctx_init` runs BEFORE argc/argv are spilled in the main prologue; the
+/// helper's pinned clobber contract (ctx register only, no argument
+/// registers) must hold, or a ctx build reads garbage arguments. This drives
+/// an argument through `$argv[1]` end to end.
+#[test]
+fn test_cli_rt_ctx_preserves_argv_across_ctx_init() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_argv");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\necho isset($argv[1]) ? $argv[1] : 'none';\n",
+    )
+    .expect("failed to write the rt-ctx argv fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx argv fixture");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx argv compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bin = dir.join("main");
+    let run = std::process::Command::new(&bin)
+        .arg("hello-ctx")
+        .output()
+        .expect("failed to run the rt-ctx argv binary");
+    assert!(
+        run.status.success(),
+        "rt-ctx argv binary crashed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "hello-ctx",
+        "ctx-init must not clobber argc/argv before the prologue spills them"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The ctx-mode allocator must RECYCLE: a loop whose cumulative allocation
+/// volume exceeds the default heap several times over can only complete
+/// through free-list/small-bin reuse. This is the codified form of the
+/// partial-routing trap the spike found (frees landing on an unread global
+/// free list exhausted the heap) — under a broken routing this test fails
+/// with "heap memory exhausted" (spike review, D3).
+#[test]
+fn test_cli_rt_ctx_heap_recycling_survives_cumulative_allocations() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_recycle");
+    let php_path = dir.join("main.php");
+    // Each iteration allocates an 8-element array and a short string, then
+    // releases both at the next iteration's reassignment. 600k iterations ×
+    // ~100 bytes ≈ 60 MB through an 8 MB heap: >7x reuse is mandatory.
+    fs::write(
+        &php_path,
+        "<?php\n$sum = 0;\nfor ($i = 0; $i < 600000; $i++) {\n    $a = [1, 2, 3, 4, $i, $i + 1, $i + 2, $i + 3];\n    $s = 'v' . $i;\n    $sum = ($sum + count($a) + strlen($s)) % 1000003;\n}\necho $sum;\n",
+    )
+    .expect("failed to write the rt-ctx recycle fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx recycle fixture");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx recycle compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bin = dir.join("main");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("failed to run the rt-ctx recycle binary");
+    assert!(
+        run.status.success(),
+        "rt-ctx recycle binary failed (recycling broken?): {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // Deterministic output: the same program must print the same value under
+    // the legacy addressing mode (golden cross-check, D7).
+    let ctx_out = String::from_utf8_lossy(&run.stdout);
+    assert!(!ctx_out.trim().is_empty(), "recycle program printed nothing");
+
+    // Golden: recompile the identical program WITHOUT --rt-ctx and compare.
+    let legacy_php = dir.join("legacy.php");
+    fs::copy(&php_path, &legacy_php).expect("failed to copy the legacy fixture");
+    let output = elephc_cli_command(&dir)
+        .arg(&legacy_php)
+        .output()
+        .expect("failed to compile legacy recycle fixture");
+    assert!(
+        output.status.success(),
+        "elephc legacy recycle compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let legacy_run = std::process::Command::new(dir.join("legacy"))
+        .output()
+        .expect("failed to run the legacy recycle binary");
+    assert_eq!(
+        ctx_out,
+        String::from_utf8_lossy(&legacy_run.stdout),
+        "ctx and legacy modes must produce identical output for the same program"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Fiber and generator bodies run on zero-initialized fiber stacks, so the first
+/// switch restores a zeroed ctx register; the fiber entry trampoline must
+/// re-publish the per-context pointer or every allocation inside the coroutine
+/// dereferences NULL. Both coroutines allocate, so both would crash without it.
+#[test]
+fn test_cli_rt_ctx_fibers_and_generators_re_publish_ctx() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_fiber_ctx");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\n\
+         function gen($n) {\n\
+             for ($i = 0; $i < $n; $i++) { $a = [$i, $i + 1, $i + 2]; yield $a[0] + $a[1]; }\n\
+             return 'done';\n\
+         }\n\
+         $total = 0;\n\
+         foreach (gen(1000) as $v) { $total = ($total + $v) % 999983; }\n\
+         $f = new Fiber(function () {\n\
+             $x = [4, 5, 6];\n\
+             Fiber::suspend(count($x));\n\
+             return 7;\n\
+         });\n\
+         $r1 = $f->start();\n\
+         $r2 = $f->resume();\n\
+         echo $total + $r1 + $r2;\n",
+    )
+    .expect("failed to write the rt-ctx fiber fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx fiber fixture");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx fiber compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bin = dir.join("main");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("failed to run the rt-ctx fiber binary");
+    assert!(
+        run.status.success(),
+        "rt-ctx fiber binary crashed ({}): {}",
+        run.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // The running total folds (2i+1) modulo 999983 per iteration, landing on 10;
+    // + 3 (suspend count) + 7 (fiber return) = 20. Legacy and ctx builds agree.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "20",
+        "rt-ctx generator + fiber program must print 20"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A runtime helper that borrows the reserved ctx register corrupts the state
+/// pointer for every ctx access it makes — and `__rt_wordwrap` did exactly that
+/// on AArch64 (it kept its output cursor in x28), so the `__rt_concat_publish`
+/// it calls at the end wrote the new scratch offset into its own result buffer
+/// instead of into `_rt_ctx`. The offset then never advanced and every later
+/// concat-backed result reused the same bytes.
+///
+/// The witness needs results that are NOT copied to the heap first: consumed
+/// inside one expression they stay in the concat arena, so a stale offset makes
+/// the second and third `wordwrap()` echo the FIRST one's text.
+#[test]
+fn test_cli_rt_ctx_concat_backed_results_do_not_overwrite_each_other() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_concat_reuse");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\n\
+         echo wordwrap(\"aaaa bbbb\", 4, \"\\n\", true) . \"[\" .\n\
+              wordwrap(\"wwww xxxx\", 4, \"\\n\", true) . \"]\" .\n\
+              wordwrap(\"1111 2222\", 4, \"\\n\", true);\n",
+    )
+    .expect("failed to write the rt-ctx concat-reuse fixture");
+
+    // One mode now: this used to run the fixture twice to compare ctx against legacy, and
+    // the comparison is what went away with the flag, not the witness.
+    let output = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the concat-reuse fixture");
+    assert!(
+        output.status.success(),
+        "concat-reuse compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let run = std::process::Command::new(dir.join("main"))
+        .output()
+        .expect("failed to run the concat-reuse binary");
+    assert!(
+        run.status.success(),
+        "concat-reuse binary crashed ({}): {}",
+        run.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // php's own output for this program, byte for byte.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "aaaa\nbbbb[wwww\nxxxx]1111\n2222",
+        "the build reused the concat arena across wordwrap() results"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// THE DEFAULT BUILD IS THE CTX BUILD. There is no other one.
+///
+/// This test used to assert the opposite — that a plain `elephc app.php` stayed on legacy
+/// symbol addressing — which was true for as long as `--rt-ctx` existed to select the
+/// other arm. Inverting it rather than deleting it keeps the fact pinned from the same
+/// place: a regression that reintroduced legacy addressing as the default would otherwise
+/// pass every test in this file.
+#[test]
+fn test_cli_default_main_installs_the_context() {
+    let dir = make_cli_test_dir("elephc_cli_default_ctx_init");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").expect("failed to write the default fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile default program");
+    assert!(
+        output.status.success(),
+        "elephc --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read default assembly");
+    assert!(
+        asm.contains("__rt_ctx_init"),
+        "the default prologue must install the per-context state pointer:\n{}",
+        asm.lines().take(40).collect::<Vec<_>>().join("\n")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--rt-ctx` IS REJECTED, NOT IGNORED.
+///
+/// A build script that still passes the flag must learn it is gone. Silently accepting it
+/// would be worse than either keeping or removing it: the script would go on believing it
+/// selects something. The rejection lives here rather than in a unit test because an
+/// unknown flag calls `fail()`, which exits the process.
+#[test]
+fn test_cli_rejects_the_removed_rt_ctx_flag() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_removed");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").expect("failed to write the fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--rt-ctx")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc");
+    assert!(!output.status.success(), "--rt-ctx must not be accepted any more");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Unknown flag: --rt-ctx"),
+        "the rejection must name the flag so a caller knows what to remove, got:\n{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A top-level-only program still produces one exact `{main}` frame when run
 /// through the real compile/control-channel/monitor pipeline.
 #[test]
@@ -2023,6 +2585,48 @@ fn test_cli_probe_embeds_in_process_sampler() {
         report.contains("burn"),
         "the profile should name the PHP function, symbolized from the embedded table: {report}"
     );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--heap-debug --rt-ctx` together: the heap-debug free-list validator was
+/// ctx-routed with the rest of the heap family, but a pattern test only pins
+/// its emitted text. This drives a real alloc/free workload through the
+/// validating allocator under ctx addressing on the host target — the
+/// validator reads the per-context bins and free list through x28/r14, so a
+/// misrouted validator reports corruption or misses real corruption here.
+#[test]
+fn test_cli_rt_ctx_heap_debug_validator_passes_clean_workload() {
+    let dir = make_cli_test_dir("elephc_cli_rt_ctx_heap_debug");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\n$sum = 0;\nfor ($i = 0; $i < 5000; $i++) {\n    $a = [$i, $i + 1, $i + 2];\n    $s = 'v' . $i;\n    unset($a);\n    $sum = ($sum + strlen($s)) % 1000003;\n}\necho $sum;\n",
+    )
+    .expect("failed to write the rt-ctx heap-debug fixture");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--heap-debug")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile rt-ctx heap-debug fixture");
+    assert!(
+        output.status.success(),
+        "elephc --rt-ctx --heap-debug compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bin = dir.join("main");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("failed to run the rt-ctx heap-debug binary");
+    assert!(
+        run.status.success(),
+        "rt-ctx heap-debug binary failed (validator corruption?): {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let ctx_out = String::from_utf8_lossy(&run.stdout);
+    assert!(!ctx_out.trim().is_empty(), "heap-debug program printed nothing");
 
     let _ = fs::remove_dir_all(&dir);
 }

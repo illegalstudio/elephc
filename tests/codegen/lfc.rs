@@ -96,6 +96,11 @@ fn compile_lfc_eval_project_and_run(
         // neither kind-specific destructor arm.
         popen_resource: false,
         directory_resource: false,
+        // The compiler emits ctx-register addressing unconditionally, so a runtime built
+        // for this fixture must carry the ctx helpers the CLI-emitted main prologue calls.
+        // Pinned to false, this linked a runtime with no `__rt_ctx_init` against a main
+        // that calls it — an undefined reference, which is the tripwire doing its job.
+        ctx_register: true,
     };
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);

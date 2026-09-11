@@ -146,10 +146,6 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
 const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
     ("__rt_curl_version", "dynamic frame: `sub rsp, r10`"),
     ("__rt_sprintf", "dynamic frame: `lea rsp, [rsp + rcx + 16]`"),
-    (
-        "__rt_vsprintf",
-        "two paths reach one instruction with different frames (-72 / -88)",
-    ),
     ("__rt_closure_bind", "realigns explicitly with `and rsp, -16`"),
     (
         "__elephc_eval_fatal",
@@ -304,11 +300,20 @@ fn walk(
         let Some((line, text)) = body.get(index) else {
             continue;
         };
+        // THE MERGE TEST IS MODULO 16, NOT EXACT. System V asks one question about rsp —
+        // which 16-byte boundary it sits on — so two paths that reach an instruction with
+        // different frame depths have not defeated the walk as long as they agree on that.
+        // `__rt_vsprintf` reached its formatting tail at -72 and -88 depending on whether
+        // the record loop ran, was declared unanalyzable for it, and so had no guard when
+        // this branch's rbx spill took its frame from 64 to 72 and flipped every call in
+        // its body onto the forbidden boundary. -72 and -88 are both 8 mod 16; the paths
+        // never actually disagreed about alignment.
         match seen.get(&index) {
-            Some(&previous) if previous == offset => continue,
+            Some(&previous) if previous.rem_euclid(16) == offset.rem_euclid(16) => continue,
             Some(&previous) => {
                 return Some(format!(
-                    "line {line}: reached with rsp offsets {previous} and {offset}"
+                    "line {line}: reached with rsp offsets {previous} and {offset}, which \
+                     sit on different 16-byte boundaries"
                 ));
             }
             None => {
@@ -618,6 +623,177 @@ fn fiber_signal_guard_call_is_sysv_aligned() {
 
     assert_eq!(function.body[call - 1].1, "sub rsp, 8");
     assert_eq!(function.body[call + 1].1, "add rsp, 8");
+}
+
+/// Runtime helpers allowed to write `rax` with a `pop`, each with the reason. The door is
+/// open because restoring a genuinely saved `rax` IS a legitimate shape — it is only
+/// indistinguishable from dropping a pad, which is the whole point of the audit below.
+///
+/// Same discipline as [`ALLOWED_MISALIGNED_CALLS`]: it shrinks, and never grows without an
+/// edit that has to justify itself in review.
+const ALLOWED_POP_RAX: &[(&str, &str)] = &[(
+    "__rt_pcntl_async_dispatch_preserving",
+    "a safe-point wrapper, not a helper with a return value: it pushes all fifteen general \
+     registers plus flags, may run a signal handler, and restores every one of them before \
+     resuming the interrupted generated code. `pop rax` here IS the saved rax coming back, \
+     and the symmetric push/pop loop is the clearest way to write a full register frame",
+)];
+
+/// AN ALIGNMENT PAD IS NEVER DROPPED INTO `rax`.
+///
+/// Parking a callee-saved register and padding the frame back to 16 bytes with `push rax` is
+/// the runtime's standard prologue. Taking the pad back with `pop rax` is where it goes
+/// wrong: `rax` is the x86_64 return register, so the pop restores rax as it was ON ENTRY
+/// and destroys whatever the helper computed, one instruction before `ret`.
+///
+/// MEASURED. `__rt_spl_dll_shift` returns the removed Mixed cell, and delete-mode iteration
+/// (`emit_iterator_delete_step_x86_64`) calls it and hands the result straight to
+/// `__rt_decref_mixed`. With the pad popped into rax, the decref released whatever rax held
+/// at entry — a live cell, or a small integer treated as a pointer.
+/// `codegen::spl::classes::test_phase4_spl_doubly_linked_list_delete_iteration_modes` was red
+/// on the linux-x86_64 shard and green on every AArch64 host: `emit_shift_aarch64` is
+/// frameless, parks no callee-saved register, so it has no pad to drop and writes `x0` once,
+/// where it survives to `ret`. Only the x86_64 arm needed rbx parked, and only it paid.
+///
+/// WHY A FLAT RULE RATHER THAN "only helpers that return a value". The two shapes are the
+/// same two bytes: a pad drop and a genuine restore both read as `pop rax`, and whether the
+/// helper returns anything is a fact about its callers, not about the instruction. Nothing
+/// in the epilogue distinguishes them, which is exactly why this bug survived review — the
+/// pop even carried a correct comment ("drop the alignment pad before restoring rbx").
+/// Releasing a pad is free to write differently (`add rsp, 8`), so the rule costs a pad
+/// nothing. Where a real save genuinely wants the symmetric push/pop — a full register frame
+/// around a safe point — [`ALLOWED_POP_RAX`] names it and says why, which is the record the
+/// comment on the broken pop was not.
+#[test]
+fn no_x86_64_runtime_helper_drops_an_alignment_pad_into_rax() {
+    let mut popping: Vec<(String, usize)> = Vec::new();
+    for features in [RuntimeFeatures::none(), RuntimeFeatures::all()] {
+        let asm = runtime_asm(features);
+        for function in functions_of(&asm) {
+            for (line, text) in &function.body {
+                let instruction = text.split('#').next().unwrap_or(text).trim();
+                if instruction == "pop rax" {
+                    popping.push((function.name.clone(), *line));
+                }
+            }
+        }
+    }
+    popping.sort();
+    popping.dedup_by(|a, b| a.0 == b.0);
+
+    let offenders: Vec<String> = popping
+        .iter()
+        .filter(|(name, _)| !ALLOWED_POP_RAX.iter().any(|(allowed, _)| allowed == name))
+        .map(|(name, line)| format!("{name} (first at line {line})"))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "these linux-x86_64 runtime helpers write rax with a `pop`, and rax is the return \
+         register — release an alignment pad with `add rsp, 8`, and restore a genuinely \
+         saved value from a named frame slot so the restore names what it brings back:\n  {}",
+        offenders.join("\n  ")
+    );
+
+    // The allowlist shrinks only: an entry that no longer pops rax has to be deleted, or the
+    // next helper to take that name inherits a waiver nobody granted it.
+    let obsolete: Vec<&str> = ALLOWED_POP_RAX
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| !popping.iter().any(|(popped, _)| popped == name))
+        .collect();
+    assert!(
+        obsolete.is_empty(),
+        "these helpers are allowlisted for `pop rax` but no longer pop it (or no longer \
+         exist) — delete their entries from ALLOWED_POP_RAX:\n  {}",
+        obsolete.join("\n  ")
+    );
+}
+
+/// Builds a synthetic helper whose two paths reach one tail with different frame depths:
+/// the shape `__rt_vsprintf` has, where the record loop may or may not have run.
+fn two_path_helper(short_frame: i64, long_frame: i64) -> Function {
+    let source = format!(
+        "__rt_two_path:\n\
+         push rbp\n\
+         mov rbp, rsp\n\
+         sub rsp, {short_frame}\n\
+         test rdi, rdi\n\
+         jz __rt_two_path_tail\n\
+         sub rsp, {extra}\n\
+         __rt_two_path_tail:\n\
+         call __rt_callee\n\
+         leave\n\
+         ret",
+        extra = long_frame - short_frame
+    );
+    Function {
+        name: "__rt_two_path".to_string(),
+        body: source.lines().map(|line| line.trim().to_string()).enumerate().collect(),
+    }
+}
+
+/// THE MERGE TEST ASKS ABOUT THE BOUNDARY, NOT THE DEPTH.
+///
+/// `__rt_vsprintf` reaches its formatting tail at -72 or -88 depending on whether the record
+/// loop ran. The walk used to compare exact offsets, call that a contradiction, and give up —
+/// which is how the helper landed in `NOT_STATICALLY_ANALYZABLE` and why nothing objected when
+/// this branch's rbx spill took its frame from 64 to 72 and put every `call` in its body on
+/// the boundary System V forbids. The two depths differ by 16: they never disagreed about
+/// alignment, only about depth, and only alignment is this module's question.
+#[test]
+fn the_walk_merges_two_paths_that_agree_modulo_sixteen() {
+    // -72 and -88 from the entry: the real `__rt_vsprintf` pair, both 8 mod 16.
+    let function = two_path_helper(64, 80);
+    let analysis = analyze(&function);
+    assert!(
+        analysis.unanalyzable.is_none(),
+        "paths differing by a multiple of 16 agree about alignment and must not defeat the \
+         walk, got: {:?}",
+        analysis.unanalyzable
+    );
+    assert!(
+        analysis.misaligned.is_empty(),
+        "both paths reach the call at 8 mod 16, which is what System V asks for: {:?}",
+        analysis.misaligned
+    );
+}
+
+/// The merge is modulo 16, not "anything goes": two paths that genuinely land the tail on
+/// different boundaries still defeat the walk, because then the audit cannot say which
+/// boundary the `call` runs on and must refuse rather than pick one.
+#[test]
+fn the_walk_still_refuses_two_paths_on_different_boundaries() {
+    // -72 (8 mod 16) on one path, -80 (0 mod 16) on the other.
+    let function = two_path_helper(64, 72);
+    let analysis = analyze(&function);
+    let reason = analysis
+        .unanalyzable
+        .expect("paths landing on different 16-byte boundaries must be refused, not merged");
+    assert!(
+        reason.contains("different 16-byte boundaries"),
+        "the refusal must say what actually disagreed, got: {reason}"
+    );
+}
+
+/// And the whole point: with the merge in place, a frame that flips the boundary is REPORTED
+/// rather than waved through. This is the failure `__rt_vsprintf` produced the moment it
+/// became analyzable, reproduced here so the guard cannot quietly stop working.
+#[test]
+fn a_frame_that_flips_the_boundary_is_reported_once_the_paths_merge() {
+    // Both paths now land 0 mod 16 at the tail — the shape `sub rsp, 72` gave __rt_vsprintf.
+    let function = two_path_helper(72, 88);
+    let analysis = analyze(&function);
+    assert!(
+        analysis.unanalyzable.is_none(),
+        "the paths still agree modulo 16, so the walk must reach a verdict: {:?}",
+        analysis.unanalyzable
+    );
+    let (_, target, offset) = analysis
+        .misaligned
+        .first()
+        .expect("a call reached at 0 mod 16 is exactly what this module exists to catch");
+    assert_eq!(target, "__rt_callee");
+    assert_eq!(offset.rem_euclid(16), 0, "reported at the forbidden boundary");
 }
 
 /// THE CURL RELEASE CHAIN IS NEVER ALLOWLISTED. Muting one of these is how the original bug
