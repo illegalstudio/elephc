@@ -190,6 +190,15 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
 }
 
 /// Retains a returned managed cell and retires any return owner superseded by a finally clause.
+///
+/// `__rt_reference_cell_owner` answers zero for every address that is not an exact live managed
+/// cell allocation, which includes an array-interior element address relayed into this frame
+/// through a by-reference parameter. Lowering cannot always settle that provenance statically:
+/// the caller's binding may be a branch away, or in another function entirely, so this
+/// boundary fails CLOSED: a zero owner raises the catchable
+/// `__rt_borrowed_reference_return_error` instead of retaining nothing and returning a null or
+/// soon-to-be-freed interior pointer to the caller. Accepted references, whose place owns a
+/// managed cell, are unaffected: the lookup answers the cell itself.
 pub(super) fn lower_acquire_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let pointer = expect_operand(inst, 0)?;
     let owner = expect_local_slot(inst)?;
@@ -198,6 +207,10 @@ pub(super) fn lower_acquire_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instr
         ctx.load_value_to_reg(pointer, abi::int_result_reg(ctx.emitter))?;
     }
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
+    let owned = ctx.next_label("reference_return_owner_present");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &owned);
+    abi::emit_call_label(ctx.emitter, "__rt_borrowed_reference_return_error");
+    ctx.emitter.label(&owned);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     let previous = abi::secondary_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, previous, owner_offset);

@@ -19,10 +19,21 @@ use super::{expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
 /// Publishes a temporary owner's frame slot above the current PHP catch boundary.
+///
+/// The record's cleanup discipline follows the SLOT, not its PHP type. A reference-cell owner
+/// slot carries its cell's PAYLOAD type, so a cell whose payload is a callable would otherwise
+/// select the descriptor release and hand a cell address to `__rt_callable_descriptor_release`.
+/// Every owned cell is heap kind 7, which the generic `__rt_decref_any` dispatcher already
+/// routes to `__rt_reference_cell_release`, so a cell slot always uses the generic entry.
 pub(super) fn lower_push_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = super::expect_local_slot(inst)?;
     let offset = ctx.local_offset(slot)?;
-    let callable = ctx.local_php_type(slot)?.codegen_repr() == PhpType::Callable;
+    let holds_reference_cell = matches!(
+        ctx.local_kind(slot)?,
+        crate::ir::LocalKind::RefCell | crate::ir::LocalKind::ReturnRefCell
+    );
+    let callable = !holds_reference_cell
+        && ctx.local_php_type(slot)?.codegen_repr() == PhpType::Callable;
     let address = abi::tertiary_scratch_reg(ctx.emitter);
     abi::emit_frame_slot_address(ctx.emitter, address, offset);
     abi::emit_push_call_operand_owner(ctx.emitter, address, callable);

@@ -190,6 +190,14 @@ pub(super) fn root_non_aliasing_callback_operands(
 /// Roots value arguments and fresh container defaults before the callee may unwind.
 /// A result-independent call or a separately owned callee parameter permits normal retirement.
 /// Reverse publication preserves the existing first-to-last user-argument cleanup order.
+///
+/// A by-reference-returning callee participates on exactly the same terms. Its result is a
+/// reference cell, never an unretained alias of a by-value argument payload, which is the same
+/// fact `release_owned_call_arg_temporaries_with_roots` already relies on when it releases those
+/// arguments after the call. Rooting them only makes that release reachable from a throwing
+/// callee as well; the payload the returned cell addresses is retained by the cell itself, so a
+/// fresh omitted-reference default is rooted here for every callee kind rather than being left
+/// unreachable from cleanup on the one that returns a reference.
 pub(super) fn root_user_call_operands(
     ctx: &mut LoweringContext<'_, '_>,
     operands: &mut [crate::ir::ValueId],
@@ -198,10 +206,8 @@ pub(super) fn root_user_call_operands(
     result_type: &PhpType,
     span: Span,
 ) -> Vec<(usize, crate::ir::LocalSlotId)> {
-    if signature.is_some_and(|sig| sig.by_ref_return) {
-        return Vec::new();
-    }
-    let independent_result = !Ownership::php_type_needs_lifetime_tracking(result_type)
+    let independent_result = signature.is_some_and(|sig| sig.by_ref_return)
+        || !Ownership::php_type_needs_lifetime_tracking(result_type)
         || return_alias == &ReturnArgAlias::None;
     let mut roots = Vec::new();
     for (index, operand) in operands.iter_mut().enumerate().rev() {
@@ -262,7 +268,7 @@ pub(super) fn register_owned_call_operand(
 }
 
 /// Removes a published owner record without releasing the slot it protects.
-fn unregister_owned_call_operand(
+pub(crate) fn unregister_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,
     slot: crate::ir::LocalSlotId,
     span: Span,

@@ -59,23 +59,67 @@ pub(crate) fn lower_ref_assign_property(
 }
 
 /// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a
-/// by-reference-returning callee. The caller adopts the transferred cell owner before rebinding.
+/// by-reference-returning callee.
+///
+/// The staging that adopts the transferred cell is declared and PUBLISHED in the unwind chain
+/// before the source expression is lowered. That ordering is what makes the lease survive a
+/// same-frame catch: the record nests outside every root the call's own arguments publish, so it
+/// is still live while the callee's argument temporaries are retired, while an owning receiver is
+/// destroyed, and while this function retires whatever `$target` was bound to before. Any of
+/// those steps can run a destructor that throws, and none of them may leave the lease held with
+/// nothing to release it.
+///
+/// Only a call whose SELECTED lowering actually returns a raw cell can be bound, which
+/// `finish_reference_return_call` reports by adopting into that staging. A statically declared
+/// by-reference signature is NOT sufficient on its own, because a call that reaches a dynamic
+/// descriptor invoker gets an ordinary owned `Mixed` copy back and the invoker retires the cell
+/// (`codegen::runtime_callable_invoker::reference_return`). Binding that value as a cell pointer
+/// would dereference a payload word as an address, so an unadopted result is refused with a
+/// compile diagnostic instead, and the target is bound to its own managed cell so the remaining
+/// lowering stays well formed.
 pub(crate) fn lower_ref_assign_call(
     ctx: &mut LoweringContext<'_, '_>,
     target: &str,
     source: &Expr,
     span: Span,
 ) {
-    let previous = ctx.reference_call_context.replace((ctx.expression_depth + 1, None));
-    let cell_ptr = lower_expr(ctx, source);
-    let captured = ctx.reference_call_context.take().and_then(|(_, php_type)| php_type);
+    let (staged, owner) = ctx.predeclare_returned_ref_cell_staging();
+    register_owned_call_operand(ctx, owner, span);
+    let previous = ctx
+        .reference_call_context
+        .replace(crate::ir_lower::context::ReferenceCallContext {
+            depth: ctx.expression_depth + 1,
+            staged: staged.clone(),
+            adopted: false,
+        });
+    let result = lower_expr(ctx, source);
+    let adopted = ctx
+        .reference_call_context
+        .take()
+        .is_some_and(|context| context.adopted);
     ctx.reference_call_context = previous;
-    if let Some(value_type) = captured {
-        ctx.bind_returned_ref_cell(target, cell_ptr, value_type, Some(span));
-    } else {
-        let value_type = ctx.builder.value_php_type(cell_ptr.value);
-        ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    if !adopted {
+        // The staging slot stayed zero, so detaching its record releases nothing.
+        unregister_owned_call_operand(ctx, owner, span);
+        crate::ir_lower::diagnostics::refuse(
+            span,
+            "Unsupported reference assignment: this compiler transfers a reference only from a \
+             call it resolves to a by-reference-returning function, method, static method or \
+             closure. PHP also allows the reference here, but the selected lowering hands back a \
+             copied value rather than the callee's reference cell",
+        );
+        let value_type = ctx.builder.value_php_type(result.value);
+        ctx.store_local(target, result, value_type, Some(span));
+        ctx.promote_local_ref_cell(target, Some(span));
+        return;
     }
+    // Publishing the alias retains the cell in the target's own owner, so the staging lease can
+    // retire. The record is detached first, exactly as `retire_owned_call_operand` does for a
+    // value root: `release_ref_cell_owner` clears the slot before releasing, so a throwing
+    // payload destructor cannot be retried by a later walk of the chain.
+    ctx.alias_local_ref_cell(target, &staged, Some(span));
+    unregister_owned_call_operand(ctx, owner, span);
+    ctx.release_ref_cell_owner(&staged, Some(span));
 }
 
 /// Lowers `$target =& $arr[idx]`: promotes the indexed-array element's inline storage to a
@@ -112,6 +156,10 @@ pub(crate) fn lower_ref_assign_array_elem(
         Some(span),
     );
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    // The address lies inside the array payload, so `__rt_reference_cell_owner` answers zero
+    // for it and no exit path can transfer an owner. Record that here so a by-reference return
+    // of this alias is refused instead of handing the caller a soon-to-be-freed interior.
+    ctx.mark_borrowed_element_ref_local(target);
 }
 
 /// Lowers a named property read once the receiver is already evaluated.

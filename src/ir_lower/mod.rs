@@ -13,6 +13,7 @@
 mod array_pointer_scan;
 mod builtin_datetime;
 mod context;
+mod diagnostics;
 mod effect_refinement;
 mod effects_lookup;
 mod entry_locals;
@@ -82,6 +83,12 @@ pub fn lower_program_with_source_path_and_web(
 #[derive(Debug)]
 pub enum LoweringError {
     Validation(ValidationError),
+    /// A PHP shape this lowering deliberately refuses, reported as a source diagnostic.
+    ///
+    /// Lowering refuses instead of emitting code whenever the selected path cannot honor an
+    /// ABI contract, most notably a reference binding that would otherwise treat an ordinary
+    /// result value as a raw reference-cell pointer.
+    Unsupported(crate::errors::CompileError),
 }
 
 impl fmt::Display for LoweringError {
@@ -89,6 +96,11 @@ impl fmt::Display for LoweringError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoweringError::Validation(err) => write!(f, "EIR validation failed: {:?}", err),
+            LoweringError::Unsupported(err) => write!(
+                f,
+                "unsupported EIR lowering at {}:{}: {}",
+                err.span.line, err.span.col, err.message
+            ),
         }
     }
 }

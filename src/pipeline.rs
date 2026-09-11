@@ -634,6 +634,13 @@ pub(crate) fn compile(config: CliConfig) {
         web,
     ) {
         Ok(module) => module,
+        Err(ir_lower::LoweringError::Unsupported(error)) => {
+            // A refused shape is an ordinary source-level diagnostic, so it is reported with the
+            // same file/line formatting as a checker error instead of a bare backend message.
+            crate::progress::clear();
+            errors::report(&error.with_file(filename.to_string()));
+            process::exit(1);
+        }
         Err(err) => {
             crate::progress::clear();
             eprintln!("EIR lowering error: {}", err);

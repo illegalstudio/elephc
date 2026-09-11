@@ -34,53 +34,12 @@ pub(super) fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
 /// Lowers a return statement using the current function return contract.
 pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, span: Span) {
     // A by-reference-returning function hands the caller the ref-cell pointer of the
-    // returned property (`function &f() { return $obj->prop; }`), so `$x = &f()` aliases
-    // it. Metadata retains the property's declared type for caller dereferencing;
+    // returned place (`function &f() { return $obj->prop; }`), so `$x = &f()` aliases
+    // it. Metadata retains the place's declared type for caller dereferencing;
     // the reference-return ABI always transports the raw cell in the integer result register.
-    if ctx.by_ref_return {
-        if let Some(Expr { kind: ExprKind::Variable(name), .. }) = value_expr {
-            if ctx.is_ref_bound_local(name) {
-                let value = ctx.load_local(name, Some(span));
-                if ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell) {
-                    let owner = ctx.declare_local_with_kind(
-                        "__eir_reference_return_owner",
-                        PhpType::Pointer(None),
-                        crate::ir::LocalKind::ReturnRefCell,
-                    );
-                    ctx.emit_void(
-                        Op::AcquireRefCell,
-                        vec![value.value],
-                        Some(Immediate::LocalSlot(owner)),
-                        Op::AcquireRefCell.default_effects(),
-                        Some(span),
-                    );
-                    terminate_return(ctx, Some(value.value));
-                    return;
-                }
-            }
-        }
-        if let Some(Expr { kind: ExprKind::PropertyAccess { object, property }, .. }) = value_expr {
-            let object = lower_expr(ctx, object);
-            let data = ctx.intern_string(property);
-            let result_ty = ctx.return_php_type.clone();
-            let cell_ptr = ctx.emit_value(
-                Op::LoadPropRefCell,
-                vec![object.value],
-                Some(Immediate::Data(data)),
-                result_ty,
-                Op::LoadPropRefCell.default_effects(),
-                Some(span),
-            );
-            let owner = ctx.declare_local_with_kind("__eir_reference_return_owner",
-                PhpType::Pointer(None), crate::ir::LocalKind::ReturnRefCell);
-            ctx.emit_void(Op::AcquireRefCell, vec![cell_ptr.value], Some(Immediate::LocalSlot(owner)),
-                Op::AcquireRefCell.default_effects(), Some(span));
-            if ctx.value_is_owning_temporary(object) {
-                crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
-            }
-            terminate_return(ctx, Some(cell_ptr.value));
-            return;
-        }
+    if ctx.by_ref_return && ctx.return_type != IrType::Void {
+        lower_reference_return(ctx, value_expr, span);
+        return;
     }
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
@@ -99,6 +58,155 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
+}
+
+/// Lowers the value of a by-reference `return`, which must transport a managed cell.
+///
+/// The reference-return ABI always places a raw cell pointer in the integer result register, so
+/// every accepted source has to OWN a transferable cell. Two shapes qualify: a reference-bound
+/// local whose cell this frame can address, and an object property whose slot already holds a
+/// promoted cell. An ordinary addressable local is promoted in place first, which preserves its
+/// identity (later writes through the variable are seen through the caller's alias).
+///
+/// Everything else is refused with a compile diagnostic rather than lowered as a value, because
+/// a value-shaped return would put a payload word where the caller expects an address. These are
+/// SUBSET limits, not PHP semantics: PHP happily returns a reference to an array element or to
+/// the result of another reference-returning call, and this compiler simply has no way yet to
+/// transfer an owning cell for those places.
+///
+/// The refusals here are early diagnostics for provenance this frame can see. Provenance it
+/// cannot see, such as an alias relayed in through a by-reference parameter, is caught by
+/// the owner-zero guard in `codegen::lower_inst::local_stores::lower_acquire_ref_cell`, which
+/// raises a catchable `Error` instead of publishing an interior address.
+fn lower_reference_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value_expr: Option<&Expr>,
+    span: Span,
+) {
+    match value_expr.map(|expr| &expr.kind) {
+        Some(ExprKind::Variable(name)) => {
+            if ctx.is_borrowed_element_ref_local(name) {
+                refuse_reference_return(
+                    ctx,
+                    span,
+                    "Unsupported by-reference return: this compiler cannot transfer an alias \
+                     of an array element out of its frame, because that address lies inside the \
+                     array's payload and owns no reference cell of its own. PHP supports the \
+                     return; this lowering has no cell to hand the caller",
+                );
+                return;
+            }
+            if !ctx.is_ref_bound_local(name) {
+                if !ctx.local_is_promotable_to_ref_cell(name) {
+                    refuse_reference_return(
+                        ctx,
+                        span,
+                        "Unsupported by-reference return: this compiler can transfer only a \
+                         local it can promote to a managed reference cell in place, which a \
+                         global, a static local, an extern global and an eval-scope name are \
+                         not",
+                    );
+                    return;
+                }
+                ctx.promote_local_ref_cell(name, Some(span));
+            }
+            let value = ctx.load_local(name, Some(span));
+            if ctx.builder.value_defining_op(value.value) != Some(Op::LoadRefCell) {
+                refuse_reference_return(
+                    ctx,
+                    span,
+                    "Unsupported by-reference return: this variable is not backed by a managed \
+                     reference cell on every path reaching the return",
+                );
+                return;
+            }
+            acquire_and_return_reference_cell(ctx, value, span);
+        }
+        Some(ExprKind::PropertyAccess { object, property }) => {
+            let object = lower_expr(ctx, object);
+            let data = ctx.intern_string(property);
+            let result_ty = ctx.return_php_type.clone();
+            let cell_ptr = ctx.emit_value(
+                Op::LoadPropRefCell,
+                vec![object.value],
+                Some(Immediate::Data(data)),
+                result_ty,
+                Op::LoadPropRefCell.default_effects(),
+                Some(span),
+            );
+            let owning_receiver = ctx.value_is_owning_temporary(object);
+            acquire_reference_return_owner(ctx, cell_ptr, span);
+            if owning_receiver {
+                crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+            }
+            terminate_return(ctx, Some(cell_ptr.value));
+        }
+        Some(_) => {
+            if let Some(value_expr) = value_expr {
+                // Keep the source expression's side effects even though its value cannot be
+                // returned; the program is refused, so only the diagnostic is observable.
+                lower_expr(ctx, value_expr);
+            }
+            refuse_reference_return(
+                ctx,
+                span,
+                "Unsupported by-reference return: this compiler transfers a reference only \
+                 from a variable or a property. PHP also allows other places here, such as an \
+                 array element or another reference-returning call, but this lowering cannot \
+                 transfer an owning cell for them yet",
+            );
+        }
+        None => refuse_reference_return(
+            ctx,
+            span,
+            "Unsupported by-reference return: a by-reference function with a declared result \
+             must return a reference",
+        ),
+    }
+}
+
+/// Records an unsupported by-reference return and terminates the block without a value.
+///
+/// `Terminator::Unreachable` keeps the lowered function well formed without inventing a cell
+/// pointer; the recorded refusal makes `lower_program` fail before the module reaches codegen.
+fn refuse_reference_return(ctx: &mut LoweringContext<'_, '_>, span: Span, message: &str) {
+    crate::ir_lower::diagnostics::refuse(span, message);
+    ctx.builder.terminate(Terminator::Unreachable);
+}
+
+/// Retains the returned cell in the frame's reference-return lease slot.
+///
+/// `AcquireRefCell` materializes the cell address ONCE, stores the retained pointer in the
+/// lease slot, and retires whatever lease a superseded return left there. The return
+/// terminator then reads that same slot, so a `finally` that rebinds the returned variable and
+/// falls through cannot make the retained owner and the returned pointer disagree.
+fn acquire_reference_return_owner(
+    ctx: &mut LoweringContext<'_, '_>,
+    cell_ptr: LoweredValue,
+    span: Span,
+) {
+    let owner = ctx.declare_local_with_kind(
+        "__eir_reference_return_owner",
+        PhpType::Pointer(None),
+        crate::ir::LocalKind::ReturnRefCell,
+    );
+    ctx.emit_void(
+        Op::AcquireRefCell,
+        vec![cell_ptr.value],
+        Some(Immediate::LocalSlot(owner)),
+        Op::AcquireRefCell.default_effects(),
+        Some(span),
+    );
+}
+
+/// Acquires the reference-return lease and terminates with the cell it captured.
+fn acquire_and_return_reference_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    cell_ptr: LoweredValue,
+    span: Span,
+) {
+    acquire_reference_return_owner(ctx, cell_ptr, span);
+    terminate_return(ctx, Some(cell_ptr.value));
 }
 
 /// Lowers a return expression with contextual array-literal element storage when available.

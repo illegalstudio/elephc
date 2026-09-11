@@ -65,6 +65,10 @@ fn lower_if_chain(
     let cond_value = ctx.truthy_consuming(cond_value, Some(condition.span));
     let split_initialized = ctx.initialized_slots_snapshot();
     let split_types = ctx.local_types_snapshot();
+    // Interior-alias markers are a MAY fact, so the arms are unioned rather than sequenced.
+    // Without this, `if (..) { $r = &$a[0]; } else { $r = &$o->p; }` would take whichever arm
+    // was lowered last as the answer for both.
+    let split_borrowed_refs = ctx.borrowed_element_ref_locals_snapshot();
     let then_block = ctx.builder.create_named_block("if.then", Vec::new());
     let else_block = ctx.builder.create_named_block("if.else", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -87,10 +91,12 @@ fn lower_if_chain(
         record_if_arm_exit(ctx, arms);
     }
 
+    let then_borrowed_refs = ctx.borrowed_element_ref_locals_snapshot();
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types);
+    ctx.restore_borrowed_element_ref_locals(split_borrowed_refs);
     let else_reachable =
         if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
             lower_if_chain(
@@ -121,6 +127,12 @@ fn lower_if_chain(
             }
         };
     merge_reachable |= else_reachable;
+    if !else_reachable {
+        ctx.restore_borrowed_element_ref_locals(HashSet::new());
+    }
+    if then_reachable {
+        ctx.merge_borrowed_element_ref_locals(&then_borrowed_refs);
+    }
     let else_initialized = ctx.initialized_slots_snapshot();
     ctx.restore_initialized_slots(merge_initialized_slots(
         &split_initialized,

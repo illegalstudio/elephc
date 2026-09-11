@@ -111,6 +111,22 @@ pub(crate) struct CallArgumentEvaluationScope {
     pub owners: Vec<CallArgumentEvaluationOwner>,
 }
 
+/// Staging for one `$target = &call()`, recorded while its source expression is lowered.
+///
+/// The hidden local and its ref-cell owner slot are declared, and that owner is published in
+/// the unwind chain, BEFORE the source expression runs. A selected by-reference lowering then
+/// adopts the transferred cell straight into this staging, so the lease is covered by a live
+/// cleanup record from before the arguments were evaluated until the alias is bound.
+#[derive(Debug, Clone)]
+pub(crate) struct ReferenceCallContext {
+    /// Expression depth of the call that may transfer a cell, one level inside the assignment.
+    pub(crate) depth: usize,
+    /// Hidden local that adopts the transferred cell.
+    pub(crate) staged: String,
+    /// Whether a selected lowering actually adopted a cell into `staged`.
+    pub(crate) adopted: bool,
+}
+
 /// Rollback point for a speculative statement lowering.
 pub(crate) struct LoweringSnapshot {
     function: Function,
@@ -131,13 +147,15 @@ pub(crate) struct LoweringSnapshot {
     reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
+    borrowed_element_ref_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     foreach_int_key_locals: HashSet<String>,
     array_conversions: HashMap<String, PhpType>,
     speculating: bool,
     closure_count: usize,
     expression_depth: usize,
-    reference_call_context: Option<(usize, Option<PhpType>)>,
+    reference_call_context: Option<ReferenceCallContext>,
+    refusals: usize,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
@@ -202,8 +220,14 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub local_types: TypeEnv,
     /// Nested expression depth separates a reference-assignment call from its argument calls.
     pub(crate) expression_depth: usize,
-    /// Requested reference-call depth and the payload type recorded by the resolved callee.
-    pub(crate) reference_call_context: Option<(usize, Option<PhpType>)>,
+    /// Staging published by the enclosing reference assignment, if one is being lowered.
+    ///
+    /// `finish_reference_return_call` adopts the transferred lease into that staging immediately
+    /// after the call, before any caller-side argument or receiver cleanup can throw, and marks
+    /// it adopted. The enclosing reference assignment then transfers out of it. Staging that was
+    /// never adopted means no selected lowering produced a transferable cell, which is a refused
+    /// reference assignment.
+    pub(crate) reference_call_context: Option<ReferenceCallContext>,
     /// Nested owner ledgers for source-order call argument evaluation.
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     initialized_slots: HashSet<LocalSlotId>,
@@ -269,6 +293,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
+    /// Reference-bound locals whose cell address points INSIDE another allocation, currently
+    /// an indexed-array element slot. `__rt_reference_cell_owner` deliberately answers zero for
+    /// such an address, so the alias can never transfer an owner and must not escape the frame
+    /// that keeps the container alive.
+    borrowed_element_ref_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     /// foreach loop-key locals whose source is a concretely-indexed array
     /// (`Array` of a non-Mixed element type), so the runtime key is always an
@@ -420,6 +449,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_arg_array_locals: HashMap::new(),
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
+            borrowed_element_ref_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
             array_conversions: HashMap::new(),
@@ -471,6 +501,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_arg_array_locals: self.reflection_arg_array_locals.clone(),
             fiber_start_sigs: self.fiber_start_sigs.clone(),
             ref_bound_locals: self.ref_bound_locals.clone(),
+            borrowed_element_ref_locals: self.borrowed_element_ref_locals.clone(),
             ref_cell_owner_locals: self.ref_cell_owner_locals.clone(),
             foreach_int_key_locals: self.foreach_int_key_locals.clone(),
             array_conversions: self.array_conversions.clone(),
@@ -481,6 +512,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             hidden_temp_counter: self.hidden_temp_counter,
             expression_depth: self.expression_depth,
             reference_call_context: self.reference_call_context.clone(),
+            // Refusals recorded by a speculative region must not outlive it: the region is
+            // always lowered again for real, and that pass records its refusals again.
+            refusals: crate::ir_lower::diagnostics::mark(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
             eval_executed: self.eval_executed,
@@ -511,6 +545,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_arg_array_locals = snapshot.reflection_arg_array_locals;
         self.fiber_start_sigs = snapshot.fiber_start_sigs;
         self.ref_bound_locals = snapshot.ref_bound_locals;
+        self.borrowed_element_ref_locals = snapshot.borrowed_element_ref_locals;
         self.ref_cell_owner_locals = snapshot.ref_cell_owner_locals;
         self.foreach_int_key_locals = snapshot.foreach_int_key_locals;
         self.array_conversions = snapshot.array_conversions;
@@ -521,6 +556,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.hidden_temp_counter = snapshot.hidden_temp_counter;
         self.expression_depth = snapshot.expression_depth;
         self.reference_call_context = snapshot.reference_call_context;
+        crate::ir_lower::diagnostics::rollback_to(snapshot.refusals);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
         self.eval_executed = snapshot.eval_executed;
@@ -935,6 +971,73 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Clears the by-reference alias marker for a local after `unset()`.
     pub(crate) fn unmark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.remove(name);
+        self.borrowed_element_ref_locals.remove(name);
+    }
+
+    /// Records that a local aliases an interior address borrowed from a live container.
+    pub(crate) fn mark_borrowed_element_ref_local(&mut self, name: &str) {
+        self.borrowed_element_ref_locals.insert(name.to_string());
+    }
+
+    /// Returns true when a local's cell address is borrowed from a container's payload.
+    ///
+    /// Such an address has no independent cell owner, so no exit path can hand it to a caller:
+    /// the container may be released while the caller still holds the alias.
+    ///
+    /// This is a MAY analysis and deliberately only an early diagnostic. Provenance that no
+    /// straight-line marker can settle, such as an alias relayed into a by-reference parameter
+    /// from another function, is caught at run time by the owner-zero guard in
+    /// `codegen::lower_inst::local_stores::lower_acquire_ref_cell`, which is what makes the
+    /// boundary sound on every path.
+    pub(crate) fn is_borrowed_element_ref_local(&self, name: &str) -> bool {
+        self.borrowed_element_ref_locals.contains(name)
+    }
+
+    /// Captures the interior-alias markers so branch arms can be merged instead of overwritten.
+    pub(crate) fn borrowed_element_ref_locals_snapshot(&self) -> HashSet<String> {
+        self.borrowed_element_ref_locals.clone()
+    }
+
+    /// Restores the interior-alias markers captured at a branch split.
+    pub(crate) fn restore_borrowed_element_ref_locals(&mut self, markers: HashSet<String>) {
+        self.borrowed_element_ref_locals = markers;
+    }
+
+    /// Unions another arm's interior-alias markers into the current ones.
+    ///
+    /// A name bound to an array interior on ONE arm is still an interior alias after the merge,
+    /// even when the other arm rebound the same name to a managed cell. Without the union the
+    /// arm lowered last would silently decide the marker for both.
+    pub(crate) fn merge_borrowed_element_ref_locals(&mut self, markers: &HashSet<String>) {
+        for name in markers {
+            self.borrowed_element_ref_locals.insert(name.clone());
+        }
+    }
+
+    /// Returns whether `name` can be promoted to its own managed reference cell in place.
+    ///
+    /// Promotion rewrites the local's storage into a heap cell that keeps the variable's
+    /// identity, which only works for an ordinary addressable PHP local of this frame.
+    /// Globals, static locals, extern globals, eval-scope names and interior aliases keep
+    /// storage this frame does not own.
+    pub(crate) fn local_is_promotable_to_ref_cell(&self, name: &str) -> bool {
+        if self.extern_global_type(name).is_some() || self.eval_scope_read_param.is_some() {
+            return false;
+        }
+        let kind = self
+            .local_kinds
+            .get(name)
+            .copied()
+            .unwrap_or(LocalKind::PhpLocal);
+        if kind != LocalKind::PhpLocal || self.uses_global_storage(name, kind) {
+            return false;
+        }
+        if self.is_borrowed_element_ref_local(name) {
+            return false;
+        }
+        self.local_slots
+            .get(name)
+            .is_some_and(|slot| self.initialized_slots.contains(slot))
     }
 
     /// Returns true when a local is currently modeled as a by-reference alias.
@@ -2460,6 +2563,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.mark_ref_bound_local(target);
+        // An alias of a borrowed interior address is itself borrowed; a managed source clears
+        // any interior marker a previous binding of this name left behind.
+        if self.is_borrowed_element_ref_local(source) {
+            self.mark_borrowed_element_ref_local(target);
+        } else {
+            self.borrowed_element_ref_locals.remove(target);
+        }
         self.initialized_slots.insert(target_slot);
         if let Some((source_owner, target_owner)) = owner_pair {
             self.emit_void(
@@ -2513,17 +2623,28 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         staged
     }
 
-    /// Publishes a transferred reference owner only after the new cell is protected from rebinding.
-    pub(crate) fn bind_returned_ref_cell(
+    /// Reserves the staging a reference assignment publishes before lowering its source.
+    ///
+    /// Only the hidden OWNER slot is declared here, because the staging local's storage type is
+    /// not known until the transferred cell's payload type is. The owner slot is zero-initialized
+    /// with every other ref-cell owner in the frame prologue, so publishing it in the unwind
+    /// chain before anything can be adopted into it is a no-op for cleanup.
+    pub(crate) fn predeclare_returned_ref_cell_staging(&mut self) -> (String, LocalSlotId) {
+        let staged = format!("__eir_place{}", self.hidden_temp_counter);
+        self.hidden_temp_counter += 1;
+        let owner = self.declare_ref_cell_owner(&staged, PhpType::Mixed);
+        (staged, owner)
+    }
+
+    /// Adopts a transferred cell into staging whose owner is already published for unwinding.
+    pub(crate) fn adopt_returned_ref_cell_into(
         &mut self,
-        target: &str,
+        staged: &str,
         cell_ptr: LoweredValue,
         value_type: PhpType,
         span: Option<Span>,
     ) {
-        let staged = self.adopt_returned_ref_cell(cell_ptr, value_type, span);
-        self.alias_local_ref_cell(target, &staged, span);
-        self.release_ref_cell_owner(&staged, span);
+        self.bind_ref_cell_ptr_impl(staged, cell_ptr, value_type, true, true, span);
     }
 
     /// Binds a borrowed or owned cell, retiring the previous binding before publishing the new one.
@@ -2560,6 +2681,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.mark_ref_bound_local(target);
+        // The caller marks an interior binding explicitly; a plain rebinding clears the marker
+        // so a name reused for a managed cell is not treated as borrowed storage.
+        self.borrowed_element_ref_locals.remove(target);
         self.initialized_slots.insert(target_slot);
     }
 

@@ -479,8 +479,44 @@ $ref[] = "router";               // also reaches $container->services
 ```
 
 Reference returns are supported for object-property targets of any scalar or container
-type — arrays, objects, integers, strings, and floats. Returning a reference to a plain
-local is not meaningful (the local does not outlive the call) and is not supported.
+type: arrays, objects, integers, strings, and floats. A plain local is also supported.
+It is promoted to a managed reference cell that keeps the variable's identity and outlives
+the call, so the caller's alias and any later write through the same variable agree.
+
+A `finally` clause cannot change which reference a pending `return` hands back. The
+reference is captured when the `return` runs, exactly as in PHP, so rebinding the returned
+variable inside a `finally` that falls through has no effect on the caller. A second
+`return` inside the `finally` does replace it.
+
+The caller's reference is published before any of the caller's own post-call cleanup runs,
+so a destructor that throws while the call's argument temporaries, an owning receiver, or
+the previous binding of the target are retired cannot lose the returned reference. A
+`catch` in the same function still sees the referenced value released exactly once.
+
+### Reference-return forms this compiler does not support yet
+
+The forms below are valid PHP. They are rejected at compile time because this compiler
+cannot yet transfer an owning reference cell for them, not because PHP lacks the
+semantics:
+
+- Returning an alias of an array element (`$slot = &$numbers[0]; return $slot;`). That
+  alias addresses storage inside the array's payload, which owns no reference cell of its
+  own, so there is nothing to hand the caller that would keep the element alive.
+- Returning a place that is neither a variable nor a property, such as an array element
+  read or the result of another call. PHP returns a reference to those places; this
+  lowering has no cell to transfer for them.
+- Capturing a reference with `$x = &f()` from a call the compiler cannot resolve to a
+  by-reference return. A named function, a method, a static method, and a closure whose
+  binding is known (including one produced by `Closure::bind`) are all resolved. A call
+  made through a runtime-selected callable, such as a variable holding a function-name
+  string, is not: that path is lowered through the dynamic descriptor invoker, which hands
+  back a copied value rather than the callee's reference cell.
+
+One case cannot be decided at compile time. A function that returns its own by-reference
+parameter has no way to know what the caller bound to it, so a caller that passed an alias
+of an array element is caught at run time instead: the return raises a catchable `Error`,
+`Cannot return a reference to storage that has no independent reference cell`, rather than
+handing back an address the array may free.
 
 ## Variadic functions
 

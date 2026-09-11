@@ -378,3 +378,327 @@ reboundCellAliases();
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert_eq!(compile_and_run_tagged(source), "new|8:4");
 }
+
+/// A fallthrough `finally` that rebinds the returned variable cannot change what was returned.
+///
+/// PHP snapshots the returned reference before the finally body runs, so the caller aliases the
+/// cell the `return` named, and the retained owner is that same cell rather than the one the
+/// finally left in the variable.
+#[test]
+fn test_core_fallthrough_finally_rebinding_returns_the_snapshotted_reference() {
+    let source = r#"<?php
+class FallthroughRebindHolder { public string $text = ''; }
+function &fallthroughRebind(): string {
+    $first = new FallthroughRebindHolder();
+    $first->text = 'first';
+    $slot = &$first->text;
+    try {
+        return $slot;
+    } finally {
+        $second = new FallthroughRebindHolder();
+        $second->text = 'second';
+        $slot = &$second->text;
+    }
+}
+$alias = &fallthroughRebind();
+echo $alias, '|';
+$alias = 'rewritten';
+echo $alias, '|';
+unset($alias);
+echo 'done';
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "first|rewritten|done", "{}\n{asm}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "first|rewritten|done");
+}
+
+/// A throwing caller-side argument cleanup cannot lose the reference lease the callee transferred.
+#[test]
+fn test_core_reference_return_lease_survives_throwing_caller_argument_cleanup() {
+    let source = r#"<?php
+class ThrowingCleanupArgument {
+    public function __destruct() { echo 'arg|'; throw new RuntimeException('cleanup'); }
+}
+class CallerCleanupReferenceHolder { public array $items = [5]; }
+function &callerCleanupReference(array $values, CallerCleanupReferenceHolder $holder): array {
+    return $holder->items;
+}
+function bindWithThrowingArgumentCleanup(): void {
+    $holder = new CallerCleanupReferenceHolder();
+    try {
+        $alias = &callerCleanupReference([new ThrowingCleanupArgument()], $holder);
+        echo 'bound|';
+    } catch (RuntimeException $error) {
+        echo 'caught';
+    }
+}
+bindWithThrowingArgumentCleanup();
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "arg|caught", "{}\n{asm}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "arg|caught");
+}
+
+/// Owned by-value arguments of a by-reference-returning callee are released when it throws.
+///
+/// The arguments are rooted before the call, so a same-frame catch still retires both owned
+/// containers instead of stranding them in the caller's evaluation temporaries.
+#[test]
+fn test_core_reference_return_call_releases_value_arguments_when_the_callee_throws() {
+    let source = r#"<?php
+class ThrowingCalleeArgumentPayload { public function __destruct() { echo 'p|'; } }
+class ThrowingCalleeReferenceHolder { public array $items = [1]; }
+function &throwingReferenceCallee(
+    array $first,
+    array $second,
+    ThrowingCalleeReferenceHolder $holder
+): array {
+    throw new RuntimeException('callee');
+    return $holder->items;
+}
+function bindThrowingReferenceCallee(): void {
+    $holder = new ThrowingCalleeReferenceHolder();
+    try {
+        $alias = &throwingReferenceCallee(
+            [new ThrowingCalleeArgumentPayload()],
+            [new ThrowingCalleeArgumentPayload()],
+            $holder
+        );
+        echo 'bound|';
+    } catch (RuntimeException $error) {
+        echo 'caught';
+    }
+}
+bindThrowingReferenceCallee();
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "p|p|caught", "{}\n{asm}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "p|p|caught");
+}
+
+/// A throwing temporary receiver destructor cannot discard the transferred property cell.
+#[test]
+fn test_core_reference_return_lease_survives_throwing_receiver_destructor() {
+    let source = r#"<?php
+class ThrowingReceiverReferenceHolder {
+    public array $items = [2];
+    public function &reference(): array { return $this->items; }
+    public function __destruct() { echo 'recv|'; throw new RuntimeException('receiver'); }
+}
+function bindThrowingReceiver(): void {
+    try {
+        $alias = &(new ThrowingReceiverReferenceHolder())->reference();
+        echo 'bound|';
+    } catch (RuntimeException $error) {
+        echo 'caught';
+    }
+}
+bindThrowingReceiver();
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "recv|caught", "{}\n{asm}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "recv|caught");
+}
+
+/// A by-reference return of an ordinary local hands the caller a cell that outlives the frame.
+///
+/// The local is promoted to a managed cell in place, so writes through the caller's alias and
+/// the callee's own later reads agree, and the payload is released exactly once.
+#[test]
+fn test_core_promoted_local_reference_return_outlives_its_frame() {
+    let source = r#"<?php
+class PromotedLocalPayload {
+    public int $id = 3;
+    public function __destruct() { echo 'payload|'; }
+}
+function &promotedLocalReference(): array {
+    $values = [new PromotedLocalPayload()];
+    return $values;
+}
+function consumePromotedLocalReference(): void {
+    $alias = &promotedLocalReference();
+    echo $alias[0]->id, '|';
+    $alias = [];
+    echo count($alias), '|';
+    unset($alias);
+    echo 'done';
+}
+consumePromotedLocalReference();
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "3|payload|0|done", "{}\n{asm}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "3|payload|0|done");
+}
+
+/// The transferred cell's payload is destroyed BEFORE a same-frame catch body runs.
+///
+/// The callee keeps no other owner of the returned payload, so only the caller's staged lease
+/// can release it. A throwing argument destructor unwinds into a catch in the SAME PHP frame,
+/// which runs no whole-frame cleanup, so the ordering of the destructor output is the proof that
+/// a real cleanup record covered the lease rather than the epilogue picking it up later.
+#[test]
+fn test_core_reference_return_lease_is_released_before_a_same_frame_catch() {
+    let source = r#"<?php
+class LeasedPayload { public function __destruct() { echo 'payload|'; } }
+class ThrowingLeaseArgument {
+    public function __destruct() { echo 'arg|'; throw new RuntimeException('cleanup'); }
+}
+function &leaseFromCalleeLocal(array $marker): array {
+    $values = [new LeasedPayload()];
+    return $values;
+}
+function bindLeaseWithThrowingArgument(): void {
+    try {
+        $alias = &leaseFromCalleeLocal([new ThrowingLeaseArgument()]);
+        echo 'bound|';
+    } catch (RuntimeException $error) {
+        echo 'caught';
+    }
+}
+bindLeaseWithThrowingArgument();
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "arg|payload|caught", "{}\n{asm}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "arg|payload|caught");
+}
+
+/// Repeated same-frame catches retire each iteration's lease instead of accumulating them.
+#[test]
+fn test_core_repeated_same_frame_catches_retire_every_reference_return_lease() {
+    let source = r#"<?php
+class RepeatedLeasePayload { public function __destruct() { echo 'p|'; } }
+class RepeatedThrowingArgument {
+    public function __destruct() { echo 'a|'; throw new RuntimeException('cleanup'); }
+}
+function &repeatedLease(array $marker): array {
+    $values = [new RepeatedLeasePayload()];
+    return $values;
+}
+function bindRepeatedLeases(): void {
+    for ($index = 0; $index < 3; $index++) {
+        try {
+            $alias = &repeatedLease([new RepeatedThrowingArgument()]);
+            echo 'bound|';
+        } catch (RuntimeException $error) {
+            echo 'c|';
+        }
+    }
+}
+bindRepeatedLeases();
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "a|p|c|a|p|c|a|p|c|", "{}\n{asm}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "a|p|c|a|p|c|a|p|c|");
+}
+
+/// A throwing old target destructor during alias rebinding cannot strand the staged lease.
+///
+/// Retiring whatever `$alias` held happens after the cell was transferred but before the alias
+/// is published, which is exactly the window the staging record covers.
+#[test]
+fn test_core_reference_return_lease_survives_a_throwing_rebound_target() {
+    let source = r#"<?php
+class RebindLeasePayload { public function __destruct() { echo 'payload|'; } }
+class ThrowingRebindTarget {
+    public function __destruct() { echo 'old|'; throw new RuntimeException('old target'); }
+}
+function &rebindLease(): array {
+    $values = [new RebindLeasePayload()];
+    return $values;
+}
+function bindOverThrowingTarget(): void {
+    try {
+        $alias = new ThrowingRebindTarget();
+        $alias = &rebindLease();
+        echo 'bound|';
+    } catch (RuntimeException $error) {
+        echo 'caught';
+    }
+}
+bindOverThrowingTarget();
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "old|payload|caught", "{}\n{asm}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "old|payload|caught");
+}
+
+/// An omitted by-reference default container is retired when a reference-returning callee throws.
+///
+/// The fresh container is rooted for a by-reference return exactly as for any other callee, so
+/// the caller's own EIR lease on it retires on the throwing path too. Which cell the callee and
+/// caller alias is unchanged: the root replaces only the caller's ownership bookkeeping.
+#[test]
+fn test_core_omitted_reference_default_retires_when_a_reference_callee_throws() {
+    let source = r#"<?php
+class OmittedDefaultPayload { public function __destruct() { echo 'seen|'; } }
+function &collectIntoOmittedDefault(array &$bucket = []): array {
+    $bucket[] = new OmittedDefaultPayload();
+    throw new RuntimeException('callee');
+    return $bucket;
+}
+function bindOmittedDefault(): void {
+    try {
+        $alias = &collectIntoOmittedDefault();
+        echo 'bound|';
+    } catch (RuntimeException $error) {
+        echo 'caught';
+    }
+}
+bindOmittedDefault();
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "seen|caught", "{}\n{asm}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), "seen|caught");
+}
+
+/// A reference relayed from an array element fails closed with a catchable Error.
+///
+/// The callee cannot see where its by-reference parameter came from, so the owner lookup answers
+/// zero at run time and the guard raises an `Error` rather than publishing an interior address
+/// the array would free underneath the caller.
+#[test]
+fn test_core_relayed_element_reference_return_fails_closed() {
+    let source = r#"<?php
+function &relayReferenceParameter(mixed &$slot): mixed {
+    return $slot;
+}
+function relayThroughElementAlias(): void {
+    $numbers = [1, 2];
+    $borrowed = &$numbers[0];
+    try {
+        $alias = &relayReferenceParameter($borrowed);
+        echo 'bound|';
+    } catch (Error $error) {
+        echo 'caught|', $error->getMessage();
+    }
+}
+relayThroughElementAlias();
+"#;
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "caught|Cannot return a reference to storage that has no independent reference cell",
+        "{}\n{asm}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
+}

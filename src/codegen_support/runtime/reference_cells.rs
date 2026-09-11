@@ -16,6 +16,12 @@ use crate::codegen_support::sentinels::{
 };
 use crate::types::PhpType;
 
+/// Byte length of `_unmanaged_reference_escape_msg`, kept beside the data that defines it.
+const UNMANAGED_REFERENCE_ESCAPE_MSG_LEN: i64 = 73;
+
+/// Byte length of `_borrowed_reference_return_msg`, kept beside the data that defines it.
+const BORROWED_REFERENCE_RETURN_MSG_LEN: i64 = 75;
+
 /// Returns the descriptor tag for the actual stored property representation.
 pub(crate) fn payload_tag(php_type: &PhpType) -> i64 {
     match php_type.codegen_repr() {
@@ -38,6 +44,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     emit_owner_lookup(emitter);
     emit_unmanaged_borrow_lookup(emitter);
     emit_unmanaged_borrow_escape_error(emitter);
+    emit_borrowed_reference_return_error(emitter);
 }
 
 /// Allocates a zeroed two-word cell; C argument zero supplies its payload descriptor tag.
@@ -303,8 +310,33 @@ fn emit_unmanaged_borrow_lookup(emitter: &mut Emitter) {
 
 /// Allocates the catchable `Error` used when an unmanaged reference crosses a lifetime boundary.
 fn emit_unmanaged_borrow_escape_error(emitter: &mut Emitter) {
+    emit_reference_escape_error(
+        emitter,
+        "__rt_unmanaged_reference_escape_error",
+        "_unmanaged_reference_escape_msg",
+        UNMANAGED_REFERENCE_ESCAPE_MSG_LEN,
+    );
+}
+
+/// Allocates the catchable `Error` a by-reference return raises when its place has no cell owner.
+///
+/// The message is separate from the `array_walk()` borrow escape on purpose: this boundary is
+/// reached by any reference whose provenance the compiler could not settle statically, most
+/// often an alias relayed through a by-reference parameter, and reporting it as an
+/// `array_walk()` problem would misdescribe the program that raised it.
+fn emit_borrowed_reference_return_error(emitter: &mut Emitter) {
+    emit_reference_escape_error(
+        emitter,
+        "__rt_borrowed_reference_return_error",
+        "_borrowed_reference_return_msg",
+        BORROWED_REFERENCE_RETURN_MSG_LEN,
+    );
+}
+
+/// Emits one `<entry>_new` allocator plus the `<entry>` thrower that publishes and raises it.
+fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, message: &str, length: i64) {
     emitter.blank();
-    emitter.label_global("__rt_unmanaged_reference_escape_error_new");
+    emitter.label_global(&format!("{entry}_new"));
     abi::emit_frame_prologue(emitter, 32);
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 56);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
@@ -315,9 +347,9 @@ fn emit_unmanaged_borrow_escape_error(emitter: &mut Emitter) {
             abi::emit_call_label(emitter, "__rt_object_handle_acquire");
             abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_error_class_id", 0);
             emitter.instruction("str x9, [x0]");                                // store the per-program Error class id
-            abi::emit_symbol_address(emitter, "x9", "_unmanaged_reference_escape_msg");
+            abi::emit_symbol_address(emitter, "x9", message);
             emitter.instruction("str x9, [x0, #8]");                            // borrow the fixed diagnostic message
-            emitter.instruction("mov x9, #73");                                 // message byte length
+            abi::emit_load_int_immediate(emitter, "x9", length);
             emitter.instruction("str x9, [x0, #16]");                           // publish the complete message pair
             emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
             emit_throwable_creation_line_unknown(emitter, "x0");
@@ -329,9 +361,9 @@ fn emit_unmanaged_borrow_escape_error(emitter: &mut Emitter) {
             abi::emit_call_label(emitter, "__rt_object_handle_acquire");
             abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_error_class_id", 0);
             emitter.instruction("mov QWORD PTR [rax], r10");                    // store the per-program Error class id
-            abi::emit_symbol_address(emitter, "r10", "_unmanaged_reference_escape_msg");
+            abi::emit_symbol_address(emitter, "r10", message);
             emitter.instruction("mov QWORD PTR [rax + 8], r10");                // borrow the fixed diagnostic message
-            emitter.instruction("mov QWORD PTR [rax + 16], 73");                // publish the message byte length
+            emitter.instruction(&format!("mov QWORD PTR [rax + 16], {length}")); // publish the message byte length
             emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
             emit_throwable_creation_line_unknown(emitter, "rax");
             emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous defaults to null
@@ -341,9 +373,9 @@ fn emit_unmanaged_borrow_escape_error(emitter: &mut Emitter) {
     abi::emit_return(emitter);
 
     emitter.blank();
-    emitter.label_global("__rt_unmanaged_reference_escape_error");
+    emitter.label_global(entry);
     abi::emit_frame_prologue(emitter, 16);
-    abi::emit_call_label(emitter, "__rt_unmanaged_reference_escape_error_new");
+    abi::emit_call_label(emitter, &format!("{entry}_new"));
     abi::emit_store_reg_to_symbol(
         emitter,
         abi::int_result_reg(emitter),

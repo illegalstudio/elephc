@@ -34,6 +34,13 @@ pub(super) fn emit(
         web,
     ) {
         Ok(module) => module,
+        Err(ir_lower::LoweringError::Unsupported(error)) => {
+            // `--emit-ir` refuses the same shapes final emission refuses, with the same
+            // source-level diagnostic, so the textual dump never shows placeholder EIR.
+            crate::progress::clear();
+            errors::report(&error.with_file(filename.to_string()));
+            process::exit(1);
+        }
         Err(err) => {
             crate::progress::clear();
             eprintln!("EIR lowering error: {}", err);

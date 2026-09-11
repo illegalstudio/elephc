@@ -42,6 +42,7 @@ mod reference_loop_cleanup;
 mod static_callable_string_owners;
 mod reference_cells;
 mod reference_detach;
+mod reference_return_boundaries;
 mod static_properties;
 mod synthetic_arrays;
 mod throwable_constructors;
@@ -71,6 +72,22 @@ fn lower_source_at_for_target(
     parent: &Path,
     target: Target,
 ) -> crate::ir::Module {
+    let display = main_file_path.display().to_string();
+    try_lower_source_at_for_target(source, main_file_path, parent, target)
+        .unwrap_or_else(|error| panic!("EIR lowering failed for {display}: {error:?}"))
+}
+
+/// Runs the same frontend and lowering but hands back the lowering `Result`.
+///
+/// Refusal tests need the error rather than a panic: `lower_program` reports a shape EIR
+/// lowering declines through `LoweringError::Unsupported`, which the CLI prints as an ordinary
+/// source diagnostic.
+fn try_lower_source_at_for_target(
+    source: &str,
+    main_file_path: &Path,
+    parent: &Path,
+    target: Target,
+) -> Result<crate::ir::Module, crate::ir_lower::LoweringError> {
     let source_mode = crate::source::SourceMode::from_path(main_file_path);
     let tokens =
         crate::lexer::tokenize_with_mode(source, source_mode).expect("tokenize failed");
@@ -132,12 +149,7 @@ fn lower_source_at_for_target(
     );
     let ast =
         crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
-    crate::ir_lower::lower_program(&ast, &check_result, target, false).unwrap_or_else(|error| {
-        panic!(
-            "EIR lowering failed for {}: {error:?}",
-            main_file_path.display()
-        )
-    })
+    crate::ir_lower::lower_program(&ast, &check_result, target, false)
 }
 
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.

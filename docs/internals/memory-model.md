@@ -347,8 +347,68 @@ temporary collector pins when making that decision.
 
 Resolved reference-returning callees retain a cell lease before local cleanup.
 The lease lives in a `ReturnRefCell` slot: normal return transfers it, while an
-exception during epilogue cleanup releases it. The caller either adopts the lease
-for reference assignment or acquires the contained value and retires the lease.
+exception during epilogue cleanup releases it. The return terminator reads the
+pointer back out of that same slot, so the retained owner and the returned
+reference are one snapshot taken where the `return` ran. A `finally` that rebinds
+the returned variable and falls through therefore cannot make them disagree, and a
+second `return` inside the `finally` replaces the lease and releases the superseded
+one. This mirrors PHP, which materializes the reference with `MAKE_REF` before the
+finally rather than re-reading the variable afterwards.
+
+Every accepted by-reference return source owns a transferable cell. A property slot
+already holds one; an ordinary addressable local is promoted in place first, which
+preserves the variable's identity. A source whose cell this frame can see is not
+one of those is refused during lowering with a source diagnostic instead of being
+lowered as a value. Those refusals describe this lowering's subset, not PHP: PHP
+does return references to array elements and to other reference-returning calls,
+and the refusal exists only because no owning cell can be transferred for them yet.
+
+Provenance the frame cannot see is settled at run time. A function returning its own
+by-reference parameter may have been handed an array-interior address by its caller,
+which the owner lookup answers zero for. `AcquireRefCell` therefore fails closed:
+a zero owner raises the catchable `__rt_borrowed_reference_return_error` rather than
+retaining nothing and publishing a null or soon-to-be-freed interior pointer. The
+message is separate from the `array_walk()` borrow escape so the diagnostic matches
+the program that raised it.
+
+The caller either adopts the lease for reference assignment or acquires the
+contained value and retires the lease. Both adoptions happen immediately after the
+call, before argument temporaries, evaluation intermediates or an owning receiver
+are retired.
+
+A reference assignment needs the lease to survive longer than that adoption point:
+it still has to retire the previous binding of its target and publish the alias, and
+both can run a throwing destructor. Its staging local and ref-cell owner slot are
+therefore declared and PUBLISHED in the call-operand cleanup chain BEFORE the source
+expression is lowered, so the record nests outside every argument root the call
+publishes and is detached only once the alias owns the cell. A same-frame `catch`,
+which runs no whole-frame cleanup, still releases the payload exactly once. The
+record's cleanup discipline follows the slot: a ref-cell owner always uses the
+generic `__rt_decref_any` entry, which dispatches heap kind 7 to
+`__rt_reference_cell_release`, never the callable-descriptor entry its payload type
+would otherwise select.
+
+A by-value use of the same call needs no record. It loads the payload, acquires it
+and retires the lease with no PHP code in between. The acquired copy is then an
+ordinary owned call result and shares whatever protection every other owned call
+result has.
+
+Owned by-value arguments of a reference-returning call are rooted like any other
+call's, including a fresh container materialized for an omitted by-reference default,
+so a throwing callee cannot strand them. Actual reference places stay unrooted
+because their storage belongs to the caller.
+
+A reference assignment is only accepted when the SELECTED lowering adopted such a
+lease. A declared by-reference signature is not sufficient on its own, because a
+call routed through a dynamic descriptor invoker receives an owned boxed copy while
+the invoker retires the cell; binding that result would read a payload word as an
+address, so lowering refuses it.
+
+Refusals are collected in a thread-local sink that `lower_program` drains before
+validation. Collection is rollback-safe: the speculative region `stmt::repr_fixpoint`
+lowers and discards rolls its refusals back with it, and the guaranteed final lowering
+of that region records them again.
+
 Ordinary descriptor calls box the referenced value before releasing the cell.
 Cell-owner lookup validates allocation boundaries before adopting an unknown
 pointer, so borrowed frame and inline-array addresses never become heap owners.
