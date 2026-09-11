@@ -48,22 +48,22 @@ pub(crate) fn emit_call_object_destructor(emitter: &mut Emitter) {
 
 
 
-/// Marks destructor invocation once; protected callers finish the temporary refcount guard.
+/// Marks destructor invocation once; failed construction uses the same bit to suppress invocation.
 fn emit_destructor_lifetime_boundary(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
     emitter.label_global("__rt_call_object_destructor");
     if arm {
         emitter.instruction("cbz x0, __rt_object_destructor_boundary_ret");     // reject a missing receiver before probing its header
         emitter.instruction("ldr x9, [x0, #-8]");                               // inspect persistent object destructor state
-        emitter.instruction("tbnz x9, #14, __rt_object_destructor_boundary_ret");// never repeat a destructor after its receiver was retained
+        emitter.instruction("tbnz x9, #14, __rt_object_destructor_boundary_ret");// skip a completed destructor or failed construction permanently
         emitter.instruction("orr x9, x9, #0x4000");                             // record invocation before any user callback or throwable
         emitter.instruction("str x9, [x0, #-8]");                               // preserve called state in the low sixteen kind-word bits across GC
         emitter.instruction("b __rt_call_object_destructor_body");              // let the protected caller finish temporary release state
     } else {
         emitter.instruction("test rdi, rdi");                                   // reject a missing receiver before reading object metadata
         emitter.instruction("jz __rt_object_destructor_boundary_ret");          // return immediately for a null receiver
-        emitter.instruction("test QWORD PTR [rdi - 8], 0x4000");                // inspect the persistent object destructor-called bit
-        emitter.instruction("jnz __rt_object_destructor_boundary_ret");         // a resurrected object must not repeat its PHP destructor
+        emitter.instruction("test QWORD PTR [rdi - 8], 0x4000");                // inspect persistent destructor-called or suppression state
+        emitter.instruction("jnz __rt_object_destructor_boundary_ret");         // completed and failed construction must not invoke PHP destruction
         emitter.instruction("or QWORD PTR [rdi - 8], 0x4000");                  // record invocation before a callback can escape
         emitter.instruction("jmp __rt_call_object_destructor_body");            // reuse the existing protected caller and native/eval dispatch
     }

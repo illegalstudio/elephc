@@ -125,6 +125,109 @@ fn native_argument_ownership_reference_markers() {
     }
 }
 
+/// Balances the sole live raw-string slot owner before and after native replacement.
+#[test]
+fn native_argument_ownership_raw_string_slot_ledger() {
+    for changed in [false, true] {
+        let mut values = FakeOps::default();
+        let original = values.string("original").unwrap();
+        let original_words = [
+            values.raw_value_word(original).unwrap(),
+            values.raw_value_high_word(original).unwrap(),
+        ];
+        let retained = values
+            .retain_raw_string_words(original_words[0], original_words[1])
+            .unwrap();
+        let current = if changed {
+            values
+                .release_raw_string_words(retained.0, retained.1)
+                .unwrap();
+            let replacement = values.string("replacement").unwrap();
+            [
+                values.raw_value_word(replacement).unwrap(),
+                values.raw_value_high_word(replacement).unwrap(),
+            ]
+        } else {
+            [retained.0, retained.1]
+        };
+        let args = raw_string_ref_args([retained.0, retained.1], current);
+
+        cleanup_native_function_ref_args_for_test(&args, &mut values).unwrap();
+
+        assert_eq!(release_count(&values, original), 1);
+        assert_eq!(values.cell_owners.get(&(original.as_ptr() as usize)), Some(&1));
+        if changed {
+            let replacement = RuntimeCellHandle::from_raw(current[0] as *mut RuntimeCell);
+            assert_eq!(release_count(&values, replacement), 1);
+            assert_eq!(values.cell_owners.get(&(replacement.as_ptr() as usize)), Some(&0));
+        }
+    }
+}
+
+/// Balances the sole live one-word heap slot owner before and after native replacement.
+#[test]
+fn native_argument_ownership_raw_heap_slot_ledger() {
+    for changed in [false, true] {
+        let mut values = FakeOps::default();
+        let original = values.array_new(0).unwrap();
+        let original_word = values.raw_value_word(original).unwrap();
+        let retained = values.retain_raw_heap_word(original_word).unwrap();
+        let current = if changed {
+            values.release_raw_heap_word(retained).unwrap();
+            let replacement = values.array_new(0).unwrap();
+            values.raw_value_word(replacement).unwrap()
+        } else {
+            retained
+        };
+        let args = raw_heap_ref_args(original_word, current);
+
+        cleanup_native_function_ref_args_for_test(&args, &mut values).unwrap();
+
+        assert_eq!(release_count(&values, original), 1);
+        assert_eq!(values.cell_owners.get(&(original.as_ptr() as usize)), Some(&1));
+        if changed {
+            let replacement = RuntimeCellHandle::from_raw(current as *mut RuntimeCell);
+            assert_eq!(release_count(&values, replacement), 1);
+            assert_eq!(values.cell_owners.get(&(replacement.as_ptr() as usize)), Some(&0));
+        }
+    }
+}
+
+/// Builds one staged raw-string argument without a caller writeback target.
+fn raw_string_ref_args(original: [u64; 2], current: [u64; 2]) -> BoundNativeFunctionArgs {
+    BoundNativeFunctionArgs {
+        values: Vec::new(),
+        ref_slots: vec![BoundNativeFunctionRefSlot::RawString {
+            original,
+            slot: Box::new(current),
+            target: None,
+        }],
+        owners: Vec::new(),
+    }
+}
+
+/// Builds one staged raw-heap argument without a caller writeback target.
+fn raw_heap_ref_args(original: u64, current: u64) -> BoundNativeFunctionArgs {
+    BoundNativeFunctionArgs {
+        values: Vec::new(),
+        ref_slots: vec![BoundNativeFunctionRefSlot::OwnedRawWord {
+            original,
+            slot: Box::new(current),
+            target: None,
+        }],
+        owners: Vec::new(),
+    }
+}
+
+/// Counts recorded releases for one fake runtime identity.
+fn release_count(values: &FakeOps, value: RuntimeCellHandle) -> usize {
+    values
+        .releases
+        .iter()
+        .filter(|released| **released == value)
+        .count()
+}
+
 /// Checks the single explicit owner of a value constructed by an argument fixture.
 fn assert_released_once(values: &FakeOps, expected: &FakeValue) {
     let cells: Vec<_> = values.values.iter().filter_map(|(id, value)| (value == expected).then_some(*id)).collect();

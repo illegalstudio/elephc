@@ -8,6 +8,7 @@
 //! - Guards use the existing three-word activation prefix followed by one heap owner.
 //! - Removing any active guard preserves newer guards, including reordered named arguments.
 //! - Cleanup clears the transferred owner before invoking potentially reentrant destruction.
+//! - Failed construction marks the object so its destructor stays suppressed after escape.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET;
@@ -17,6 +18,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::AArch64 { aarch64(emitter); } else { x86_64(emitter); }
     super::emit_protected(emitter, "__rt_exception_release_owned", release_body);
     super::emit_protected(emitter, "__rt_exception_release_callable", release_callable_body);
+    super::emit_protected(
+        emitter,
+        "__rt_exception_release_unconstructed_object",
+        release_unconstructed_object_body,
+    );
 }
 
 /// Unlinks an AArch64 guard from the activation chain and transfers exceptional owners to the GC.
@@ -89,6 +95,29 @@ fn release_callable_body(emitter: &mut Emitter) {
     emit_release_body(emitter, "__rt_callable_descriptor_release");
 }
 
+/// Suppresses `__destruct` before releasing a raw object whose constructor did not complete.
+fn release_unconstructed_object_body(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.instruction("ldr x9, [sp, #224]");                              // recover the cleanup record passed as the first C argument
+        emitter.instruction(&format!("ldr x0, [x9, #{EXCEPTION_GUARD_OWNER_OFFSET}]")); // transfer the guarded raw object to the native GC convention
+        emitter.instruction(&format!("str xzr, [x9, #{EXCEPTION_GUARD_OWNER_OFFSET}]")); // clear ownership before object cleanup can reenter PHP
+        emitter.instruction("cbz x0, __rt_exception_release_unconstructed_object_drop"); // skip header access for an already-cleared guard
+        emitter.instruction("ldr x10, [x0, #-8]");                              // load the persistent object kind and destructor state
+        emitter.instruction("orr x10, x10, #0x4000");                           // suppress __destruct for this failed construction permanently
+        emitter.instruction("str x10, [x0, #-8]");                              // preserve suppression if the constructor escaped another owner
+        emitter.label("__rt_exception_release_unconstructed_object_drop");
+    } else {
+        emitter.instruction("mov r10, QWORD PTR [rsp + 224]");                  // recover the cleanup record passed as the first C argument
+        emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {EXCEPTION_GUARD_OWNER_OFFSET}]")); // transfer the guarded raw object to the native GC convention
+        emitter.instruction(&format!("mov QWORD PTR [r10 + {EXCEPTION_GUARD_OWNER_OFFSET}], 0")); // clear ownership before object cleanup can reenter PHP
+        emitter.instruction("test rax, rax");                                   // avoid reading a header from an already-cleared guard
+        emitter.instruction("jz __rt_exception_release_unconstructed_object_drop"); // null owners need only the ordinary no-op release
+        emitter.instruction("or QWORD PTR [rax - 8], 0x4000");                  // persist failed-construction destructor suppression across escape and GC
+        emitter.label("__rt_exception_release_unconstructed_object_drop");
+    }
+    abi::emit_call_label(emitter, "__rt_decref_any");
+}
+
 /// Clears transferred guard ownership before calling its type-specific native release helper.
 fn emit_release_body(emitter: &mut Emitter, symbol: &str) {
     if emitter.target.arch == Arch::AArch64 {
@@ -101,4 +130,39 @@ fn emit_release_body(emitter: &mut Emitter, symbol: &str) {
         emitter.instruction(&format!("mov QWORD PTR [r10 + {EXCEPTION_GUARD_OWNER_OFFSET}], 0")); // prevent duplicate release during nested exception propagation
     }
     abi::emit_call_label(emitter, symbol);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every target marks failed construction before releasing the guard's raw object owner.
+    #[test]
+    fn unconstructed_object_cleanup_suppresses_destructor_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let arch = emitter.target.arch;
+            emit(&mut emitter);
+            let assembly = emitter.output();
+            let cleanup = assembly
+                .split_once("__rt_exception_release_unconstructed_object:")
+                .unwrap()
+                .1;
+            let mark = if arch == Arch::AArch64 {
+                "orr x10, x10, #0x4000"
+            } else {
+                "or QWORD PTR [rax - 8], 0x4000"
+            };
+
+            assert!(cleanup.find(mark).unwrap() < cleanup.find("__rt_decref_any").unwrap(), "{name}");
+            assert_eq!(cleanup.matches("__rt_decref_any").count(), 1, "{name}");
+        }
+    }
 }

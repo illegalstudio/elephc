@@ -26,6 +26,8 @@ uint64_t payload_sizes[] __asm__("_class_object_payload_sizes") = { sizeof(struc
 uint64_t dynamic_flags[] __asm__("_class_object_dynamic_prop_flags") = { 1 };
 unsigned char empty_descriptor[] = { 0 };
 unsigned char *descriptors[] __asm__("_class_gc_desc_ptrs") = { empty_descriptor };
+void *eval_object_gc_child __asm__("_elephc_eval_object_gc_child_fn");
+void *eval_object_release __asm__("_elephc_eval_object_release_fn");
 
 static unsigned destructions, frees, throws_seen, throw_next, callback_threw;
 static unsigned rescue_next, break_cycle_next;

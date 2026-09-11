@@ -19,7 +19,8 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
-    emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
+    emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;

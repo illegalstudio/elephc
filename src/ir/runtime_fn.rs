@@ -3140,6 +3140,19 @@ fn set_callable_param_type(
 mod tests {
     use super::RuntimeFnId;
     use crate::builtins::semantics::BuiltinResultOwnership;
+    use crate::types::PhpType;
+
+    /// The declared-array union is boxed, but `array_values()` always returns dense Mixed slots.
+    #[test]
+    fn array_values_fallback_normalizes_declared_array_union_result() {
+        assert_eq!(
+            RuntimeFnId::ArrayValues.fallback_result_type(
+                &[PhpType::php_array()],
+                &PhpType::Mixed,
+            ),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+    }
 
     /// Pins the contracts used by argument cleanup and synthetic callable wrappers.
     #[test]

@@ -512,6 +512,18 @@ fn copy_nonempty(source: &Path, destination: &Path) {
         "native test provider '{}' must be a non-empty file",
         source.display()
     );
+    // `fs::copy` preserves the provider's mode. Homebrew archives are read-only, so a second
+    // compile in the same isolated project cannot truncate the first cache copy. Removing only
+    // this known fixture destination makes population repeatable without changing the provider
+    // or production cache permissions.
+    if let Err(error) = fs::remove_file(destination) {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "failed to replace native test provider destination '{}': {error}",
+            destination.display()
+        );
+    }
     fs::copy(source, destination).unwrap_or_else(|error| {
         panic!(
             "failed to copy native test provider '{}' to '{}': {error}",

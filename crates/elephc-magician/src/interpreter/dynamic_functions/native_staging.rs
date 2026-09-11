@@ -7,6 +7,7 @@
 //! Key details:
 //! - Slots use stable Rust allocations through native invocation and reference writeback.
 //! - The binder retires partial staging on failure and markers after writeback.
+//! - Raw slots own their current payload; generated replacement stores consume the old owner.
 
 use super::*;
 

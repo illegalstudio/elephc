@@ -38,15 +38,39 @@ impl Scope {
 
     /// Runs one potentially throwing release with a native or C-ABI unary value argument.
     pub(crate) fn call(self, emitter: &mut Emitter, target: &str, c_input: bool) {
+        self.call_with_address(emitter, target, c_input, false);
+    }
+
+    /// Runs a potentially throwing internal helper without routing its local label through the GOT.
+    pub(crate) fn call_local(self, emitter: &mut Emitter, target: &str, c_input: bool) {
+        self.call_with_address(emitter, target, c_input, true);
+    }
+
+    /// Materializes the selected target and invokes it through the shared protected boundary.
+    fn call_with_address(
+        self,
+        emitter: &mut Emitter,
+        target: &str,
+        c_input: bool,
+        local: bool,
+    ) {
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("mov x1, x0");                              // retain the native child value before materializing its release callback
-                abi::emit_symbol_address(emitter, "x0", target);
+                if local {
+                    abi::emit_local_symbol_address(emitter, "x0", target);
+                } else {
+                    abi::emit_symbol_address(emitter, "x0", target);
+                }
                 emitter.instruction(&format!("add x2, sp, #{}", self.arm));     // pass this container's exception state by address
             },
             Arch::X86_64 => {
                 emitter.instruction(if c_input { "mov rsi, rdi" } else { "mov rsi, rax" }); // adapt the child's C or native unary value convention
-                abi::emit_symbol_address(emitter, "rdi", target);
+                if local {
+                    abi::emit_local_symbol_address(emitter, "rdi", target);
+                } else {
+                    abi::emit_symbol_address(emitter, "rdi", target);
+                }
                 emitter.instruction(&format!("lea rdx, [rbp - {}]", self.x86)); // retain pending state in the enclosing deep-free frame
             },
         }
