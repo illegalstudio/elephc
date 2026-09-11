@@ -176,6 +176,7 @@ pub(super) fn lower_preg_replace_callback_closure(
         callback,
         &[PhpType::Array(Box::new(PhpType::Str))],
         None,
+        None,
         *is_static,
     ))
 }
@@ -403,6 +404,7 @@ fn lower_xml_handler_closure(
             capture_refs,
             arg,
             hint,
+            None,
             None,
             *is_static,
         )

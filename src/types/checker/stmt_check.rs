@@ -153,17 +153,27 @@ impl Checker {
                     if self.current_by_ref_return {
                         if let ExprKind::PropertyAccess { object, property } = &e.kind {
                             let object_ty = self.infer_type(object, env)?;
-                            if let Some(class) =
+                            // A CLOSURE's `$this` is never settled by the scope it was written
+                            // in: `Closure::bind`/`bindTo` can hand it any receiver, and the
+                            // enclosing class is only the default. Inferring it as that class
+                            // and promoting only there left a bound receiver of another class
+                            // with an ordinary (non-cell) slot, which the runtime class dispatch
+                            // then could not match at all.
+                            let rebindable_this =
+                                self.closure_depth > 0 && matches!(object.kind, ExprKind::This);
+                            let declared_class = if rebindable_this {
+                                None
+                            } else {
                                 crate::types::checker::single_object_class_name(&object_ty)
-                            {
+                            };
+                            if let Some(class) = declared_class {
                                 self.reference_property_promotions
                                     .insert((class, property.clone()));
                             } else {
-                                // A by-reference closure returning `$this->prop` whose `$this`
-                                // is bound dynamically (`Closure::bind`) has a Mixed receiver, so
-                                // the class is unknown here. Promote the property on every class
-                                // that declares it so the reference resolves at runtime through
-                                // class-id dispatch.
+                                // A by-reference closure returning `$this->prop` has a receiver
+                                // that is only known at run time, so the class is unknown here.
+                                // Promote the property on every class that declares it so the
+                                // reference resolves at runtime through class-id dispatch.
                                 let owners: Vec<String> = self
                                     .classes
                                     .iter()

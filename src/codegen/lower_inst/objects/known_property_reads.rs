@@ -9,6 +9,14 @@
 
 use super::*;
 
+/// Wording of the catchable `Error` a runtime-dispatched by-reference return raises when the
+/// receiver's actual class stores the property with a representation the declared result cannot
+/// read. Reference PHP has no equivalent condition (its references are untyped), so this is a
+/// compiler-subset diagnostic and makes no PHP-equivalence claim.
+const REFERENCE_RETURN_PAYLOAD_MISMATCH_MESSAGE: &str =
+    "Cannot return a reference to a property whose stored representation differs from the \
+     declared by-reference result type";
+
 /// Lowers a declared object property read for statically known object receivers.
 pub(in crate::codegen::lower_inst) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
@@ -118,6 +126,131 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell(
     ctx.load_value_to_reg(object, base_reg)?;
     let int_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset); // load the reference-cell pointer from the property slot (no deref)
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// Lowers `LoadPropRefCellChecked`: the by-reference-return form of the load above, which hands
+/// the caller a cell it will dereference with the callee's DECLARED result representation.
+///
+/// The cell pointer itself is one word whatever it aliases, so the danger is not the transfer but
+/// the claim that travels with it: a caller told the cell holds a `Mixed` box while the slot
+/// actually holds a raw `int` would read that integer as a pointer. The slot's ACTUAL payload
+/// type is therefore checked here, before the pointer is published.
+///
+/// A statically typed receiver has exactly one slot, and `ir_lower::stmt::control_exit` already
+/// refuses that disagreement with a source diagnostic; the check below is defence in depth for a
+/// receiver type the early diagnostic could not resolve. A `Mixed` receiver is decided PER
+/// CANDIDATE CLASS instead: the compatible classes keep working through the same function, and
+/// only a receiver whose runtime class stores an incompatible payload raises a catchable `Error`.
+pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell_checked(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property = property_name_immediate(ctx, inst)?.to_string();
+    let expected = inst.result_php_type.clone();
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return lower_mixed_load_prop_ref_cell_checked(ctx, inst, object, &property, &expected);
+    }
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    if !slot.is_reference {
+        return Err(CodegenIrError::unsupported(format!(
+            "load_prop_ref_cell_checked on non-reference property {}::${}",
+            slot.class_name, slot.property
+        )));
+    }
+    if !slot.php_type.reference_payload_compatible(&expected) {
+        return Err(CodegenIrError::unsupported(format!(
+            "by-reference return of {}::${} stores {:?}, which cannot be read as the declared \
+             result {:?}",
+            slot.class_name, slot.property, slot.php_type, expected
+        )));
+    }
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    let int_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset); // load the reference-cell pointer from the property slot (no deref)
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// Lowers the guarded by-reference-return cell load for a receiver whose class is only known at
+/// run time (a closure's `Closure::bind`-supplied `$this`, or a `mixed` parameter).
+///
+/// The class-id ladder is the same one the unguarded `Mixed` form uses, so every declared
+/// reference-property owner still gets its own arm and dispatch stays a compile-time-known
+/// comparison chain. What differs is the arm BODY: a class whose slot payload cannot be read as
+/// the declared result jumps to one shared throw site instead of loading its cell. That keeps the
+/// decision per candidate: a program that calls the same by-reference function with a compatible
+/// class and with an incompatible one gets the reference for the first and a catchable `Error`
+/// for the second, which a blanket static refusal of `Mixed` receivers could not express.
+fn lower_mixed_load_prop_ref_cell_checked(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+    expected: &PhpType,
+) -> Result<()> {
+    let candidates: Vec<MixedPropertyCandidate> =
+        declared_mixed_property_candidates(ctx, property, inst)?
+            .into_iter()
+            .filter(|candidate| candidate.slot.is_reference)
+            .collect();
+    if candidates.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "load_prop_ref_cell_checked on Mixed receiver for property ${} with no \
+             reference-property class",
+            property
+        )));
+    }
+    let done_label = ctx.next_label("mixed_propref_checked_done");
+    let null_label = ctx.next_label("mixed_propref_checked_null");
+    let mismatch_label = ctx.next_label("mixed_propref_checked_mismatch");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_propref_checked_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_object_payload_or_null(ctx, &null_label);
+    // stdClass and classes without this reference property have no matching cell.
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &null_label,
+        &null_label,
+    );
+
+    let int_reg = abi::int_result_reg(ctx.emitter);
+    let mut any_mismatch = false;
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        if candidate.slot.php_type.reference_payload_compatible(expected) {
+            abi::emit_load_from_address(ctx.emitter, int_reg, int_reg, candidate.slot.offset); // load the reference-cell pointer from the matched class's property slot
+        } else {
+            any_mismatch = true;
+            abi::emit_jump(ctx.emitter, &mismatch_label);
+        }
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    if any_mismatch {
+        ctx.emitter.label(&mismatch_label);
+        // No pointer has been published yet, so the throw leaves the caller with no cell at all
+        // rather than with one it would read through the wrong representation.
+        super::super::exceptions::emit_error(ctx, REFERENCE_RETURN_PAYLOAD_MISMATCH_MESSAGE);
+    }
+
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, int_reg, 0); // no reference cell for a non-object / unknown receiver
+
+    ctx.emitter.label(&done_label);
     store_ref_cell_pointer_result(ctx, inst)
 }
 
@@ -393,10 +526,7 @@ pub(super) fn lower_allow_dynamic_prop_get(
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null fallback after a successful dynamic-property hit
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
-                "mov rdi, QWORD PTR [{} + {}]",
-                object_reg, hash_offset
-            ));                                                                 // load the dynamic-property hash pointer from the receiver
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [{} + {}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");

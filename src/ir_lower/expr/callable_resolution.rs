@@ -344,11 +344,13 @@ pub(super) fn closure_bind_property_return_type(
 /// cell pointer through. The call result is typed from the bound receiver's property so a
 /// by-reference array return binds correctly. Only the auto-captured `$this` shape (the
 /// `fn &() => $this->prop` form) is handled; other captures fall back to the generic path.
-/// The unbound descriptor the binding was derived from is not an operand of the direct call, but
-/// it owns the closure's captured environment until the call returns, so it is published in the
-/// unwind chain before the arguments are lowered and retired once the call is complete. A
-/// refused direct lowering retires it too, leaving no owner record and no leaked descriptor
-/// behind for the generic path the caller falls back to.
+/// The bound descriptor the binding was derived from is not an operand of the direct call, but
+/// it OWNS the boxed receiver that call passes as the closure's `$this`, so it is published in
+/// the unwind chain before the arguments are lowered and retired once the call is complete.
+/// Retiring it there is also what frees the receiver at the PHP-observable point: the bound
+/// `Closure` of `Closure::bind(...)()` is a temporary, and its destruction is the last reference
+/// an otherwise unreferenced receiver has. A refused direct lowering retires it too, leaving no
+/// owner record and no leaked descriptor behind for the generic path the caller falls back to.
 pub(super) fn lower_bound_closure_immediate_call(
     ctx: &mut LoweringContext<'_, '_>,
     callee: &Expr,
@@ -442,13 +444,28 @@ pub(super) fn prepublish_static_callable_call_result(
 
 /// Builds the static-callable binding for `Closure::bind(fn &() => $this->prop, $newThis, scope)`.
 ///
-/// Lowers the closure literal (once), boxes `$newThis` as the closure's `$this` capture, and
-/// overrides the binding's return type with the bound receiver's property type so a
-/// by-reference return binds correctly. Returns the binding together with the lowered closure
-/// descriptor value (the still-unbound `closure_new`), which callers may store in the assigned
-/// variable. `None` unless the call is the single auto-captured `$this` shape — the only form
-/// whose `$this` is fully known at compile time. Shared by the immediate-invoke path
-/// (`Closure::bind(...)()`) and the variable-assignment path (`$b = Closure::bind(...)`).
+/// Lowers the closure literal ONCE, with the bound receiver's property type supplied as the
+/// closure's contextual result type and its `$this` capture forced to the bind's `Mixed`
+/// representation, then builds the BOUND descriptor from that same compiled closure. Returns the
+/// bound descriptor together with the direct-call binding. `None` unless the call is the single
+/// auto-captured `$this` shape, the only form whose `$this` is fully known at compile time.
+/// Shared by the immediate-invoke path (`Closure::bind(...)()`) and the variable-assignment path
+/// (`$b = Closure::bind(...)`), which materialize identically.
+///
+/// ONE RECEIVER BOX, ONE OWNER. The bound descriptor is a second `closure_new` over the same
+/// compiled function, whose only capture is the receiver boxed as `Mixed`, the identical value
+/// the direct call passes as the closure's hidden `$this` argument. The descriptor owns that box
+/// and the call borrows it, so there is no second receiver reference anywhere: the box (and with
+/// it the receiver) is freed exactly when the descriptor retires, which is what makes the bound
+/// receiver's destructor run at the PHP-observable point. Routing through the runtime
+/// `closure_bind` instead would box the receiver a SECOND time inside the descriptor and leave
+/// this lowering's box owned by nobody.
+///
+/// ORDER. The literal is lowered first, in source order, so the closure's object handle is drawn
+/// before anything `$newThis` evaluates allocates. It is then rooted across that evaluation,
+/// which can throw. The bound descriptor's own staging slot is published before either root, so
+/// the owner chain still unwinds strictly last-in-first-out: result slot, original descriptor,
+/// receiver, then back out again.
 ///
 /// Both callers gate on `bound_closure_binding_shape_is_supported` first, so the `None` arms
 /// after the closure literal is lowered are unreachable defence rather than a live fallback that
@@ -463,15 +480,15 @@ pub(super) fn build_bound_closure_binding(
         return None;
     };
     let closure_lit = bind_args.first()?;
-    if !matches!(closure_lit.kind, ExprKind::Closure { .. }) {
-        return None;
-    }
     let new_this = bind_args.get(1)?.clone();
-    // Lower the closure literal to obtain its static binding (function name + captures).
-    let closure_value = lower_expr(ctx, closure_lit);
+    // Lower the closure literal to obtain its static binding (function name + captures). The
+    // bound property's type reaches the body, so the closure's own `return $this->prop` is
+    // lowered against that representation instead of the untyped `Mixed` its `Mixed` `$this`
+    // would otherwise infer.
+    let original = lower_bound_this_closure_literal(ctx, closure_lit, &result_type)?;
     let Some(StaticCallableBinding::Closure {
         name,
-        mut signature,
+        signature,
         captures,
     }) = ctx.take_pending_static_callable_result()
     else {
@@ -481,9 +498,53 @@ pub(super) fn build_bound_closure_binding(
     if captures.len() != 1 {
         return None;
     }
+    // Published before the operand roots, so the descriptor this builds is reachable from the
+    // unwind chain while those roots are retired and their destructors run.
+    let result_staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
+    let (_, original_owner) = root_owned_call_operand(ctx, original, expr.span);
     let new_this_value = lower_expr(ctx, &new_this);
-    let boxed_this = ctx.box_value_as_mixed(new_this_value, PhpType::Mixed, Some(expr.span));
-    signature.return_type = result_type;
+    let (new_this_value, receiver_owner) = root_owned_call_operand(ctx, new_this_value, expr.span);
+    // The scope argument is still a PHP expression, even though this specialization already
+    // knows the property layout. Evaluate it once in source order and keep its owner through
+    // descriptor construction, just like the receiver argument.
+    let scope_owner = bind_args.get(2).and_then(|scope| {
+        let value = lower_expr(ctx, scope);
+        root_owned_call_operand(ctx, value, scope.span).1
+    });
+    // Acquire before boxing so the box owns a reference of its own: the rooted receiver is still
+    // owned by its operand-owner slot, which is retired separately below.
+    let receiver_for_capture =
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, new_this_value, Some(expr.span));
+    // Boxing a value that ALREADY represents as `Mixed` (a nullable `?C` receiver) emits nothing
+    // and then releases its source, which would hand the descriptor a reference no box took.
+    // Such a receiver is already in the capture's representation, so it is captured as it stands.
+    let boxed_this =
+        if ctx.builder.value_php_type(receiver_for_capture.value).codegen_repr() == PhpType::Mixed {
+            receiver_for_capture
+        } else {
+            ctx.box_value_as_mixed(receiver_for_capture, PhpType::Mixed, Some(expr.span))
+        };
+    let data = ctx.intern_string(&name);
+    let bound_descriptor = ctx.emit_value(
+        Op::ClosureNew,
+        vec![boxed_this.value],
+        Some(Immediate::Data(data)),
+        PhpType::Callable,
+        Op::ClosureNew.default_effects(),
+        Some(expr.span),
+    );
+    stage_call_result(ctx, result_staging.as_ref(), bound_descriptor, expr.span);
+    if let Some(slot) = scope_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    if let Some(slot) = receiver_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    if let Some(slot) = original_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    let bound_descriptor =
+        take_prepublished_call_result(ctx, result_staging, bound_descriptor, expr.span);
     let bound = StaticCallableBinding::Closure {
         name,
         signature,
@@ -491,7 +552,7 @@ pub(super) fn build_bound_closure_binding(
             value: boxed_this.value,
         }],
     };
-    Some((bound, closure_value))
+    Some((bound, bound_descriptor))
 }
 
 /// Returns true when an assignment value is a by-reference `Closure::bind` of the auto-`$this`
@@ -511,8 +572,12 @@ pub(crate) fn is_bound_closure_assignment_shape(ctx: &LoweringContext<'_, '_>, v
 
 /// Lowers `$b = Closure::bind(fn &() => $this->prop, $newThis, scope)` for assignment: builds
 /// the bound-closure binding, publishes it as the pending static callable so the assignment
-/// registers `$b` for later direct `$b()` calls, and returns the closure descriptor to store
-/// in `$b`. `None` for any non-matching shape so normal assignment lowering applies.
+/// registers `$b` for later direct `$b()` calls, and returns the BOUND closure descriptor to
+/// store in `$b`. Storing the bound descriptor is what keeps a use of `$b` that bypasses the
+/// direct-call path (`call_user_func($b)`, a callable argument, a stored callback) running
+/// against the same receiver the direct call uses; it also makes `unset($b)` release the
+/// receiver, since the descriptor is the sole owner of the boxed `$this`. `None` for any
+/// non-matching shape so normal assignment lowering applies.
 pub(crate) fn lower_bound_closure_for_assignment(
     ctx: &mut LoweringContext<'_, '_>,
     value: &Expr,

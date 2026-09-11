@@ -699,6 +699,17 @@ pub enum Op {
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
     LoadPropRefCell,
+    /// Loads a reference property's cell pointer for a BY-REFERENCE RETURN, after proving the
+    /// slot's stored payload can be read with the declared result representation. Operand:
+    /// object; immediate: property name data id; `result_php_type` is the DECLARED by-reference
+    /// result, i.e. the representation the caller will dereference the transferred cell with.
+    ///
+    /// This is deliberately a distinct opcode from `LoadPropRefCell` rather than a flag on it:
+    /// an ordinary `$x = &$obj->prop` alias produces a bare `Pointer` with no payload claim and
+    /// must never be guarded against a property type, while this form carries exactly that claim
+    /// and must be. A receiver whose class is only known at run time raises a catchable `Error`
+    /// when the matched class stores an incompatible payload, so the effects below admit a throw.
+    LoadPropRefCellChecked,
     /// Promotes an indexed-array element to a reference cell and returns the cell
     /// pointer. Used to alias a local to `$a[idx]` (`$b =& $a[0]`). The returned pointer
     /// addresses the element's inline storage within the array; the local aliases it
@@ -970,6 +981,14 @@ impl Op {
             ArrayLen | HashLen => E::READS_HEAP,
             ArrayKeyExists | OffsetExists | PropInitialized | LoadPropRefCell => {
                 E::READS_HEAP
+            }
+            // The payload guard allocates and throws a catchable `Error` for an incompatible
+            // runtime class, and that throw unwinds through frame cleanup that can run PHP
+            // destructors. Modelling it as a plain heap read would let the optimizer hoist,
+            // sink or drop the guarded load across the very cleanup the throw depends on.
+            LoadPropRefCellChecked => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+                    | E::MAY_THROW | E::MAY_FATAL
             }
             PropGet | NullsafePropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
@@ -1311,6 +1330,7 @@ impl Op {
             PropSet => "prop_set",
             PropUnset => "prop_unset",
             LoadPropRefCell => "load_prop_ref_cell",
+            LoadPropRefCellChecked => "load_prop_ref_cell_checked",
             LoadArrayElemRefCell => "load_array_elem_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",
             AdoptRefCellPtr => "adopt_ref_cell_ptr",

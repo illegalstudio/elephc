@@ -524,12 +524,62 @@ the caller dereferences and may alias, so that path fails closed instead of hand
 the null placeholder an ordinary return would use. Declare a result type to have the
 missing return reported at compile time instead.
 
+### Payload agreement between the callee and its caller
+
+The caller dereferences the transferred cell with the representation of the callee's
+**declared result**, so the returned storage has to hold a payload that can be read that
+way.
+
 An ordinary local can be boxed into the declared result's `Mixed` representation before
 its reference cell is created, including a typed array local returned as PHP `array`.
-An already shared local cell, including a by-reference parameter, is not widened:
-incompatible payload layouts are rejected at compile time. Compatible object class
-types still share the same pointer layout. This guard is a compiler subset limit, not
-a PHP restriction on reference returns.
+Storage that is already shared cannot be re-shaped behind the aliases that hold it, so it
+is checked instead of converted. This applies to a by-reference parameter and to an object
+property alike:
+
+```php
+<?php
+class Holder { public int $value = 7; }
+
+// Rejected at compile time: the slot stores a raw int, while a `mixed` result makes the
+// caller read the cell as a boxed value.
+function &slot(Holder $h): mixed { return $h->value; }
+```
+
+Compatible object class types still share the same pointer layout, so returning a property
+holding a subclass instance through a base-typed result is accepted. Container element
+layouts are part of the payload, so an `array` of one element representation cannot be
+returned as an `array` of another.
+
+When the receiver's class is only known at run time (a `mixed` parameter, or the `$this`
+of a closure bound with `Closure::bind`), the decision is made per class at the point of
+return, never for the whole function. A call that lands on a class whose slot is
+compatible gets its reference; a call on a class whose slot is not raises a catchable
+`Error`, `Cannot return a reference to a property whose stored representation differs from
+the declared by-reference result type`, and publishes no pointer at all, so the object and
+every other alias of it are left exactly as they were:
+
+```php
+<?php
+class GoodHolder { public mixed $value = 7; }
+class BadHolder  { public int   $value = 9; }
+function &dynamicSlot(mixed $holder): mixed { return $holder->value; }
+
+$good = new GoodHolder();
+$bad  = new BadHolder();
+$goodAlias = &$good->value;               // makes each property a reference property
+$badAlias  = &$bad->value;
+
+$reference = &dynamicSlot($good);         // 7, aliases $good->value
+try {
+    $refused = &dynamicSlot($bad);
+} catch (Error $error) {
+    echo $bad->value;                     // 9, untouched
+}
+```
+
+Both the compile-time rejection and the run-time `Error` are compiler subset limits, not
+PHP restrictions on reference returns: PHP's references are untyped and have no equivalent
+condition.
 
 ## Variadic functions
 

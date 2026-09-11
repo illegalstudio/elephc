@@ -1077,7 +1077,15 @@ pub(crate) fn lower_closure_function(
     )
 }
 
-/// Lowers one closure literal using contextual types for unannotated parameters.
+/// Lowers one closure literal using contextual types for unannotated parameters and, when the
+/// binding context supplies one, for an undeclared result type.
+///
+/// The contextual result is applied BEFORE the body is lowered, because the body's `return`
+/// statements are lowered against the signature's return type: a by-reference `return
+/// $this->prop` decides there which payload representation it publishes to the caller. It is
+/// only a default: a closure that declares its own return type keeps it, so an explicit
+/// declaration is never silently overridden by the binding.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_closure_function_with_context(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -1088,6 +1096,7 @@ pub(crate) fn lower_closure_function_with_context(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     contextual_arg_types: &[PhpType],
+    contextual_return_type: Option<&PhpType>,
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
     loop_storage_scope: String,
@@ -1103,6 +1112,11 @@ pub(crate) fn lower_closure_function_with_context(
         parent.builtin_call_types,
     );
     signature.by_ref_return = by_ref_return;
+    if let Some(contextual_return_type) = contextual_return_type {
+        if !signature.declared_return {
+            signature.return_type = contextual_return_type.clone();
+        }
+    }
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
         if type_ann.is_none() {
             if let Some(contextual_ty) = contextual_arg_types.get(idx) {

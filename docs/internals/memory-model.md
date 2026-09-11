@@ -360,19 +360,58 @@ variable, a `finally` that rebinds the returned variable and falls through canno
 change what was returned. This mirrors PHP, which materializes the reference with
 `MAKE_REF` before the finally rather than re-reading the variable afterwards.
 
-Managed by-reference return sources own a transferable cell. A promoted property
-slot already holds one; an ordinary addressable local is promoted in place first, which
-preserves the variable's identity. That promotion uses the DECLARED result's payload
-representation, not the local's narrower inferred storage: a concretely typed array
-local inside an `: array` function widens to `Mixed` before its cell exists, because
-the caller dereferences the cell with the declared shape and a later write through
-either alias has to keep meaning. A by-reference parameter cannot be widened, since
-its storage belongs to the caller, so a payload representation that disagrees with
-the declared result is refused instead. A source whose cell this frame can see is not
-one of those is refused during lowering with a source diagnostic instead of being
-lowered as a value. Those refusals describe this lowering's subset, not PHP: PHP
-does return references to array elements and to other reference-returning calls,
-and the refusal exists only because no owning cell can be transferred for them yet.
+An accepted by-reference return source is either a MANAGED cell whose ownership
+transfers with the address, or an EXACT bounded active borrow whose ultimate consumer
+copies the pointee before any cleanup can run (see the `array_walk()` exception below).
+Everything else is refused. For the managed transfer, a promoted property slot already
+holds a cell; an ordinary addressable local is promoted in place first, which preserves
+the variable's identity.
+
+That promotion uses the DECLARED result's payload representation, not the local's
+narrower inferred storage: a concretely typed array local inside an `: array` function
+widens to `Mixed` before its cell exists, because the caller dereferences the cell with
+the declared shape and a later write through either alias has to keep meaning. Storage
+that other aliases ALREADY share cannot be re-shaped that way, so it is checked instead
+of widened:
+
+- A by-reference parameter's storage belongs to the caller. A payload representation
+  disagreeing with the declared result is refused at compile time.
+- An object property's slot is shared by every holder of the object. When the receiver's
+  class is statically known, a disagreement is likewise refused at compile time. When it
+  is not (a `mixed` receiver, or the `$this` of a `Closure::bind` closure), the check
+  moves into the guarded `LoadPropRefCellChecked` lowering, which decides PER CANDIDATE
+  CLASS after the runtime class-id dispatch: a compatible class loads its cell, and an
+  incompatible one raises a catchable `Error` BEFORE any pointer is published, so the
+  receiver and its other aliases are untouched. Rejecting every `Mixed` receiver instead
+  would break the compatible classes that reach the same function.
+
+Compatibility is representation, not identity: two object classes share one pointer
+layout and are interchangeable here, while container element layouts are part of the
+payload and are compared recursively.
+
+A source that is none of the accepted shapes is refused during lowering with a source
+diagnostic instead of being lowered as a value. Those refusals describe this lowering's
+subset, not PHP: PHP does return references to array elements and to other
+reference-returning calls, PHP's references carry no payload type at all, and the
+refusals exist only because no owning cell can be transferred for them yet.
+
+Because a by-reference return's guard can throw, an OWNING temporary receiver is rooted
+in the call-operand-owner chain across both the guarded cell load and `AcquireRefCell`,
+and retired exactly once after the snapshot is published. A borrowed receiver (a plain
+local or parameter the caller still owns) is never rooted and never released there.
+
+`Closure::bind(fn &() => $this->prop, $newThis, ...)` has a direct specialization for
+reference assignment. Ordinary by-value calls through its descriptor copy the pointee
+into `Mixed`; that value does not transport an alias. The closure
+literal is lowered once, in source order, with the bound property's type as its result
+type and its `$this` capture boxed as `Mixed` whatever scope the literal was written in.
+The bound descriptor is then a second `closure_new` over that same compiled function whose
+only capture is the receiver's box. That descriptor OWNS the box, and the direct call
+borrows it, so the descriptor owns one receiver reference: releasing the closure releases the
+box, which releases the receiver, which is where its destructor runs. The literal's own
+descriptor is rooted across receiver and scope evaluation and retired afterwards, and the
+bound descriptor is staged in its own owner slot before either root so it stays reachable
+while those retirements run destructors.
 
 A by-reference function whose declared result is missing runs no return-coverage
 analysis in the checker, so an inferred non-void one can still fall through. The
@@ -391,13 +430,16 @@ the program that raised it.
 That owner-zero rule has exactly one accepted exception, and it is checked against
 the runtime rather than assumed: an address that is an EXACT node of the active
 unmanaged-borrow chain is a live boxed `array_walk()` element. Nested reference
-relays are permitted while that borrow is active; the enclosing descriptor invoker
-copies the final pointee into an owned `Mixed` before releasing the element, so the return is
-accepted with NO lease and still transports its own snapshot. Every other owner-zero
-address, including an ordinary array element relayed through a by-reference
-parameter, still fails closed, and the separate escape guards that reject publishing
-such a borrow into a property, a promoted constructor property or a closure capture
-are unaffected.
+relays are permitted while that borrow is active: the frame that publishes the address
+is not necessarily the one that consumes it, and what bounds the lifetime is the active
+walk itself, not the identity of the direct caller. The ULTIMATE consumer (the
+descriptor invoker or the walk that owns the borrow chain) copies the final pointee
+into an owned `Mixed` before releasing the element, so each relay is accepted with NO
+lease and still transports its own snapshot. Every other owner-zero address, including
+an ordinary array element relayed through a by-reference parameter, still fails closed
+rather than escaping with no bound at all, and the separate escape guards that reject
+publishing such a borrow into a property, a promoted constructor property or a closure
+capture are unaffected.
 
 The caller either adopts the lease for reference assignment or acquires the
 contained value and retires the lease. Both adoptions happen immediately after the

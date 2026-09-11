@@ -8,15 +8,17 @@ branch `feat/core-align`.
 - [x] Close unsupported descriptor and non-reference call reference assignment.
 - [ ] Ensure reference-return sources have a managed owner or a bounded active borrow.
 - [ ] Preserve the selected reference cell across fallthrough finally rebinding.
-- [ ] Align returned property payload guards with bound-closure signature specialization.
+- [x] Align returned property payload guards with bound-closure signature specialization.
 - [x] Publish returned reference leases before throwing caller cleanup and root value arguments.
 - [x] Protect copied by-value reference-call results during throwing caller cleanup.
 - [x] Release successful static extern callable argument temporaries.
-- [x] Protect static builtin callable arguments during later argument evaluation.
+- [x] Protect static builtin callable arguments and keep wrapper arity aligned.
 - [x] Protect descriptor callbacks before argument container construction.
-- [x] Retire unused immediately invoked closure descriptors.
+- [x] Retire unused immediately invoked closure descriptors and detached capture views.
+- [ ] Protect partial CUFA containers and preserve call-unpack duplicate/order checks.
+- [ ] Protect callable results during throwing argument or descriptor cleanup.
 - [x] Protect partial statically lowered array_map results across exceptions.
-- [ ] Accept valid Mixed class-name strings in get_class_vars.
+- [x] Accept valid Mixed class-name strings in get_class_vars.
 - [ ] Capture native argument metadata for indirect and eval-originated backtraces.
 - [ ] Expose AOT user constants in eval inventories under the correct category.
 - [x] Preserve first-inclusion order in eval file inventories.
@@ -201,3 +203,63 @@ below, and checklist items must not imply that unexecuted tests passed.
   runtime destructor and heap-clean assertions remain unchanged.
 - `cargo check --locked -p elephc --tests` completed without warnings (4.57s).
   Runtime validation still belongs to CI; no test ran locally.
+
+### Boxed class-introspection arguments
+
+- Reviewed and applied Claude's read-only proposal: the class-variable validator
+  accepts boxed string candidates, and both introspection builtins share runtime
+  tag checks instead of coercing non-string cells into class names.
+- Corrected the proposed cleanup further: the extracted name is rooted outside
+  its input, and a TypeError is published before unwinding an input whose
+  destructor can throw. Typed object arguments use the same result-owner rule.
+- Added source coverage for direct/CUF/CUFA/FCC/spread calls, invalid tags,
+  same-frame catches, destructor timing, repeated heap-debug cleanup and a
+  five-target control-flow owner-stack check. Updated the existing example.
+- `cargo check --locked -p elephc --tests` passed before the final structural
+  assertion refinement. Final compilation, generated-doc audits and CI remain
+  pending. No local test or PHP/compiler reproduction ran.
+
+### Callable CI follow-ups
+
+- CI `34604123024` exposed a four-operand replacement wrapper against a
+  three-operand backend, boxed spreads reaching raw Array instructions, unrooted
+  partial CUFA literals, detached closure capture views, and result-cleanup gaps.
+  It also exposed a boxed-reference fixture rejected before reaching its target
+  and a structural assertion counting the newly added result owner as an operand.
+- Applied Claude's reviewed arity-cap fix and matching signature metadata
+  truncation. Added runtime/error fixture sources without relaxing the cap.
+- Made spread-free indexed CUFA construction unconditionally published; inferred
+  all-by-value signatures must not select an unrooted generic array builder.
+- Corrected the boxed-reference fixture to use a declared-array property and a
+  reference alias for its mutation. Kept its output and clean-heap assertions.
+- The proposed ordinary HashSpread reuse is not accepted: call unpacking needs
+  duplicate-name and positional-after-named errors, whereas array construction
+  overwrites duplicate string keys. A bounded read-only follow-up covers that
+  distinction and associative CUFA construction before integration.
+- Capture-view release waits for the sole bound-closure writer to finish. Another
+  read-only task is diagnosing throwing result cleanup and the owner-count test.
+- Commit `31a641ef44067d9c1d06d5e3210010ae5ec08e21` is pushed. CI
+  `34606644288` is running; only the promotion leak correction is in that head.
+
+### Property guards, bound closures and class introspection reviewed
+
+- Claude's A4/A5 property guard and contextual closure typing are integrated.
+  Runtime-dispatched properties are checked per class, ordinary aliases remain
+  unchecked, and the bound descriptor owns the same receiver box its direct call
+  borrows. Both immediate and stored forms publish results outside operand roots.
+- Coordinator also preserved scope-argument evaluation and cleanup order, added
+  its regression source, and integrated Claude's provisional capture-view release.
+- A separate review found ClosureBind missing from the owned-producer classifier
+  and retaining result boxing in the descriptor invoker. Both corrections and
+  their five-target structural fixtures are integrated. The omitted-default test
+  now distinguishes operand records from the newly added result record.
+- The direct-call throwing-argument failure is not root-caused yet. Its unchanged
+  failing assertion now reports generated assembly from CI for further diagnosis;
+  this diagnostic addition is not reported as a fix.
+- Final `cargo check --locked -p elephc -p elephc-magician --tests` passed without
+  warnings in 17.30s. The exporter build passed in 22.89s. No local tests ran.
+- Regenerated builtin pages, registries, module sections and comparison docs.
+  Builtin-doc audit, site compatibility audit and target-architecture boundary
+  audit passed. Assembly-comment alignment and `git diff --check` passed.
+- AOT user-constant visibility is now delegated to the sole Claude writer.
+  Call-unpack duplicate/order semantics remain in a separate read-only review.

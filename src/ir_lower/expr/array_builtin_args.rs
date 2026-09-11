@@ -546,6 +546,7 @@ pub(super) fn lower_value_sort_comparator_closure(
         callback,
         &[elem_ty.clone(), elem_ty],
         None,
+        None,
         *is_static,
     )
     .value

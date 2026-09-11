@@ -63,10 +63,19 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
 /// Lowers the value of a by-reference `return`, which must transport a managed cell.
 ///
 /// The reference-return ABI always places a raw cell pointer in the integer result register, so
-/// every accepted source has to OWN a transferable cell. Two shapes qualify: a reference-bound
-/// local whose cell this frame can address, and an object property whose slot already holds a
-/// promoted cell. An ordinary addressable local is promoted in place first, which preserves its
-/// identity (later writes through the variable are seen through the caller's alias).
+/// every accepted source has to hand the caller either a MANAGED cell whose ownership transfers
+/// with the pointer, or an EXACT bounded active borrow whose consumer copies the pointee before
+/// any cleanup can run. Two shapes qualify for the managed transfer: a reference-bound local
+/// whose cell this frame can address, and an object property whose slot already holds a promoted
+/// cell. An ordinary addressable local is promoted in place first, which preserves its identity
+/// (later writes through the variable are seen through the caller's alias).
+///
+/// The cell the caller receives is dereferenced with the representation of this function's
+/// DECLARED result, so an accepted source must also store a payload that can be read that way.
+/// A local that is only being promoted here is widened first; a property slot and a
+/// by-reference parameter are storage other aliases already share, so a disagreement there is
+/// refused (statically) or raised as a catchable `Error` (when the receiver's class is only
+/// known at run time), never relabelled.
 ///
 /// Everything else is refused with a compile diagnostic rather than lowered as a value, because
 /// a value-shaped return would put a payload word where the caller expects an address. These are
@@ -78,8 +87,11 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
 /// cannot see, such as an alias relayed in through a by-reference parameter, is caught by
 /// the owner-zero guard in `codegen::lower_inst::local_stores::lower_acquire_ref_cell`, which
 /// raises a catchable `Error` instead of publishing an interior address. Its one exception is
-/// an EXACT active `array_walk()` element borrow, whose caller is the descriptor invoker and
-/// copies the pointee before any cleanup runs.
+/// an EXACT active `array_walk()` element borrow, whose ULTIMATE consumer is the descriptor
+/// invoker (or the walk itself) and copies the pointee before any cleanup runs. A nested relay
+/// of that borrow, one by-reference function handing it to the next, stays valid for the same
+/// reason: the borrow is still inside the one active walk lifetime that bounds it. What the
+/// guard refuses is an owner-zero address with no such bound, which would escape arbitrarily.
 fn lower_reference_return(
     ctx: &mut LoweringContext<'_, '_>,
     value_expr: Option<&Expr>,
@@ -135,21 +147,38 @@ fn lower_reference_return(
             acquire_and_return_reference_cell(ctx, value, span);
         }
         Some(ExprKind::PropertyAccess { object, property }) => {
+            let statically_incompatible = !property_reference_return_payload_matches(ctx, object, property);
             let object = lower_expr(ctx, object);
+            if statically_incompatible {
+                refuse_reference_return(
+                    ctx,
+                    span,
+                    "Unsupported by-reference return: this property's slot stores a different \
+                     payload representation than the declared by-reference result, so the caller \
+                     would read the shared storage with the wrong shape. The property is aliased \
+                     by every other holder of the object, so this lowering cannot widen it",
+                );
+                return;
+            }
             let data = ctx.intern_string(property);
             let result_ty = ctx.return_php_type.clone();
+            // The payload guard and the lease acquisition can both throw, and a same-frame catch
+            // has to find an owning receiver temporary through the operand-owner chain rather
+            // than only in SSA. A borrowed receiver is not rooted at all, so a caller's object is
+            // never released here.
+            let (object, receiver_owner) =
+                crate::ir_lower::expr::root_owned_call_operand(ctx, object, span);
             let cell_ptr = ctx.emit_value(
-                Op::LoadPropRefCell,
+                Op::LoadPropRefCellChecked,
                 vec![object.value],
                 Some(Immediate::Data(data)),
                 result_ty,
-                Op::LoadPropRefCell.default_effects(),
+                Op::LoadPropRefCellChecked.default_effects(),
                 Some(span),
             );
-            let owning_receiver = ctx.value_is_owning_temporary(object);
             let captured = acquire_reference_return_owner(ctx, cell_ptr, span);
-            if owning_receiver {
-                crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+            if let Some(slot) = receiver_owner {
+                crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
             }
             terminate_return(ctx, Some(captured.value));
         }
@@ -216,6 +245,44 @@ fn promote_local_to_reference_return_payload(
 /// both sides now agree on one representation.
 fn reference_return_payload_matches(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
     ctx.local_type(name).reference_payload_compatible(&ctx.return_php_type)
+}
+
+/// Returns whether a returned property's slot can be read with the declared by-reference result.
+///
+/// Answers TRUE whenever the receiver's class is not statically known, because a `Mixed` or
+/// union receiver reaches several candidate classes and only some of them may disagree. Refusing
+/// the whole function there would reject the compatible classes too, so that case is decided per
+/// candidate at run time by the backend's `LoadPropRefCellChecked` guard instead. This early
+/// diagnostic covers only the fully decided shape, where the disagreement is a property of the
+/// source rather than of the value that happens to arrive.
+fn property_reference_return_payload_matches(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    if !receiver_class_is_statically_decided(ctx, object) {
+        return true;
+    }
+    let Some(property_ty) = crate::ir_lower::expr::property_access_expr_type_for_ir(ctx, object, property)
+    else {
+        return true;
+    };
+    property_ty.reference_payload_compatible(&ctx.return_php_type)
+}
+
+/// Returns whether the receiver's CLASS is settled by this frame's own storage.
+///
+/// `$this` is the case that needs asking. Inside a `Closure::bind` closure the receiver arrives
+/// as a boxed `Mixed` capture, and the enclosing lexical class (which the syntactic type lookup
+/// still reports) is not the class the body will run against. Deciding the payload from that
+/// lexical class would refuse a perfectly compatible bound receiver, so the decision is left to
+/// the per-candidate backend guard whenever the `this` slot is not a concrete object.
+fn receiver_class_is_statically_decided(ctx: &LoweringContext<'_, '_>, object: &Expr) -> bool {
+    if !matches!(object.kind, ExprKind::This) {
+        return true;
+    }
+    ctx.has_local_slot("this")
+        && matches!(ctx.local_type("this").codegen_repr(), PhpType::Object(_))
 }
 
 /// Retains the returned cell in the frame's lease slot and yields the address it captured.

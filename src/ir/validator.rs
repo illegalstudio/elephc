@@ -377,6 +377,7 @@ fn validate_instruction_immediate(
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
+        | LoadPropRefCellChecked
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
         | EvalStaticMethodCall
@@ -712,6 +713,7 @@ fn validate_opcode_rules(
         | PropGetForWrite
         | PropInitialized
         | LoadPropRefCell
+        | LoadPropRefCellChecked
         | DynamicPropGet
         | DynamicPropSet
         | NullsafePropGet
