@@ -346,3 +346,29 @@ below, and checklist items must not imply that unexecuted tests passed.
   key and current-value owners and pre-insertion duplicate checks. Its independent
   review is pending. The destructor draft is undergoing a bounded correctness
   refinement; neither draft is included in the capture ownership commit.
+
+### Grok delegation and eval count operand cleanup
+
+- `d666caddad89a56144d84dbbc0ac0d8f3723831e` is pushed. Its CI run
+  `34617125231` is still in progress and already reports failures; this is not a
+  green-head or review-ready claim.
+- The user-constant heap regression exposed a separate direct `count()` adapter
+  leak. Its evaluated argument owners were not retired, and recursive counting
+  also dropped owned iteration keys and fetched cells. The constant metadata
+  fix is unchanged.
+- Direct count now uses the shared source-order operand lease helper. Recursive
+  counting attempts key and element cleanup before propagating operation or
+  cleanup errors. Added heap-debug regression sources for repeated nested reads,
+  recursive counting, and temporary Countable cleanup when a later operand throws.
+- Grok 4.6 reviewed the supplied diff and ownership contracts. The coordinator
+  independently verified its assumptions against the runtime adapter and operand
+  helper. Its finding-free verdict is limited to this patch, not the whole PR.
+  Delegations that returned only progress or blank output were not accepted as
+  reviews. New write tasks require a persistent final report as well as stdout.
+- Required builtin documentation generation and audits passed with this count
+  binding, without generated changes. The Magician test targets compile without
+  warnings. `cargo check --locked -p elephc --test codegen_tests` passed in 10.53s.
+  No local tests, PHP/compiler repros or formatters ran.
+- The descriptor spread and destructor-analysis drafts remain separate,
+  uncommitted work. Grok is checking a narrow optimizer refinement before the
+  coordinator completes that draft's review.

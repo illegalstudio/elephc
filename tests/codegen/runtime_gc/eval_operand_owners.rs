@@ -126,6 +126,51 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Positional `count()` retires owned operands, including nested reads and recursive walks.
+///
+/// `count($table["items"])` hands the direct hook an owned element cell, not a borrowed
+/// variable read, so a hook that only reads its operand leaves one owner per call behind and
+/// strands the whole nested array. `COUNT_RECURSIVE` additionally pins the boxed key and the
+/// fetched element allocated for every visited position.
+#[test]
+fn test_core_eval_count_releases_owned_operands_and_recursive_reads() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function evalCountOperandOwners(string $source): void { eval($source); }
+$source = '$table = ["items" => [4, 5], "name" => "seeded"];
+echo count($table["items"]), ":";
+echo count($table["items"], COUNT_RECURSIVE), ":";
+echo count(["a" => [1, [2, 3]]]["a"], COUNT_RECURSIVE), ":";
+echo count($table), "|";
+unset($table); // ' . $argc;
+for ($i = 0; $i < 3; $i++) { evalCountOperandOwners($source); }
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:2:4:2|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A later count operand can throw without stranding an earlier temporary Countable object.
+#[test]
+fn test_core_eval_count_retires_countable_operands_on_success_and_argument_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function evalCountableOwners(string $source): void { eval($source); }
+$source = 'class CountedOperand implements Countable {
+    public function count(): int { return 3; }
+    public function __destruct() { echo "drop|"; }
+}
+function failingCountMode(): int { throw new RuntimeException("mode"); }
+try { count(new CountedOperand(), failingCountMode()); }
+catch (RuntimeException $error) { echo "caught|"; }
+echo count(new CountedOperand()), "|"; // ' . $argc;
+evalCountableOwners($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop|caught|drop|3|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A finally unset cannot invalidate the eval return consumed after native scope teardown.
 #[test]
 fn test_core_eval_returned_local_survives_finally_unset() {
