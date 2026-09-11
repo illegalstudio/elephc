@@ -2375,3 +2375,16 @@ exception for the two local tests was requested but has not been granted.
 Native Sol repaired both diagnostic extractors. Cargo check --tests, workflow YAML
 and dependency validation, assembly-comment alignment and diff hygiene pass. No
 local tests or repros execute. The next exact-head CI supplies runtime evidence.
+
+### Keep diagnostic extraction active across inline registration thunks
+
+The dedicated d3f158f11 job confirms the same three-string and six-string leaks,
+but exposes an extraction defect: native registration emits global invoker
+labels inside the skipped context-initialization block. Process the active
+skip-to-ready state before treating a global directive as the next function.
+Add synthetic formatting regressions retaining the post-eval query and epilogue.
+This changes diagnostics only, not the failing runtime ownership assertions.
+
+Native Sol updated both fixture-local extractors. Static diff checks and
+cargo check --tests pass. No local tests or repros execute; the dedicated CI job
+continues to supply the requested runtime evidence.

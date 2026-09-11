@@ -22,12 +22,6 @@ fn bounded_user_function_assembly(assembly: &str, function: &str) -> String {
         let line = line.split_once(" // ").map_or(line, |(instruction, _)| instruction);
         let line = line.split_once(" # ").map_or(line, |(instruction, _)| instruction);
         let trimmed = line.trim_start();
-        if matches!(
-            trimmed.split_whitespace().next(),
-            Some(".globl" | ".global")
-        ) {
-            break;
-        }
         if let Some(ready) = eval_context_ready.as_deref() {
             if trimmed == format!("{ready}:") {
                 body.push_str("    <eval context initialization omitted>\n");
@@ -36,6 +30,12 @@ fn bounded_user_function_assembly(assembly: &str, function: &str) -> String {
                 eval_context_ready = None;
             }
             continue;
+        }
+        if matches!(
+            trimmed.split_whitespace().next(),
+            Some(".globl" | ".global")
+        ) {
+            break;
         }
         if trimmed
             .split_whitespace()
@@ -68,6 +68,37 @@ fn bounded_user_function_assembly(assembly: &str, function: &str) -> String {
         .rev()
         .collect::<String>();
     format!("{head}\n<user function middle omitted>\n{tail}")
+}
+
+/// Inline registration globals inside context initialization do not end the selected function.
+#[test]
+fn bounded_user_function_assembly_skips_inline_registration_globals() {
+    let assembly = r#".globl _fn_probe
+_fn_probe:
+    call source_pin
+    jne .L_probe_eval_context_ready_1
+    call __elephc_eval_context_new
+.globl _eval_registration_invoker
+_eval_registration_invoker:
+    ret
+.L_probe_eval_context_ready_1:
+    call __elephc_eval_execute
+    call metadata_query
+    call function_epilogue
+.globl _fn_next
+_fn_next:
+    ret
+"#;
+
+    let selected = bounded_user_function_assembly(assembly, "probe");
+
+    assert!(selected.contains("call source_pin"), "{selected}");
+    assert!(selected.contains("<eval context initialization omitted>"), "{selected}");
+    assert!(selected.contains("call __elephc_eval_execute"), "{selected}");
+    assert!(selected.contains("call metadata_query"), "{selected}");
+    assert!(selected.contains("call function_epilogue"), "{selected}");
+    assert!(!selected.contains("_eval_registration_invoker"), "{selected}");
+    assert!(!selected.contains("_fn_next"), "{selected}");
 }
 
 /// Failed and matched native catch predicates release the temporary boxes used to query eval.
