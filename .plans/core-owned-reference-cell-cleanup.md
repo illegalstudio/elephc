@@ -2411,3 +2411,17 @@ taken and skipped optional eval. Existing metadata and instanceof assertions sta
 intact. Native Sol agents traced, implemented and independently reviewed the
 change. Cargo check --tests, assembly-comment checks and diff hygiene pass.
 No local test or repro executes. Runtime confirmation remains assigned to CI.
+
+### Confirm the repaired ownership paths before retiring temporary CI diagnostics
+
+Extend the temporary early CI filter to include the isolated future-local heap
+case, its two structural tests, and the reference/callable regressions repaired
+in this batch. Normal matrix membership and assertions remain unchanged. Once
+the existing metadata heap assertion passes, its second tagged compilation is
+reachable again; assign only that exact two-compile fixture the same bounded
+180-second budget as its sibling eval GC tests. The new isolated heap fixture
+compiles only once and keeps the normal budget.
+
+TOML and workflow YAML parse successfully; the archive dependency and diff hygiene
+checks pass. No local test executes. Remove the temporary early job after it has
+confirmed the repair, before presenting the PR for review.

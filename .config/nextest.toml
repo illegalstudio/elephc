@@ -149,6 +149,17 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'test(=codegen::runtime_gc::core_builtins::test_core_eval_class_constant_defaults_release_inventory_leases)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# Once its heap assertion passes, this metadata fixture also performs a second
+# Magician compile for tagged output. Give that existing second phase the same
+# bounded budget as the other two-compile eval ownership regressions.
+[[profile.default.overrides]]
+filter = 'test(=codegen::runtime_gc::gc_exception_recovery::test_core_eval_metadata_queries_balance_native_and_borrowed_object_inputs)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::runtime_gc::gc_exception_recovery::test_core_eval_metadata_queries_balance_native_and_borrowed_object_inputs)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # CI on 75f0f8910 terminated these two-compile eval fixtures on both macOS
 # attempts while both Linux targets passed. Keep the same bounded three-period
 # budget as their siblings above, without changing assertion or retry policies.

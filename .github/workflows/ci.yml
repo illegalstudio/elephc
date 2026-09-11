@@ -489,8 +489,8 @@ jobs:
 
   core-eval-ownership-diagnostics:
     name: Core eval ownership diagnostics (PR 893)
-    # Temporary fast feedback for the two remaining PR 893 leaks. The ordinary
-    # sharded matrix still runs both tests. Remove this job before review.
+    # Temporary fast feedback for the remaining PR 893 regressions. The ordinary
+    # sharded matrix still runs these tests. Remove this job before review.
     if: github.event_name == 'pull_request' && github.event.pull_request.number == 893
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
@@ -509,12 +509,12 @@ jobs:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
 
-      - name: Run the two eval ownership regressions
+      - name: Run the focused ownership regressions
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests) and (test(=codegen::runtime_gc::gc_exception_recovery::test_core_eval_metadata_queries_balance_native_and_borrowed_object_inputs) or test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_post_eval_dynamic_class_name_target_balances_detached_strings))' \
+            -E 'test(=codegen::runtime_gc::gc_exception_recovery::test_core_eval_metadata_queries_balance_native_and_borrowed_object_inputs) or test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_post_eval_dynamic_class_name_target_balances_detached_strings) or test(=codegen::runtime_gc::gc_exception_recovery::test_core_first_string_store_after_optional_eval_retires_synced_owner) or test(=codegen::runtime_gc::boxed_array_walk::test_core_local_reference_return_keeps_managed_cell_alive) or test(first_post_eval_) or test(mixed_named_string_and_callable_coercions_do_not_double_retire_evaluation_owners) or test(promoted_reference_guards_accept_materialized_cells_on_every_target) or test(reference_returns_transfer_cell_owners_on_every_target) or test(reference_return_array_normalization_does_not_strand_a_detached_load_on_every_target)' \
             --no-fail-fast --retries 0 -j 1
 
   non-codegen-tests-linux-aarch64:
