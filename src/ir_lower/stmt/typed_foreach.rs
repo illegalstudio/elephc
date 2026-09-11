@@ -107,9 +107,11 @@ pub(super) fn lower_foreach(
     let source = retain_object_foreach_source(ctx, source, array.span);
     // Iterator initialization can invoke user code before the loop frame exists.
     // Publish temporary sources first so a same-frame catch can unwind them.
-    // A by-reference fetch-for-write is deliberately excluded because retaining
-    // it before IterStart would defeat the required copy-on-write split.
-    let (source, source_owner) = if source_is_borrowed_fetch {
+    // Every by-reference source is deliberately excluded because retaining it
+    // before IterStart would defeat the required copy-on-write split. Concrete
+    // array locals also need to remain a direct LoadLocal so the backend can
+    // publish the split payload back into the original slot.
+    let (source, source_owner) = if value_by_ref || source_is_borrowed_fetch {
         (source, None)
     } else {
         crate::ir_lower::expr::root_owned_call_operand(ctx, source, array.span)

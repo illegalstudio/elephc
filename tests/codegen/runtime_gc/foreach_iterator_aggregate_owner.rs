@@ -213,3 +213,59 @@ echo "\n";
     );
     assert_clean(out, "Ax\n");
 }
+
+/// Rooting the aggregate source must not hide a by-reference array local from COW writeback.
+#[test]
+fn test_foreach_by_reference_arrays_publish_mutations_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$indexed = [1, 2];
+foreach ($indexed as &$value) { $value++; }
+unset($value);
+echo implode(",", $indexed), ":";
+
+$assoc = ["a" => 1, "b" => 2];
+foreach ($assoc as &$value) { $value++; }
+unset($value);
+echo implode(",", $assoc), ":";
+
+$mixed = [1, "2"];
+foreach ($mixed as &$value) { $value = (int) $value + 1; }
+unset($value);
+echo implode(",", $mixed), "\n";
+"#,
+    );
+    assert_clean(out, "2,3:2,3:2,3\n");
+}
+
+/// A terminal first branch must not consume the handler/finally state used by its sibling.
+///
+/// Both branches have to run in one program: `return` is the branch that consumes a finally
+/// frame, and `continue` is the sibling that must still find one. `walk(false)` catches twice,
+/// so the finally runs after each catch body and the loop completes normally, retiring the
+/// iterator before the aggregate. `walk(true)` returns out of the first iteration, so the
+/// finally runs once and the same two destructors follow it on the return path.
+#[test]
+fn test_foreach_try_branch_exit_preserves_sibling_handler_state_heap_clean() {
+    let out = compile_and_run_with_heap_debug(&format!(
+        r#"<?php {PRELUDE}
+function walk(bool $leave): void {{
+    foreach (new FreshAgg() as $value) {{
+        try {{
+            if ($leave) {{ return; }}
+            throw new RuntimeException("x");
+        }} catch (RuntimeException $exception) {{
+            echo $value;
+            continue;
+        }} finally {{
+            echo "f";
+        }}
+    }}
+}}
+walk(false);
+walk(true);
+echo "\n";
+"#
+    ));
+    assert_clean(out, "0f1fIAfIA\n");
+}

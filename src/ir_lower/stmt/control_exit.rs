@@ -435,10 +435,16 @@ pub(super) fn acquire_borrowed_return_value(
 
 /// Terminates with a return after running active finally bodies from inner to outer.
 pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
+    let saved_finally_stack = ctx.finally_stack.clone();
+    let saved_handler_loop_depths = ctx.handler_loop_depths.clone();
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_return(ctx, value);
         }
+        // Finalizer frames are consumed only on the emitted control-flow path.
+        // Restore the lexical lowering state for sibling and fallthrough blocks.
+        ctx.finally_stack = saved_finally_stack;
+        ctx.handler_loop_depths = saved_handler_loop_depths;
         return;
     }
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
@@ -448,10 +454,14 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
 
 /// Terminates with a branch after running active finally bodies from inner to outer.
 pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
+    let saved_finally_stack = ctx.finally_stack.clone();
+    let saved_handler_loop_depths = ctx.handler_loop_depths.clone();
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_branch(ctx, target, loop_cleanup_count);
         }
+        ctx.finally_stack = saved_finally_stack;
+        ctx.handler_loop_depths = saved_handler_loop_depths;
         return;
     }
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
@@ -463,10 +473,14 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
 
 /// Terminates with a throw after running finally bodies that apply to uncaught throws.
 pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
+    let saved_finally_stack = ctx.finally_stack.clone();
+    let saved_handler_loop_depths = ctx.handler_loop_depths.clone();
     if run_innermost_finally(ctx, true) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_throw(ctx, value);
         }
+        ctx.finally_stack = saved_finally_stack;
+        ctx.handler_loop_depths = saved_handler_loop_depths;
         return;
     }
     let handler_loop_depth = ctx.handler_loop_depths.last().copied().unwrap_or(0);
