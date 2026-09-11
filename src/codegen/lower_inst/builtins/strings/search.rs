@@ -247,11 +247,12 @@ pub(crate) fn lower_substr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             inst.operands.len()
         )));
     }
+    let has_length = optional_null_length_is_present(ctx, inst, 2)?;
     let neg_done = ctx.next_label("substr_neg_done");
     let len_done = ctx.next_label("substr_len_done");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_substr_aarch64(ctx, inst, &neg_done, &len_done)?,
-        Arch::X86_64 => lower_substr_x86_64(ctx, inst, &neg_done, &len_done)?,
+        Arch::AArch64 => lower_substr_aarch64(ctx, inst, has_length, &neg_done, &len_done)?,
+        Arch::X86_64 => lower_substr_x86_64(ctx, inst, has_length, &neg_done, &len_done)?,
     }
     store_if_result(ctx, inst)
 }
@@ -264,9 +265,10 @@ pub(crate) fn lower_substr_replace(ctx: &mut FunctionContext<'_>, inst: &Instruc
             inst.operands.len()
         )));
     }
+    let has_length = optional_null_length_is_present(ctx, inst, 3)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_substr_replace_aarch64(ctx, inst)?,
-        Arch::X86_64 => lower_substr_replace_x86_64(ctx, inst)?,
+        Arch::AArch64 => lower_substr_replace_aarch64(ctx, inst, has_length)?,
+        Arch::X86_64 => lower_substr_replace_x86_64(ctx, inst, has_length)?,
     }
     abi::emit_call_label(ctx.emitter, "__rt_substr_replace");
     store_if_result(ctx, inst)
@@ -285,7 +287,7 @@ pub(crate) fn lower_substr_count(ctx: &mut FunctionContext<'_>, inst: &Instructi
             inst.operands.len()
         )));
     }
-    let has_length = substr_count_has_length(ctx, inst)?;
+    let has_length = optional_null_length_is_present(ctx, inst, 3)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_substr_count_aarch64(ctx, inst, has_length)?,
         Arch::X86_64 => lower_substr_count_x86_64(ctx, inst, has_length)?,
@@ -295,14 +297,18 @@ pub(crate) fn lower_substr_count(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
-/// Reports whether `substr_count()` was given a `$length` that actually bounds the window.
+/// Reports whether an optional string-builtin `$length` actually bounds the operation.
 ///
 /// PHP's default is `null`, meaning "to the end of the subject", and an explicitly written
 /// `null` behaves identically. A statically-null operand (checker type `Void`/`Never`) is
 /// therefore treated exactly like an omitted argument instead of being coerced to `0`, which
-/// would have counted matches inside an empty window.
-fn substr_count_has_length(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
-    let Some(length) = inst.operands.get(3) else {
+/// would select an empty substring or replacement window.
+fn optional_null_length_is_present(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    operand_index: usize,
+) -> Result<bool> {
+    let Some(length) = inst.operands.get(operand_index) else {
         return Ok(false);
     };
     Ok(!matches!(
@@ -588,16 +594,14 @@ pub(super) struct StrstrLabels {
 pub(super) fn lower_substr_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    has_length: bool,
     neg_done: &str,
     len_done: &str,
 ) -> Result<()> {
     load_substr_string_and_offset_aarch64(ctx, inst)?;
-    // Whether a length was PASSED is known here, at compile time, so it is never encoded in the
-    // length's own value. It used to be: `-1` doubled as the "omitted" sentinel, which made an
-    // explicit `substr($s, 1, -1)` indistinguishable from the two-argument call and kept the
-    // whole tail. Every other negative length was then clamped to zero, so `substr("hello",0,-2)`
-    // answered `""` where php answers `"hel"`.
-    let has_length = inst.operands.len() >= 3;
+    // Whether a non-null length was supplied is known here at compile time, so it is never
+    // encoded in the length's own value. In particular, `-1` is a real php length while
+    // omitted and statically-null lengths both mean "through the end".
     if has_length {
         let length = expect_operand(inst, 2)?;
         load_as_int(ctx, length, "substr length")?;
@@ -647,13 +651,12 @@ pub(super) fn load_substr_string_and_offset_aarch64(
 pub(super) fn lower_substr_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    has_length: bool,
     neg_done: &str,
     len_done: &str,
 ) -> Result<()> {
     load_substr_string_and_offset_x86_64(ctx, inst)?;
-    // See the AArch64 sibling: the "was a length passed" question is answered by the operand
-    // count, never by the length's own value.
-    let has_length = inst.operands.len() >= 3;
+    // See the AArch64 sibling: omitted and statically-null lengths both skip the clamp.
     if has_length {
         let length = expect_operand(inst, 2)?;
         load_as_int(ctx, length, "substr length")?;
@@ -800,7 +803,11 @@ pub(super) fn lower_strstr_x86_64(
     Ok(())
 }
 /// Materializes AArch64 `substr_replace()` runtime arguments.
-pub(super) fn lower_substr_replace_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_substr_replace_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    has_length: bool,
+) -> Result<()> {
     let subject = expect_string_operand(ctx, inst, 0, "substr_replace")?;
     let replacement = expect_string_operand(ctx, inst, 1, "substr_replace")?;
     let start = expect_operand(inst, 2)?;
@@ -810,7 +817,7 @@ pub(super) fn lower_substr_replace_aarch64(ctx: &mut FunctionContext<'_>, inst: 
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the replacement string while materializing slice bounds
     load_as_int(ctx, start, "substr_replace start")?;
     abi::emit_push_reg(ctx.emitter, "x0");
-    materialize_substr_replace_length_aarch64(ctx, inst)?;
+    materialize_substr_replace_length_aarch64(ctx, inst, has_length)?;
     abi::emit_pop_reg(ctx.emitter, "x0");
     ctx.emitter.instruction("ldp x3, x4, [sp], #16");                           // restore replacement into the secondary runtime string argument
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore subject into the primary runtime string argument
@@ -818,7 +825,11 @@ pub(super) fn lower_substr_replace_aarch64(ctx: &mut FunctionContext<'_>, inst: 
 }
 
 /// Materializes x86_64 `substr_replace()` runtime arguments.
-pub(super) fn lower_substr_replace_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_substr_replace_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    has_length: bool,
+) -> Result<()> {
     let subject = expect_string_operand(ctx, inst, 0, "substr_replace")?;
     let replacement = expect_string_operand(ctx, inst, 1, "substr_replace")?;
     let start = expect_operand(inst, 2)?;
@@ -828,7 +839,7 @@ pub(super) fn lower_substr_replace_x86_64(ctx: &mut FunctionContext<'_>, inst: &
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     load_as_int(ctx, start, "substr_replace start")?;
     abi::emit_push_reg(ctx.emitter, "rax");
-    materialize_substr_replace_length_x86_64(ctx, inst)?;
+    materialize_substr_replace_length_x86_64(ctx, inst, has_length)?;
     abi::emit_pop_reg(ctx.emitter, "rcx");
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
@@ -839,8 +850,9 @@ pub(super) fn lower_substr_replace_x86_64(ctx: &mut FunctionContext<'_>, inst: &
 pub(super) fn materialize_substr_replace_length_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    has_length: bool,
 ) -> Result<()> {
-    if inst.operands.len() >= 4 {
+    if has_length {
         let length = expect_operand(inst, 3)?;
         load_as_int(ctx, length, "substr_replace length")?;
         ctx.emitter.instruction("mov x7, x0");                                  // pass the explicit replacement length to the runtime helper
@@ -857,8 +869,9 @@ pub(super) fn materialize_substr_replace_length_aarch64(
 pub(super) fn materialize_substr_replace_length_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    has_length: bool,
 ) -> Result<()> {
-    if inst.operands.len() >= 4 {
+    if has_length {
         let length = expect_operand(inst, 3)?;
         load_as_int(ctx, length, "substr_replace length")?;
         ctx.emitter.instruction("mov r8, rax");                                 // pass the explicit replacement length to the runtime helper

@@ -98,6 +98,32 @@ echo implode("|", $rows);
     assert_eq!(out, "hXo|Xlo|hXllo|heXo|hXello|hX|hXello|hXlo|hX|helloX");
 }
 
+/// Verifies explicit null and named omitted/null lengths run through the string end.
+///
+/// Zero-length controls remain empty selection for `substr()` and pure insertion for
+/// `substr_replace()`, keeping a real zero distinct from PHP's nullable default.
+#[test]
+fn test_substr_and_substr_replace_null_length_runs_to_end() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [
+    substr("hello", 1),
+    substr("hello", 1, null),
+    substr(string: "hello", offset: 1),
+    substr(string: "hello", offset: 1, length: null),
+    substr("hello", 1, 0),
+    substr_replace("hello", "X", 1),
+    substr_replace("hello", "X", 1, null),
+    substr_replace(string: "hello", replace: "X", offset: 1),
+    substr_replace(string: "hello", replace: "X", offset: 1, length: null),
+    substr_replace("hello", "X", 1, 0),
+];
+echo implode("|", $rows);
+"#,
+    );
+    assert_eq!(out, "ello|ello|ello|ello||hX|hX|hX|hX|hXello");
+}
+
 /// Verifies substr accepts a non-negative integer offset derived from a function return via addition.
 /// Regression test: int-to-integer coercion path for the offset expression `$o + 1`.
 /// Fixture: queries with `?` delimiter, strpos + intval, then substr with +1 offset.
