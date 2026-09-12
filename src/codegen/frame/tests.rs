@@ -11,6 +11,41 @@ use super::*;
 use crate::codegen::generate_user_asm_from_ir;
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{Builder, FunctionParam, IrType, Module, Terminator};
+use crate::types::FunctionSig;
+
+/// Descriptor-only backtrace reachability is carried by the frontend's hidden frame snapshot.
+#[test]
+fn hidden_argument_snapshot_enables_backtrace_activations_without_a_core_instruction() {
+    let target = Target::new(Platform::Linux, Arch::X86_64);
+    let mut module = Module::new(target);
+    let mut function = Function::new(
+        "dynamic_backtrace_frame".to_string(),
+        IrType::Void,
+        PhpType::Void,
+    );
+    function.signature = Some(FunctionSig {
+        params: vec![
+            ("value".to_string(), PhpType::Int),
+            (
+                crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+            ),
+        ],
+        param_type_exprs: vec![None, None],
+        param_attributes: vec![Vec::new(), Vec::new()],
+        defaults: vec![None, None],
+        return_type: PhpType::Void,
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: vec![false, false],
+        declared_params: vec![true, false],
+        variadic: Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string()),
+        deprecation: None,
+    });
+    module.add_function(function);
+
+    assert!(module_uses_backtrace(&module));
+}
 
 /// Both dynamic constructor opcodes reserve the hand-used receiver register on every target.
 #[test]
