@@ -539,12 +539,7 @@ impl Checker {
             }
         }
 
-        let variadic_elem_ty = sig.variadic.as_ref().and_then(|_| {
-            sig.params.last().and_then(|(_, ty)| match ty {
-                PhpType::Array(elem) => Some((**elem).clone()),
-                _ => None,
-            })
-        });
+        let variadic_elem_ty = self.variadic_argument_element_type(sig, span, callee_desc)?;
 
         let mut param_idx = 0usize;
         for arg in args {
@@ -637,13 +632,19 @@ impl Checker {
             } else {
                 // An argument collected by a by-REFERENCE variadic (`&...$xs`) is bound by
                 // reference exactly like a regular by-ref parameter's, so the local it names is
-                // aliased for the rest of the body. The variadic's flag sits at
-                // `regular_param_count` in `ref_params` (it is the signature's last slot).
-                // Recorded outside the element-type check below because that one only runs when
-                // the element type is a known array, which has nothing to do with aliasing.
-                if sig
-                    .ref_params
-                    .get(regular_param_count)
+                // aliased for the rest of the body. Recorded outside the element-type check below
+                // because that one only runs when the element type is a known array, which has
+                // nothing to do with aliasing.
+                //
+                // The collector's own slot is addressed through
+                // `crate::types::signatures::variadic_param_index`, the one rule the whole
+                // descriptor container contract uses. `regular_param_count` is NOT that index: it
+                // deliberately hides the synthesized `__elephc_func_argc` parameter, so for a
+                // body that calls `func_get_args()` it names the slot BEFORE the collector, and
+                // this read answered with the hidden count slot's flag instead.
+                let variadic_index = crate::types::signatures::variadic_param_index(sig);
+                if variadic_index
+                    .and_then(|index| sig.ref_params.get(index))
                     .copied()
                     .unwrap_or(false)
                 {
@@ -652,10 +653,16 @@ impl Checker {
                 if let (Some(vname), Some(expected_ty)) =
                     (sig.variadic.as_ref(), variadic_elem_ty.as_ref())
                 {
-                    // The variadic occupies the last `declared_params` slot, so gating on it
-                    // keeps the strict rejection off builtin variadics, whose registry-derived
-                    // parameter types the checker does not otherwise consume.
-                    if sig.declared_params.last().copied().unwrap_or(false) {
+                    // Gating on the collector's own `declared_params` slot keeps the strict
+                    // rejection off builtin variadics, whose registry-derived parameter types the
+                    // checker does not otherwise consume. The slot is the one
+                    // `variadic_param_index` names, so it stays the collector's flag even when a
+                    // hidden parameter shares the signature.
+                    if variadic_index
+                        .and_then(|index| sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                    {
                         self.require_strict_types_param_binding(
                             expected_ty,
                             &actual_ty,
@@ -677,6 +684,45 @@ impl Checker {
         Ok(sig.return_type.clone())
     }
 
+    /// The element contract ONE argument collected by `sig`'s variadic collector must satisfy.
+    ///
+    /// The SOURCE hint first, the collector's storage only as a fallback. A descriptor-reachable
+    /// collector is STORED as `array<mixed>` so the invoker may hand it a hash
+    /// (`crate::types::signatures::descriptor_variadic_container`), and re-deriving the element
+    /// contract from that storage would silently turn `int ...$xs` into an untyped tail that
+    /// accepts anything: exactly the direct-call check the transport decision must not cost.
+    /// The declaration's own element syntax survives promotion in `param_type_exprs`, so
+    /// resolving it here keeps a direct call checked as strictly as before the storage moved,
+    /// whether or not the callee was ever handed out as a callable.
+    ///
+    /// An UNDECLARED collector has no source contract, so its storage element is the answer; that
+    /// is also the path builtin variadics take, whose registry-derived parameter types carry no
+    /// type syntax.
+    fn variadic_argument_element_type(
+        &self,
+        sig: &FunctionSig,
+        span: crate::span::Span,
+        callee_desc: &str,
+    ) -> Result<Option<PhpType>, CompileError> {
+        let Some(index) = crate::types::signatures::variadic_param_index(sig) else {
+            return Ok(None);
+        };
+        if let Some(type_expr) = crate::types::signatures::variadic_source_element_type_expr(sig) {
+            let variadic_name = sig.params[index].0.clone();
+            return self
+                .resolve_declared_param_type_hint(
+                    type_expr,
+                    span,
+                    &format!("{} variadic parameter ${}", callee_desc, variadic_name),
+                )
+                .map(Some);
+        }
+        Ok(match &sig.params[index].1 {
+            PhpType::Array(elem) => Some((**elem).clone()),
+            _ => None,
+        })
+    }
+
     /// Rejects dynamic spreads that could feed raw array storage into a `Callable` slot.
     ///
     /// Argument unpacking can project existing callable descriptors from `array<Callable>`, but
@@ -695,7 +741,13 @@ impl Checker {
             return Ok(());
         }
         let regular_param_count = call_args::regular_param_count(sig);
-        let variadic_is_callable = call_args::variadic_element_type(sig)
+        let spread_span = args
+            .iter()
+            .find(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            .map(|arg| arg.span)
+            .unwrap_or_else(crate::span::Span::dummy);
+        let variadic_is_callable = self
+            .variadic_argument_element_type(sig, spread_span, callee_desc)?
             .is_some_and(|ty| ty.codegen_repr() == PhpType::Callable);
         let mut checked_spreads = HashSet::new();
 

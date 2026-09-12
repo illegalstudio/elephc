@@ -1267,6 +1267,55 @@ fn test_error_strict_types_rejects_variadic_element() {
     );
 }
 
+/// Handing the same function out as a callable must not relax its declared element type.
+///
+/// A descriptor-reachable collector is STORED as `array<mixed>` so the invoker may hand it a
+/// named tail as a hash, and re-deriving the element contract from that storage would turn
+/// `int ...$xs` into an untyped tail. The declaration's element syntax survives the storage move,
+/// and this is the direct call that proves validation still resolves it. `f(...)` appears BEFORE
+/// the bad call so the promotion has already happened when it is checked.
+#[test]
+fn test_error_strict_types_rejects_variadic_element_after_callable_promotion() {
+    expect_error(
+        "<?php declare(strict_types=1); function f(int ...$xs) { return count($xs); } $g = f(...); echo f(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
+/// The same rule on a METHOD collector, whose signature lives in the class table.
+#[test]
+fn test_error_strict_types_rejects_method_variadic_element_after_callable_promotion() {
+    expect_error(
+        "<?php declare(strict_types=1); class Adder { public function add(int ...$xs): int { return array_sum($xs); } } \
+         $adder = new Adder(); $call = $adder->add(...); echo $adder->add(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
+/// The same rule on a STATIC method collector, reached through a callable array rather than syntax.
+#[test]
+fn test_error_strict_types_rejects_static_variadic_element_after_callable_array_promotion() {
+    expect_error(
+        "<?php declare(strict_types=1); class Joiner { public static function join(int ...$xs): int { return array_sum($xs); } } \
+         $call = [Joiner::class, 'join']; echo Joiner::join(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
+/// A CLOSURE's declared variadic element type is a contract too, and used to be dropped entirely.
+///
+/// A closure value is always a descriptor, so its collector always takes the descriptor
+/// container; the declared `int` is kept beside that storage rather than instead of it. The
+/// signature builder used to push a bare `None`/`false` pair for a closure collector, which
+/// silently accepted anything here.
+#[test]
+fn test_error_strict_types_rejects_closure_variadic_element() {
+    expect_error(
+        "<?php declare(strict_types=1); $f = function (int ...$xs) { return count($xs); }; echo $f(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
 /// Verifies `call_user_func` stays on the strict path. Unlike `array_map`, it forwards the
 /// caller's frame, so PHP 8.4.20 throws `TypeError` for `call_user_func('g', true)` in a
 /// strict file.

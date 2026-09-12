@@ -1476,8 +1476,12 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
 ///   otherwise drop the positional entry without a word. "Already arrived" is literal: a
 ///   positional key that comes LATER is the ordering error above, and PHP reports that instead.
 /// - A string key no visible regular parameter declares is `Unknown named parameter $<name>`,
-///   for a non-variadic callee only. A variadic callee keeps those entries: its tail collector
-///   copies every unconsumed name into the variadic hash.
+///   unless the callee's variadic collector can actually take it. A collector whose storage is
+///   dynamic keeps those entries: its tail collector copies every unconsumed name into the
+///   variadic hash. A collector with static indexed storage cannot hold a string key at all, so
+///   the call FAILS CLOSED with the PHP-visible diagnostic rather than being handed a hash block
+///   its frame would read as an indexed array. See
+///   [`variadic_collector_accepts_named_entries`].
 ///
 /// "Its own positional key already arrived" is answered by re-walking the container from the
 /// start up to the entry being classified and looking for that one integer key, not by a bitset:
@@ -1554,7 +1558,7 @@ fn emit_reject_invalid_named_arguments(
             param_name, KEY_PTR_OFF, KEY_LEN_OFF, matched, emitter, data,
         );
     }
-    if sig.variadic.is_none() {
+    if !variadic_collector_accepts_named_entries(sig) {
         emit_named_scan_key_pair_to_args(KEY_PTR_OFF, KEY_LEN_OFF, emitter);
         abi::emit_call_label(emitter, "__rt_throw_unknown_named_parameter");
     }
@@ -2613,6 +2617,24 @@ fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &Ph
     abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
 }
 
+/// Returns whether this callee's variadic collector may receive a NAMED tail entry.
+///
+/// The last gate before an ABI mismatch. The associative argument builder allocates a HASH for
+/// the collector slot, so a callee whose collector is static indexed storage (`array<int>`, the
+/// untyped fallback, or the declared `array<T>` of an `int ...$xs` that no promotion reached)
+/// would read that hash's header as indexed storage: entry count as the length, insertion-order
+/// head slot as element 0, and an indexed release that never frees the persisted string keys.
+///
+/// Every callable the checker can see through a descriptor is promoted onto
+/// `crate::types::signatures::descriptor_variadic_container` before it is published, so this
+/// normally answers `true` for any callee a named argument can reach. It exists for the callee
+/// that promotion could NOT reach, an inherited or otherwise undeclarable signature above all:
+/// such a call raises `Unknown named parameter $<name>`, which is a PHP-visible diagnostic the
+/// program can catch, instead of corrupting the collector.
+pub(crate) fn variadic_collector_accepts_named_entries(sig: &FunctionSig) -> bool {
+    crate::types::signatures::variadic_storage_accepts_named_entries(sig)
+}
+
 /// Returns the element type a variadic collector's storage holds, for BOTH container shapes.
 ///
 /// One decision, because the two argument builders fill the SAME callee slot: the indexed builder
@@ -2624,11 +2646,16 @@ fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &Ph
 /// an array" and falling back to the CONTAINER's element type instead handed a dynamic callee raw
 /// scalar slots whenever that container was not itself Mixed-element.
 ///
+/// The collector slot is addressed through
+/// `crate::types::signatures::variadic_param_index`, the same helper the checker's promotion uses,
+/// so the type this reads is by construction the type that promotion wrote. Taking
+/// `params.last()` instead would answer from whatever slot happens to sit at the end, which is a
+/// different question the moment a signature carries a hidden trailing parameter.
+///
 /// `container_elem_ty` remains the fallback for a signature with no typed variadic slot at all.
 fn invoker_variadic_elem_ty(sig: &FunctionSig, container_elem_ty: &PhpType) -> PhpType {
-    sig.params
-        .last()
-        .and_then(|(_, ty)| match ty {
+    crate::types::signatures::variadic_param_index(sig)
+        .and_then(|index| match &sig.params[index].1 {
             PhpType::Array(elem) => Some((**elem).clone()),
             PhpType::Iterable => Some(PhpType::Mixed),
             _ => None,

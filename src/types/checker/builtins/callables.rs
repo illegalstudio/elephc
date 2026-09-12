@@ -305,6 +305,7 @@ fn check_array_callback_builtin_call_in_engine_frame(
         params,
         variadic,
         variadic_by_ref,
+        variadic_type,
         return_type,
         body,
         captures,
@@ -321,6 +322,7 @@ fn check_array_callback_builtin_call_in_engine_frame(
             params,
             variadic,
             *variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             captures,
@@ -333,6 +335,7 @@ fn check_array_callback_builtin_call_in_engine_frame(
             params,
             variadic,
             *variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             captures,
@@ -1040,6 +1043,10 @@ fn check_callback_builtin_call_in_engine_frame(
     }
 
     if let ExprKind::StringLiteral(cb_name) = &callback.kind {
+        // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
+        // this function a named entry, so its collector has to be compiled for the descriptor
+        // container before its signature is read here.
+        checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             return checker.check_known_callable_call(&sig, callback_args, span, env, label);
         }
@@ -1282,6 +1289,10 @@ pub(crate) fn check_call_user_func_array(
                 }
             }
         }
+        // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
+        // this function a named entry, so its collector has to be compiled for the descriptor
+        // container before its signature is read here.
+        checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             validate_call_user_func_array_dynamic_arg_array(
                 checker,
@@ -1499,6 +1510,10 @@ pub(crate) fn check_call_user_func(
         let cb_name = checker
             .canonical_function_name_folded(cb_name)
             .unwrap_or_else(|| cb_name.clone());
+        // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
+        // this function a named entry, so its collector has to be compiled for the descriptor
+        // container before its signature is read here.
+        checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
                 &sig,
@@ -1511,6 +1526,9 @@ pub(crate) fn check_call_user_func(
         }
         let cb_args = args[1..].to_vec();
         let ret_ty = checker.check_function_call(&cb_name, &cb_args, span, env)?;
+        // The declaration was only instantiated by the call above, so the collector is promoted
+        // once its signature exists. Idempotent, so the earlier attempt costs nothing.
+        checker.promote_descriptor_variadic_container(&cb_name)?;
         return Ok(ret_ty);
     }
     if let Some(ret_ty) =

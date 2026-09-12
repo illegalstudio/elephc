@@ -80,6 +80,7 @@ mod capture_view_owners;
 mod descriptor_reference_args;
 mod descriptor_callable_owners;
 mod descriptor_unpack_keys;
+mod descriptor_variadic_container;
 mod class_name_owners;
 mod handler_registration_owners;
 mod closure_reference_owners;

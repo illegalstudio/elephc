@@ -35,7 +35,12 @@ mod result;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
 /// Function signature representation and builtin signature helpers.
-mod signatures;
+///
+/// Crate-visible because the descriptor variadic storage contract
+/// (`signatures::descriptor_variadic_container` and its predicates) has to be asked the SAME
+/// question by the checker, by EIR lowering, and by the runtime callable invoker. A contract
+/// three layers must agree on cannot be re-spelled behind a narrow re-export in each of them.
+pub(crate) mod signatures;
 /// Target-dependent values of `ICONV_IMPL` / `ICONV_VERSION`.
 pub(crate) mod iconv_constants;
 /// The compiler's view over the shared builtin class catalog.

@@ -44,6 +44,7 @@ impl Checker {
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
         variadic_by_ref: bool,
+        variadic_type: &Option<TypeExpr>,
         captures: &[String],
         span: Span,
         env: &TypeEnv,
@@ -96,12 +97,32 @@ impl Checker {
         }
 
         if let Some(name) = variadic {
-            closure_env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Int)));
-            param_types.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
-            param_type_exprs.push(None);
+            // A closure VALUE is a callable descriptor, so its collector is always
+            // descriptor-reachable and always takes the descriptor container. There is no
+            // reachability question to answer here and nothing to promote later: the body and the
+            // published signature are built from the same storage in one place.
+            //
+            // The body environment used to be seeded with `array<int>` while the signature
+            // published `array<mixed>`, so the frame read boxed Mixed slots as raw integers even
+            // before any named argument was involved. One binding, both sides.
+            let storage = crate::types::signatures::descriptor_variadic_container();
+            // The declared element hint is the SOURCE contract, not the storage: it is what
+            // `$closure(...)` call sites are checked against, and dropping it (this pushed a bare
+            // `None`/`false` pair) silently turned `int ...$xs` into an untyped tail that accepted
+            // anything. Resolving it here also keeps a bad hint an error at the declaration.
+            if let Some(type_ann) = variadic_type {
+                self.resolve_declared_param_type_hint(
+                    type_ann,
+                    span,
+                    &format!("Closure variadic parameter ${}", name),
+                )?;
+            }
+            closure_env.insert(name.clone(), storage.clone());
+            param_types.push((name.clone(), storage));
+            param_type_exprs.push(variadic_type.clone());
             defaults.push(None);
             ref_params.push(variadic_by_ref);
-            declared_params.push(false);
+            declared_params.push(variadic_type.is_some());
         }
 
         Ok(ClosureSignatureContext {
@@ -123,6 +144,7 @@ impl Checker {
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
         variadic_by_ref: bool,
+        variadic_type: &Option<TypeExpr>,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -135,6 +157,7 @@ impl Checker {
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             captures,
             span,
             env,
@@ -249,6 +272,7 @@ impl Checker {
                 params,
                 variadic,
                 variadic_by_ref,
+                variadic_type,
                 return_type,
                 body,
                 captures,
@@ -260,6 +284,7 @@ impl Checker {
                     params,
                     variadic,
                     *variadic_by_ref,
+                    variadic_type,
                     return_type,
                     body,
                     captures,

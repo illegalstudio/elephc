@@ -634,6 +634,12 @@ fn update_callable_array_assignment_metadata(
     };
     checker.mark_callable_array_target_write(name);
     if let Some(target) = resolve_callable_array_target(checker, callable_source, env)? {
+        // Recording the target is the MATERIALIZATION of a callable descriptor: from here the
+        // pair can be invoked with named arguments, and it can also leave this frame through a
+        // `callable` parameter and be invoked where no target record survives. So the callee's
+        // variadic collector moves onto the descriptor container now, not at the call, which is
+        // the only point that is guaranteed to be reached.
+        checker.promote_descriptor_variadic_container_for_callable_target(&target, env)?;
         checker
             .callable_array_targets
             .insert(name.to_string(), target);

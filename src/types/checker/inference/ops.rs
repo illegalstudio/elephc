@@ -402,6 +402,7 @@ impl Checker {
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
         variadic_by_ref: bool,
+        variadic_type: &Option<TypeExpr>,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -413,6 +414,7 @@ impl Checker {
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             captures,
@@ -436,6 +438,7 @@ impl Checker {
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
         variadic_by_ref: bool,
+        variadic_type: &Option<TypeExpr>,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -448,6 +451,7 @@ impl Checker {
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             captures,
             expr.span,
             env,
@@ -931,6 +935,11 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        // Calling THROUGH a callable-array value is a descriptor invocation, so the callee's
+        // variadic collector has to be on the descriptor container before any signature below is
+        // read: this call site may deliver named arguments, which the invoker's tail collector
+        // hands over as hash entries.
+        self.promote_descriptor_variadic_container_for_callable_target(target, env)?;
         match target {
             CallableTarget::Method { object, method } => {
                 let receiver_ty = self.infer_type(object, env)?;

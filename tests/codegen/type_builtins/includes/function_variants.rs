@@ -538,3 +538,67 @@ if ($pick) {
     );
     assert_eq!(out, "b");
 }
+
+/// A conditional variant group's collector takes a named tail, in every variant.
+///
+/// A variant group is TWO signatures: the group signature every call site sees, and the per-variant
+/// signature that carries the body actually compiled. Both have to sit on the descriptor container
+/// or the descriptor publishes one collector shape while the selected variant's frame reads the
+/// other, which is how a named tail's hash header gets read as an indexed length. Both variants
+/// declare the same collector here, and the fixture routes through `call_user_func_array` with a
+/// variable container so the invoker receives the named entry untouched.
+#[test]
+fn test_conditional_include_function_variant_collector_takes_a_named_tail() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+$pick = time() < 0;
+if ($pick) {
+    include 'left_tail.php';
+} else {
+    include 'right_tail.php';
+}
+function bindTail(callable $callback, array $arguments): string {
+    return call_user_func_array($callback, $arguments);
+}
+$positional = ['lead', 'first tail'];
+$named = ['head' => 'lead', 'alpha' => 'named alpha'];
+$mixed = ['lead', 'first tail', 'beta' => 'named beta'];
+echo bindTail(variant_tail(...), $positional), '|', bindTail(variant_tail(...), $named);
+echo '|', bindTail(variant_tail(...), $mixed);
+"#,
+            ),
+            (
+                "left_tail.php",
+                r#"<?php
+function variant_tail(string $head, ...$rest): string {
+    $out = 'left/' . $head . '#' . count($rest);
+    foreach ($rest as $key => $value) {
+        $out .= ';' . (is_string($key) ? 's' : 'i') . $key . '=' . $value;
+    }
+    return $out;
+}
+"#,
+            ),
+            (
+                "right_tail.php",
+                r#"<?php
+function variant_tail(string $head, ...$rest): string {
+    $out = 'right/' . $head . '#' . count($rest);
+    foreach ($rest as $key => $value) {
+        $out .= ';' . (is_string($key) ? 's' : 'i') . $key . '=' . $value;
+    }
+    return $out;
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "right/lead#1;i0=first tail|right/lead#1;salpha=named alpha|right/lead#2;i0=first tail;sbeta=named beta",
+    );
+}
