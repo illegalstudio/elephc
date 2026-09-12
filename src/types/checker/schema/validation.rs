@@ -16,7 +16,9 @@ use crate::types::{FunctionSig, PhpType};
 use super::super::Checker;
 
 /// Builds a `FunctionSig` from a parsed class method, resolving parameter and return type
-/// annotations through the checker. Parameters without type hints default to `PhpType::Int`.
+/// annotations through the checker. Parameters without type hints use a declared default's
+/// syntactic type when one exists, matching free-function signature construction, and otherwise
+/// default to `PhpType::Int`.
 /// Validates that each declared parameter's default value is compatible with its resolved type.
 /// Infers return type from method body when no return annotation is present.
 pub(crate) fn build_method_sig(
@@ -29,7 +31,7 @@ pub(crate) fn build_method_sig(
         .params
         .iter()
         .enumerate()
-        .map(|(i, (n, type_ann, _, _))| {
+        .map(|(i, (n, type_ann, default, _))| {
             // User hydration hooks receive a PHP array with arbitrary integer/string
             // keys. Use its boxed declaration contract, including for untyped hooks.
             // Synthetic SPL hooks retain their explicit raw Array(Mixed) ABI.
@@ -42,7 +44,10 @@ pub(crate) fn build_method_sig(
                     method.span,
                     &format!("Method parameter ${}", n),
                 )?,
-                None => PhpType::Int,
+                None => default
+                    .as_ref()
+                    .map(super::super::infer_expr_type_syntactic)
+                    .unwrap_or(PhpType::Int),
             };
             Ok((n.clone(), ty))
         })
