@@ -2769,15 +2769,19 @@ fn interface_method_table_symbol(
 fn source_instance_method_entry(
     class_info: &ClassInfo,
     method_name: &str,
-    _classes: &HashMap<String, ClassInfo>,
+    classes: &HashMap<String, ClassInfo>,
 ) -> Result<String, String> {
     let Some(impl_class) = class_info.method_impl_classes.get(method_name) else {
         return Ok("0".to_string());
     };
-    let physical = class_info
-        .methods
-        .get(method_name)
-        .ok_or_else(|| format!("missing physical method signature for {impl_class}::{method_name}"))?;
+    let Some(physical) = physical_instance_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+    )? else {
+        return Ok(method_symbol(impl_class, method_name));
+    };
     source_method_adapters::source_method_entry_symbol(
         impl_class,
         method_name,
@@ -2793,15 +2797,19 @@ fn source_instance_method_entry(
 fn source_instance_vtable_entry(
     class_info: &ClassInfo,
     method_name: &str,
-    _classes: &HashMap<String, ClassInfo>,
+    classes: &HashMap<String, ClassInfo>,
 ) -> Result<String, String> {
     let Some(impl_class) = class_info.method_impl_classes.get(method_name) else {
         return Ok("0".to_string());
     };
-    let physical = class_info
-        .methods
-        .get(method_name)
-        .ok_or_else(|| format!("missing physical method signature for {impl_class}::{method_name}"))?;
+    let Some(physical) = physical_instance_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+    )? else {
+        return Ok(method_symbol(impl_class, method_name));
+    };
     source_method_adapters::source_vtable_entry_symbol(
         impl_class,
         method_name,
@@ -2814,21 +2822,81 @@ fn source_instance_vtable_entry(
 fn source_static_vtable_entry(
     class_info: &ClassInfo,
     method_name: &str,
-    _classes: &HashMap<String, ClassInfo>,
+    classes: &HashMap<String, ClassInfo>,
 ) -> Result<String, String> {
     let Some(impl_class) = class_info.static_method_impl_classes.get(method_name) else {
         return Ok("0".to_string());
     };
-    let physical = class_info
-        .static_methods
-        .get(method_name)
-        .ok_or_else(|| format!("missing physical static signature for {impl_class}::{method_name}"))?;
+    let Some(physical) = physical_static_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+    )? else {
+        return Ok(static_method_symbol(impl_class, method_name));
+    };
     source_method_adapters::source_vtable_entry_symbol(
         impl_class,
         method_name,
         physical,
         MethodKind::Static,
     )
+}
+
+/// Finds the physical instance signature on the class that emits the method body.
+fn physical_instance_method_signature<'a>(
+    class_info: &'a ClassInfo,
+    impl_class: &str,
+    method_name: &str,
+    classes: &'a HashMap<String, ClassInfo>,
+) -> Result<Option<&'a FunctionSig>, String> {
+    physical_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+        |info| &info.methods,
+        "method",
+    )
+}
+
+/// Finds the physical static signature on the class that emits the method body.
+fn physical_static_method_signature<'a>(
+    class_info: &'a ClassInfo,
+    impl_class: &str,
+    method_name: &str,
+    classes: &'a HashMap<String, ClassInfo>,
+) -> Result<Option<&'a FunctionSig>, String> {
+    physical_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+        |info| &info.static_methods,
+        "static method",
+    )
+}
+
+/// Resolves inherited physical signatures without requiring filtered runtime-native classes.
+fn physical_method_signature<'a>(
+    class_info: &'a ClassInfo,
+    impl_class: &str,
+    method_name: &str,
+    classes: &'a HashMap<String, ClassInfo>,
+    methods: impl Fn(&'a ClassInfo) -> &'a HashMap<String, FunctionSig>,
+    kind: &str,
+) -> Result<Option<&'a FunctionSig>, String> {
+    if let Some(impl_info) = classes.get(impl_class) {
+        if let Some(signature) = methods(impl_info).get(method_name) {
+            return Ok(Some(signature));
+        }
+        if impl_info.declaration_span != crate::span::Span::dummy() {
+            return Err(format!(
+                "missing physical {kind} signature for {impl_class}::{method_name}"
+            ));
+        }
+    }
+    Ok(methods(class_info).get(method_name))
 }
 
 /// Returns true when an interface method requires a return-type wrapper at call sites.
@@ -3328,9 +3396,72 @@ mod tests {
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
     use crate::parser::ast::Visibility;
-    use crate::types::{ClassInfo, PhpType};
+    use crate::types::{ClassInfo, FunctionSig, PhpType};
 
-    use super::emit_runtime_data_user;
+    use super::{
+        emit_runtime_data_user, source_instance_method_entry, source_instance_vtable_entry,
+        source_static_vtable_entry,
+    };
+
+    /// Builds a direct physical method signature for source-entry lookup tests.
+    fn direct_method_signature() -> FunctionSig {
+        FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
+    /// Inherited source entries read the signature from the class that owns the body.
+    #[test]
+    fn inherited_source_entries_use_the_implementing_class_signature() {
+        let mut parent = empty_class_info(1, "run");
+        parent
+            .method_impl_classes
+            .insert("run".to_string(), "Parent".to_string());
+        parent
+            .methods
+            .insert("run".to_string(), direct_method_signature());
+        parent
+            .static_method_impl_classes
+            .insert("build".to_string(), "Parent".to_string());
+        parent
+            .static_methods
+            .insert("build".to_string(), direct_method_signature());
+
+        let mut child = empty_class_info(2, "run");
+        child
+            .method_impl_classes
+            .insert("run".to_string(), "Parent".to_string());
+        child
+            .static_method_impl_classes
+            .insert("build".to_string(), "Parent".to_string());
+        let classes = HashMap::from([
+            ("Parent".to_string(), parent),
+            ("Child".to_string(), child.clone()),
+        ]);
+
+        assert_eq!(
+            source_instance_method_entry(&child, "run", &classes).unwrap(),
+            "_method_Parent_run"
+        );
+        assert_eq!(
+            source_instance_vtable_entry(&child, "run", &classes).unwrap(),
+            "_method_Parent_run"
+        );
+        assert_eq!(
+            source_static_vtable_entry(&child, "build", &classes).unwrap(),
+            "_static_Parent_build"
+        );
+    }
 
     /// All supported targets retain hook lookup rows while marking only virtual storage and real accessors.
     #[test]
