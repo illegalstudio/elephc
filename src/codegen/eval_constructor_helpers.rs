@@ -632,6 +632,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
         fail_label,
         data,
         callable_support,
+        ConstructorArgOwner::Borrowed,
     );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
     emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
@@ -648,6 +649,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
         fail_label,
         data,
         callable_support,
+        ConstructorArgOwner::Borrowed,
     );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for code initialization
     emitter.instruction("str x0, [x9, #24]");                                   // store the integer exception code
@@ -682,6 +684,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
         fail_label,
         data,
         callable_support,
+        ConstructorArgOwner::Borrowed,
     );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
     emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the message pointer in the compact Throwable payload
@@ -698,6 +701,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
         fail_label,
         data,
         callable_support,
+        ConstructorArgOwner::Borrowed,
     );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for code initialization
     emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // store the integer exception code
