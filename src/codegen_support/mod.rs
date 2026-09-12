@@ -42,9 +42,12 @@ pub(crate) mod visibility;
 mod wrappers;
 
 pub(crate) use arrays::emit_array_value_type_stamp;
-pub(crate) use compilation_context::{compile_is_web_sapi, compile_php_version, linked_extensions};
+pub(crate) use compilation_context::{
+    compile_is_web_sapi, compile_php_version, ini_overrides, linked_extensions,
+};
 pub use compilation_context::{
-    autoload_rule_count, set_autoload_rule_count, set_compile_profile, set_linked_extensions,
+    autoload_rule_count, set_autoload_rule_count, set_compile_profile, set_ini_overrides,
+    set_linked_extensions,
 };
 pub(crate) use declaration_order::{
     declared_class_names, declared_interface_names, declared_trait_names,

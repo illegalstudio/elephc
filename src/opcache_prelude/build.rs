@@ -123,11 +123,71 @@ fn in_manifest(manifest_paths: Expr) -> Expr {
     )
 }
 
+/// Fills `$__elephc_blacklist` with the patterns `opcache.blacklist_filename` resolved.
+///
+/// Reference PHP lists the RESOLVED entries — the lines of every file the directive's glob
+/// matched — not the directive's own value, and keys them 0..n-1. The explicit write index
+/// reproduces that keying and leaves no hole if a read ever comes back empty.
+///
+/// Both calls fold at lowering time in a binary with no eval bridge: the count becomes `0`
+/// and the loop never runs. The empty list that binary then reports is the TRUTHFUL answer,
+/// because a binary with no dynamic tier never loads a blacklist in the first place.
+fn blacklist_prologue() -> Vec<Stmt> {
+    use crate::opcache::rt_status_keys as keys;
+
+    vec![
+        s_assign("__elephc_blacklist", e_array(vec![])),
+        s_assign("__elephc_bl_i", e_int(0)),
+        s_assign("__elephc_bl_out", e_int(0)),
+        s_assign(
+            "__elephc_bl_n",
+            e_call(
+                "__elephc_opcache_rt_stat",
+                vec![e_int(keys::RT_STAT_BLACKLIST_COUNT)],
+            ),
+        ),
+        s_while(
+            e_binop(e_var("__elephc_bl_i"), BinOp::Lt, e_var("__elephc_bl_n")),
+            vec![
+                s_assign(
+                    "__elephc_bl_entry",
+                    e_call(
+                        "__elephc_opcache_rt_blacklist_entry",
+                        vec![e_var("__elephc_bl_i")],
+                    ),
+                ),
+                s_if(
+                    e_binop(e_var("__elephc_bl_entry"), BinOp::StrictNotEq, e_str("")),
+                    vec![
+                        s_array_assign(
+                            "__elephc_blacklist",
+                            e_var("__elephc_bl_out"),
+                            e_var("__elephc_bl_entry"),
+                        ),
+                        s_assign(
+                            "__elephc_bl_out",
+                            e_binop(e_var("__elephc_bl_out"), BinOp::Add, e_int(1)),
+                        ),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign(
+                    "__elephc_bl_i",
+                    e_binop(e_var("__elephc_bl_i"), BinOp::Add, e_int(1)),
+                ),
+            ],
+        ),
+    ]
+}
+
 /// `opcache_get_configuration()`: returns the baked configuration array.
 pub(crate) fn get_configuration_decl(configuration: Expr) -> Stmt {
+    let mut body = blacklist_prologue();
+    body.push(s_return(configuration));
     function("opcache_get_configuration")
         .returns(t_array())
-        .body(vec![s_return(configuration)])
+        .body(body)
         .build()
 }
 
@@ -135,16 +195,18 @@ pub(crate) fn get_configuration_decl(configuration: Expr) -> Stmt {
 /// real configuration array kept as a DEAD arm so the inferred return stays `array|false` and a
 /// caller's `is_array()` guard still narrows.
 pub(crate) fn restricted_get_configuration_decl(configuration: Expr, warning: Stmt) -> Stmt {
+    // The prologue sits AFTER the restricted exit, not before it: a denied call returns
+    // `false` without ever reading the bridge, so the dead arm costs no runtime work.
+    let mut body = vec![s_if(
+        e_binop(e_bool(false), BinOp::StrictEq, e_bool(false)),
+        vec![warning, s_return(e_bool(false))],
+        vec![],
+        None,
+    )];
+    body.extend(blacklist_prologue());
+    body.push(s_return(configuration));
     function("opcache_get_configuration")
-        .body(vec![
-            s_if(
-                e_binop(e_bool(false), BinOp::StrictEq, e_bool(false)),
-                vec![warning, s_return(e_bool(false))],
-                vec![],
-                None,
-            ),
-            s_return(configuration),
-        ])
+        .body(body)
         .build()
 }
 
@@ -169,6 +231,16 @@ pub(crate) fn reset_decl(enabled: bool) -> Stmt {
                 "scheduled",
                 e_call("__elephc_opcache_restart_pending", vec![e_bool(true)]),
             ),
+            // Schedule on the RUNTIME SCRIPT CACHE as well, not just the reported latch
+            // above. Without this a natively compiled `opcache_reset()` moved what the
+            // status array says while the dynamic tier kept serving its entries — and the
+            // flush php-src performs at the next request never happened at all.
+            //
+            // The result is deliberately discarded: the once-then-false answer is the
+            // native latch's to give, and it has already been taken. In a binary with no
+            // eval bridge this whole call folds away at lowering time, leaving that latch
+            // as the entire effect, which is correct when there is no cache to restart.
+            s_expr(e_call("__elephc_opcache_rt_reset", vec![])),
             s_return(e_var("scheduled")),
         ])
         .build()
@@ -208,6 +280,9 @@ pub(crate) struct StatusFacts {
     pub preload_statistics: Option<Expr>,
     /// The `scripts` map keyed by canonical path.
     pub scripts_map: Expr,
+    /// `opcache.revalidate_freq`, added to a dynamic entry's `last_used_timestamp` to make
+    /// its `revalidate` field — or `None` on a profile that has no such key (pre-8.3).
+    pub revalidate_freq: Option<i64>,
     /// The `jit` sub-array's seven fields, already clamped.
     pub jit: JitFacts,
 }
@@ -244,17 +319,35 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
 
     let mut status_entries = vec![
         (e_str("opcache_enabled"), e_bool(true)),
-        (e_str("cache_full"), e_bool(false)),
+        // The budget latch belongs to the runtime script cache; a binary without one reports
+        // `0` here and the comparison renders the same `false` this key always carried.
+        (
+            e_str("cache_full"),
+            e_binop(e_var("__elephc_rt_full"), BinOp::StrictNotEq, e_int(0)),
+        ),
+        // EITHER latch counts: the native one is set by this binary's own `opcache_reset()`,
+        // the runtime one by a reset issued from inside `eval()`. Reporting only the native
+        // one would deny a restart the cache has actually scheduled.
         (
             e_str("restart_pending"),
-            e_call("__elephc_opcache_restart_pending", vec![e_bool(false)]),
+            e_binop(
+                e_call("__elephc_opcache_restart_pending", vec![e_bool(false)]),
+                BinOp::Or,
+                e_binop(e_var("__elephc_rt_pending"), BinOp::StrictNotEq, e_int(0)),
+            ),
         ),
         (e_str("restart_in_progress"), e_bool(false)),
         (
             e_str("memory_usage"),
             e_array_assoc(vec![
-                (e_str("used_memory"), php_int(facts.memory_used)),
-                (e_str("free_memory"), php_int(facts.memory_free)),
+                (
+                    e_str("used_memory"),
+                    e_binop(php_int(facts.memory_used), BinOp::Add, e_var("__elephc_rt_used")),
+                ),
+                (
+                    e_str("free_memory"),
+                    e_binop(php_int(facts.memory_free), BinOp::Sub, e_var("__elephc_rt_used")),
+                ),
                 (e_str("wasted_memory"), e_int(0)),
                 (e_str("current_wasted_percentage"), e_float(0.0)),
             ]),
@@ -266,25 +359,41 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
     status_entries.push((
         e_str("opcache_statistics"),
         e_array_assoc(vec![
+            // The compile-time manifest is fixed; the runtime cache's entries are added to it,
+            // so the count grows as dynamically included files are cached.
             (
                 e_str("num_cached_scripts"),
-                php_int(facts.num_cached_scripts),
+                e_binop(
+                    php_int(facts.num_cached_scripts),
+                    BinOp::Add,
+                    e_var("__elephc_rt_count"),
+                ),
             ),
-            (e_str("num_cached_keys"), php_int(facts.num_cached_keys)),
+            (
+                e_str("num_cached_keys"),
+                e_binop(
+                    php_int(facts.num_cached_keys),
+                    BinOp::Add,
+                    e_var("__elephc_rt_count"),
+                ),
+            ),
             (e_str("max_cached_keys"), php_int(facts.max_cached_keys)),
-            (e_str("hits"), e_int(0)),
+            (e_str("hits"), e_var("__elephc_rt_hits")),
             (
                 e_str("start_time"),
                 e_var("__elephc_opcache_start_time"),
             ),
-            (e_str("last_restart_time"), e_int(0)),
+            (e_str("last_restart_time"), e_var("__elephc_rt_restart_time")),
             (e_str("oom_restarts"), e_int(0)),
             (e_str("hash_restarts"), e_int(0)),
-            (e_str("manual_restarts"), e_int(0)),
-            (e_str("misses"), e_int(0)),
-            (e_str("blacklist_misses"), e_int(0)),
-            (e_str("blacklist_miss_ratio"), e_float(0.0)),
-            (e_str("opcache_hit_rate"), e_float(0.0)),
+            (e_str("manual_restarts"), e_var("__elephc_rt_manual")),
+            (e_str("misses"), e_var("__elephc_rt_misses")),
+            (e_str("blacklist_misses"), e_var("__elephc_rt_blacklist")),
+            (
+                e_str("blacklist_miss_ratio"),
+                e_var("__elephc_rt_blacklist_rate"),
+            ),
+            (e_str("opcache_hit_rate"), e_var("__elephc_rt_rate")),
         ]),
     ));
 
@@ -311,8 +420,11 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
             vec![],
             None,
         ),
-        s_assign("status", e_array_assoc(status_entries)),
     ];
+    // AFTER the disabled gate, so a binary whose cache is off never calls the bridge, and
+    // BEFORE the status array, which names the locals this leaves behind.
+    body.extend(runtime_cache_prologue());
+    body.push(s_assign("status", e_array_assoc(status_entries)));
     if let Some(preload) = facts.preload_statistics {
         body.push(s_array_assign(
             "status",
@@ -320,16 +432,14 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
             preload,
         ));
     }
-    body.push(s_if(
-        e_var("include_scripts"),
-        vec![s_array_assign(
-            "status",
-            e_str("scripts"),
-            facts.scripts_map,
-        )],
-        vec![],
-        None,
+    let mut scripts_body = vec![s_assign("__elephc_scripts", facts.scripts_map)];
+    scripts_body.extend(runtime_cache_scripts_loop(facts.revalidate_freq));
+    scripts_body.push(s_array_assign(
+        "status",
+        e_str("scripts"),
+        e_var("__elephc_scripts"),
     ));
+    body.push(s_if(e_var("include_scripts"), scripts_body, vec![], None));
     body.push(s_array_assign(
         "status",
         e_str("jit"),
@@ -349,6 +459,184 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
         .param_untyped_default("include_scripts", e_bool(true))
         .body(body)
         .build()
+}
+
+
+/// Reads every runtime script-cache figure once, into locals the status array then names.
+///
+/// One call per figure, hoisted out of the array literal: the array is built in one
+/// expression and a call inside it would be evaluated in key order, which is not the order
+/// the figures have to be consistent in. Reading them up front also means `hits` and
+/// `misses` cannot straddle an include that moves one of them.
+///
+/// Every call folds to `0` at lowering time in a binary with no eval bridge, so this whole
+/// prologue costs a handful of constant assignments there.
+fn runtime_cache_prologue() -> Vec<Stmt> {
+    use crate::opcache::rt_status_keys as keys;
+
+    let stat = |key: i64| e_call("__elephc_opcache_rt_stat", vec![e_int(key)]);
+    vec![
+        s_assign("__elephc_rt_hits", stat(keys::RT_STAT_HITS)),
+        s_assign("__elephc_rt_misses", stat(keys::RT_STAT_MISSES)),
+        s_assign("__elephc_rt_count", stat(keys::RT_STAT_SCRIPT_COUNT)),
+        s_assign("__elephc_rt_used", stat(keys::RT_STAT_USED_MEMORY)),
+        s_assign("__elephc_rt_full", stat(keys::RT_STAT_CACHE_FULL)),
+        s_assign("__elephc_rt_manual", stat(keys::RT_STAT_MANUAL_RESTARTS)),
+        s_assign("__elephc_rt_restart_time", stat(keys::RT_STAT_LAST_RESTART_TIME)),
+        s_assign("__elephc_rt_pending", stat(keys::RT_STAT_RESTART_PENDING)),
+        s_assign("__elephc_rt_blacklist", stat(keys::RT_STAT_BLACKLIST_MISSES)),
+        // php-src reports the hit rate as a PERCENTAGE of lookups, and `0.0` when there have
+        // been none — not a division by zero and not `NAN`.
+        s_assign(
+            "__elephc_rt_lookups",
+            e_binop(e_var("__elephc_rt_hits"), BinOp::Add, e_var("__elephc_rt_misses")),
+        ),
+        s_assign("__elephc_rt_rate", e_float(0.0)),
+        s_if(
+            e_binop(e_var("__elephc_rt_lookups"), BinOp::Gt, e_int(0)),
+            // The CAST is load-bearing, not decoration: PHP's `/` on two ints is `int|float`,
+            // and assigning a union into a local that starts out `float` is a branch-divergent
+            // retype — the shape that miscompiles order-dependently. Casting pins one type on
+            // both arms, and `opcache_hit_rate` is a float in reference PHP anyway.
+            vec![s_assign(
+                "__elephc_rt_rate",
+                e_cast(
+                    CastType::Float,
+                    e_binop(
+                        e_binop(
+                            e_var("__elephc_rt_hits"),
+                            BinOp::Div,
+                            e_var("__elephc_rt_lookups"),
+                        ),
+                        BinOp::Mul,
+                        e_float(100.0),
+                    ),
+                ),
+            )],
+            vec![],
+            None,
+        ),
+        // `blacklist_miss_ratio` is a PERCENTAGE of ALL lookups — php-src's
+        // `reqs = hits + misses`, where its INTERNAL `misses` counts blacklist refusals too
+        // and the REPORTED `misses` has them subtracted back out. So the denominator here is
+        // `hits + misses + blacklist_misses`, all three reported figures.
+        //
+        // An earlier revision used `misses + blacklist_misses`, derived from a single probe
+        // where misses=6 and blacklist_misses=29 reported 82.8571428571. That probe could not
+        // discriminate: it had hits=0, so `misses + bl` and `hits + misses + bl` were the same
+        // 35. VERIFIED on reference PHP 8.5.10 with two runs built so no two candidate
+        // denominators coincide — hits=4 misses=2 bl=1 reports 14.285714 (1*100/7), and
+        // hits=12 misses=3 bl=3 reports 16.666667 (3*100/18).
+        //
+        // Zero lookups report `0.0` rather than dividing by zero.
+        s_assign(
+            "__elephc_rt_blacklist_total",
+            e_binop(
+                e_binop(
+                    e_var("__elephc_rt_hits"),
+                    BinOp::Add,
+                    e_var("__elephc_rt_misses"),
+                ),
+                BinOp::Add,
+                e_var("__elephc_rt_blacklist"),
+            ),
+        ),
+        s_assign("__elephc_rt_blacklist_rate", e_float(0.0)),
+        s_if(
+            e_binop(e_var("__elephc_rt_blacklist_total"), BinOp::Gt, e_int(0)),
+            // Cast for the same reason the hit rate casts: PHP's `/` on two ints is
+            // `int|float`, and letting that union reach a local that starts as a float is
+            // the branch-divergent retype that miscompiles order-dependently.
+            vec![s_assign(
+                "__elephc_rt_blacklist_rate",
+                e_cast(
+                    CastType::Float,
+                    e_binop(
+                        e_binop(
+                            e_var("__elephc_rt_blacklist"),
+                            BinOp::Div,
+                            e_var("__elephc_rt_blacklist_total"),
+                        ),
+                        BinOp::Mul,
+                        e_float(100.0),
+                    ),
+                ),
+            )],
+            vec![],
+            None,
+        ),
+    ]
+}
+
+/// Appends the runtime cache's scripts to the manifest map, one index at a time.
+///
+/// Walks by INDEX rather than taking an array across the bridge: every figure crosses as a
+/// scalar, which keeps the bridge free of an array ABI and of the ownership question that
+/// comes with one.
+///
+/// An empty path is the loop's safety net. A real cached path is never empty, so an empty
+/// one means the index went out of range between the count and the read — possible because
+/// nothing holds the cache locked across the walk — and skipping it is the honest answer.
+fn runtime_cache_scripts_loop(revalidate_freq: Option<i64>) -> Vec<Stmt> {
+    use crate::opcache::rt_status_keys as keys;
+
+    let field = |key: i64| {
+        e_call(
+            "__elephc_opcache_rt_script_field",
+            vec![e_var("__elephc_rt_i"), e_int(key)],
+        )
+    };
+    let mut entry = vec![
+        (e_str("full_path"), e_var("__elephc_rt_path")),
+        (e_str("hits"), field(keys::RT_SCRIPT_HITS)),
+        (e_str("memory_consumption"), field(keys::RT_SCRIPT_MEMORY)),
+        (
+            e_str("last_used"),
+            e_call(
+                "__elephc_opcache_asctime",
+                vec![e_var("__elephc_rt_last_used")],
+            ),
+        ),
+        (e_str("last_used_timestamp"), e_var("__elephc_rt_last_used")),
+        (e_str("timestamp"), field(keys::RT_SCRIPT_TIMESTAMP)),
+    ];
+    if let Some(freq) = revalidate_freq {
+        entry.push((
+            e_str("revalidate"),
+            e_binop(e_var("__elephc_rt_last_used"), BinOp::Add, php_int(freq)),
+        ));
+    }
+
+    vec![
+        s_assign("__elephc_rt_i", e_int(0)),
+        s_while(
+            e_binop(e_var("__elephc_rt_i"), BinOp::Lt, e_var("__elephc_rt_count")),
+            vec![
+                s_assign(
+                    "__elephc_rt_path",
+                    e_call(
+                        "__elephc_opcache_rt_script_path",
+                        vec![e_var("__elephc_rt_i")],
+                    ),
+                ),
+                s_assign("__elephc_rt_last_used", field(keys::RT_SCRIPT_LAST_USED)),
+                s_if(
+                    e_binop(e_var("__elephc_rt_path"), BinOp::StrictNotEq, e_str("")),
+                    vec![s_array_assign(
+                        "__elephc_scripts",
+                        e_var("__elephc_rt_path"),
+                        e_array_assoc(entry),
+                    )],
+                    vec![],
+                    None,
+                ),
+                s_assign(
+                    "__elephc_rt_i",
+                    e_binop(e_var("__elephc_rt_i"), BinOp::Add, e_int(1)),
+                ),
+            ],
+        ),
+    ]
 }
 
 /// `opcache_is_script_cached($filename)`: `realpath`-normalized membership in the baked
@@ -619,13 +907,42 @@ pub(crate) fn state_helper_decls() -> Program {
         function("__elephc_opcache_system_timezone")
             .returns(TypeExpr::Str)
             .body(vec![
+                // MEMOIZED, and the memo is the whole point rather than an optimisation.
+                // The lookup consults `TZ`, and elephc's own `date_default_timezone_set()`
+                // WRITES `TZ` — it drives libc through `putenv` + `tzset`, because the binary
+                // carries no tzdata and lets libc resolve offsets and DST. Without the memo
+                // the first `__elephc_opcache_asctime` call restores the PHP default and
+                // leaves `TZ=UTC` behind, and every later call reads that back as though it
+                // were the system zone: `opcache_get_status()['scripts']` then reported its
+                // FIRST entry in local time and every other entry in UTC. Resolving once,
+                // before any of this helper's own writes exist, makes every entry agree.
+                //
+                // TWO statics rather than one with a `null` sentinel: `''` is a real answer
+                // here (it means "no zone could be determined", which the caller reads as
+                // "leave the default timezone alone"), so the memo needs a separate
+                // "resolved yet?" flag. A `null` marker would type the static `Mixed`, and
+                // the EIR backend refuses to store a `Str` into a `Mixed` static local —
+                // each static has to keep ONE PHP type for its whole life.
+                s_static("memo", e_str("")),
+                s_static("memo_resolved", e_bool(false)),
+                s_if(
+                    e_binop(e_var("memo_resolved"), BinOp::StrictEq, e_bool(true)),
+                    vec![s_return(e_var("memo"))],
+                    vec![],
+                    None,
+                ),
+                s_assign("memo_resolved", e_bool(true)),
+                s_assign("memo", e_str("")),
                 s_assign(
                     "tz",
                     e_cast(CastType::String, e_call("getenv", vec![e_str("TZ")])),
                 ),
                 s_if(
                     e_binop(e_var("tz"), BinOp::StrictNotEq, e_str("")),
-                    vec![s_return(e_var("tz"))],
+                    vec![
+                        s_assign("memo", e_var("tz")),
+                        s_return(e_var("tz")),
+                    ],
                     vec![],
                     None,
                 ),
@@ -660,6 +977,7 @@ pub(crate) fn state_helper_decls() -> Program {
                         ],
                     ),
                 ),
+                s_assign("memo", e_var("zone")),
                 s_return(e_var("zone")),
             ])
             .build(),
@@ -745,28 +1063,96 @@ pub(crate) fn cli_ini_get_decl() -> Stmt {
         .build()
 }
 
-/// The CLI `ini_set(string $option, $value): string|false` wrapper: every `opcache.*` directive
-/// is baked into the binary, so it reports failure for every key.
+/// The `opcache.*` directives `ini_set()` genuinely moves, with the id the runtime-cache
+/// setter addresses each by.
+///
+/// These are exactly the intersection of two sets: the directives php-src registers
+/// `PHP_INI_ALL` (so reference PHP's own `ini_set()` succeeds on them) and the ones
+/// elephc's runtime script cache actually reads. Every other `opcache.*` key keeps
+/// reporting failure, which is exact for the `PHP_INI_SYSTEM` majority and deliberate for
+/// the rest: succeeding there would move a reported value while nothing changed.
+///
+/// THE IDS ARE A WIRE CONTRACT with `elephc_magician::script_cache::config`, matched by
+/// number across the C ABI, so they may never be reordered.
+pub(crate) const INI_SETTABLE_DIRECTIVES: [(&str, i64); 3] = [
+    ("opcache.revalidate_freq", 0),
+    ("opcache.validate_timestamps", 1),
+    ("opcache.file_update_protection", 2),
+];
+
+/// The `ini_set(string $option, $value): string|false` wrapper.
+///
+/// Succeeds for [`INI_SETTABLE_DIRECTIVES`] and fails for every other key. A successful
+/// call does two things, and needs both to stay honest: it records the new raw string in
+/// the override store every reporting surface consults, and it installs the value on the
+/// live runtime script cache through `__elephc_opcache_rt_swap`. Moving only the report
+/// would be the contradiction the runtime-override scope rule exists to prevent.
+///
+/// Returns the PREVIOUS raw value, as PHP requires — read before the write, and through
+/// `__elephc_opcache_ini_string` so it already accounts for an earlier `ini_set()`.
+///
+/// The value goes through `__elephc_ini_scan` first, the same bareword normalizer `--ini`
+/// and `ELEPHC_INI_*` apply, so `ini_set('opcache.validate_timestamps', 'off')` stores
+/// `''` exactly as the other two paths would.
 pub(crate) fn cli_ini_set_decl() -> Stmt {
+    let mut body = opcache_ini_set_arms();
+    body.push(s_return(e_bool(false)));
     function("ini_set")
         .param("option", TypeExpr::Str)
         .param_untyped("value")
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
-        .body(vec![
-            s_assign("value", e_cast(CastType::String, e_var("value"))),
-            s_if(
-                e_binop(
-                    e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
-                    BinOp::StrictEq,
-                    e_var("value"),
-                ),
-                vec![s_return(e_bool(false))],
-                vec![],
-                None,
-            ),
-            s_return(e_bool(false)),
-        ])
+        .body(body)
         .build()
+}
+
+/// The `ini_set()` statements that handle [`INI_SETTABLE_DIRECTIVES`], shared by the CLI
+/// wrapper and the `--web` one.
+///
+/// ONE SOURCE OF TRUTH ON PURPOSE. The two wrappers are separate declarations — under
+/// `--web` the session-aware body owns the `ini_set` name — and letting each spell this
+/// logic itself is how the two surfaces drift apart, which is exactly the class of bug the
+/// override-scope rule keeps producing when it is only half-applied.
+///
+/// Reads `$option` and `$value` from the enclosing wrapper, and DOES NOT ASSIGN `$value`:
+/// the `--web` body goes on to use it for the session directives, so the scanned copy lives
+/// in its own local. Each arm returns, so the caller appends its own fallthrough.
+pub(crate) fn opcache_ini_set_arms() -> Vec<Stmt> {
+    let mut body = vec![s_assign(
+        "oc_scanned",
+        e_call(
+            "__elephc_ini_scan",
+            vec![e_cast(CastType::String, e_var("value"))],
+        ),
+    )];
+    for (name, id) in INI_SETTABLE_DIRECTIVES {
+        body.push(s_if(
+            e_binop(e_var("option"), BinOp::StrictEq, e_str(name)),
+            vec![
+                // Read BEFORE the write, and through `__elephc_opcache_ini_string` so the
+                // previous value already accounts for an earlier `ini_set()`.
+                s_assign(
+                    "oc_previous",
+                    e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
+                ),
+                s_expr(e_call(
+                    "__elephc_opcache_ini_override",
+                    vec![e_var("option"), e_var("oc_scanned"), e_int(1)],
+                )),
+                // The cache push. In a binary with no eval bridge this whole call folds
+                // to `0` at lowering time and the interpreter is never linked; the
+                // override store above still moved, so `ini_get()` reports the new value
+                // in that binary too.
+                s_expr(e_call(
+                    "__elephc_opcache_rt_swap",
+                    vec![e_int(id), e_cast(CastType::Int, e_var("oc_scanned"))],
+                )),
+                s_return(e_var("oc_previous")),
+            ],
+            vec![],
+            None,
+        ));
+    }
+    body
 }
 
 /// The CLI `ini_get_all(?string $extension = null, bool $details = true)` wrapper — the
@@ -893,13 +1279,83 @@ pub(crate) fn ini_helper_decls(
         )
     };
 
-    let mut string_body: Vec<Stmt> = string_arms.into_iter().map(arm).collect();
+    // The `ini_set()` override wins over every baked or environment-derived value, so it
+    // is consulted FIRST. An empty answer means "never set": the three settable
+    // directives are all numeric, so the empty string is a value none of them can take
+    // and is safe as the absent sentinel.
+    let mut string_body: Vec<Stmt> = vec![
+        s_assign(
+            "overridden",
+            e_call(
+                "__elephc_opcache_ini_override",
+                vec![e_var("option"), e_str(""), e_int(2)],
+            ),
+        ),
+        s_if(
+            e_binop(e_var("overridden"), BinOp::StrictEq, e_str("1")),
+            vec![s_return(e_call(
+                "__elephc_opcache_ini_override",
+                vec![e_var("option"), e_str(""), e_int(0)],
+            ))],
+            vec![],
+            None,
+        ),
+    ];
+    string_body.extend(string_arms.into_iter().map(arm));
     string_body.push(s_return(e_bool(false)));
 
     let mut null_body: Vec<Stmt> = null_arms.into_iter().map(arm).collect();
     null_body.push(s_return(e_bool(false)));
 
     vec![
+        // The `ini_set()` override store. `$op` 1 writes, 0 reads the value, 2 answers
+        // whether the key is set at all.
+        //
+        // THE PRESENCE TEST IS NOT REDUNDANT: the empty string cannot serve as the "never
+        // set" sentinel, because it is a legitimate stored value. `__elephc_ini_scan`
+        // rewrites the boolean barewords to `''`, so `ini_set('opcache.validate_timestamps',
+        // 'off')` stores exactly that, and a value-only read could not tell it from absent.
+        //
+        // Every reporting surface funnels through this one store, which is what keeps
+        // `ini_get()`, `ini_get_all()` and `opcache_get_configuration()` agreeing with each
+        // other and with the cache.
+        function("__elephc_opcache_ini_override")
+            .param("option", TypeExpr::Str)
+            .param("value", TypeExpr::Str)
+            .param("op", TypeExpr::Int)
+            .returns(TypeExpr::Str)
+            .body(vec![
+                // Seeded with one typed dummy entry: the EIR backend rejects
+                // `static $s = [];`, the same restriction
+                // `__elephc_opcache_invalidate_state` documents.
+                s_static("overrides", e_array_assoc(vec![(e_str(""), e_str(""))])),
+                s_if(
+                    e_binop(e_var("op"), BinOp::StrictEq, e_int(1)),
+                    vec![s_array_assign("overrides", e_var("option"), e_var("value"))],
+                    vec![],
+                    None,
+                ),
+                // An `isset` guard plus a bound local, not `?? ''`: the coalesce reads
+                // `true` for an absent key in elephc.
+                s_if(
+                    e_not(e_call(
+                        "isset",
+                        vec![e_index(e_var("overrides"), e_var("option"))],
+                    )),
+                    vec![s_return(e_str(""))],
+                    vec![],
+                    None,
+                ),
+                s_if(
+                    e_binop(e_var("op"), BinOp::StrictEq, e_int(2)),
+                    vec![s_return(e_str("1"))],
+                    vec![],
+                    None,
+                ),
+                s_assign("current", e_index(e_var("overrides"), e_var("option"))),
+                s_return(e_var("current")),
+            ])
+            .build(),
         function("__elephc_opcache_ini_string")
             .param("option", TypeExpr::Str)
             .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))

@@ -17,6 +17,8 @@ thread_local! {
     /// Selected PHP language profile and whether the current compilation uses web SAPI.
     static COMPILE_PROFILE: Cell<(crate::web_prelude::PhpVersion, bool)> =
         const { Cell::new((crate::web_prelude::PhpVersion::Php85, false)) };
+    /// The compile-time `--ini KEY=VALUE` directive overrides of this compilation.
+    static INI_OVERRIDES: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Records the PHP language profile and SAPI mode of the current compilation.
@@ -64,3 +66,18 @@ pub(crate) fn linked_extensions() -> Vec<String> {
     LINKED_EXTENSIONS.with(|names| names.borrow().clone())
 }
 
+/// Records this compilation's `--ini` directive overrides.
+///
+/// Set from the pipeline alongside the compile profile, because the values are
+/// consumed far below the parameter list that carries them — the OPcache runtime
+/// cache configuration is baked in per-instruction lowering. Read via
+/// [`ini_overrides`].
+pub fn set_ini_overrides(overrides: Vec<(String, String)>) {
+    INI_OVERRIDES.with(|entries| *entries.borrow_mut() = overrides);
+}
+
+/// Returns this compilation's `--ini` directive overrides (empty unless
+/// [`set_ini_overrides`] ran for it, which is the no-override default).
+pub(crate) fn ini_overrides() -> Vec<(String, String)> {
+    INI_OVERRIDES.with(|entries| entries.borrow().clone())
+}

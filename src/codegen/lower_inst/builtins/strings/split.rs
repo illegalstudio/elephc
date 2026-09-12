@@ -9,7 +9,9 @@
 
 use super::*;
 
-use crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_array_values;
+use crate::codegen::lower_inst::builtins::arrays::values::{
+    emit_loaded_assoc_array_values, emit_loaded_dynamic_array_values,
+};
 
 /// Stack cleanup slots for split builtin string coercions that allocate owned temporaries.
 pub(super) struct SplitStringTempCleanups {
@@ -314,10 +316,11 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         abi::emit_call_label(ctx.emitter, runtime_label);
         return store_if_result(ctx, inst);
     };
-    // The hash operand was copied into a fresh indexed array the caller owns. It has to
-    // outlive the join and then be released, and the join answers in the STRING result
-    // register PAIR — so the answer is stacked while the copy is released, rather than the
-    // copy being released first, which would free the payload the join just read.
+    // The operand loader left an OWNED indexed payload: a fresh copy for a hash, and the
+    // original retained for packed storage. Either way it has to outlive the join and then be
+    // released, and the join answers in the STRING result register PAIR — so the answer is
+    // stacked while the payload is released, rather than releasing first, which would free the
+    // bytes the join just read.
     let array_reg = implode_array_argument_reg(ctx);
     abi::emit_push_reg(ctx.emitter, array_reg);
     abi::emit_call_label(ctx.emitter, runtime_label);
@@ -591,6 +594,10 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
         // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
         PhpType::Bool => Ok("__rt_implode_bool"),
         PhpType::Int => Ok("__rt_implode_int"),
+        // PHP spells a float at `precision = 14` with `zend_gcvt` fixups, which is what
+        // `__rt_ftoa` does and what `__rt_implode_float` calls per element. Without this arm
+        // `implode(",", [1.5])` was an outright backend refusal.
+        PhpType::Float => Ok("__rt_implode_float"),
         // An empty array literal carries an uninhabited element type (`Never`, or
         // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
         // dereference an element, so the generic string helper is the safe choice and
@@ -603,20 +610,41 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
     }
 }
 
-/// Returns the associative-array VALUE type when `implode()` must copy its values first.
+/// Returns the element type of the OWNED payload `implode()` must release after the join.
 ///
-/// The renderers walk a dense indexed payload, so a hash operand is converted through the
-/// same extraction `array_values()` uses. That copy is a fresh owned array, which is why the
-/// caller has to release it once the join has read it.
+/// The renderers walk a dense indexed payload, so a hash operand is converted through the same
+/// extraction `array_values()` uses, and that copy is a fresh owned array. An operand whose
+/// STATIC type is already indexed goes the same way, because an indexed static type does not
+/// guarantee indexed storage: `__rt_array_set_mixed_key` promotes an array to hash storage
+/// when a key does not fit the packed layout and the static type does not move with it. That
+/// case is decided at run time by `emit_loaded_dynamic_array_values`, which retains the
+/// original rather than copying it when the storage really is packed — so the release is
+/// unconditional either way, and this answers `Some` for every array shape.
 fn implode_hash_value_type(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
     array_index: usize,
 ) -> Result<Option<PhpType>> {
     let array = expect_operand(inst, array_index)?;
-    match ctx.value_php_type(array)? {
+    match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::AssocArray { value, .. } => Ok(Some(value.codegen_repr())),
+        PhpType::Array(elem) => Ok(Some(implode_copy_value_type(&elem))),
+        PhpType::Mixed | PhpType::Union(_) => Ok(Some(PhpType::Mixed)),
         _ => Ok(None),
+    }
+}
+
+/// The element layout a promoted-hash copy must be stamped with for one `implode()` operand.
+///
+/// It has to match the renderer `implode_runtime_label` picked, since both are derived from
+/// the same static element type. An uninhabited element type — the empty `[]` literal, which
+/// reaches this as `Never` or, through `codegen_repr`, `Void` — describes no layout at all,
+/// and its renderer is the generic `__rt_implode`, which reads boxed `Mixed` elements. So that
+/// is what the copy carries.
+fn implode_copy_value_type(elem_ty: &PhpType) -> PhpType {
+    match elem_ty.codegen_repr() {
+        PhpType::Never | PhpType::Void => PhpType::Mixed,
+        other => other,
     }
 }
 
@@ -680,7 +708,7 @@ pub(super) fn load_implode_array_aarch64(
             ctx.load_value_to_reg(array, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed array payload to implode()
-            Ok(())
+            emit_loaded_dynamic_array_values(ctx, &PhpType::Mixed)
         }
         // A hash has no dense payload for the renderers to walk, so its values are copied
         // into a fresh indexed array first — the same extraction `array_values()` uses.
@@ -688,6 +716,12 @@ pub(super) fn load_implode_array_aarch64(
         PhpType::AssocArray { value, .. } => {
             ctx.load_value_to_reg(array, "x0")?;
             emit_loaded_assoc_array_values(ctx, &value.codegen_repr())
+        }
+        // An indexed STATIC type can still carry promoted hash storage, so the choice between
+        // handing the payload over as-is and copying its values out is made at run time.
+        PhpType::Array(elem) => {
+            ctx.load_value_to_reg(array, "x0")?;
+            emit_loaded_dynamic_array_values(ctx, &implode_copy_value_type(&elem))
         }
         _ => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -706,12 +740,17 @@ pub(super) fn load_implode_array_x86_64(
             ctx.load_value_to_reg(array, "rax")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed array payload to implode()
-            Ok(())
+            emit_loaded_dynamic_array_values(ctx, &PhpType::Mixed)
         }
         // See the AArch64 loader: a hash operand is copied into an indexed array first.
         PhpType::AssocArray { value, .. } => {
             ctx.load_value_to_reg(array, "rax")?;
             emit_loaded_assoc_array_values(ctx, &value.codegen_repr())
+        }
+        // See the AArch64 loader: an indexed static type can still carry promoted storage.
+        PhpType::Array(elem) => {
+            ctx.load_value_to_reg(array, "rax")?;
+            emit_loaded_dynamic_array_values(ctx, &implode_copy_value_type(&elem))
         }
         _ => {
             ctx.load_value_to_reg(array, "rax")?;

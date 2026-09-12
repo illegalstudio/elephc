@@ -62,13 +62,20 @@ pub(in crate::interpreter) fn eval_opcache_reset_call(
     eval_opcache_reset_result(values)
 }
 
-/// Builds the `opcache_reset()` return value: the compile-time cache-enabled boolean.
-/// The eval interpreter has no runtime SAPI, so it uses the CLI default
-/// (`is_web_sapi = false`) — reference-PHP `php script.php` reports the cache disabled,
-/// hence `false`.
+/// Builds the `opcache_reset()` return value.
+///
+/// Disabled → `false`, which is both reference PHP's answer and the compile-time
+/// const-folder's state (no generated code has installed a configuration there).
+/// Enabled → schedules the runtime script cache's restart: `true` on the FIRST call and
+/// `false` on every call after it, exactly as php-src's `zend_accel_schedule_restart()`
+/// clears the flag `opcache_reset()`'s own guard tests.
 pub(in crate::interpreter) fn eval_opcache_reset_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let enabled = opcache_cache_enabled(crate::eval_php_profile::eval_php_version_id(), false);
-    values.bool_value(enabled)
+    if !crate::script_cache::config().enabled {
+        let enabled = opcache_cache_enabled(crate::eval_php_profile::eval_php_version_id(), false);
+        debug_assert!(!enabled, "an uninstalled configuration means the CLI default");
+        return values.bool_value(enabled);
+    }
+    values.bool_value(crate::script_cache::schedule_restart())
 }

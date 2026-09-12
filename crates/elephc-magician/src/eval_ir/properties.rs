@@ -10,7 +10,7 @@
 use super::*;
 
 /// Public property metadata for a runtime eval class.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalClassProperty {
     name: String,
     trait_origin: Option<String>,
@@ -276,7 +276,7 @@ impl EvalClassProperty {
 }
 
 /// PHP visibility for eval-declared object members.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalVisibility {
     Public,
     Protected,

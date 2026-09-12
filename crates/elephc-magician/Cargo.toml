@@ -40,6 +40,10 @@ elephc-pcntl = { path = "../elephc-pcntl" }
 flate2 = "1"
 inventory = "0.3"
 libc = "0.2"
+# `rc` is required: a cached script segment holds its bytes and its parsed program
+# behind `Arc`, which serde only (de)serializes with that feature on.
+serde = { version = "1", features = ["derive", "rc"] }
+bincode = "1"
 unicode-segmentation = "1"
 
 [dev-dependencies]

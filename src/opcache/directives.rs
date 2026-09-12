@@ -848,12 +848,16 @@ fn parse_ini_int(name: &str, raw: &str) -> Option<i64> {
 /// modelled because reference PHP prints them through `zend_error(E_WARNING, …)`, i.e.
 /// unconditionally, and because they are the only refusals a user cannot otherwise attribute (the
 /// off-by-one in three of their message bounds means the reverted value is genuinely surprising —
-/// see [`directive_int_range`]). NOT modelled: the `zend_accel_error(ACCEL_LOG_WARNING, …)` lines
-/// for `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` / the
+/// see [`directive_int_range`]). NOT modelled HERE: the `zend_accel_error(ACCEL_LOG_WARNING, …)`
+/// lines for `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` / the
 /// `opcache.memory_consumption` floor, which reference PHP itself suppresses at the default
-/// `opcache.log_verbosity_level` of 1 (they appear only at `>= 2`, on a timestamped channel elephc
-/// has no counterpart for) — those refusals stay silent here too, exactly as reference PHP's
-/// default configuration renders them. `opcache.max_wasted_percentage` and an invalid
+/// `opcache.log_verbosity_level` of 1 — they appear only at `>= 2`. They stay silent here too,
+/// exactly as reference PHP's default configuration renders them, and this compile-time channel
+/// would be the WRONG place for them regardless: it is unconditional, so emitting them would
+/// produce noise reference does not. elephc does now have the timestamped accelerator channel
+/// they belong on (`crate::opcache_prelude`'s `zend_accel_error` emulation, which
+/// `opcache.blacklist_filename` already uses for its no-match warning), so moving them there is
+/// possible — it is just not this function's job. `opcache.max_wasted_percentage` and an invalid
 /// `opcache.jit` spelling are likewise silent in reference PHP. The runtime
 /// `ELEPHC_INI_*` path emits nothing — it is an elephc extension with no reference counterpart
 /// (see [`directive_runtime_overridable`]), and a compiled binary has no startup phase to warn in.
@@ -1236,6 +1240,30 @@ pub fn directive_runtime_overridable(name: &str) -> bool {
             | "opcache.jit_buffer_size"
             | "opcache.restrict_api"
             | "opcache.preload"
+            // The four below bake the STARTUP VALIDATION of `opcache.file_cache` and the
+            // `zend_accel_error` channel that reports it (see
+            // `crate::opcache::runtime_cache`). Before that validation existed they were
+            // pure reporting and were overridable; now a runtime override would report a
+            // directory the binary never checked, which is exactly the self-contradiction
+            // this scope rule exists to prevent.
+            | "opcache.file_cache"
+            | "opcache.file_cache_read_only"
+            | "opcache.log_verbosity_level"
+            | "opcache.error_log"
+            // These two are baked into the same `__elephc_eval_configure_opcache` call as
+            // `revalidate_freq` and `memory_consumption`, which were excluded from the
+            // start. They were missed when the runtime script cache first consumed them,
+            // leaving a binary that could report a `max_file_size` its cache did not apply.
+            | "opcache.validate_timestamps"
+            | "opcache.max_file_size"
+            // Refuses to cache a file younger than its value, so it governs what the
+            // runtime script cache admits rather than only what the binary reports.
+            | "opcache.file_update_protection"
+            // Read ONCE at eval-context setup, php-src's `MINIT` equivalent, because the
+            // directive is `PHP_INI_SYSTEM` there and reference PHP never re-reads the
+            // files either. A runtime override would name a blacklist the cache had
+            // already been built without.
+            | "opcache.blacklist_filename"
     )
 }
 
@@ -2552,12 +2580,13 @@ mod tests {
     }
 
     /// The runtime-override scope rule, asserted over the WHOLE matrix of every maintained
-    /// version: exactly the ten directives elephc derives compiled-in behavior from are excluded,
+    /// version: exactly the directives elephc derives compiled-in behavior from are excluded,
     /// and every other directive is overridable.
     #[test]
     fn runtime_override_scope_covers_every_directive() {
         /// The directives whose value is consumed at COMPILE TIME to bake code or constants.
-        const EXCLUDED: [&str; 10] = [
+        // Present in every 8.2–8.5 table.
+        const EXCLUDED: [&str; 17] = [
             "opcache.enable",
             "opcache.enable_cli",
             "opcache.memory_consumption",
@@ -2568,13 +2597,23 @@ mod tests {
             "opcache.jit_buffer_size",
             "opcache.restrict_api",
             "opcache.preload",
+            "opcache.file_cache",
+            "opcache.log_verbosity_level",
+            "opcache.error_log",
+            "opcache.validate_timestamps",
+            "opcache.max_file_size",
+            "opcache.file_update_protection",
+            "opcache.blacklist_filename",
         ];
+        // Excluded for the same reason, but REGISTERED ONLY BY 8.5 — so it cannot be
+        // asserted present in the older tables the way the rest can.
+        const EXCLUDED_85_ONLY: [&str; 1] = ["opcache.file_cache_read_only"];
         for version in [80200u32, 80300, 80400, 80500] {
             let directives = opcache_directives(version);
             for (name, _) in &directives {
                 assert_eq!(
                     directive_runtime_overridable(name),
-                    !EXCLUDED.contains(name),
+                    !EXCLUDED.contains(name) && !EXCLUDED_85_ONLY.contains(name),
                     "{name} runtime-override scope disagrees with the excluded set ({version})"
                 );
             }
@@ -2586,22 +2625,25 @@ mod tests {
                     "{excluded} must exist in the {version} table"
                 );
             }
-            // The overridable majority is the whole rest of the table.
+            // The overridable majority is the whole rest of the table. The 8.5-only name is
+            // counted only where it is registered, which is what keeps the arithmetic exact
+            // rather than accidentally right.
+            let excluded_here = EXCLUDED.len()
+                + EXCLUDED_85_ONLY
+                    .iter()
+                    .filter(|excluded| directives.iter().any(|(name, _)| name == *excluded))
+                    .count();
             let overridable = directives
                 .iter()
                 .filter(|(name, _)| directive_runtime_overridable(name))
                 .count();
-            assert_eq!(overridable, directives.len() - EXCLUDED.len());
+            assert_eq!(overridable, directives.len() - excluded_here);
+            // Every version lands on the same 36: 8.5 excludes 18 of 54, the older tables
+            // exclude 17 of 53.
+            assert_eq!(overridable, 36, "for {version}");
         }
-        // 8.5 registers 54 directives, so 44 are runtime-overridable.
+        // 8.5 registers 54 directives, so 36 are runtime-overridable.
         assert_eq!(opcache_directives(80500).len(), 54);
-        assert_eq!(
-            opcache_directives(80500)
-                .iter()
-                .filter(|(name, _)| directive_runtime_overridable(name))
-                .count(),
-            44
-        );
     }
 
     /// The PHP-side type code mirrors `parse_ini_override`'s Rust type dispatch for every

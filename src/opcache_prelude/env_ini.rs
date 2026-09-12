@@ -17,8 +17,53 @@ use super::*;
 ///
 /// `value` is the EFFECTIVE compile-time value (defaults with `--ini` already applied), which is
 /// what makes the precedence chain baked default → `--ini` → env fall out for free.
-pub(super) fn directive_runtime_value_expr(name: &str, value: &DirectiveValue) -> Expr {
+pub(super) fn directive_runtime_value_expr(
+    name: &str,
+    value: &DirectiveValue,
+    ini_set_injected: bool,
+) -> Expr {
     let literal = directive_value_expr(value);
+    // An `ini_set()` outranks everything below, so the three settable directives resolve
+    // through the override store first. They are NOT runtime-overridable through
+    // `ELEPHC_INI_*` (they bake behaviour), so without this arm they would return the
+    // compiled literal and `opcache_get_configuration()` would disagree with `ini_get()`
+    // after a successful `ini_set()`.
+    // Only when `ini_set()` is actually in this binary. Without it no override can ever
+    // exist, so the plain literal is not merely cheaper but the only correct reading — and
+    // the override helper is injected with the INI surface, so referencing it here would
+    // otherwise be an undefined function in a program that just reads the configuration.
+    if ini_set_injected
+        && build::INI_SETTABLE_DIRECTIVES
+            .iter()
+            .any(|(settable, _)| *settable == name)
+    {
+        let raw = e_call(
+            "__elephc_opcache_ini_override",
+            vec![e_str(name), e_str(""), e_int(0)],
+        );
+        // Back to the directive's own type: these are reported NORMALIZED, so an int
+        // directive must come back an int and a bool a bool, not the raw INI string.
+        let typed = match value {
+            DirectiveValue::Bool(_) => e_binop(
+                e_binop(raw.clone(), BinOp::StrictNotEq, e_str("")),
+                BinOp::And,
+                e_binop(raw, BinOp::StrictNotEq, e_str("0")),
+            ),
+            _ => e_cast(CastType::Int, raw),
+        };
+        return e_ternary(
+            e_binop(
+                e_call(
+                    "__elephc_opcache_ini_override",
+                    vec![e_str(name), e_str(""), e_int(2)],
+                ),
+                BinOp::StrictEq,
+                e_str("1"),
+            ),
+            typed,
+            literal,
+        );
+    }
     if !directive_runtime_overridable(name) {
         return literal;
     }
@@ -96,6 +141,12 @@ pub(crate) fn ini_helper_declarations(
         .map(|(name, _)| {
             let condition = if latest_ini_override(overrides, name).is_some() {
                 e_bool(false)
+            } else if !directive_runtime_overridable(name) {
+                // The null-ness must follow the SAME scope rule as the value arm above. When a
+                // directive bakes behavior, its `ELEPHC_INI_*` variable is ignored — so letting
+                // it flip the null here would report `''` ("assigned the empty string") for a
+                // directive nothing assigned, which is a third state reference PHP never shows.
+                e_bool(true)
             } else {
                 let (under, dotted) = directive_env_var_names(name);
                 e_binop(

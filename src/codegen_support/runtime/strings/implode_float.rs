@@ -1,0 +1,240 @@
+//! Purpose:
+//! Emits the `__rt_implode_float` runtime helper assembly for `implode()` over an indexed
+//! array of raw floats.
+//!
+//! Called from:
+//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
+//!   `crate::codegen_support::runtime::strings`.
+//!
+//! Key details:
+//! - A structural twin of `__rt_implode_int`: same frame, same glue loop, same copy loop,
+//!   same `_concat_off` bookkeeping. Exactly two things differ — the element is loaded into
+//!   the float argument register (`d0` / `xmm0`) instead of the integer one, and it is
+//!   rendered with `__rt_ftoa` instead of `__rt_itoa`. Both converters return the same
+//!   `(ptr, len)` pair in the same registers, which is what makes the twin exact.
+//! - `__rt_ftoa` spells a float the way PHP does (`precision = 14`, `zend_gcvt` fixups), so
+//!   `implode(",", [1.5, 2.5])` renders `1.5,2.5` rather than a C `%f` expansion.
+//! - CURSOR INVARIANT, and the one place this is NOT a copy of the int twin: `__rt_ftoa`
+//!   formats into `_concat_buf` at `_concat_off` and advances it by the bytes it actually
+//!   emitted, so the offset must be republished as the LIVE destination cursor before every
+//!   call and the final offset stamped ABSOLUTELY. `__rt_itoa` gets away without that because
+//!   it reserves a fixed 21-byte scratch that always stays ahead of the join cursor; a
+//!   three-byte `1.5` does not, and leaving the offset parked at the result START made the
+//!   second element overwrite the glue — `implode(",", [1.5, 2.5])` rendered `1.52222`.
+//!   `__rt_implode`'s boxed-Mixed path carries the same invariant for the same reason.
+//! - Before this helper existed, `implode()` over a float array was an outright compile
+//!   refusal ("unsupported EIR backend feature: implode array element PHP type Float"), and
+//!   the same array reached through a `Mixed`-typed value SEGFAULTED in `__rt_implode`,
+//!   which read each raw double as a string pointer.
+
+use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::platform::Arch;
+
+/// Emits the runtime helper for PHP `implode()` with float array elements.
+///
+/// Dispatches to the x86_64 variant; ARM64 is emitted inline below.
+/// ABI (ARM64): x1/x2 = glue_ptr/glue_len, x3 = array_ptr → x1 = result_ptr, x2 = result_len.
+/// ABI (x86_64): rdi/rsi = glue_ptr/glue_len, rdx = array_ptr → rax = result_ptr, rdx = result_len.
+/// Uses the shared concat buffer; advances `_concat_off` by the bytes written.
+pub fn emit_implode_float(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_implode_float_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: implode_float ---");
+    emitter.label_global("__rt_implode_float");
+
+    // -- set up stack frame (80 bytes) --
+    emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
+    emitter.instruction("stp x1, x2, [sp]");                                    // save glue string ptr and length
+    emitter.instruction("str x3, [sp, #16]");                                   // save array pointer
+
+    // -- get concat_buf write position --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
+    emitter.instruction("ldr x8, [x6]");                                        // load current write offset
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    emitter.instruction("add x9, x7, x8");                                      // compute destination pointer
+    emitter.instruction("str x9, [sp, #24]");                                   // save result start pointer
+    emitter.instruction("str x6, [sp, #32]");                                   // save offset variable address
+    emitter.instruction("str x9, [sp, #40]");                                   // save current dest pointer
+
+    // -- load array length and initialize index --
+    emitter.instruction("ldr x3, [sp, #16]");                                   // reload array pointer
+    emitter.instruction("ldr x10, [x3]");                                       // load array element count
+    emitter.instruction("str x10, [sp, #48]");                                  // save element count
+    emitter.instruction("str xzr, [sp, #56]");                                  // initialize element index = 0
+
+    // -- main loop: join elements with glue --
+    emitter.label("__rt_implode_float_loop");
+    emitter.instruction("ldr x11, [sp, #56]");                                  // load current element index
+    emitter.instruction("ldr x10, [sp, #48]");                                  // load element count
+    emitter.instruction("cmp x11, x10");                                        // check if all elements processed
+    emitter.instruction("b.ge __rt_implode_float_done");                        // if done, finalize result
+
+    // -- insert glue before element (skip for first element) --
+    emitter.instruction("cbz x11, __rt_implode_float_elem");                    // skip glue before first element
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload glue ptr and length
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload current dest pointer
+    emitter.instruction("mov x12, x2");                                         // copy glue length as counter
+    emitter.label("__rt_implode_float_glue");
+    emitter.instruction("cbz x12, __rt_implode_float_elem");                    // if no glue bytes remain, copy element
+    emitter.instruction("ldrb w13, [x1], #1");                                  // load glue byte, advance glue ptr
+    emitter.instruction("strb w13, [x9], #1");                                  // store to dest, advance dest ptr
+    emitter.instruction("sub x12, x12, #1");                                    // decrement glue byte counter
+    emitter.instruction("b __rt_implode_float_glue");                           // continue copying glue
+
+    // -- convert current float element to string via ftoa --
+    emitter.label("__rt_implode_float_elem");
+    emitter.instruction("str x9, [sp, #40]");                                   // save updated dest pointer
+    emitter.instruction("ldr x3, [sp, #16]");                                   // reload array pointer
+    emitter.instruction("ldr x11, [sp, #56]");                                  // reload current element index
+    emitter.instruction("add x3, x3, #24");                                     // skip 24-byte array header to reach data
+    emitter.instruction("ldr d0, [x3, x11, lsl #3]");                           // load float element at index (8 bytes each)
+    // Publish the LIVE destination cursor before the conversion: `__rt_ftoa` formats at
+    // `_concat_off`, so an offset still parked at the result start would write over the glue
+    // and element bytes already copied.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_concat_buf");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the live destination cursor
+    emitter.instruction("sub x14, x9, x13");                                    // absolute offset of the live destination cursor
+    emitter.instruction("ldr x13, [sp, #32]");                                  // reload the concat offset variable address
+    emitter.instruction("str x14, [x13]");                                      // reserve everything written so far against the conversion's scratch
+    emitter.instruction("bl __rt_ftoa");                                        // convert float to string → x1=ptr, x2=len
+
+    // -- copy ftoa result bytes to output --
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload dest pointer
+    emitter.instruction("mov x12, x2");                                         // copy string length as counter
+    emitter.label("__rt_implode_float_copy");
+    emitter.instruction("cbz x12, __rt_implode_float_next");                    // if no bytes remain, move to next element
+    emitter.instruction("ldrb w13, [x1], #1");                                  // load string byte, advance src ptr
+    emitter.instruction("strb w13, [x9], #1");                                  // store to dest, advance dest ptr
+    emitter.instruction("sub x12, x12, #1");                                    // decrement byte counter
+    emitter.instruction("b __rt_implode_float_copy");                           // continue copying string
+
+    // -- advance to next element --
+    emitter.label("__rt_implode_float_next");
+    emitter.instruction("str x9, [sp, #40]");                                   // save updated dest pointer
+    emitter.instruction("ldr x11, [sp, #56]");                                  // reload element index
+    emitter.instruction("add x11, x11, #1");                                    // increment element index
+    emitter.instruction("str x11, [sp, #56]");                                  // save updated index
+    emitter.instruction("b __rt_implode_float_loop");                           // process next element
+
+    // -- finalize: compute result length and update concat_off --
+    emitter.label("__rt_implode_float_done");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // load final dest pointer
+    emitter.instruction("ldr x1, [sp, #24]");                                   // load result start pointer
+    emitter.instruction("sub x2, x9, x1");                                      // result length = dest_end - dest_start
+    // ABSOLUTE, not an increment: the conversions above already moved `_concat_off` forward,
+    // so adding the result length again would double-count their scratch.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_concat_buf");
+    emitter.instruction("sub x14, x9, x13");                                    // absolute offset one past the joined result
+    emitter.instruction("ldr x6, [sp, #32]");                                   // load offset variable address
+    emitter.instruction("str x14, [x6]");                                       // store updated concat_off
+
+    // -- restore frame and return --
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
+    emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Emits the `__rt_implode_float` runtime helper for Linux x86_64.
+///
+/// ABI: rdi/rsi = glue_ptr/glue_len, rdx = array_ptr → rax = result_ptr, rdx = result_len.
+/// Copies glue and each float element (converted via `__rt_ftoa`) into the shared concat
+/// buffer, then advances `_concat_off` by the total bytes written.
+/// Stack frame: 64 bytes of spill slots for glue, array, destination cursor, length, and index.
+fn emit_implode_float_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: implode_float ---");
+    emitter.label_global("__rt_implode_float");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving float-implode spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for glue, array, concat-buffer bookkeeping, and the loop cursor
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for glue, array, concat destination, array length, and loop index
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the glue string pointer across float conversion and copy helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across float conversion and copy helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across float conversion and copy helper calls
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before materializing the implode output start pointer
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    emitter.instruction("lea r10, [r10 + r9]");                                 // compute the current concat-buffer destination pointer for the float implode output
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the implode result start pointer so the final string result can reference the copied bytes
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the current concat-buffer destination cursor across glue emission and float string copies
+    emitter.instruction("mov r11, QWORD PTR [rdx]");                            // load the indexed-array logical length once before entering the float implode loop
+    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the indexed-array logical length for the loop termination check
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the indexed-array loop cursor to the first float element
+
+    emitter.label("__rt_implode_float_loop");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current indexed-array loop cursor before deciding whether float implode is complete
+    emitter.instruction("cmp r11, QWORD PTR [rbp - 48]");                       // compare the current indexed-array loop cursor against the saved logical length
+    emitter.instruction("jae __rt_implode_float_done");                         // stop once every indexed-array float element has been copied into the concat buffer
+    emitter.instruction("test r11, r11");                                       // check whether the current float element is the first one in the indexed array
+    emitter.instruction("jz __rt_implode_float_elem");                          // skip glue emission before converting the first float element
+    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the glue string pointer before copying the separator bytes
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the glue string length before copying the separator bytes
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor before copying the separator bytes
+
+    emitter.label("__rt_implode_float_glue");
+    emitter.instruction("test r9, r9");                                         // check whether every glue byte has already been copied into the concat buffer
+    emitter.instruction("jz __rt_implode_float_glue_done");                     // continue with float conversion once the glue string has been fully copied
+    emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one byte from the glue string before advancing the source pointer
+    emitter.instruction("mov BYTE PTR [r10], r11b");                            // store one separator byte into the concat buffer before advancing the destination pointer
+    emitter.instruction("add r8, 1");                                           // advance the glue string source pointer after copying one separator byte
+    emitter.instruction("add r10, 1");                                          // advance the concat-buffer destination pointer after storing one separator byte
+    emitter.instruction("sub r9, 1");                                           // decrement the remaining glue byte count after copying one separator byte
+    emitter.instruction("jmp __rt_implode_float_glue");                         // continue copying separator bytes until the glue string is exhausted
+
+    emitter.label("__rt_implode_float_glue_done");
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the concat-buffer destination cursor after copying the separator bytes
+
+    emitter.label("__rt_implode_float_elem");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current indexed-array loop cursor before locating the next float element slot
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the indexed-array pointer before addressing the current float slot
+    emitter.instruction("movsd xmm0, QWORD PTR [r10 + r11 * 8 + 24]");          // load the current indexed-array float payload into the float-to-string helper input register
+    // Publish the LIVE destination cursor before the conversion, for the reason the module
+    // docblock gives: `__rt_ftoa` formats at `_concat_off` and would otherwise overwrite the
+    // glue and element bytes already copied.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the live concat-buffer destination cursor
+    emitter.instruction("sub r9, r8");                                          // absolute offset of the live destination cursor
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // reserve everything written so far against the conversion's scratch
+    emitter.instruction("call __rt_ftoa");                                      // convert the current indexed-array float element into a concat-buffer-backed PHP-spelled string
+    emitter.instruction("mov r8, rax");                                         // preserve the string pointer returned by the float-to-string helper before copying bytes
+    emitter.instruction("mov r9, rdx");                                         // preserve the string length returned by the float-to-string helper before copying bytes
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor before copying the converted float bytes
+
+    emitter.label("__rt_implode_float_copy");
+    emitter.instruction("test r9, r9");                                         // check whether every converted float byte has already been copied into the concat buffer
+    emitter.instruction("jz __rt_implode_float_next");                          // advance to the next indexed-array float once the current string is fully copied
+    emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one byte from the converted float string before advancing the source pointer
+    emitter.instruction("mov BYTE PTR [r10], r11b");                            // store one byte from the converted float string into the concat buffer
+    emitter.instruction("add r8, 1");                                           // advance the converted float string source pointer after copying one byte
+    emitter.instruction("add r10, 1");                                          // advance the concat-buffer destination pointer after storing one byte
+    emitter.instruction("sub r9, 1");                                           // decrement the remaining converted float byte count after copying one byte
+    emitter.instruction("jmp __rt_implode_float_copy");                         // continue copying bytes from the converted float string until it is exhausted
+
+    emitter.label("__rt_implode_float_next");
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the concat-buffer destination cursor after copying the current converted float string
+    emitter.instruction("add QWORD PTR [rbp - 56], 1");                         // advance the indexed-array loop cursor to the next float element
+    emitter.instruction("jmp __rt_implode_float_loop");                         // continue joining converted float elements into the concat buffer
+
+    emitter.label("__rt_implode_float_done");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the final concat-buffer destination cursor to compute the joined string length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the implode result start pointer before computing the joined string length
+    emitter.instruction("mov rdx, r10");                                        // copy the final concat-buffer destination cursor before subtracting the result start pointer
+    emitter.instruction("sub rdx, rax");                                        // compute the joined string length as dest_end - dest_start
+    // ABSOLUTE, not an increment: the conversions above already moved `_concat_off` forward,
+    // so adding the result length again would double-count their scratch.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    emitter.instruction("mov r11, r10");                                        // copy the final destination cursor before computing its absolute offset
+    emitter.instruction("sub r11, r9");                                         // absolute offset one past the joined result
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    emitter.instruction("mov QWORD PTR [r8], r11");                             // persist the absolute concat-buffer write offset after writing the float implode output bytes
+    emitter.instruction("add rsp, 64");                                         // release the float-implode spill slots before returning the joined string
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the joined string
+    emitter.instruction("ret");                                                 // return the joined string in the standard x86_64 string result registers
+}

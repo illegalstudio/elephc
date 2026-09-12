@@ -10,7 +10,7 @@
 use super::*;
 
 /// Parsed eval fragment lowered into dynamic by-name statements.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalProgram {
     source_len: usize,
     statements: Vec<EvalStmt>,
@@ -42,7 +42,7 @@ impl EvalProgram {
 }
 
 /// One source range inside the current eval fragment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvalSourceLocation {
     start_line: i64,
     end_line: i64,

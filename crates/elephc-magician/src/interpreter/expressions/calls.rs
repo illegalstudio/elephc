@@ -103,9 +103,16 @@ pub(in crate::interpreter) fn eval_call(
     if name == "opcache_reset" {
         return eval_opcache_reset_call(args, context, scope, values);
     }
-    // `opcache_get_status` is likewise prelude-provided on native; eval reports the CLI
-    // default (cache disabled) and so returns `false` as a plain runtime handler.
-    if name == "opcache_get_status" {
+    // `opcache_get_status` is prelude-provided on native, and when this binary carries that
+    // declaration it is the ONE that knows the compile-time manifest and the live runtime
+    // script cache. Falling through to it is what keeps an eval-written call and a natively
+    // written call from disagreeing: before this guard, the same call in the same binary
+    // answered an array natively and `false` from inside `eval()`.
+    //
+    // The handler below stays the answer for a program with NO such declaration — above all
+    // the compile-time const-folder, where no prelude has been injected and the CLI default
+    // (cache disabled, so `false`) is correct.
+    if name == "opcache_get_status" && context.native_function(name).is_none() {
         return eval_opcache_get_status_call(args, context, scope, values);
     }
     // The five OPcache file/script functions are likewise prelude-provided on native; eval
