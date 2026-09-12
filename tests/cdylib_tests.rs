@@ -1173,14 +1173,14 @@ function unrelated_trace(): array {
     let asm = fs::read_to_string(dir.join("collector.s"))
         .expect("missing collector-bearing library assembly");
     let public_label = if cfg!(target_os = "macos") {
-        ".globl _roundtrip\n_roundtrip:"
+        "\n_roundtrip:"
     } else {
-        ".globl roundtrip\nroundtrip:"
+        "\nroundtrip:"
     };
     let lifecycle_label = if cfg!(target_os = "macos") {
-        ".globl _elephc_abi_version\n_elephc_abi_version:"
+        "\n_elephc_abi_version:"
     } else {
-        ".globl elephc_abi_version\nelephc_abi_version:"
+        "\nelephc_abi_version:"
     };
     let start = asm.find(public_label).expect("missing public roundtrip wrapper");
     let end = asm[start..]
