@@ -43,8 +43,9 @@ pub(super) use string_return::method_returns_owned_string;
 use public_args::InvokerParamShape;
 
 use argument_owners::InvokerArgumentOwners;
-use crate::codegen::const_default_values::ConstDefaultValue;
-pub(in crate::codegen) use defaults::{resolve_invoker_defaults, InvokerDefaults};
+pub(in crate::codegen) use defaults::{
+    resolve_invoker_defaults, InvokerDefaultValue, InvokerDefaults,
+};
 use crate::codegen::callable_descriptor;
 use crate::codegen::callable_invoker_args::{
     emit_branch_if_mixed_arg_tag, emit_call_user_func_array_invalid_mixed_args_abort,
@@ -116,7 +117,7 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     /// Parameter defaults ALREADY resolved against the module, indexed like `sig.params`.
     /// A declared default that could not be folded into a materializable value stays `None`, and
     /// the invoker keeps its fatal diagnostic for that slot rather than inventing a value.
-    pub(super) defaults: &'a [Option<ConstDefaultValue>],
+    pub(super) defaults: &'a [Option<InvokerDefaultValue>],
 }
 
 /// Reports whether regular or variadic callable parameters can require runtime normalization.
@@ -155,7 +156,7 @@ impl InvokerEmitContext {
     }
 
     /// Returns the resolved default for one parameter index, if it was materializable.
-    fn resolved_default(&self, index: usize) -> Option<ConstDefaultValue> {
+    fn resolved_default(&self, index: usize) -> Option<InvokerDefaultValue> {
         self.defaults.get(index).cloned().flatten()
     }
 
@@ -3130,8 +3131,8 @@ mod tests {
         let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
         let mut left: InvokerDefaults = vec![None; sig.params.len()];
         let mut right = left.clone();
-        left[0] = Some(ConstDefaultValue::String("left".to_string()));
-        right[0] = Some(ConstDefaultValue::String("right".to_string()));
+        left[0] = Some(InvokerDefaultValue::String("left".to_string()));
+        right[0] = Some(InvokerDefaultValue::String("right".to_string()));
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
         state.cache_runtime_callable_invoker(&sig, &[], false, &left, "left_body");
         assert!(state

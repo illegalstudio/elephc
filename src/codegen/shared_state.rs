@@ -271,7 +271,7 @@ impl SharedCodegenState {
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
         owns_string_return: bool,
-        defaults: &[Option<crate::codegen::const_default_values::ConstDefaultValue>],
+        defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
     ) -> Option<String> {
         self.runtime_callable_invokers
             .iter()
@@ -290,7 +290,7 @@ impl SharedCodegenState {
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
         owns_string_return: bool,
-        defaults: &[Option<crate::codegen::const_default_values::ConstDefaultValue>],
+        defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
         label: &str,
     ) {
         self.runtime_callable_invokers

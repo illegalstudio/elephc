@@ -17,9 +17,12 @@
 //! - Object defaults are constructed through the same pair of runtime entry points eval already
 //!   uses to build an AOT class: `__rt_new_by_name` allocates and
 //!   `__elephc_eval_value_construct_object` runs the real constructor.
+//! - Object constructor arguments are normalized from their source call shape to the physical
+//!   constructor signature before assembly emission. The eval constructor bridge therefore sees
+//!   the same regular, variadic, and hidden slots that Magician's native binder would produce.
 
 use crate::codegen::const_default_values::{
-    resolve_const_default, ConstDefaultArrayElement, ConstDefaultArrayKey, ConstDefaultContext,
+    resolve_const_default, ConstDefaultArrayKey, ConstDefaultContext, ConstDefaultObjectArg,
     ConstDefaultValue, CONST_DEFAULT_BOOL, CONST_DEFAULT_EMPTY_ARRAY, CONST_DEFAULT_FLOAT,
     CONST_DEFAULT_INT, CONST_DEFAULT_NULL,
 };
@@ -29,10 +32,36 @@ use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_val
 use crate::ir::Module;
 use crate::types::{FunctionSig, PhpType};
 
-use super::{abi, DataSection, Emitter, InvokerEmitContext};
+use super::{abi, DataSection, Emitter, InvokerEmitContext, InvokerParamShape};
 
 /// One parameter's resolved default, aligned with `FunctionSig::params` by index.
-pub(in crate::codegen) type InvokerDefaults = Vec<Option<ConstDefaultValue>>;
+pub(in crate::codegen) type InvokerDefaults = Vec<Option<InvokerDefaultValue>>;
+
+/// One descriptor-invoker default after nested object calls have been physically normalized.
+#[derive(Clone, PartialEq)]
+pub(in crate::codegen) enum InvokerDefaultValue {
+    Scalar { kind: i64, payload: i64 },
+    String(String),
+    Array(Vec<InvokerDefaultArrayElement>),
+    Object {
+        class_name: String,
+        args: Vec<InvokerDefaultObjectArg>,
+    },
+}
+
+/// One array element whose nested value is ready for invoker materialization.
+#[derive(Clone, PartialEq)]
+pub(in crate::codegen) struct InvokerDefaultArrayElement {
+    key: Option<ConstDefaultArrayKey>,
+    default: InvokerDefaultValue,
+}
+
+/// One physical constructor slot plus the storage type the raw constructor expects.
+#[derive(Clone, PartialEq)]
+pub(in crate::codegen) struct InvokerDefaultObjectArg {
+    default: InvokerDefaultValue,
+    target_ty: PhpType,
+}
 
 /// Resolves every parameter default of one signature into a materializable constant value.
 ///
@@ -51,29 +80,197 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
         .iter()
         .map(|default| {
             let value = resolve_const_default(default.as_ref()?, &context)?;
+            let value = normalize_invoker_default(module, value)?;
             materializable(module, &value).then_some(value)
         })
         .collect()
+}
+
+/// Recursively converts shared source defaults into descriptor-invoker materialization values.
+fn normalize_invoker_default(
+    module: &Module,
+    value: ConstDefaultValue,
+) -> Option<InvokerDefaultValue> {
+    match value {
+        ConstDefaultValue::Scalar { kind, payload } => {
+            Some(InvokerDefaultValue::Scalar { kind, payload })
+        }
+        ConstDefaultValue::String(value) => Some(InvokerDefaultValue::String(value)),
+        ConstDefaultValue::Array(elements) => Some(InvokerDefaultValue::Array(
+            elements
+                .into_iter()
+                .map(|element| {
+                    Some(InvokerDefaultArrayElement {
+                        key: element.key,
+                        default: normalize_invoker_default(module, element.default)?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        ConstDefaultValue::Object { class_name, args } => {
+            let args = normalize_object_constructor_args(module, &class_name, args)?;
+            Some(InvokerDefaultValue::Object { class_name, args })
+        }
+    }
+}
+
+/// Binds source object-default arguments to the constructor's complete physical parameter list.
+fn normalize_object_constructor_args(
+    module: &Module,
+    class_name: &str,
+    args: Vec<ConstDefaultObjectArg>,
+) -> Option<Vec<InvokerDefaultObjectArg>> {
+    let (resolved_class, _) =
+        crate::codegen::const_default_values::resolve_const_default_class(module, class_name)?;
+    let constructor_key = crate::names::php_symbol_key("__construct");
+    let Some((owner_class, owner_info)) =
+        crate::types::constructor_owner(&module.class_infos, resolved_class)
+    else {
+        return args.is_empty().then(Vec::new);
+    };
+    let sig = owner_info.methods.get(&constructor_key)?.clone();
+    let declaring_class = owner_info
+        .method_impl_classes
+        .get(&constructor_key)
+        .map(String::as_str)
+        .unwrap_or(owner_class)
+        .to_string();
+    normalize_object_args_for_signature(module, &declaring_class, &sig, args)
+}
+
+/// Applies PHP positional/named/default/variadic binding to one physical constructor signature.
+fn normalize_object_args_for_signature(
+    module: &Module,
+    declaring_class: &str,
+    sig: &FunctionSig,
+    args: Vec<ConstDefaultObjectArg>,
+) -> Option<Vec<InvokerDefaultObjectArg>> {
+    let shape = InvokerParamShape::of(sig);
+    let variadic_index = crate::types::signatures::variadic_param_index(sig);
+    let source_variadic = sig
+        .variadic
+        .as_deref()
+        .is_some_and(|name| name != crate::func_args::HIDDEN_ARGS_PARAM);
+    let mut regular = vec![None; shape.visible_regular];
+    let mut tail = Vec::new();
+    let mut next_positional = 0usize;
+    let mut highest_regular = 0usize;
+    let mut positional_surplus = 0usize;
+    let mut saw_named = false;
+
+    for arg in args {
+        let value = normalize_invoker_default(module, arg.default)?;
+        if let Some(name) = arg.name {
+            saw_named = true;
+            if let Some(index) = crate::types::call_args::named_param_index(
+                sig,
+                shape.visible_regular,
+                &name,
+            ) {
+                if regular[index].replace(value).is_some() {
+                    return None;
+                }
+                highest_regular = highest_regular.max(index + 1);
+                continue;
+            }
+            if !source_variadic
+                || !crate::types::signatures::variadic_storage_accepts_named_entries(sig)
+            {
+                return None;
+            }
+            tail.push(InvokerDefaultArrayElement {
+                key: Some(ConstDefaultArrayKey::String(name)),
+                default: value,
+            });
+            continue;
+        }
+        if saw_named {
+            return None;
+        }
+        if next_positional < shape.visible_regular {
+            regular[next_positional] = Some(value);
+            next_positional += 1;
+            highest_regular = highest_regular.max(next_positional);
+        } else if variadic_index.is_some() {
+            tail.push(InvokerDefaultArrayElement {
+                key: None,
+                default: value,
+            });
+            positional_surplus += 1;
+        }
+    }
+
+    let default_context = ConstDefaultContext::for_class(module, declaring_class);
+    for (index, slot) in regular.iter_mut().enumerate() {
+        if slot.is_some() {
+            continue;
+        }
+        let default = resolve_const_default(sig.defaults.get(index)?.as_ref()?, &default_context)?;
+        *slot = Some(normalize_invoker_default(module, default)?);
+    }
+
+    let actual_count = highest_regular + positional_surplus;
+    if shape.collector_needs_count {
+        tail.insert(
+            0,
+            InvokerDefaultArrayElement {
+                key: None,
+                default: InvokerDefaultValue::Scalar {
+                    kind: CONST_DEFAULT_INT,
+                    payload: actual_count as i64,
+                },
+            },
+        );
+    }
+    let mut physical = Vec::with_capacity(sig.params.len());
+    for (index, (name, target_ty)) in sig.params.iter().enumerate() {
+        let default = if index < shape.visible_regular {
+            regular[index].take()?
+        } else if name == crate::func_args::HIDDEN_ARGC_PARAM {
+            InvokerDefaultValue::Scalar {
+                kind: CONST_DEFAULT_INT,
+                payload: actual_count as i64,
+            }
+        } else if Some(index) == variadic_index {
+            if tail.iter().any(|element| {
+                matches!(element.key, Some(ConstDefaultArrayKey::String(_)))
+            }) && matches!(target_ty.codegen_repr(), PhpType::Array(_))
+            {
+                // The callee can use `Array<Mixed>` as dynamic collector storage, but the eval
+                // constructor bridge still validates an Array parameter as indexed tag 4. Do
+                // not emit a hash that the bridge would reject after allocation.
+                return None;
+            }
+            InvokerDefaultValue::Array(std::mem::take(&mut tail))
+        } else {
+            return None;
+        };
+        physical.push(InvokerDefaultObjectArg {
+            default,
+            target_ty: target_ty.clone(),
+        });
+    }
+    Some(physical)
 }
 
 /// Reports whether one resolved default can be built by the runtime materializer below.
 ///
 /// Declining here is what keeps the invoker honest: an unrepresentable default keeps the existing
 /// fatal diagnostic instead of quietly becoming null or a half-built value.
-fn materializable(module: &Module, value: &ConstDefaultValue) -> bool {
+fn materializable(module: &Module, value: &InvokerDefaultValue) -> bool {
     match value {
-        ConstDefaultValue::Scalar { .. } | ConstDefaultValue::String(_) => true,
-        ConstDefaultValue::Array(elements) => elements
+        InvokerDefaultValue::Scalar { .. } | InvokerDefaultValue::String(_) => true,
+        InvokerDefaultValue::Array(elements) => elements
             .iter()
             .all(|element| materializable(module, &element.default)),
-        ConstDefaultValue::Object { class_name, args } => {
-            // The bridge takes POSITIONAL cells only, and it exists only in a module that uses
-            // eval, which is also the only module whose constructors it knows how to dispatch.
+        InvokerDefaultValue::Object { class_name, args } => {
+            // The normalized bridge container is positional and physical. It exists only in a
+            // module that uses eval, which is also the only module whose constructors it knows.
             crate::codegen::eval_constructor_helpers::module_emits_eval_constructor_bridge(module)
                 && constructible_class(module, class_name)
                 && args
                     .iter()
-                    .all(|arg| arg.name.is_none() && materializable(module, &arg.default))
+                    .all(|arg| materializable(module, &arg.default))
         }
     }
 }
@@ -95,39 +292,39 @@ fn constructible_class(module: &Module, class_name: &str) -> bool {
 
 /// Emits one resolved default into the canonical result registers, returning its produced type.
 pub(super) fn emit_const_default_to_result(
-    default: &ConstDefaultValue,
+    default: &InvokerDefaultValue,
     target_ty: Option<&PhpType>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
     match default {
-        ConstDefaultValue::Scalar {
+        InvokerDefaultValue::Scalar {
             kind: CONST_DEFAULT_NULL,
             ..
         } => super::emit_null_default_to_result(emitter, target_ty),
-        ConstDefaultValue::Scalar {
+        InvokerDefaultValue::Scalar {
             kind: CONST_DEFAULT_BOOL,
             payload,
         } => {
             abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), *payload);
             PhpType::Bool
         }
-        ConstDefaultValue::Scalar {
+        InvokerDefaultValue::Scalar {
             kind: CONST_DEFAULT_INT,
             payload,
         } => {
             abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), *payload);
             PhpType::Int
         }
-        ConstDefaultValue::Scalar {
+        InvokerDefaultValue::Scalar {
             kind: CONST_DEFAULT_FLOAT,
             payload,
         } => {
             super::emit_float_literal_to_result(emitter, data, f64::from_bits(*payload as u64));
             PhpType::Float
         }
-        ConstDefaultValue::Scalar {
+        InvokerDefaultValue::Scalar {
             kind: CONST_DEFAULT_EMPTY_ARRAY,
             ..
         } => {
@@ -135,20 +332,20 @@ pub(super) fn emit_const_default_to_result(
             super::emit_empty_indexed_array(emitter, &elem_ty);
             PhpType::Array(Box::new(elem_ty))
         }
-        ConstDefaultValue::String(value) => {
+        InvokerDefaultValue::String(value) => {
             let (label, len) = data.add_string(value.as_bytes());
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_symbol_address(emitter, ptr_reg, &label);
             abi::emit_load_int_immediate(emitter, len_reg, len as i64);
             PhpType::Str
         }
-        ConstDefaultValue::Array(elements) => {
+        InvokerDefaultValue::Array(elements) => {
             emit_array_default(elements, target_ty, emitter, ctx, data)
         }
-        ConstDefaultValue::Object { class_name, args } => {
+        InvokerDefaultValue::Object { class_name, args } => {
             emit_object_default(class_name, args, emitter, ctx, data)
         }
-        ConstDefaultValue::Scalar { .. } => {
+        InvokerDefaultValue::Scalar { .. } => {
             super::emit_unsupported_default_abort(emitter, data, ctx);
             PhpType::Void
         }
@@ -164,7 +361,7 @@ fn target_indexed_elem_ty(target_ty: Option<&PhpType>) -> Option<PhpType> {
 }
 
 /// Returns each element's final PHP key, applying PHP's auto-index rule to unkeyed entries.
-fn resolved_array_keys(elements: &[ConstDefaultArrayElement]) -> Vec<ConstDefaultArrayKey> {
+fn resolved_array_keys(elements: &[InvokerDefaultArrayElement]) -> Vec<ConstDefaultArrayKey> {
     let mut next_index = 0i64;
     let mut keys = Vec::with_capacity(elements.len());
     for element in elements {
@@ -185,7 +382,7 @@ fn resolved_array_keys(elements: &[ConstDefaultArrayElement]) -> Vec<ConstDefaul
 
 /// Emits a nonempty array default, choosing the storage shape the target slot declares.
 fn emit_array_default(
-    elements: &[ConstDefaultArrayElement],
+    elements: &[InvokerDefaultArrayElement],
     target_ty: Option<&PhpType>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -215,7 +412,7 @@ fn emit_array_default(
 
 /// Emits an indexed array default whose elements land in declared element storage.
 fn emit_indexed_array_default(
-    elements: &[ConstDefaultArrayElement],
+    elements: &[InvokerDefaultArrayElement],
     elem_ty: &PhpType,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -239,25 +436,39 @@ fn emit_indexed_array_default(
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     for element in elements {
         let value_ty = emit_const_default_to_result(&element.default, None, emitter, ctx, data);
-        append_indexed_array_element(emitter, elem_ty, &value_ty);
+        append_indexed_array_element(emitter, elem_ty, &element.default, &value_ty);
     }
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
 }
 
 /// Appends the current result to the indexed array whose pointer is the top pushed word.
-fn append_indexed_array_element(emitter: &mut Emitter, elem_ty: &PhpType, value_ty: &PhpType) {
+fn append_indexed_array_element(
+    emitter: &mut Emitter,
+    elem_ty: &PhpType,
+    default: &InvokerDefaultValue,
+    value_ty: &PhpType,
+) {
     match elem_ty.codegen_repr() {
         PhpType::Str => append_indexed_string_element(emitter),
         PhpType::Float => append_indexed_float_element(emitter),
         PhpType::Int | PhpType::Bool => append_indexed_scalar_element(emitter),
         _ => {
-            if value_ty.is_refcounted() {
-                emit_box_current_owned_value_as_mixed(emitter, value_ty);
-            } else {
-                emit_box_current_value_as_mixed(emitter, &value_ty.codegen_repr());
-            }
+            box_const_default_for_container(emitter, default, value_ty);
             append_indexed_refcounted_element(emitter);
         }
+    }
+}
+
+/// Boxes one constant for a container without transferring borrowed static string storage.
+fn box_const_default_for_container(
+    emitter: &mut Emitter,
+    default: &InvokerDefaultValue,
+    value_ty: &PhpType,
+) {
+    if value_ty.is_refcounted() && !matches!(default, InvokerDefaultValue::String(_)) {
+        emit_box_current_owned_value_as_mixed(emitter, value_ty);
+    } else {
+        emit_box_current_value_as_mixed(emitter, &value_ty.codegen_repr());
     }
 }
 
@@ -350,7 +561,7 @@ fn append_indexed_refcounted_element(emitter: &mut Emitter) {
 /// reallocate it on growth, and each key is staged on the temporary stack while its value is
 /// materialized so value-staging calls cannot clobber it.
 fn emit_hash_array_default(
-    elements: &[ConstDefaultArrayElement],
+    elements: &[InvokerDefaultArrayElement],
     keys: &[ConstDefaultArrayKey],
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -486,7 +697,7 @@ fn emit_hash_value_x86_64(emitter: &mut Emitter, value_ty: &PhpType) {
 /// pending, which this rethrows into the invoker's boundary instead of inventing a value.
 fn emit_object_default(
     class_name: &str,
-    args: &[crate::codegen::const_default_values::ConstDefaultObjectArg],
+    args: &[InvokerDefaultObjectArg],
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -592,9 +803,9 @@ fn emit_object_default(
     object_ty
 }
 
-/// Builds the boxed Mixed argument container the eval constructor bridge consumes.
+/// Builds the boxed physical argument container the eval constructor bridge consumes.
 fn emit_object_default_args(
-    args: &[crate::codegen::const_default_values::ConstDefaultObjectArg],
+    args: &[InvokerDefaultObjectArg],
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -602,12 +813,9 @@ fn emit_object_default_args(
     super::emit_empty_indexed_array(emitter, &PhpType::Mixed);
     for arg in args {
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-        let value_ty = emit_const_default_to_result(&arg.default, None, emitter, ctx, data);
-        if value_ty.is_refcounted() {
-            emit_box_current_owned_value_as_mixed(emitter, &value_ty);
-        } else {
-            emit_box_current_value_as_mixed(emitter, &value_ty.codegen_repr());
-        }
+        let value_ty =
+            emit_const_default_to_result(&arg.default, Some(&arg.target_ty), emitter, ctx, data);
+        box_const_default_for_container(emitter, &arg.default, &value_ty);
         append_indexed_refcounted_element(emitter);
         abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
     }
@@ -637,3 +845,6 @@ fn emit_object_default_failure(
     emitter.label(&fatal_label);
     super::emit_unsupported_default_abort(emitter, data, ctx);
 }
+
+#[cfg(test)]
+mod tests;
