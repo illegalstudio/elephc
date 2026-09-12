@@ -10,9 +10,9 @@
 //!   or return types, so this bridge is emitted into the user assembly.
 //! - This method-call slice supports public methods plus protected/private
 //!   methods when the active eval class scope satisfies PHP visibility.
-//! - A method carrying a generated argument collector is reached through its source
-//!   adapter, so a slot validates the PHP-visible arity, not the physical one. Instance
-//!   and static slots resolve that entry through the same shared resolver.
+//! - Magician binds eval method calls to the physical native signature. A generated
+//!   argument collector therefore stays in the slot metadata, and the bridge enters the
+//!   raw method symbol. Source adapters remain reserved for source/vtable boundaries.
 
 use std::collections::BTreeMap;
 
@@ -26,9 +26,7 @@ use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, LocalKind, Module};
-use crate::codegen_support::source_method_adapters::{
-    MethodKind, source_method_entry_symbol, source_visible_signature, uses_physical_func_args_abi,
-};
+use crate::codegen_support::source_method_adapters::{MethodKind, uses_physical_func_args_abi};
 use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -203,10 +201,8 @@ fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
 
 /// How the eval bridge reaches one method implementation.
 enum EvalMethodEntry {
-    /// The declared signature is already PHP-visible and the raw method symbol accepts it.
-    Raw(String),
-    /// Generated `func_args` slots sit behind a source adapter the visible arity enters.
-    Adapted(crate::types::FunctionSig, String),
+    /// Magician binds this physical signature before entering the raw method symbol.
+    Raw(crate::types::FunctionSig, String),
     /// The generated ABI cannot be bridged from eval, so this method gets no slot.
     Unsupported,
 }
@@ -219,15 +215,14 @@ fn raw_method_entry_symbol(impl_class: &str, method: &str, kind: MethodKind) -> 
     }
 }
 
-/// Resolves the PHP-visible signature and entry symbol for one method implementation.
+/// Resolves the physical signature and raw entry symbol for one method implementation.
 ///
-/// Only a generated argument collector changes anything here. Every other method keeps its
-/// declared signature and raw symbol, including a source variadic, whose hidden actual count
-/// `source_visible_signature()` deliberately refuses to project. The physical signature is read
-/// from the implementing class because that owner is what `emit_source_method_adapters()` keys
-/// its adapters on, so an inherited method resolves to the same entry its ancestor published.
-/// Instance and static methods differ only in which implementation map holds that physical
-/// signature and in which symbol family names the entry, so both kinds share this resolution.
+/// Eval method registration and Magician's native argument binder both retain the physical
+/// parameter count. A generated collector must therefore reach the raw implementation with its
+/// physical signature instead of entering the source adapter, which appends a different empty
+/// collector. A hidden actual-count shape remains unsupported here because it cannot be safely
+/// projected through the eval bridge. The physical signature is read from the implementing class
+/// so inherited instance and static methods both resolve to the symbol that owns their body.
 fn eval_method_entry(
     module: &Module,
     impl_class: &str,
@@ -243,16 +238,15 @@ fn eval_method_entry(
             MethodKind::Static => class_info.static_methods.get(method),
         })
         .unwrap_or(declared);
-    if !uses_physical_func_args_abi(physical) {
-        return EvalMethodEntry::Raw(raw_method_entry_symbol(impl_class, method, kind));
-    }
-    let (Ok(source), Ok(symbol)) = (
-        source_visible_signature(physical),
-        source_method_entry_symbol(impl_class, method, physical, kind),
-    ) else {
+    if uses_physical_func_args_abi(physical)
+        && !crate::func_args::sig_collects_surplus_args(physical)
+    {
         return EvalMethodEntry::Unsupported;
-    };
-    EvalMethodEntry::Adapted(source, symbol)
+    }
+    EvalMethodEntry::Raw(
+        physical.clone(),
+        raw_method_entry_symbol(impl_class, method, kind),
+    )
 }
 
 /// Adds bridge-supported instance methods for one class.
@@ -284,12 +278,11 @@ fn collect_class_method_slots(
             .unwrap_or(class_name);
         let runtime_helper = eval_runtime_backed_instance_method_helper(class_name, method);
         let entry = match runtime_helper {
-            Some(_) => EvalMethodEntry::Raw(method_symbol(impl_class, method)),
+            Some(_) => EvalMethodEntry::Raw(sig.clone(), method_symbol(impl_class, method)),
             None => eval_method_entry(module, impl_class, method, sig, MethodKind::Instance),
         };
         let (sig, entry_symbol) = match &entry {
-            EvalMethodEntry::Raw(symbol) => (sig, symbol),
-            EvalMethodEntry::Adapted(source, symbol) => (source, symbol),
+            EvalMethodEntry::Raw(physical, symbol) => (physical, symbol),
             EvalMethodEntry::Unsupported => continue,
         };
         if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
@@ -343,8 +336,7 @@ fn collect_hidden_private_ancestor_method_slots(
                 .unwrap_or(ancestor_name);
             let entry = eval_method_entry(module, impl_class, method, sig, MethodKind::Instance);
             let (sig, entry_symbol) = match &entry {
-                EvalMethodEntry::Raw(symbol) => (sig, symbol),
-                EvalMethodEntry::Adapted(source, symbol) => (source, symbol),
+                EvalMethodEntry::Raw(physical, symbol) => (physical, symbol),
                 EvalMethodEntry::Unsupported => continue,
             };
             if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
@@ -407,8 +399,7 @@ fn collect_class_static_method_slots(
             .unwrap_or(class_name);
         let entry = eval_method_entry(module, impl_class, method, sig, MethodKind::Static);
         let (sig, entry_symbol) = match &entry {
-            EvalMethodEntry::Raw(symbol) => (sig, symbol),
-            EvalMethodEntry::Adapted(source, symbol) => (source, symbol),
+            EvalMethodEntry::Raw(physical, symbol) => (physical, symbol),
             EvalMethodEntry::Unsupported => continue,
         };
         if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
@@ -2556,7 +2547,6 @@ mod catalog_tests {
 mod source_entry_tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
-    use crate::codegen_support::source_method_adapters::source_method_adapter_symbol;
     use crate::types::FunctionSig;
 
     /// Builds a fixed-arity signature with the given parameter types.
@@ -2613,7 +2603,8 @@ mod source_entry_tests {
                 &declared,
                 MethodKind::Instance,
             ) {
-                EvalMethodEntry::Raw(symbol) => {
+                EvalMethodEntry::Raw(physical, symbol) => {
+                    assert_eq!(physical.params, declared.params);
                     assert_eq!(symbol, method_symbol("XMLParser", "setHandler"));
                 }
                 _ => panic!("a method without generated slots must resolve to its raw entry"),
@@ -2621,10 +2612,10 @@ mod source_entry_tests {
         }
     }
 
-    /// A generated collector is hidden from PHP: the visible arity drops it and the call
-    /// enters through the source adapter rather than the physical method symbol.
+    /// Magician materializes a generated collector, so eval keeps its physical slot and enters
+    /// the raw method rather than asking a source adapter to append another collector.
     #[test]
-    fn hidden_collector_methods_project_visible_arity_and_enter_the_source_adapter() {
+    fn hidden_collector_methods_keep_physical_arity_and_enter_the_raw_symbol() {
         let visible = signature(vec![
             ("start".to_string(), PhpType::Callable),
             ("end".to_string(), PhpType::Callable),
@@ -2638,29 +2629,20 @@ mod source_entry_tests {
                 &physical,
                 MethodKind::Instance,
             ) {
-                EvalMethodEntry::Adapted(source, symbol) => {
-                    assert_eq!(source.params.len(), visible.params.len());
-                    assert_eq!(source.ref_params, visible.ref_params);
-                    assert!(source.variadic.is_none());
-                    assert_eq!(source.return_type, physical.return_type);
-                    assert_eq!(
-                        symbol,
-                        source_method_adapter_symbol(
-                            "Handlers",
-                            "setElementHandler",
-                            MethodKind::Instance
-                        )
-                    );
-                    assert_ne!(symbol, method_symbol("Handlers", "setElementHandler"));
+                EvalMethodEntry::Raw(resolved, symbol) => {
+                    assert_eq!(resolved.params, physical.params);
+                    assert_eq!(resolved.ref_params, physical.ref_params);
+                    assert_eq!(resolved.variadic, physical.variadic);
+                    assert_eq!(resolved.return_type, physical.return_type);
+                    assert_eq!(symbol, method_symbol("Handlers", "setElementHandler"));
                 }
-                _ => panic!("a generated collector must resolve to its source adapter"),
+                _ => panic!("a generated collector must resolve to its raw physical entry"),
             }
         }
     }
 
-    /// An inherited implementation resolves against the class that owns the body, which is
-    /// the same owner `emit_source_method_adapters()` published the adapter under, so a
-    /// descendant reaches the ancestor entry instead of a symbol no emitter ever wrote.
+    /// An inherited implementation resolves against the class that owns the body, so a
+    /// descendant reaches the ancestor's raw physical entry rather than a nonexistent symbol.
     #[test]
     fn inherited_implementations_resolve_against_the_implementing_owner() {
         let physical =
@@ -2673,25 +2655,12 @@ mod source_entry_tests {
                 &physical,
                 MethodKind::Instance,
             ) {
-                EvalMethodEntry::Adapted(_, symbol) => {
-                    assert_eq!(
-                        symbol,
-                        source_method_adapter_symbol(
-                            "BaseParser",
-                            "parseInto",
-                            MethodKind::Instance
-                        )
-                    );
-                    assert_ne!(
-                        symbol,
-                        source_method_adapter_symbol(
-                            "DerivedParser",
-                            "parseInto",
-                            MethodKind::Instance
-                        )
-                    );
+                EvalMethodEntry::Raw(resolved, symbol) => {
+                    assert_eq!(resolved.params, physical.params);
+                    assert_eq!(symbol, method_symbol("BaseParser", "parseInto"));
+                    assert_ne!(symbol, method_symbol("DerivedParser", "parseInto"));
                 }
-                _ => panic!("an inherited collector must share the owner's source adapter"),
+                _ => panic!("an inherited collector must enter the owner's raw physical method"),
             }
         }
     }
@@ -2715,7 +2684,7 @@ mod source_entry_tests {
         for module in modules() {
             assert!(matches!(
                 eval_method_entry(&module, "Collector", "add", &variadic, MethodKind::Instance),
-                EvalMethodEntry::Raw(_)
+                EvalMethodEntry::Raw(_, _)
             ));
             assert!(matches!(
                 eval_method_entry(
@@ -2737,7 +2706,8 @@ mod source_entry_tests {
         let declared = signature(vec![("path".to_string(), PhpType::Str)]);
         for module in modules() {
             match eval_method_entry(&module, "Loader", "fromFile", &declared, MethodKind::Static) {
-                EvalMethodEntry::Raw(symbol) => {
+                EvalMethodEntry::Raw(physical, symbol) => {
+                    assert_eq!(physical.params, declared.params);
                     assert_eq!(symbol, static_method_symbol("Loader", "fromFile"));
                     assert_ne!(symbol, method_symbol("Loader", "fromFile"));
                 }
@@ -2749,37 +2719,28 @@ mod source_entry_tests {
     }
 
     /// A static method reading `func_get_args()` grows the same hidden collector an instance
-    /// method does, so eval must validate the projected visible arity and enter the static
-    /// source adapter instead of the physical symbol that still wants the collector.
+    /// method does, so eval keeps that physical slot and enters the raw static symbol.
     #[test]
-    fn hidden_collector_static_methods_project_visible_arity_and_enter_the_source_adapter() {
+    fn hidden_collector_static_methods_keep_physical_arity_and_enter_the_raw_symbol() {
         let visible = signature(vec![("label".to_string(), PhpType::Str)]);
         let physical = with_generated_collector(visible.clone());
         for module in modules() {
             match eval_method_entry(&module, "Registry", "record", &physical, MethodKind::Static) {
-                EvalMethodEntry::Adapted(source, symbol) => {
-                    assert_eq!(source.params.len(), visible.params.len());
-                    assert_eq!(source.ref_params, visible.ref_params);
-                    assert!(source.variadic.is_none());
-                    assert_eq!(source.return_type, physical.return_type);
-                    assert_eq!(
-                        symbol,
-                        source_method_adapter_symbol("Registry", "record", MethodKind::Static)
-                    );
-                    assert_ne!(symbol, static_method_symbol("Registry", "record"));
-                    assert_ne!(
-                        symbol,
-                        source_method_adapter_symbol("Registry", "record", MethodKind::Instance)
-                    );
+                EvalMethodEntry::Raw(resolved, symbol) => {
+                    assert_eq!(resolved.params, physical.params);
+                    assert_eq!(resolved.ref_params, physical.ref_params);
+                    assert_eq!(resolved.variadic, physical.variadic);
+                    assert_eq!(resolved.return_type, physical.return_type);
+                    assert_eq!(symbol, static_method_symbol("Registry", "record"));
+                    assert_ne!(symbol, method_symbol("Registry", "record"));
                 }
-                _ => panic!("a generated static collector must resolve to its source adapter"),
+                _ => panic!("a generated static collector must resolve to its raw physical entry"),
             }
         }
     }
 
-    /// An inherited static implementation resolves against the class that owns the body, which
-    /// is the owner `emit_source_method_adapters()` published the static adapter under, so a
-    /// descendant reaches the ancestor entry instead of a symbol no emitter ever wrote.
+    /// An inherited static implementation resolves against the class that owns the body, so a
+    /// descendant reaches the ancestor's raw physical static entry.
     #[test]
     fn inherited_static_implementations_resolve_against_the_implementing_owner() {
         let physical =
@@ -2787,17 +2748,12 @@ mod source_entry_tests {
         for module in modules() {
             match eval_method_entry(&module, "BaseRegistry", "make", &physical, MethodKind::Static)
             {
-                EvalMethodEntry::Adapted(_, symbol) => {
-                    assert_eq!(
-                        symbol,
-                        source_method_adapter_symbol("BaseRegistry", "make", MethodKind::Static)
-                    );
-                    assert_ne!(
-                        symbol,
-                        source_method_adapter_symbol("DerivedRegistry", "make", MethodKind::Static)
-                    );
+                EvalMethodEntry::Raw(resolved, symbol) => {
+                    assert_eq!(resolved.params, physical.params);
+                    assert_eq!(symbol, static_method_symbol("BaseRegistry", "make"));
+                    assert_ne!(symbol, static_method_symbol("DerivedRegistry", "make"));
                 }
-                _ => panic!("an inherited static collector must share the owner's source adapter"),
+                _ => panic!("an inherited static collector must enter the owner's raw method"),
             }
         }
     }
@@ -2820,7 +2776,7 @@ mod source_entry_tests {
         for module in modules() {
             assert!(matches!(
                 eval_method_entry(&module, "Aggregator", "sum", &variadic, MethodKind::Static),
-                EvalMethodEntry::Raw(_)
+                EvalMethodEntry::Raw(_, _)
             ));
             assert!(matches!(
                 eval_method_entry(

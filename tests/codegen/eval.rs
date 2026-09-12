@@ -29508,27 +29508,28 @@ echo get_resource_type($evaluated["STDOUT"]);
     assert_eq!(out, "count:keys:value:stream");
 }
 
-/// Verifies the eval method bridge calls a hidden-collector source method through its source
-/// adapter, for the declaring class and for a descendant that inherits the implementation.
+/// Verifies eval method bridges preserve the physical collector ABI for instance and static
+/// methods, including a zero-argument curl prelude getter in a program containing eval.
 ///
-/// A method that reads `func_get_args()` grows a generated trailing collector parameter, so its
-/// physical symbol no longer matches the arity PHP sees. The bridge must validate the projected
-/// visible arity and enter through `_method_source_abi_*`; calling the raw physical symbol
-/// leaves the collector argument unsupplied and the call fails without a pending Throwable.
+/// Magician materializes every hidden collector before calling the bridge. The bridge must keep
+/// that physical slot and call the raw method symbol. Entering a source adapter would append a
+/// second collector, while validating visible arity would reject the physical argument array.
 #[test]
-fn test_eval_method_bridge_enters_hidden_collector_methods_through_the_source_adapter() {
-    let dir = make_cli_test_dir("elephc_eval_method_source_adapter");
+fn test_eval_method_bridge_enters_physical_collector_methods_through_raw_symbols() {
+    let dir = make_cli_test_dir("elephc_eval_method_physical_collector");
     let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
         r#"<?php
-class BaseCollector {
+class EvalPhysicalCollector {
     public function collect(string $label): string {
         return $label . ":" . count(func_get_args());
     }
+    public static function collectStatic(string $label): string {
+        return $label . ":" . count(func_get_args());
+    }
 }
-class DerivedCollector extends BaseCollector {
-}
-$object = new DerivedCollector();
-$code = 'return $object->collect("tag");';
+$file = new CURLFile("/tmp/a.txt");
+$object = new EvalPhysicalCollector();
+$code = 'return $file->getFilename() . $object->collect("instance") . EvalPhysicalCollector::collectStatic("static");';
 echo eval($code);
 "#,
         &dir,
@@ -29536,11 +29537,7 @@ echo eval($code);
         false,
         false,
     );
-    assert!(
-        user_asm.contains("_method_source_abi_BaseCollector_collect"),
-        "a hidden-collector method should publish a source adapter:\n{user_asm}"
-    );
-    let bridge = user_asm
+    let instance_bridge = user_asm
         .split("--- eval bridge: user method call ---")
         .nth(1)
         .and_then(|section| {
@@ -29549,21 +29546,42 @@ echo eval($code);
                 .next()
         })
         .expect("the eval instance method bridge should be emitted");
-    for class_name in ["BaseCollector", "DerivedCollector"] {
+    for (class_name, method) in [
+        ("CURLFile", "getFilename"),
+        ("EvalPhysicalCollector", "collect"),
+    ] {
         assert!(
-            bridge.contains(&format!(
-                "__elephc_eval_method_{class_name}_BaseCollector_collect"
+            instance_bridge.contains(&format!(
+                "__elephc_eval_method_{class_name}_{class_name}_{method}"
             )),
-            "the eval bridge should own a method body for {class_name}:\n{bridge}"
+            "the eval bridge should own a physical body for {class_name}::{method}:\n{instance_bridge}"
+        );
+        assert!(
+            instance_bridge.contains(&format!("_method_{class_name}_{method}")),
+            "the eval bridge should call the raw symbol for {class_name}::{method}:\n{instance_bridge}"
+        );
+        assert!(
+            !instance_bridge.contains(&format!("_method_source_abi_{class_name}_{method}")),
+            "the eval bridge must not enter the source adapter for {class_name}::{method}:\n{instance_bridge}"
         );
     }
+    let static_bridge = user_asm
+        .split("--- eval bridge: user static method call ---")
+        .nth(1)
+        .expect("the eval static method bridge should be emitted");
     assert!(
-        bridge.contains("_method_source_abi_BaseCollector_collect"),
-        "the eval bridge should enter the source adapter:\n{bridge}"
+        static_bridge.contains(
+            "__elephc_eval_static_method_body_EvalPhysicalCollector_EvalPhysicalCollector_collectStatic"
+        ),
+        "the eval bridge should own a body for the static collector twin:\n{static_bridge}"
     );
     assert!(
-        !bridge.contains("_method_BaseCollector_collect"),
-        "the eval bridge must not call the physical symbol that still wants the collector:\n{bridge}"
+        static_bridge.contains("_static_EvalPhysicalCollector_collectStatic"),
+        "the eval bridge should call the raw static collector symbol:\n{static_bridge}"
+    );
+    assert!(
+        !static_bridge.contains("_static_source_abi_EvalPhysicalCollector_collectStatic"),
+        "the eval bridge must not enter the static source adapter:\n{static_bridge}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
