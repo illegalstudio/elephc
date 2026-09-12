@@ -473,6 +473,43 @@ pub(super) fn wrapper_value_ir_type(php_type: &PhpType) -> IrType {
 mod tests {
     use super::*;
 
+    /// The callable signature and wrapper keep `debug_backtrace()` as a raw PHP array.
+    #[test]
+    fn debug_backtrace_callable_wrapper_preserves_array_storage() {
+        let expected = PhpType::Array(Box::new(PhpType::Mixed));
+        let sig = crate::builtins::registry::first_class_callable_sig("debug_backtrace").unwrap();
+        assert_eq!(sig.return_type, expected);
+
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let wrapper = build_runtime_call_wrapper_function(
+                &mut module,
+                "debug_backtrace_array_probe",
+                "debug_backtrace",
+                &sig,
+                RuntimeCallWrapperKind::Builtin { strict_php: false },
+            ).unwrap();
+            assert_eq!(wrapper.return_php_type, expected, "{target}");
+            assert_eq!(
+                wrapper.return_type,
+                IrType::Heap(crate::ir::IrHeapKind::Array),
+                "{target}",
+            );
+
+            let result = wrapper.instructions.iter()
+                .find(|inst| inst.op == Op::CoreBuiltin)
+                .and_then(|inst| inst.result)
+                .expect("debug_backtrace wrapper must emit one Core builtin result");
+            let value = wrapper.value(result).expect("Core builtin result value");
+            assert_eq!(value.php_type, expected, "{target}");
+            assert_eq!(
+                value.ir_type,
+                IrType::Heap(crate::ir::IrHeapKind::Array),
+                "{target}",
+            );
+        }
+    }
+
     /// GC wrappers transfer all fresh cells instead of retaining them again at each hash insert.
     #[test]
     fn gc_status_callable_wrapper_marks_all_allocations_owned() {

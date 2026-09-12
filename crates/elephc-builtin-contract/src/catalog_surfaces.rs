@@ -90,7 +90,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
             param!("limit", Int = DefaultSpec::Int(0)),
         ],
         None,
-        Mixed,
+        Array,
         "Generates a PHP backtrace for the active call stack."
     ),
     surface!(

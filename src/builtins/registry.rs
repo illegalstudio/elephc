@@ -819,10 +819,11 @@ mod tests {
         assert_eq!(sig.return_type, PhpType::Bool);
     }
 
-    /// Direct and first-class signatures use the shared introspection result payload layouts.
+    /// Direct and first-class signatures preserve their concrete introspection array layouts.
     #[test]
-    fn class_introspection_signatures_preserve_shared_array_shapes() {
+    fn introspection_signatures_preserve_array_shapes() {
         for (name, expected) in [
+            ("debug_backtrace", PhpType::Array(Box::new(PhpType::Mixed))),
             ("get_class_vars", PhpType::AssocArray {
                 key: Box::new(PhpType::Str),
                 value: Box::new(PhpType::Mixed),
