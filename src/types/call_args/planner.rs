@@ -84,6 +84,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
             spread_bounds_checks: Vec::new(),
             first_named_pos,
             prefix_has_dynamic_named_spread: false,
+            regular_param_count,
         });
     }
 
@@ -140,6 +141,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
             spread_bounds_checks: Vec::new(),
             first_named_pos,
             prefix_has_dynamic_named_spread: false,
+            regular_param_count,
         });
     }
 
@@ -508,6 +510,7 @@ fn plan_named_call_args(
         first_named_pos,
         prefix_has_dynamic_named_spread,
         passthrough_args: None,
+        regular_param_count,
     })
 }
 

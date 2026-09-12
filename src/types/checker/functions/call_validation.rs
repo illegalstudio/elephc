@@ -473,6 +473,12 @@ impl Checker {
         } else {
             sig.params.len()
         };
+        let spread_projects_into_reference = descriptor_projections
+            .iter()
+            .enumerate()
+            .any(|(index, projected)| {
+                *projected && sig.ref_params.get(index).copied().unwrap_or(false)
+            });
         // The variadic collector is represented as the signature's final param
         // with no default expression, but it never contributes to minimum arity.
         let required = sig
@@ -483,6 +489,15 @@ impl Checker {
             .count();
 
         if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread && !allow_by_ref_spread {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                    callee_desc
+                ),
+            ));
+        }
+        if spread_projects_into_reference {
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -585,13 +600,15 @@ impl Checker {
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                     }
-                    // A tracked callable array is accepted only where EIR materializes a real
+                    // A proven callable array is accepted only where EIR materializes a real
                     // descriptor for the declared Callable slot. Untracked Array(Mixed) values
-                    // remain ordinary arrays and retain the type error.
+                    // and unresolved literal shapes remain ordinary arrays and retain the error.
                     let proven_callable_array = matches!(expected_ty, PhpType::Callable)
                         && !Self::types_compatible(expected_ty, &actual_ty)
                         && !self.type_accepts(expected_ty, &actual_ty)
-                        && self.tracked_callable_array_target(arg).is_some();
+                        && self
+                            .callable_array_param_target(arg, caller_env)?
+                            .is_some();
                     if !proven_callable_array && !runtime_unboxed_callable {
                         if coercive_param_binding
                             && sig.declared_params.get(param_idx).copied().unwrap_or(false)

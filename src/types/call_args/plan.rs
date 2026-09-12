@@ -26,6 +26,7 @@ pub(crate) struct CallArgPlan {
     pub(crate) first_named_pos: Option<usize>,
     pub(crate) prefix_has_dynamic_named_spread: bool,
     pub(super) passthrough_args: Option<Vec<Expr>>,
+    pub(super) regular_param_count: usize,
 }
 
 /// A resolved regular (non-variadic) parameter slot in the plan.
@@ -125,7 +126,12 @@ impl CallArgPlan {
     /// must not gain the same exception merely because its normalized expression has that type.
     pub(crate) fn descriptor_projection_mask(&self) -> Vec<bool> {
         if let Some(args) = &self.passthrough_args {
-            return vec![false; args.len()];
+            let first_spread = args
+                .iter()
+                .position(|arg| matches!(arg.kind, ExprKind::Spread(_)));
+            return (0..self.regular_param_count)
+                .map(|param_idx| first_spread.is_some_and(|spread_idx| param_idx >= spread_idx))
+                .collect();
         }
 
         self.regular_args
@@ -460,5 +466,41 @@ mod tests {
         assert_eq!(plan.spread_bounds_checks[0].min_len, 1);
         let normalized = plan.normalized_args();
         assert!(matches!(&normalized[1].kind, ExprKind::Ternary { .. }));
+    }
+
+    /// Positional passthrough keeps descriptor provenance in parameter space.
+    #[test]
+    fn descriptor_projection_mask_marks_only_slots_fed_by_positional_spread() {
+        let sig = sig_with_defaults(vec![None, None, None]);
+        let spread = Expr::new(
+            ExprKind::Spread(Box::new(Expr::var("args"))),
+            Span::dummy(),
+        );
+        let plan = super::super::planner::plan_call_args(
+            &sig,
+            &[Expr::int_lit(1), spread],
+            Span::dummy(),
+            false,
+            true,
+        )
+        .expect("positional spread should remain a passthrough source");
+
+        assert_eq!(plan.descriptor_projection_mask(), vec![false, true, true]);
+    }
+
+    /// A direct unknown value never inherits descriptor-spread provenance.
+    #[test]
+    fn descriptor_projection_mask_does_not_mark_direct_values() {
+        let sig = sig_with_defaults(vec![None, None, None]);
+        let plan = super::super::planner::plan_call_args(
+            &sig,
+            &[Expr::var("first"), Expr::var("second")],
+            Span::dummy(),
+            false,
+            true,
+        )
+        .expect("direct positional values should remain passthrough sources");
+
+        assert_eq!(plan.descriptor_projection_mask(), vec![false, false, false]);
     }
 }

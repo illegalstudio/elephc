@@ -155,6 +155,71 @@ echo invokeSpreadDescriptor([SpreadDescriptorTarget::hit(...)]);
             PhpType::Callable,
             "{target}: unpacking array<Callable> must keep descriptor storage",
         );
+        assert!(
+            function.instructions.iter().any(|instruction| {
+                instruction.op == Op::MixedUnbox
+                    && instruction.result_php_type.codegen_repr() == PhpType::Callable
+            }),
+            "{target}: a boxed spread projection must be validated as a descriptor",
+        );
+    }
+}
+
+/// A tracked instance callable array remains admissible at a resolved Callable boundary.
+#[test]
+fn tracked_instance_callable_array_crosses_resolved_function_boundary_on_every_target() {
+    use crate::ir::Op;
+    use crate::types::PhpType;
+
+    let source = r#"<?php
+class ResolvedArrayTarget { public function hit(): int { return 11; } }
+function consumeResolvedArray(callable $callback): int { return $callback(); }
+function invokeResolvedArray(): int {
+    $callback = [new ResolvedArrayTarget(), 'hit'];
+    return consumeResolvedArray($callback);
+}
+function invokeResolvedLiteral(): int {
+    return consumeResolvedArray([new ResolvedArrayTarget(), 'hit']);
+}
+echo invokeResolvedArray(), invokeResolvedLiteral();
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["invokeResolvedArray", "invokeResolvedLiteral"] {
+            let function = module
+                .functions
+                .iter()
+                .find(|function| function.name == name)
+                .unwrap();
+            let call = function
+                .instructions
+                .iter()
+                .find(|instruction| instruction.op == Op::Call)
+                .unwrap();
+            assert_eq!(
+                function.value(call.operands[0]).unwrap().php_type.codegen_repr(),
+                PhpType::Callable,
+                "{target}/{name}: the proven callable array must materialize before the call",
+            );
+            assert!(
+                function
+                    .instructions
+                    .iter()
+                    .any(|instruction| instruction.op == Op::FirstClassCallableNew),
+                "{target}/{name}: the instance target must become a descriptor",
+            );
+        }
     }
 }
 

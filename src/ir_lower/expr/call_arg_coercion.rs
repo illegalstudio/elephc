@@ -45,12 +45,11 @@ pub(super) fn lower_arg_with_signature(
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 
-/// Materializes a tracked callable-array local as the descriptor required by a Callable slot.
+/// Materializes a proven callable array as the descriptor required by a Callable slot.
 ///
-/// The PHP local remains an ordinary array. Only this value crossing the typed parameter
-/// boundary changes representation. Instance receivers were captured into a hidden local when
-/// the callable array was assigned, so constructing the descriptor here does not evaluate the
-/// original receiver expression again.
+/// A tracked PHP local remains an ordinary array, and its instance receiver was already captured
+/// into a hidden local at assignment. A literal crossing this boundary is consumed directly, so
+/// its receiver is evaluated exactly once while constructing the descriptor.
 pub(super) fn lower_tracked_callable_array_param(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -62,9 +61,6 @@ pub(super) fn lower_tracked_callable_array_param(
     {
         return None;
     }
-    let ExprKind::Variable(_) = &arg.kind else {
-        return None;
-    };
     let target = match static_callable_binding_for_expr(ctx, arg)? {
         StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
             CallableTarget::StaticMethod { receiver, method }
@@ -483,7 +479,7 @@ fn lower_args_with_signature_options(
         return coerce_operands_to_params(ctx, sig, operands);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args, None) {
-        return coerce_operands_to_params(ctx, sig, operands);
+        return operands;
     }
     let static_spread_args = if has_static_call_spread_args(args) {
         Some(expand_static_call_spread_args(args))

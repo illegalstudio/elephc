@@ -116,6 +116,26 @@ impl Checker {
             span,
             &format!("Function '{}'", name),
         )?;
+        if descriptor_projections
+            .iter()
+            .enumerate()
+            .any(|(index, projected)| {
+                *projected
+                    && effective_sig
+                        .ref_params
+                        .get(index)
+                        .copied()
+                        .unwrap_or(false)
+            })
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                    name
+                ),
+            ));
+        }
         let mut param_idx = 0usize;
         for arg in args {
             let actual_ty = self.infer_type(arg, caller_env)?;
@@ -162,6 +182,13 @@ impl Checker {
                         && actual_ty.codegen_repr() == PhpType::Mixed
                         && descriptor_projected
                         && !supplied_reference;
+                    let proven_callable_array = expected_ty.codegen_repr() == PhpType::Callable
+                        && !supplied_reference
+                        && !Self::types_compatible(expected_ty, &actual_ty)
+                        && !self.type_accepts(expected_ty, &actual_ty)
+                        && self
+                            .callable_array_param_target(arg, caller_env)?
+                            .is_some();
                     if effective_sig
                         .declared_params
                         .get(param_idx)
@@ -183,6 +210,7 @@ impl Checker {
                     // produced, so coercing against it would invent a conversion PHP does not
                     // perform.
                     if !runtime_unboxed_callable
+                        && !proven_callable_array
                         && effective_sig
                         .declared_params
                         .get(param_idx)
@@ -198,7 +226,7 @@ impl Checker {
                             Some((name, param_name.as_str())),
                             supplied_reference,
                         )?;
-                    } else if !runtime_unboxed_callable {
+                    } else if !runtime_unboxed_callable && !proven_callable_array {
                         self.require_compatible_arg_type(
                             expected_ty,
                             &actual_ty,

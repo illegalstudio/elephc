@@ -84,7 +84,7 @@ pub(super) fn lower_builtin_call_args(
     ) {
         if let Some(sig) = sig {
             if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, name) {
-                return coerce_operands_to_params(ctx, sig, operands);
+                return operands;
             }
         }
     }
@@ -95,11 +95,10 @@ pub(super) fn lower_builtin_call_args(
             if let Some(operands) = lower_positional_spread_args_with_signature(
                 ctx, sig, args, Some(name),
             ) {
-                let lowered = coerce_operands_to_params(ctx, sig, operands);
                 for (name, ty) in pcntl_outputs {
                     ctx.set_local_logical_type(&name, ty);
                 }
-                return lowered;
+                return operands;
             }
         }
     }

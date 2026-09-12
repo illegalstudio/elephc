@@ -347,6 +347,47 @@ impl Checker {
         self.callable_array_targets.get(name).cloned()
     }
 
+    /// Resolves a callable array that parameter lowering can materialize as a descriptor.
+    ///
+    /// Stored arrays need tracked target metadata. A two-element literal is also safe because
+    /// lowering consumes it directly at the parameter boundary and evaluates its receiver once.
+    pub(crate) fn callable_array_param_target(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<CallableTarget>, CompileError> {
+        let target = if let Some(target) = self.tracked_callable_array_target(expr) {
+            target
+        } else {
+            let ExprKind::ArrayLiteral(items) = &expr.kind else {
+                return Ok(None);
+            };
+            let [receiver, method] = items.as_slice() else {
+                return Ok(None);
+            };
+            let ExprKind::StringLiteral(method) = &method.kind else {
+                return Ok(None);
+            };
+            if let Some(receiver) = self.static_callable_array_receiver(receiver, expr.span)? {
+                CallableTarget::StaticMethod {
+                    receiver,
+                    method: method.clone(),
+                }
+            } else {
+                let receiver_ty = self.infer_type(receiver, env)?;
+                let Some(_) = self.invokable_class_for_type(&receiver_ty) else {
+                    return Ok(None);
+                };
+                CallableTarget::Method {
+                    object: Box::new(receiver.clone()),
+                    method: method.clone(),
+                }
+            }
+        };
+        self.resolve_first_class_callable_sig(&target, expr.span, env)?;
+        Ok(Some(target))
+    }
+
     /// Extracts the element callable signature from an expression that yields an array of callables.
     ///
     /// The checker stores homogeneous callable-array metadata under the array variable name.

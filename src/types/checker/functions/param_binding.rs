@@ -16,8 +16,9 @@
 //! - The `declare(strict_types=1)` rejection runs *before* them instead, because the widenings
 //!   PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible`
 //!   already accepts on its own.
-//! - A tracked callable-array local may bind to `callable` only when lowering can materialize
-//!   its recorded target as a real callable descriptor at the same parameter boundary.
+//! - A tracked callable-array local or statically resolved two-element literal may bind to
+//!   `callable` only when lowering can materialize its target as a real descriptor at the same
+//!   parameter boundary.
 
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
@@ -91,10 +92,11 @@ impl Checker {
             )),
             ParamBinding::Rejected => {
                 // A callable array keeps ordinary array storage until this exact boundary.
-                // Accept only a local with tracked target metadata, resolve its signature
-                // without invoking it, and let EIR materialize the corresponding descriptor.
+                // Accept only a tracked local or a statically resolvable two-element literal,
+                // resolve its signature without invoking it, and let EIR materialize the
+                // corresponding descriptor.
                 if *expected == PhpType::Callable {
-                    let Some(target) = self.tracked_callable_array_target(arg) else {
+                    let Some(target) = self.callable_array_param_target(arg, env)? else {
                         return self.require_compatible_arg_type(
                             expected, actual, arg.span, context,
                         );

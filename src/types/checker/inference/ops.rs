@@ -1005,7 +1005,7 @@ impl Checker {
     }
 
     /// Resolves a callable-array receiver expression to a static class receiver.
-    fn static_callable_array_receiver(
+    pub(crate) fn static_callable_array_receiver(
         &self,
         receiver: &Expr,
         span: Span,

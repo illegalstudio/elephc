@@ -140,7 +140,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
         operands.push(tail.value);
     }
 
-    Some(operands)
+    Some(coerce_operands_to_params(ctx, sig, operands))
 }
 
 /// Counts a staged unpack using its actual storage representation, not its PHP array hint.

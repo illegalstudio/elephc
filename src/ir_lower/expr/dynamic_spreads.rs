@@ -85,7 +85,7 @@ pub(super) fn lower_boxed_spread_args(
         operands.push(owned.value);
         clear_slot(ctx, &slot, span);
     }
-    Some(operands)
+    Some(coerce_operands_to_params(ctx, sig, operands))
 }
 
 /// Stores an expression in a rooted slot whose boxed layout does not depend on its current value.
