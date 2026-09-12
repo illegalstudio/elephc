@@ -116,7 +116,16 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         _ => None,
     };
     begin_call_argument_evaluation(ctx);
-    let mut operands = if is_extern || is_user_function {
+    let mut operands = if is_user_function {
+        // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
+        // runtime keys and bind each boxed cell before entering the direct function ABI, just
+        // like the same fixed signature reached through a builtin descriptor surface.
+        sig.as_ref()
+            .and_then(|signature| {
+                dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, canonical)
+            })
+            .unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args))
+    } else if is_extern {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)

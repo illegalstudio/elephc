@@ -137,19 +137,7 @@ impl Checker {
             )?;
             let defaults = plan.default_argument_mask();
             let descriptor_projections = plan.descriptor_projection_mask();
-            let source_has_spread = plan.has_spread_args();
             let normalized_args = plan.normalized_args();
-            if source_has_spread
-                && effective_sig.ref_params.iter().any(|is_ref| *is_ref)
-            {
-                return Err(CompileError::new(
-                    span,
-                    &format!(
-                        "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
-                        name
-                    ),
-                ));
-            }
             if descriptor_projections
                 .iter()
                 .enumerate()
@@ -288,6 +276,7 @@ impl Checker {
             &format!("Function '{}'", name),
         )?;
         let defaults = plan.default_argument_mask();
+        let descriptor_projections = plan.descriptor_projection_mask();
         let normalized_args = plan.normalized_args();
         let args = normalized_args.as_slice();
         let effective_arg_count = args
@@ -376,6 +365,20 @@ impl Checker {
             } else if arg_idx < decl.params.len() {
                 let supplied_reference = decl.ref_params.get(arg_idx).copied().unwrap_or(false)
                     && !defaults.get(arg_idx).copied().unwrap_or(false);
+                if supplied_reference
+                    && descriptor_projections
+                        .get(arg_idx)
+                        .copied()
+                        .unwrap_or(false)
+                {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                            name
+                        ),
+                    ));
+                }
                 if ty == PhpType::Callable {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
                         self.callable_param_sigs.insert(

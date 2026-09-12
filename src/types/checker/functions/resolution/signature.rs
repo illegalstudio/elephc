@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Specialized and builtin signatures must expose the caller-visible parameter contract expected by call-argument planning.
+//! - Callable-array target provenance is local-frame state. A body check starts with empty target
+//!   maps and restores the caller's maps before call-site validation resumes.
 
 use std::collections::HashMap;
 
@@ -62,6 +64,14 @@ impl Checker {
             .map(|(_, (pname, _))| pname.clone())
             .collect();
         let saved_callable_param_names = self.callable_param_names.clone();
+        // Target records name storage in one physical frame. A same-named parameter or local in
+        // this function must neither inherit the caller's target nor let a loop/try join clear
+        // the caller's record while the body is re-specialized. Callable parameter signatures
+        // have their dedicated channel below; callable-array locals rebuild their records from
+        // assignments inside this body.
+        let saved_callable_array_targets = std::mem::take(&mut self.callable_array_targets);
+        let saved_callable_array_target_versions =
+            std::mem::take(&mut self.callable_array_target_versions);
         for pname in &declared_callable_param_names {
             self.callable_param_names.insert(pname.clone());
         }
@@ -198,6 +208,8 @@ impl Checker {
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.callable_param_names = saved_callable_param_names;
+        self.callable_array_targets = saved_callable_array_targets;
+        self.callable_array_target_versions = saved_callable_array_target_versions;
         body_check_result?;
         for pname in &callable_param_names {
             if let Some(sig) = self.callable_sigs.get(pname).cloned() {
