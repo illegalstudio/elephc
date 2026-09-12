@@ -35,7 +35,10 @@ pub(crate) fn function_returns_owned_string(function: &Function) -> bool {
     for block in &function.blocks {
         if let Some(Terminator::Return { value }) = block.terminator.as_ref() {
             has_return = true;
-            if !value.is_some_and(|value| owns_string_value(function, value)) {
+            if !value.is_some_and(|value| {
+                owns_string_value(function, value)
+                    || crate::codegen::frame::return_transfers_local_string_owner(function, value)
+            }) {
                 return false;
             }
         }

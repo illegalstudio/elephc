@@ -155,7 +155,9 @@ echo invokeSpreadDescriptor([SpreadDescriptorTarget::hit(...)]);
                 let Some(crate::ir::Immediate::Data(callee)) = instruction.immediate else {
                     return false;
                 };
-                module.data.strings[callee.as_raw() as usize] == "consumeSpreadDescriptor"
+                module.data.strings[callee.as_raw() as usize]
+                    .trim_start_matches('\\')
+                    == "consumeSpreadDescriptor"
             })
             .expect("the spread guard's exception constructor must not hide the target call");
         assert_eq!(

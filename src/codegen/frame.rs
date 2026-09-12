@@ -1349,6 +1349,35 @@ pub(super) fn return_cleanup_skip_slot(function: &Function, value: ValueId) -> O
     return_cleanup_skip_slot_inner(function, value, &result_ty, &return_ty, &mut visited)
 }
 
+/// Returns whether a string return transfers an ordinary local owner out of the frame.
+///
+/// The slot trace alone also finds borrowed parameters, whose slots are never epilogue owners.
+/// Requiring a non-parameter cleanup local with a real store matches the local epilogue's transfer
+/// case and lets descriptor wrappers avoid persisting an already-owned result.
+pub(in crate::codegen) fn return_transfers_local_string_owner(
+    function: &Function,
+    value: ValueId,
+) -> bool {
+    let Some(slot) = return_cleanup_skip_slot(function, value) else {
+        return false;
+    };
+    if local_slot_is_parameter(function, slot)
+        || function.no_epilogue_cleanup_slots.contains(&slot)
+    {
+        return false;
+    }
+    let Some(local) = function.locals.get(slot.as_raw() as usize) else {
+        return false;
+    };
+    local.id == slot
+        && local_kind_needs_epilogue_cleanup(local.kind)
+        && local.php_type.codegen_repr() == PhpType::Str
+        && function.instructions.iter().any(|instruction| {
+            instruction.op == Op::StoreLocal
+                && instruction.immediate == Some(Immediate::LocalSlot(slot))
+        })
+}
+
 /// Recursively traces forwarding return values back to the owned local they transfer.
 fn return_cleanup_skip_slot_inner(
     function: &Function,

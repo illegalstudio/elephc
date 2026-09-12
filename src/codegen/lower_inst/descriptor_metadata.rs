@@ -136,14 +136,17 @@ pub(super) fn first_class_callable_descriptor(
         return Ok(Some(descriptor));
     }
     if let Some(callee) = ctx.callable_function_by_name(target) {
+        let public_entry = ctx
+            .function_variant_group_name(target)
+            .unwrap_or_else(|| callee.name.clone());
         return Ok(Some(FirstClassCallableDescriptor {
-            entry_label: Some(function_symbol(&callee.name)),
+            entry_label: Some(function_symbol(&public_entry)),
             owns_string_return: crate::codegen::runtime_callable_invoker::function_returns_owned_string(callee),
             kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
             sig: Some(function_signature_from_eir(callee)),
             invocation: callable_descriptor::CallableDescriptorInvocation::named(
                 callable_descriptor::CallableDescriptorShape::Function,
-                callee.name.clone(),
+                public_entry,
             ),
         }));
     }

@@ -245,7 +245,7 @@ impl Checker {
     /// The runtime descriptor binder validates key types, order, aliases, duplicates and arity.
     /// The checker still expands fully static associative spreads and retains PHP's syntactic
     /// ordering errors, but leaves every remaining spread as a possible named-key provider.
-    fn plan_descriptor_call_args(
+    pub(crate) fn plan_descriptor_call_args(
         &self,
         sig: &FunctionSig,
         args: &[Expr],
@@ -507,6 +507,7 @@ impl Checker {
             self.plan_named_call_args(sig, args, span, callee_desc, caller_env)?
         };
         self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
+        let source_has_spread = plan.has_spread_args();
         let defaults = plan.default_argument_mask();
         let descriptor_projections = plan.descriptor_projection_mask();
         let normalized_args = plan.normalized_args();
@@ -515,7 +516,7 @@ impl Checker {
             .iter()
             .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
             .count();
-        let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
+        let has_spread = source_has_spread;
         let regular_param_count = if sig.variadic.is_some() {
             sig.params.len().saturating_sub(1)
         } else {

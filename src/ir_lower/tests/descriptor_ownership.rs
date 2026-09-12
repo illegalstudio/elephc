@@ -350,6 +350,10 @@ fn descriptor_string_return_ownership_requires_every_return_to_transfer_an_owner
             if ($copy) { return $value . "!"; }
             return $value;
         }
+        function local_return(string $value): string {
+            $result = $value . "!";
+            return $result;
+        }
         function invoke_return(callable $callback, string $value): string {
             return call_user_func($callback, $value);
         }
@@ -362,7 +366,12 @@ fn descriptor_string_return_ownership_requires_every_return_to_transfer_an_owner
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
-        for (name, owned) in [("owned_return", true), ("borrowed_return", false), ("conditional_return", false)] {
+        for (name, owned) in [
+            ("owned_return", true),
+            ("borrowed_return", false),
+            ("conditional_return", false),
+            ("local_return", true),
+        ] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
             assert_eq!(crate::codegen::function_returns_owned_string(function), owned, "{target}: {name}");
         }

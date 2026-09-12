@@ -1329,11 +1329,16 @@ impl Checker {
         env: &TypeEnv,
         callee_desc: &str,
     ) -> Result<FunctionSig, CompileError> {
-        let normalized_args = self.normalize_named_call_args(&sig, args, span, callee_desc, env)?;
+        let descriptor_args = self.callable_param_names.contains(var);
+        let plan = if descriptor_args {
+            self.plan_descriptor_call_args(&sig, args, span, callee_desc)?
+        } else {
+            self.plan_named_call_args(&sig, args, span, callee_desc, env)?
+        };
+        let normalized_args = plan.normalized_args();
         let regular_param_count = crate::types::call_args::regular_param_count(&sig);
         let mut changed = false;
         let mut param_idx = 0usize;
-        let descriptor_args = self.callable_param_names.contains(var);
         for arg in &normalized_args {
             let actual_ty = if descriptor_args {
                 self.infer_descriptor_call_arg_type(arg, env)?
