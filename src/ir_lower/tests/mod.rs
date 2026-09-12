@@ -40,6 +40,7 @@ mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
 mod boxed_array_multisort;
+mod builtin_datetime_methods;
 mod instanceof_operand_owners;
 mod iterator_aggregate_owners;
 mod boxed_array_predicates;
