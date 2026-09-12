@@ -1181,6 +1181,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns true when `IterStart` may call `IteratorAggregate::getIterator` on this source.
+    ///
+    /// An array source is excluded on purpose. The backend still routes a Mixed/Union-element
+    /// array through its dynamic dispatch because runtime hash promotion can change the
+    /// storage kind, but an array is never heap kind 4, so the aggregate case is unreachable
+    /// there. The backend treats the resulting optional owner as authoritative because the
+    /// operand's stored PHP type may be widened after this lowering decision.
     pub(crate) fn iter_start_needs_get_iterator_owner(&self, source_ty: &PhpType) -> bool {
         match source_ty.codegen_repr() {
             PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => true,
@@ -1355,7 +1361,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     .get(name)
                     .copied()
                     .unwrap_or(LocalKind::PhpLocal);
-                (kind == LocalKind::PhpLocal).then_some((name.clone(), *slot))
+                (kind == LocalKind::PhpLocal
+                    && !crate::names::is_generated_local_name(name))
+                .then_some((name.clone(), *slot))
             })
             .collect::<Vec<_>>();
         for (name, slot) in local_names {
@@ -1369,7 +1377,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .get(&name)
                 .copied()
                 .unwrap_or(LocalKind::PhpLocal);
-            if kind == LocalKind::PhpLocal && eval_barrier_can_widen(&ty) {
+            if kind == LocalKind::PhpLocal
+                && !crate::names::is_generated_local_name(&name)
+                && eval_barrier_can_widen(&ty)
+            {
                 self.local_types.insert(name, PhpType::Mixed);
             }
         }

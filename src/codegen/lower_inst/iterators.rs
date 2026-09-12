@@ -10,7 +10,9 @@
 //! - A successful `IteratorAggregate::getIterator()` result is transferred into the
 //!   optional Mixed owner slot before the raw iterator pointer is published. The
 //!   source word then borrows that payload; the aggregate word is overwritten
-//!   without being released. `IterEnd` remains a no-op.
+//!   without being released. `IterEnd` remains a no-op. The optional owner in the
+//!   `IterStart` immediate is the lowering decision for whether the aggregate probe is
+//!   reachable; backend value types may have widened after that decision.
 //! - Current values are boxed into `Mixed` unless EIR preserves a concrete indexed-array element type.
 //! - A source that is not iterable does NOT abort. Every dispatch that misses the
 //!   indexed/hash/object cases — the static `NonIterable` kind, the `__rt_mixed_unbox` tag
@@ -940,12 +942,16 @@ fn lower_dynamic_iter_current_value(
 }
 
 /// Replaces a dynamic object iterator source with `IteratorAggregate::getIterator()` when available.
+///
+/// The owner recorded in `IterStart` is authoritative. Its absence means lowering proved
+/// this source cannot produce an aggregate result, even if later type widening makes the
+/// backend operand look dynamic.
 fn resolve_dynamic_object_iterator_source(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
     owner: Option<LocalSlotId>,
 ) -> Result<()> {
-    if !ctx.module.interface_infos.contains_key("IteratorAggregate") {
+    if owner.is_none() || !ctx.module.interface_infos.contains_key("IteratorAggregate") {
         return Ok(());
     }
     let return_ty =

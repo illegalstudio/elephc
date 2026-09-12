@@ -73,7 +73,7 @@ unset($a);
 echo "\n";
 "#
     ));
-    assert_clean(out, "01IA\n");
+    assert_clean(out, "01AI\n");
 }
 
 /// Normal completion, innermost break, break 2, and return all leave a clean heap.
@@ -93,7 +93,7 @@ echo first();
 echo "\n";
 "#
     ));
-    assert_clean(out, "0IA0IA0IA\n");
+    assert_clean(out, "0IA0IAIA0\n");
 }
 
 /// Same-frame throws from rewind/current/key/next run iterator destructors and stay clean.

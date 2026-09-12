@@ -379,6 +379,45 @@ function walkGen(): void {{ foreach (gen() as $v) {{ echo $v; }} }}
     }
 }
 
+/// A mixed-element array reaches the backend's dynamic dispatch, but its heap kind is
+/// always an array, so `getIterator()` is unreachable and lowering publishes no owner.
+/// The backend must agree and skip the aggregate probe instead of rejecting the module.
+#[test]
+fn mixed_element_array_foreach_lowers_without_a_get_iterator_owner() {
+    let source = format!(
+        "<?php {PRELUDE}
+function walkMixedArray(): void {{ foreach ([1, \"a\"] as $v) {{ echo $v; }} }}
+function walkAggregate(): void {{ foreach (new FreshAgg() as $x) {{ echo $x; }} }}
+walkMixedArray();
+walkAggregate();
+"
+    );
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            &source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(target).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name.eq_ignore_ascii_case("walkMixedArray"))
+            .unwrap_or_else(|| panic!("{target}: walkMixedArray is lowered"));
+        let owners = iter_start_owners(function);
+        assert!(
+            !owners.is_empty(),
+            "{target}: the mixed-element array foreach must still reach IterStart"
+        );
+        assert!(
+            owners.iter().all(|(_, owner)| owner.is_none()),
+            "{target}: a mixed-element array must not allocate a getIterator owner"
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Iterator protocol opcodes retain arbitrary callback effects until calls are explicit in EIR.
 #[test]
 fn iterator_callback_opcodes_are_conservatively_effectful() {
