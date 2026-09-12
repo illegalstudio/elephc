@@ -1364,6 +1364,22 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     emitter.comment("--- runtime: var_dump_indexed ---");
     emitter.label_global("__rt_var_dump_indexed");
 
+    // -- hand a run-time promoted array to the hash walker --
+    // A statically `Array(Mixed)` local can hold HASH storage at run time: the write helper
+    // `__rt_array_set_mixed_key` promotes the destination when a key does not fit the packed
+    // layout, and the static type does not move with it. Walking that as an indexed array
+    // reads hash internals — `var_dump` printed `[0]=> int(9)` for a one-entry `[5] => 3`.
+    // The probe is the uniform heap-kind byte, the same one `__rt_array_edge_key` dispatches
+    // on, and the hash walker takes its argument in the same register, so this is a tail
+    // jump. The conditional branch skips OVER an unconditional one because AArch64 cannot
+    // point a conditional branch at an external label.
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
+    emitter.instruction("b.ne __rt_var_dump_indexed_packed");                   // packed storage walks inline below
+    emitter.instruction("b __rt_var_dump_hash");                                // hash storage is the hash walker's job
+    emitter.label("__rt_var_dump_indexed_packed");
+
     // Frame (64 bytes): [0]arr [8]index [16]count [24]stamp [48]x29 [56]x30.
     emitter.instruction("sub sp, sp, #64");                                     // allocate the indexed-walk frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
@@ -1442,6 +1458,16 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_indexed ---");
     emitter.label_global("__rt_var_dump_indexed");
+
+    // -- hand a run-time promoted array to the hash walker --
+    // Same runtime-promotion probe as the AArch64 path; see its comment for why a statically
+    // indexed argument can arrive holding hash storage.
+    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the uniform heap-kind header word
+    emitter.instruction("and rax, 0xff");                                       // isolate the low-byte heap kind
+    emitter.instruction("cmp rax, 3");                                          // kind 3 = associative hash storage
+    emitter.instruction("jne __rt_var_dump_indexed_packed");                    // packed storage walks inline below
+    emitter.instruction("jmp __rt_var_dump_hash");                              // hash storage is the hash walker's job
+    emitter.label("__rt_var_dump_indexed_packed");
 
     // rbp-relative frame: [-8]arr [-16]index [-24]count [-32]stamp.
     emitter.instruction("push rbp");                                            // save caller frame pointer

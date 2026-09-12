@@ -2146,3 +2146,88 @@ echo implode('#', $parts);"#;
          observable behavior): {response:?}\nexpected suffix: {expected:?}"
     );
 }
+
+/// Verifies `ini_set()` moves the settable `opcache.*` directives under `--web` exactly as
+/// it does on CLI, without disturbing the session directives the web wrapper owns.
+///
+/// The `--web` `ini_set` is a SEPARATE declaration from the CLI one — the session-aware body
+/// owns that name here — and it refuses every `opcache.*` key before reaching the session
+/// logic. Running the shared opcache arms ahead of that refusal is what keeps the two
+/// surfaces from disagreeing about the same directive in the same program.
+///
+/// `opcache.memory_consumption` must still be refused: it is `PHP_INI_SYSTEM` in reference
+/// PHP, so `false` is exact there too.
+#[test]
+fn opcache_ini_set_works_under_web() {
+    let dir = make_test_dir("ini_opcache_web");
+    let src = "<?php \
+        $old = ini_set('opcache.revalidate_freq', '77'); \
+        $now = ini_get('opcache.revalidate_freq'); \
+        $cfg = opcache_get_configuration()['directives']['opcache.revalidate_freq']; \
+        $sys = ini_set('opcache.memory_consumption', '256'); \
+        $sess = ini_set('session.gc_maxlifetime', 999); \
+        echo $old . '|' . $now . '|' . $cfg . '|' . var_export($sys, true) . '|' . $sess;";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with("2|77|77|false|1440"),
+        "opcache ini_set must move all three surfaces under --web, refuse the \
+         PHP_INI_SYSTEM key, and leave the session directives alone: {:?}",
+        resp
+    );
+}
+
+/// Verifies a scheduled `opcache_reset()` is performed at the NEXT REQUEST's boundary, the
+/// way php-src defers its restart, rather than flushing inside the request that asked.
+///
+/// Two requests against one persistent worker, and the counters tell the whole story:
+///
+/// - request 1 misses and fills (`h=0 m=1`), then schedules a restart (`r=0` — php-src
+///   counts the restart when it happens, not when it is scheduled);
+/// - request 2 starts AFTER the boundary performed it, so the entry is gone: the include
+///   misses again (`h=0 m=2`) instead of hitting, and the restart is finally counted
+///   (`r=1`).
+///
+/// The contrast is what pins the behaviour — without a reset, request 2 reports `h=1 m=1`,
+/// because the entry survived.
+///
+/// The reset is issued from NATIVE code, which is where ordinary programs call it and the
+/// path that reaches the cache through `__elephc_opcache_rt_reset`.
+///
+/// `--workers 1` is load-bearing: both requests must land in the same process.
+#[test]
+fn opcache_reset_is_performed_at_the_next_request_boundary() {
+    let dir = make_test_dir("opcache_deferred_reset");
+    std::fs::write(dir.join("lib.php"), "<?php $marker = 1;\n").unwrap();
+    let counters = "$s = opcache_get_status(); \
+        echo 'h=' . $s['opcache_statistics']['hits'] \
+           . ' m=' . $s['opcache_statistics']['misses'] \
+           . ' r=' . $s['opcache_statistics']['manual_restarts'];";
+    // The reset is NATIVE, not inside `eval()`: that is the path ordinary code takes, and
+    // the one that used to move only the reported latch.
+    let src = format!(
+        "<?php eval('include __DIR__ . \"/lib.php\";'); {counters} opcache_reset();"
+    );
+    let bin = compile_web(&dir, &src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        first.ends_with("h=0 m=1 r=0"),
+        "the scheduling request fills the cache and counts no restart yet: {first:?}"
+    );
+    assert!(
+        second.ends_with("h=0 m=2 r=1"),
+        "the next request must start with the restart already performed: {second:?}"
+    );
+}

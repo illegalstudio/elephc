@@ -10,7 +10,7 @@
 use super::*;
 
 /// Runtime enum declared by an eval fragment.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalEnum {
     name: String,
     source_location: Option<EvalSourceLocation>,
@@ -189,14 +189,14 @@ impl EvalEnum {
 }
 
 /// Scalar backing type for a runtime eval enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalEnumBackingType {
     Int,
     String,
 }
 
 /// One case declared by a runtime eval enum.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalEnumCase {
     name: String,
     attributes: Vec<EvalAttribute>,

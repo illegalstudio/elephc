@@ -49,8 +49,53 @@ pub fn collect_preload_symbols(program: &[Stmt]) -> PreloadSymbols {
     let mut symbols = PreloadSymbols::default();
     let mut seen_functions: HashSet<String> = HashSet::new();
     let mut seen_classes: HashSet<String> = HashSet::new();
-    collect_symbols_in(program, None, &mut symbols, &mut seen_functions, &mut seen_classes);
+    let variants = collect_variant_public_names(program);
+    collect_symbols_in(
+        program,
+        None,
+        &variants,
+        &mut symbols,
+        &mut seen_functions,
+        &mut seen_classes,
+    );
     symbols
+}
+
+/// Maps every generated function-variant symbol back to the PHP name it stands for.
+///
+/// A function declared inside an include the resolver inlines is renamed to
+/// `__elephc_include_variant_<hash>_<name>` so several include branches can each keep their own
+/// body (see `crate::resolver::function_variants`), and the resolver emits a
+/// `FunctionVariantGroup` recording the PHP-visible name beside its variants. Reporting the
+/// generated symbol in `preload_statistics.functions` would leak a compiler-internal name into a
+/// user-visible API — reference PHP reports `dep_helper`, never a mangled spelling — so the group
+/// statements are read first and the collector substitutes the public name.
+///
+/// The map is built from the AST rather than by stripping the prefix off the symbol: the variant
+/// spelling is SANITIZED (every byte outside `[A-Za-z0-9_]` becomes `_`), so a PHP function name
+/// carrying a high byte, which PHP identifiers allow, could not be recovered from it.
+fn collect_variant_public_names(program: &[Stmt]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    collect_variant_public_names_in(program, &mut map);
+    map
+}
+
+/// Walks one statement list for `FunctionVariantGroup`, through the same block forms that can
+/// host a hoisted declaration.
+fn collect_variant_public_names_in(body: &[Stmt], map: &mut HashMap<String, String>) {
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::FunctionVariantGroup { name, variants } => {
+                for variant in variants {
+                    map.insert(variant.to_ascii_lowercase(), name.clone());
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::Synthetic(body) => collect_variant_public_names_in(body, map),
+            _ => {}
+        }
+    }
 }
 
 /// Walks one statement list under `namespace`, appending every declaration it hosts.
@@ -60,6 +105,7 @@ pub fn collect_preload_symbols(program: &[Stmt]) -> PreloadSymbols {
 pub(super) fn collect_symbols_in(
     body: &[Stmt],
     namespace: Option<&str>,
+    variants: &HashMap<String, String>,
     out: &mut PreloadSymbols,
     seen_functions: &mut HashSet<String>,
     seen_classes: &mut HashSet<String>,
@@ -74,16 +120,31 @@ pub(super) fn collect_symbols_in(
                 collect_symbols_in(
                     body,
                     name.as_ref().map(Name::as_str),
+                    variants,
                     out,
                     seen_functions,
                     seen_classes,
                 );
             }
             StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
-                collect_symbols_in(body, current.as_deref(), out, seen_functions, seen_classes);
+                collect_symbols_in(
+                    body,
+                    current.as_deref(),
+                    variants,
+                    out,
+                    seen_functions,
+                    seen_classes,
+                );
             }
             StmtKind::FunctionDecl { name, .. } => {
                 let fqn = canonical_name_for_decl(current.as_deref(), name);
+                // A resolver-generated variant reports the PHP name it stands for, never its own
+                // symbol; the group is keyed on the canonical spelling the variant was declared
+                // with, which is what `canonical_name_for_decl` just produced.
+                let fqn = variants
+                    .get(&fqn.to_ascii_lowercase())
+                    .cloned()
+                    .unwrap_or(fqn);
                 if seen_functions.insert(fqn.to_ascii_lowercase()) {
                     out.functions.push(fqn);
                 }
@@ -172,25 +233,6 @@ impl PreloadVerdict {
         }
     }
 
-    /// The compile-warning text for a resolvable preload file that is NOT in the compile-time
-    /// script manifest, or `None` when there is nothing to warn about. Not an error: preloading a
-    /// file this program never includes/requires/autoloads is a legitimate configuration that must
-    /// not break a build.
-    pub fn compile_warning(&self) -> Option<String> {
-        match self {
-            PreloadVerdict::Preloading {
-                resolved,
-                in_manifest: false,
-            } => Some(format!(
-                "opcache.preload: '{resolved}' is not in this binary's compile-time OPcache script \
-                 manifest (the entry file, its statically-resolved includes, and its autoloaded \
-                 files), so it is not compiled into the binary; \
-                 opcache_get_status()['preload_statistics'] reports the manifest and the \
-                 symbols this binary actually bakes instead."
-            )),
-            _ => None,
-        }
-    }
 }
 
 /// Decides — AT COMPILE TIME — what `opcache.preload` means for this binary. See
@@ -253,15 +295,18 @@ pub fn preload_verdict(
 /// entry, `preload_statistics`, in eighth position). `preload_statistics` is also NOT suppressed
 /// by `opcache_get_status(false)`; only `scripts` is.
 ///
-/// DOCUMENTED DIVERGENCE (verified, deliberately not reproduced): reference PHP additionally
-/// inserts a SYNTHETIC `$PRELOAD$` pseudo-entry into the top-level `scripts` map (with
-/// `full_path` literally `$PRELOAD$` and `memory_consumption` equal to
-/// `preload_statistics.memory_consumption`), which also bumps
-/// `opcache_statistics.num_cached_scripts` by one. That entry stands for the shared-memory block
-/// preloading itself allocates. An elephc binary allocates no such block — its scripts are native
-/// code in the executable — so fabricating a `$PRELOAD$` script would be inventing a cache entry
-/// that does not exist. `scripts` and `num_cached_scripts` therefore keep reporting exactly the
-/// manifest.
+/// THE SYNTHETIC `$PRELOAD$` ENTRY IS REPRODUCED, in
+/// `super::scripts_configuration::preload_marker_entry`: `full_path` is literally `$PRELOAD$`,
+/// `memory_consumption` equals the `memory_consumption` below to the byte, every clock is zero,
+/// and `opcache_statistics.num_cached_scripts` counts it — all verified against reference PHP
+/// 8.5.10.
+///
+/// This block previously argued the opposite, that fabricating the entry would invent a cache
+/// entry that does not exist. That argument does not survive what this very struct reports:
+/// `memory_consumption` here is ALREADY a synthetic sum over the manifest, and `scripts`
+/// already reports the manifest as though it were a cache. Under "the binary IS the cache",
+/// the block the marker stands for is real here too — the baked code, resident for the whole
+/// process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreloadStatistics {
     /// Total memory the preloaded scripts occupy. Derived as Σ of the manifest entries'
@@ -306,4 +351,77 @@ pub fn preload_statistics(
         classes: symbols.classes.clone(),
         scripts: manifest.iter().map(|entry| entry.path.clone()).collect(),
     })
+}
+
+/// Prepends the implicit `require_once` that makes `opcache.preload` actually preload.
+///
+/// Reference PHP EXECUTES the preload file during startup, before a line of the entry script
+/// runs, and persists the declarations it leaves behind — VERIFIED on PHP 8.5.6 with a preload
+/// file declaring one of each: `function_exists`, `class_exists`, `interface_exists`,
+/// `trait_exists` and `enum_exists` all answer `true` in the entry script WITHOUT it including
+/// the file, and the file's own top-level output appears before the script's. A `require_once`
+/// at the very top of the entry program is that semantic, expressed in the one mechanism an AOT
+/// compiler already has: the resolver inlines the target, so its declarations are compiled into
+/// the binary and its top-level statements run first, in order, exactly once.
+///
+/// It also makes three things fall out that used to be special-cased:
+/// - the preload file and everything it transitively `require`s join `included_files`, so the
+///   OPcache script manifest reports them the way reference's `preload_statistics.scripts` does
+///   (VERIFIED: a preload file that requires one dependency reports BOTH paths);
+/// - [`PreloadVerdict::compile_warning`]'s "not in this binary's manifest" arm becomes
+///   unreachable, because the file is now always in the manifest;
+/// - the unresolvable path is refused HERE, before the autoload registry and the resolver run,
+///   which is the compile-time position matching reference's startup fatal most closely.
+///
+/// DOCUMENTED DIVERGENCE: reference PHP does NOT carry the preload file's CONSTANTS into the
+/// request — VERIFIED, both `const PRELOADED = 42;` and `define('PRELOADED', 43)` leave
+/// `defined()` answering `false` in the entry script, because preloading persists the compiled
+/// function and class tables while the startup request's own symbol table is torn down. An AOT
+/// binary has no torn-down startup request: the preload file's top-level code IS part of the
+/// program, so its constants necessarily exist. elephc is a SUPERSET here, never a fabrication,
+/// and reproducing the absence would mean building machinery to un-define a constant the program
+/// legitimately declared.
+pub fn inject_preload_require(
+    program: Program,
+    php_version: PhpVersion,
+    web: bool,
+    overrides: &[(String, String)],
+    filename: &str,
+) -> Program {
+    // The manifest is not consulted: only `in_manifest` depends on it, and that flag exists for a
+    // warning this injection makes unreachable. Passing an empty one keeps the resolution, the
+    // cache gate and the unresolvable arm exactly as `preload_verdict` documents them.
+    let verdict = preload_verdict(php_version, web, overrides, &[]);
+    if let Some(message) = verdict.compile_error() {
+        crate::errors::report(
+            &crate::errors::CompileError::new(Span::new(0, 0), &message)
+                .with_file(filename.to_string()),
+        );
+        std::process::exit(1);
+    }
+    let PreloadVerdict::Preloading { resolved, .. } = verdict else {
+        return program;
+    };
+    // Preloading the ENTRY file is a no-op, not a self-include. Reference PHP compiles the file
+    // once during the preload pass and the request then finds its declarations already in the
+    // symbol table; for elephc the entry file is ALREADY the program, so injecting a require of
+    // it would inline the whole script into itself and every declaration would collide
+    // (`Duplicate function declaration: …`). The statistics still report it, through the manifest
+    // it is the first member of.
+    if canonical_entry_path(filename).is_some_and(|entry| entry == resolved) {
+        return program;
+    }
+    // `once` and `required` both set: reference preloads a file exactly once and a preload path
+    // that stops resolving is fatal, which is `require_once`, not `include`.
+    let mut with_preload = Vec::with_capacity(program.len() + 1);
+    with_preload.push(Stmt::new(
+        StmtKind::Include {
+            path: Expr::new(ExprKind::StringLiteral(resolved), Span::new(0, 0)),
+            once: true,
+            required: true,
+        },
+        Span::new(0, 0),
+    ));
+    with_preload.extend(program);
+    with_preload
 }

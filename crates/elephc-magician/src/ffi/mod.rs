@@ -24,6 +24,7 @@ pub mod native_methods;
 pub mod object_construction;
 #[cfg(not(test))]
 pub mod object_introspection;
+pub mod opcache_status;
 pub mod scope;
 #[cfg(not(test))]
 pub mod static_members;

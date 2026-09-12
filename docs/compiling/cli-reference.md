@@ -759,8 +759,8 @@ for one set to nothing — but the override reads its value through a string cas
 and both arrive as `""` on the other side of it.
 
 **Which directives are overridable at run time.** Only the ones elephc merely
-*reports*. Ten `opcache.*` directives are consumed at compile time to bake code
-or baked constants, and honoring them on the reporting surface alone would
+*reports*. Seventeen `opcache.*` directives are consumed at compile time to bake
+code or baked constants, and honoring them on the reporting surface alone would
 produce a binary that contradicts itself (`ini_get('opcache.enable_cli') === '1'`
 next to an `opcache_get_status()` that still returns `false`). Their environment
 variables are ignored; use `--ini` for them instead:
@@ -768,9 +768,19 @@ variables are ignored; use `--ini` for them instead:
 `opcache.enable`, `opcache.enable_cli`, `opcache.memory_consumption`,
 `opcache.interned_strings_buffer`, `opcache.max_accelerated_files`,
 `opcache.revalidate_freq`, `opcache.jit`, `opcache.jit_buffer_size`,
-`opcache.restrict_api`, `opcache.preload`.
+`opcache.restrict_api`, `opcache.preload`, `opcache.validate_timestamps`,
+`opcache.max_file_size`, `opcache.file_update_protection`,
+`opcache.blacklist_filename`, `opcache.file_cache`,
+`opcache.file_cache_read_only` (8.5 only), `opcache.log_verbosity_level`,
+`opcache.error_log`.
 
-The other 44 directives of the PHP 8.5 set are runtime-overridable.
+The last eight govern the
+[runtime script cache](../php/opcache.md#the-runtime-script-cache), the
+[blacklist](../php/opcache.md#opcacheblacklist_filename) it consults, and the
+[`opcache.file_cache` startup validation](../php/opcache.md#opcachefile_cache),
+which can refuse to run — so they bake behavior, not just a report.
+
+The other 36 directives of the PHP 8.5 set are runtime-overridable.
 
 > **Not PHP parity — an elephc extension.** Reference PHP has *no*
 > per-directive environment override. Its only environment mechanisms are

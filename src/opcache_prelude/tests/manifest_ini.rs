@@ -49,7 +49,7 @@ pub(super) fn renders_manifest_paths_literal() {
     #[test]
 pub(super) fn renders_scripts_map_literal() {
         // revalidate_freq = 2 (the 8.5 directive default).
-        let map = rendered_expr(&scripts_map_expr(&sample_manifest(), 2, 80500));
+        let map = rendered_expr(&scripts_map_expr(&sample_manifest(), 2, 80500, None));
         // Keyed by full_path.
         assert!(map.contains("'/srv/app/index.php' => ["));
         assert!(map.contains("'full_path' => '/srv/app/index.php'"));
@@ -70,8 +70,27 @@ pub(super) fn renders_scripts_map_literal() {
         // The whole map parses as a PHP expression.
         let _ = parse(&format!("<?php $s = {map};"));
 
+        // No preload → no synthetic entry anywhere in the map.
+        assert!(!map.contains("$PRELOAD$"), "unexpected preload marker:\n{map}");
+
         // Empty manifest → empty map.
-        assert_eq!(rendered_expr(&scripts_map_expr(&[], 2, 80500)), "[]");
+        assert_eq!(rendered_expr(&scripts_map_expr(&[], 2, 80500, None)), "[]");
+
+        // Preloading inserts reference PHP's synthetic entry, carrying the preload block's
+        // memory and ZERO clocks — it stands for a block, not a file there is anything to stat.
+        let preloaded = rendered_expr(&scripts_map_expr(&sample_manifest(), 2, 80500, Some(999)));
+        assert!(preloaded.contains("'$PRELOAD$' => ["), "{preloaded}");
+        assert!(preloaded.contains("'full_path' => '$PRELOAD$'"), "{preloaded}");
+        assert!(preloaded.contains("'memory_consumption' => 999"), "{preloaded}");
+        assert!(preloaded.contains("'last_used' => __elephc_opcache_asctime(0)"), "{preloaded}");
+        assert!(preloaded.contains("'last_used_timestamp' => 0"), "{preloaded}");
+        assert!(preloaded.contains("'revalidate' => 0"), "{preloaded}");
+        let _ = parse(&format!("<?php $s = {preloaded};"));
+
+        // A pre-8.3 target has no `revalidate` key, marker included.
+        let older = rendered_expr(&scripts_map_expr(&sample_manifest(), 2, 80200, Some(999)));
+        assert!(older.contains("'$PRELOAD$' => ["), "{older}");
+        assert!(!older.contains("'revalidate'"), "{older}");
     }
 
     /// `opcache_get_status` bakes the manifest count into `num_cached_scripts` /
@@ -98,16 +117,24 @@ pub(super) fn get_status_bakes_manifest_counts_and_scripts() {
         let _ = parse(&format!("<?php {body}"));
     }
 
-    /// An empty manifest still renders a valid `opcache_get_status` body: zero counts, an
-    /// empty scripts map, and the untouched baseline memory figures.
+    /// An empty manifest still renders a valid `opcache_get_status` body: zero MANIFEST
+    /// counts, an empty manifest map for the runtime tier to append to, and the untouched
+    /// baseline memory figures.
+    ///
+    /// The counts and the map are no longer closed constants: each is the manifest's
+    /// contribution plus the runtime script cache's, which is `0` / empty in a binary with no
+    /// dynamic tier. This asserts the manifest HALF, which is what an empty manifest decides.
     #[test]
 pub(super) fn get_status_empty_manifest_is_valid() {
         let body = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &[], false, None));
-        assert!(body.contains("'num_cached_scripts' => 0"));
-        assert!(body.contains("'num_cached_keys' => 0"));
-        assert!(body.contains("$status['scripts'] = [];"));
-        // Baseline used_memory unchanged when no scripts contribute memory.
-        assert!(body.contains("'used_memory' => 6291456"));
+        assert!(body.contains("'num_cached_scripts' => 0 + $__elephc_rt_count"));
+        assert!(body.contains("'num_cached_keys' => 0 + $__elephc_rt_count"));
+        // The manifest map seeds the local the runtime entries are appended to, and the
+        // finished local is what lands on the status array.
+        assert!(body.contains("$__elephc_scripts = [];"));
+        assert!(body.contains("$status['scripts'] = $__elephc_scripts;"));
+        // Baseline used_memory unchanged when no manifest script contributes memory.
+        assert!(body.contains("'used_memory' => 6291456 + $__elephc_rt_used"));
         let _ = parse(&format!("<?php {body}"));
     }
 
@@ -142,9 +169,20 @@ pub(super) fn renders_parsable_opcache_ini_helpers() {
         assert!(helpers.contains(
             "if ($option === 'opcache.jit_prof_threshold') { return __elephc_opcache_env_raw('ELEPHC_INI_opcache__jit_prof_threshold', 'ELEPHC_INI_opcache.jit_prof_threshold', 'f', '0.005'); }"
         ));
+        // A reporting-only STRING still carries its env-override call, with its own default.
         assert!(helpers.contains(
-            "if ($option === 'opcache.error_log') { return __elephc_opcache_env_raw('ELEPHC_INI_opcache__error_log', 'ELEPHC_INI_opcache.error_log', 's', ''); }"
+            "if ($option === 'opcache.lockfile_path') { return __elephc_opcache_env_raw('ELEPHC_INI_opcache__lockfile_path', 'ELEPHC_INI_opcache.lockfile_path', 's', '/tmp'); }"
         ));
+        // Two string directives are NOT among them any more, because both now bake behaviour
+        // rather than only being reported, and so render as plain literals:
+        // `opcache.error_log` selects where the `zend_accel_error` channel writes, and
+        // `opcache.blacklist_filename` is READ AT STARTUP to build the blacklist the runtime
+        // script cache consults — a later env override would name a list the cache was
+        // already built without.
+        assert!(helpers.contains("if ($option === 'opcache.error_log') { return ''; }"));
+        assert!(!helpers.contains("ELEPHC_INI_opcache__error_log"));
+        assert!(helpers.contains("if ($option === 'opcache.blacklist_filename') { return ''; }"));
+        assert!(!helpers.contains("ELEPHC_INI_opcache__blacklist_filename"));
         // The helper functions are present and the whole block parses.
         assert!(helpers.contains("function __elephc_opcache_ini_string(string $option): string|false"));
         assert!(helpers.contains("function __elephc_opcache_ini_access(string $option): int"));

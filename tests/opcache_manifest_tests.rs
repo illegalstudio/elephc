@@ -398,6 +398,72 @@ echo 'after_tz=', date_default_timezone_get(), "\n";
     assert_eq!((paris - utc).rem_euclid(24), 2, "Europe/Paris is UTC+2 in July");
 }
 
+/// EVERY `scripts` entry formats `last_used` in the same zone — not just the first.
+///
+/// REGRESSION. `last_used_is_formatted_in_the_system_timezone` above compiles a fixture with
+/// exactly ONE script and reads only the first `last_used=` line, so it could not observe
+/// entries disagreeing with each other. They did: the binary reported its first entry in
+/// local time and EVERY OTHER ENTRY IN UTC.
+///
+/// The cause was a self-poisoning lookup. `__elephc_opcache_system_timezone()` consulted
+/// `getenv('TZ')`, and elephc's `date_default_timezone_set()` WRITES `TZ` — it drives libc
+/// through `putenv` + `tzset`, because the binary carries no tzdata. The first `last_used`
+/// therefore restored the PHP default and left `TZ=UTC` behind, and every later entry read
+/// that back as though it were the system zone. The lookup is memoized now.
+///
+/// VERIFIED against reference PHP 8.5.10 on this fixture: all three entries agree, both with
+/// no `TZ` and with `TZ=America/New_York`.
+#[test]
+fn every_scripts_entry_agrees_on_the_timezone() {
+    let dir = make_test_dir("opcache_tz_multi");
+    fs::write(dir.join("a.php"), "<?php $a = 1;\n").unwrap();
+    fs::write(dir.join("b.php"), "<?php $b = 1;\n").unwrap();
+    fs::write(
+        dir.join("multi.php"),
+        r#"<?php
+require __DIR__ . '/a.php';
+require __DIR__ . '/b.php';
+$s = opcache_get_status();
+foreach ($s['scripts'] as $entry) {
+    echo 'last_used=', $entry['last_used'], "\n";
+}
+"#,
+    )
+    .unwrap();
+    let bin = compile(&dir, "multi", &["opcache.enable_cli=1"]);
+
+    let hours = |tz: Option<&str>| -> Vec<String> {
+        let mut cmd = Command::new(&bin);
+        match tz {
+            Some(zone) => {
+                cmd.env("TZ", zone);
+            }
+            None => {
+                cmd.env_remove("TZ");
+            }
+        }
+        let output = cmd.output().expect("failed to run binary");
+        assert!(output.status.success(), "binary failed for {tz:?}");
+        let out = String::from_utf8_lossy(&output.stdout).into_owned();
+        let hours: Vec<String> = out
+            .lines()
+            .filter_map(|line| line.strip_prefix("last_used="))
+            // `Www Mmm dd HH:MM:SS yyyy` — the hour field.
+            .map(|stamp| stamp.get(11..13).expect("asctime hour").to_string())
+            .collect();
+        assert_eq!(hours.len(), 3, "three manifest entries expected:\n{out}");
+        hours
+    };
+
+    for zone in [None, Some("America/New_York"), Some("Europe/Paris")] {
+        let reported = hours(zone);
+        assert!(
+            reported.iter().all(|hour| *hour == reported[0]),
+            "entries disagree on the zone for {zone:?}: {reported:?}"
+        );
+    }
+}
+
 /// `opcache_reset()` LATCHES: the first call returns `true` and flips
 /// `opcache_get_status()['restart_pending']`, the second returns `false`, and NOTHING ELSE
 /// observable changes within the request.

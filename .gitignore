@@ -18,3 +18,15 @@ docs/superpowers/
 /bundle.tar
 /bundle.tar.gz
 /bundle.tar.bz2
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Kage's memory. `.agent_memory/packets/` is the durable, team-shared knowledge and
+# IS committed; everything else under it is a regenerable local index (~175 MB —
+# structural/, code_graph/, indexes/, observations/) rebuilt by `kage refresh`.
+/.agent_memory/*
+!/.agent_memory/packets/
+
+# graft writes this so its gitignored cards stay greppable (ripgrep reads .ignore first).
+/.ignore

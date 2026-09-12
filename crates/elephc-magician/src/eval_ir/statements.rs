@@ -10,7 +10,7 @@
 use super::*;
 
 /// Dynamic eval statements that operate on a materialized activation scope.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalStmt {
     ArrayAppendVar {
         name: String,
@@ -270,7 +270,7 @@ pub enum EvalStmt {
 }
 
 /// One `catch` block attached to an eval `try` statement.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalCatch {
     pub class_names: Vec<String>,
     pub var_name: Option<String>,

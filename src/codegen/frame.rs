@@ -593,6 +593,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // every function is emitted; the call here forward-references its label.
     ctx.emitter.comment("reset per-request persistent state");
     abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    emit_opcache_restart_boundary(ctx);
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
@@ -605,6 +606,29 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // profiler before the bridge invokes this handler.
     register_main_instr(ctx);
     emit_registered_instr_enter(ctx);
+}
+
+/// Emits the request-boundary call that performs a deferred `opcache_reset()`.
+///
+/// php-src schedules a restart and performs it at the START of the next request, so this
+/// sits beside the other per-request resets rather than inside `opcache_reset()` itself.
+/// A request that calls `opcache_reset()` therefore keeps being served by the cache, and
+/// the one after it starts cold — which is what reference PHP does.
+///
+/// PAY-FOR-USE, the same rule the `opcache_get_status()` readers follow: a binary with no
+/// eval bridge has no runtime script cache to restart, so the call is not emitted at all
+/// and the interpreter archive stays unlinked.
+fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    ctx.emitter
+        .comment("apply a restart scheduled by opcache_reset() in an earlier request");
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_apply_restart");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.

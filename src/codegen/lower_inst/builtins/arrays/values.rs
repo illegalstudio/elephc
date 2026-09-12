@@ -80,6 +80,55 @@ fn lower_dynamic_mixed_array_values(
     store_if_result(ctx, inst)
 }
 
+/// Materializes an OWNED indexed payload from a value whose static type is an indexed array
+/// but whose run-time STORAGE may have been promoted to a hash.
+///
+/// `__rt_array_set_mixed_key` promotes the destination when a key does not fit the packed
+/// layout. That is the ordinary path for rebuilding an array under a `foreach` key, whose key
+/// is always a boxed `Mixed`, and the static type does not move with it — so a consumer that
+/// walks a dense payload reads hash internals instead. `implode(",", $a)` over a rebuilt
+/// `[5 => 3]` answered `9`, a word of hash bookkeeping, rather than `3`.
+///
+/// BOTH branches leave an OWNED reference, which is what lets the caller release
+/// unconditionally: the promoted branch hands over the fresh copy it just built, and the
+/// packed branch retains the original instead of copying it.
+pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_dynamic_array_values(
+    ctx: &mut FunctionContext<'_>,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let promoted_label = ctx.next_label("dynvals_promoted");
+    let done_label = ctx.next_label("dynvals_done");
+    let owned_ty = PhpType::Array(Box::new(value_ty.clone()));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 = storage promoted to an associative hash
+            ctx.emitter.instruction(&format!("b.eq {}", promoted_label));       // copy the hash values when the payload was promoted
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_incref_if_refcounted(ctx.emitter, &owned_ty);
+            ctx.emitter.instruction(&format!("b {}", done_label));              // packed storage is handed over retained, not copied
+            ctx.emitter.label(&promoted_label);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            lower_assoc_array_values_aarch64(ctx, value_ty)?;
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 = storage promoted to an associative hash
+            ctx.emitter.instruction(&format!("je {}", promoted_label));         // copy the hash values when the payload was promoted
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_incref_if_refcounted(ctx.emitter, &owned_ty);
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // packed storage is handed over retained, not copied
+            ctx.emitter.label(&promoted_label);
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            lower_assoc_array_values_x86_64(ctx, value_ty)?;
+        }
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Lowers associative-array `array_values()` by copying values into a new indexed array.
 fn lower_assoc_array_values(
     ctx: &mut FunctionContext<'_>,

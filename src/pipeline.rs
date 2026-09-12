@@ -83,6 +83,7 @@ pub(crate) fn compile(config: CliConfig) {
     // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
+    codegen::set_ini_overrides(ini_overrides.clone());
     crate::superglobals::set_compiling_for_web(web);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
@@ -91,6 +92,21 @@ pub(crate) fn compile(config: CliConfig) {
     let mut timings = CompileTimings::new(emit_timings);
 
     let parsed = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);
+
+    // `opcache.preload` becomes an implicit `require_once` at the very top of the entry program,
+    // which is what reference PHP's startup preload pass IS for a compiler: the resolver inlines
+    // the target below, so its declarations are baked into the binary and its top-level code runs
+    // first. Injected BEFORE the autoload registry so a preload file that registers an autoloader
+    // or declares an autoloadable class is seen by both, and before `resolve` so its transitive
+    // requires join the OPcache script manifest. An unresolvable path is refused in here, at the
+    // compile-time position closest to reference's startup fatal.
+    let parsed = opcache_prelude::inject_preload_require(
+        parsed,
+        php_version,
+        web,
+        &ini_overrides,
+        filename,
+    );
 
     crate::progress::phase("autoload-build");
     let phase_started = Instant::now();
@@ -466,16 +482,13 @@ pub(crate) fn compile(config: CliConfig) {
         &opcache_included_files,
         &opcache_autoloaded_files,
     );
-    // Re-decide `opcache.preload` against the complete manifest. Only the `in_manifest` arm can
-    // differ from the verdict taken above (the directive, the SAPI gate and the path resolution
-    // are all manifest-independent), so this second call exists purely to emit the
-    // outside-the-manifest WARNING against the truthful set — reporting it against the
-    // placeholder manifest would warn about files that are, in fact, compiled in.
+    // Re-decide `opcache.preload` against the COMPLETE manifest, which is the set
+    // `preload_statistics` reports. Only the `in_manifest` arm can differ from the verdict taken
+    // above (the directive, the SAPI gate and the path resolution are all manifest-independent).
+    // There is no out-of-manifest diagnostic to emit any more: `inject_preload_require` has
+    // already made the preload file part of this binary, so it is always a manifest member.
     let opcache_preload =
         opcache_prelude::preload_verdict(php_version, web, &ini_overrides, &opcache_manifest);
-    if let Some(message) = opcache_preload.compile_warning() {
-        errors::report_warning(&errors::CompileWarning::new(Span::new(0, 0), &message));
-    }
     let opcache_preload_statistics = opcache_prelude::preload_statistics(
         &opcache_preload,
         &opcache_manifest,

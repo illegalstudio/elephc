@@ -54,26 +54,35 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     }
 
     // The five OPcache file/script functions are prelude-provided on native and dispatched
-    // here as plain runtime handlers (not PHP-visible builtins), each returning the
-    // CLI-default disabled-cache result (`false`) after validating arity — except the
-    // `void` `opcache_jit_blacklist`, which yields `NULL`.
+    // here as plain runtime handlers (not PHP-visible builtins). Three of them answer about
+    // the runtime script cache, so they resolve their path and go through the SAME core the
+    // direct call handlers use — `call_user_func('opcache_is_script_cached', $f)` must not
+    // disagree with `opcache_is_script_cached($f)`. The remaining two are terminal: the file
+    // cache does not exist, and the `void` `opcache_jit_blacklist` yields `NULL`.
     if name == "opcache_is_script_cached" {
-        if evaluated_args.len() != 1 {
+        let [filename] = evaluated_args else {
             return Err(EvalStatus::RuntimeFatal);
-        }
-        return Ok(Some(eval_opcache_is_script_cached_result(values)?));
+        };
+        let path = eval_opcache_path_value(*filename, values)?;
+        return Ok(Some(eval_opcache_is_script_cached_for_path(&path, values)?));
     }
     if name == "opcache_invalidate" {
         if evaluated_args.is_empty() || evaluated_args.len() > 2 {
             return Err(EvalStatus::RuntimeFatal);
         }
-        return Ok(Some(eval_opcache_invalidate_result(values)?));
+        let path = eval_opcache_path_value(evaluated_args[0], values)?;
+        let forced = match evaluated_args.get(1) {
+            Some(force) => values.truthy(*force)?,
+            None => false,
+        };
+        return Ok(Some(eval_opcache_invalidate_for_path(&path, forced, values)?));
     }
     if name == "opcache_compile_file" {
-        if evaluated_args.len() != 1 {
+        let [filename] = evaluated_args else {
             return Err(EvalStatus::RuntimeFatal);
-        }
-        return Ok(Some(eval_opcache_compile_file_result(values)?));
+        };
+        let path = eval_opcache_path_value(*filename, values)?;
+        return Ok(Some(eval_opcache_compile_file_for_path(&path, values)?));
     }
     if name == "opcache_is_script_cached_in_file_cache" {
         if evaluated_args.len() != 1 {

@@ -82,7 +82,6 @@ pub(super) fn disabled_cache_ignores_preload_entirely() {
         let verdict = preload_verdict(PhpVersion::Php85, false, &preload_override(&missing), &[]);
         assert_eq!(verdict, PreloadVerdict::NotPreloading);
         assert!(verdict.compile_error().is_none());
-        assert!(verdict.compile_warning().is_none());
 
         // Explicitly disabling the web cache reaches the same row.
         let mut overrides = preload_override(&missing);
@@ -117,8 +116,6 @@ pub(super) fn enabled_cache_with_missing_preload_is_a_compile_error() {
             message.contains("failed opening required"),
             "the message must echo reference's fatal wording: {message}"
         );
-        // An error, not a warning.
-        assert!(verdict.compile_warning().is_none());
 
         // A directory does not resolve to a preloadable file.
         let dir_verdict = preload_verdict(
@@ -140,14 +137,20 @@ pub(super) fn enabled_cache_with_missing_preload_is_a_compile_error() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// CACHE ENABLED + RESOLVABLE PATH: preloading, with `in_manifest` deciding the warning.
-    /// A manifest member is silent; a resolvable file outside the manifest warns but still
-    /// compiles (preloading a file this program never compiles in is legitimate).
+    /// CACHE ENABLED + RESOLVABLE PATH: preloading, with `in_manifest` recording whether the
+    /// file is part of the manifest handed in. Neither arm diagnoses anything — the file is
+    /// compiled into the binary by `inject_preload_require`, so the complete manifest always
+    /// contains it; the `false` arm is what the pre-resolver verdict sees, since that one is
+    /// deliberately given an empty manifest.
     #[test]
 pub(super) fn enabled_cache_with_resolvable_preload_preloads() {
         let (dir, file) = temp_preload_file("resolvable");
 
-        // Outside the manifest → warning, but no error.
+        // Outside the manifest is still a PRELOADING verdict, and still never an error. It no
+        // longer carries a diagnostic: `inject_preload_require` compiles the file into the
+        // binary, so by the time the complete manifest is built the file is a member of it. This
+        // arm survives only for the verdict taken BEFORE the resolver runs, which is handed an
+        // empty manifest on purpose.
         let outside = preload_verdict(PhpVersion::Php85, true, &preload_override(&file), &[]);
         assert_eq!(
             outside,
@@ -157,11 +160,6 @@ pub(super) fn enabled_cache_with_resolvable_preload_preloads() {
             }
         );
         assert!(outside.compile_error().is_none(), "a resolvable path must never error");
-        let warning = outside
-            .compile_warning()
-            .expect("a preload file outside the manifest must warn");
-        assert!(warning.contains("opcache.preload"), "{warning}");
-        assert!(warning.contains(&file), "the warning must name the path: {warning}");
 
         // In the manifest → completely silent.
         let manifest = [ScriptEntry {
@@ -178,7 +176,6 @@ pub(super) fn enabled_cache_with_resolvable_preload_preloads() {
             }
         );
         assert!(inside.compile_error().is_none());
-        assert!(inside.compile_warning().is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

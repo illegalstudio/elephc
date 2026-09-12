@@ -24,8 +24,13 @@ pub(super) const SCRIPTS_REVALIDATE_MIN_VERSION_ID: u32 = 80300;
 /// — so every entry reports the same instant, exactly as reference PHP does. `timestamp` goes
 /// through `__elephc_opcache_script_timestamp` rather than being the bare mtime so a
 /// FORCE-INVALIDATED entry reports `0`.
-pub(super) fn scripts_map_expr(manifest: &[ScriptEntry], revalidate_freq: i64, version_id: u32) -> Expr {
-    let entries = manifest
+pub(super) fn scripts_map_expr(
+    manifest: &[ScriptEntry],
+    revalidate_freq: i64,
+    version_id: u32,
+    preload_memory: Option<i64>,
+) -> Expr {
+    let mut entries = manifest
         .iter()
         .map(|entry| {
             let mut fields = vec![
@@ -66,8 +71,50 @@ pub(super) fn scripts_map_expr(manifest: &[ScriptEntry], revalidate_freq: i64, v
             }
             (e_str(&entry.path), e_array_assoc(fields))
         })
-        .collect();
+        .collect::<Vec<_>>();
+    if let Some(memory) = preload_memory {
+        entries.insert(0, preload_marker_entry(memory, version_id));
+    }
     build::php_assoc(entries)
+}
+
+/// The literal key reference PHP gives its synthetic preload entry. NOT a path: a caller
+/// walking `scripts` meets it among real filenames, and `file_exists('$PRELOAD$')` is false.
+const PRELOAD_MARKER: &str = "$PRELOAD$";
+
+/// Reference PHP's synthetic `$PRELOAD$` entry, for the block preloading holds resident.
+///
+/// VERIFIED on PHP 8.5.10: `full_path` is the literal `$PRELOAD$`, `hits` is `0`,
+/// `memory_consumption` equals `preload_statistics.memory_consumption` exactly, and all three
+/// CLOCKS ARE ZERO — `timestamp`, `last_used_timestamp` and `revalidate` are `0` and
+/// `last_used` is the epoch, because the entry stands for a block rather than a file there is
+/// anything to stat. `num_cached_scripts` counts it.
+///
+/// POSITION: reference puts it second, after the file named by `opcache.preload`. That is hash
+/// insertion order rather than a documented contract, and elephc's `scripts` is manifest order,
+/// which already differs from reference's compile order. It goes FIRST here — it precedes what
+/// it contains — and the position is not something either runtime guarantees.
+fn preload_marker_entry(memory_consumption: i64, version_id: u32) -> (Expr, Expr) {
+    let mut fields = vec![
+        (e_str("full_path"), e_str(PRELOAD_MARKER)),
+        (e_str("hits"), e_int(0)),
+        (
+            e_str("memory_consumption"),
+            build::php_int(memory_consumption),
+        ),
+        // The epoch, spelled the way `asctime` spells it, rather than the request clock every
+        // real entry carries.
+        (
+            e_str("last_used"),
+            e_call("__elephc_opcache_asctime", vec![e_int(0)]),
+        ),
+        (e_str("last_used_timestamp"), e_int(0)),
+        (e_str("timestamp"), e_int(0)),
+    ];
+    if version_id >= SCRIPTS_REVALIDATE_MIN_VERSION_ID {
+        fields.push((e_str("revalidate"), e_int(0)));
+    }
+    (e_str(PRELOAD_MARKER), e_array_assoc(fields))
 }
 
 /// The full `opcache_get_configuration()` return array for the given compile target.
@@ -76,11 +123,20 @@ pub(super) fn scripts_map_expr(manifest: &[ScriptEntry], revalidate_freq: i64, v
 /// is instead a CALL to the typed environment helper carrying its compile-time value as the
 /// default, which is what makes `opcache_get_configuration()['directives']` and `ini_get()` move
 /// TOGETHER under an `ELEPHC_INI_*` override, the way `-d` moves both surfaces in reference PHP.
-pub(super) fn configuration_expr(php_version: PhpVersion, overrides: &[(String, String)]) -> Expr {
+pub(super) fn configuration_expr(
+    php_version: PhpVersion,
+    overrides: &[(String, String)],
+    ini_set_injected: bool,
+) -> Expr {
     let version_id = php_version.version_id();
     let directives = effective_opcache_directives(version_id, overrides)
         .into_iter()
-        .map(|(name, value)| (e_str(name), directive_runtime_value_expr(name, &value)))
+        .map(|(name, value)| {
+            (
+                e_str(name),
+                directive_runtime_value_expr(name, &value, ini_set_injected),
+            )
+        })
         .collect();
     e_array_assoc(vec![
         (e_str("directives"), e_array_assoc(directives)),
@@ -97,7 +153,9 @@ pub(super) fn configuration_expr(php_version: PhpVersion, overrides: &[(String, 
                 ),
             ]),
         ),
-        (e_str("blacklist"), e_array(vec![])),
+        // Filled by `build::blacklist_prologue`, which runs immediately before this array is
+        // returned. Reference PHP lists the resolved `opcache.blacklist_filename` patterns here.
+        (e_str("blacklist"), e_var("__elephc_blacklist")),
     ])
 }
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:348](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L348) (`opcache_get_status`)
+- **Lowering**: [`src/opcache_prelude/build.rs`:458](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L458) (`opcache_get_status`)
 - **Function symbol**: `opcache_get_status()`
 
 
