@@ -137,7 +137,19 @@ impl Checker {
             )?;
             let defaults = plan.default_argument_mask();
             let descriptor_projections = plan.descriptor_projection_mask();
+            let source_has_spread = plan.has_spread_args();
             let normalized_args = plan.normalized_args();
+            if source_has_spread
+                && effective_sig.ref_params.iter().any(|is_ref| *is_ref)
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                        name
+                    ),
+                ));
+            }
             if descriptor_projections
                 .iter()
                 .enumerate()
@@ -410,6 +422,18 @@ impl Checker {
                         decl.span,
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
+                    // A tracked two-slot callable array crosses a declared `callable` boundary
+                    // as the descriptor EIR lowering materializes for this exact argument. The
+                    // already-resolved call validator applies the same exception; the first call
+                    // must not reject the underlying `Array(Mixed)` before it can publish the
+                    // function signature and reach that shared validator.
+                    let proven_callable_array = declared_ty.codegen_repr() == PhpType::Callable
+                        && !supplied_reference
+                        && !Self::types_compatible(&declared_ty, &ty)
+                        && !self.type_accepts(&declared_ty, &ty)
+                        && self
+                            .callable_array_param_target(arg, caller_env)?
+                            .is_some();
                     if supplied_reference {
                         self.require_boxed_by_ref_storage(
                             &declared_ty,
@@ -420,15 +444,17 @@ impl Checker {
                         )?;
                         self.record_php_array_reference_output(arg, &declared_ty, &ty, span);
                     }
-                    self.require_bound_param_arg_type(
-                        &declared_ty,
-                        &ty,
-                        arg,
-                        caller_env,
-                        &format!("Function '{}' parameter ${}", name, param_name),
-                        Some((name, decl.params[arg_idx].as_str())),
-                        supplied_reference,
-                    )?;
+                    if !proven_callable_array {
+                        self.require_bound_param_arg_type(
+                            &declared_ty,
+                            &ty,
+                            arg,
+                            caller_env,
+                            &format!("Function '{}' parameter ${}", name, param_name),
+                            Some((name, decl.params[arg_idx].as_str())),
+                            supplied_reference,
+                        )?;
+                    }
                     let specialized_ty =
                         Self::specialize_generic_array_param_hint(&declared_ty, &ty);
                     param_types.push((decl.params[arg_idx].clone(), specialized_ty));

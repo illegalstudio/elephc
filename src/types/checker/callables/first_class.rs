@@ -128,6 +128,7 @@ impl Checker {
                 ))
             }
             CallableTarget::StaticMethod { receiver, method } => {
+                let method_key = crate::names::php_symbol_key(method);
                 let resolved_class_name = match receiver {
                     StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
                     StaticReceiver::Self_ => {
@@ -173,14 +174,14 @@ impl Checker {
                 // describe the container the method's own frame will be compiled for.
                 self.promote_descriptor_variadic_container_for_method(
                     &resolved_class_name,
-                    method,
+                    &method_key,
                     true,
                 );
                 let class_info = self.classes.get(&resolved_class_name).ok_or_else(|| {
                     CompileError::new(span, &format!("Undefined class: {}", resolved_class_name))
                 })?;
-                let sig = class_info.static_methods.get(method).ok_or_else(|| {
-                    if class_info.methods.contains_key(method) {
+                let sig = class_info.static_methods.get(&method_key).ok_or_else(|| {
+                    if class_info.methods.contains_key(&method_key) {
                         CompileError::new(
                             span,
                             &format!(
@@ -198,10 +199,10 @@ impl Checker {
                         )
                     }
                 })?;
-                if let Some(visibility) = class_info.static_method_visibilities.get(method) {
+                if let Some(visibility) = class_info.static_method_visibilities.get(&method_key) {
                     let declaring_class = class_info
                         .static_method_declaring_classes
-                        .get(method)
+                        .get(&method_key)
                         .map(String::as_str)
                         .unwrap_or(resolved_class_name.as_str());
                     if !self.can_access_member(declaring_class, visibility) {
@@ -216,11 +217,13 @@ impl Checker {
                         ));
                     }
                 }
-                let declared_flags = Self::declared_method_param_flags(class_info, method, true);
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, &method_key, true);
                 let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
                 Ok(Self::callable_wrapper_sig(&effective_sig))
             }
             CallableTarget::Method { object, method } => {
+                let method_key = crate::names::php_symbol_key(method);
                 let object_ty = self.infer_type(object, env)?;
                 match object_ty {
                     PhpType::Object(class_name) => {
@@ -228,13 +231,13 @@ impl Checker {
                         // the descriptor and the method frame agree on one collector container.
                         self.promote_descriptor_variadic_container_for_method(
                             &class_name,
-                            method,
+                            &method_key,
                             false,
                         );
                         let class_info = self.classes.get(&class_name).ok_or_else(|| {
                             CompileError::new(span, &format!("Undefined class: {}", class_name))
                         })?;
-                        let sig = class_info.methods.get(method).ok_or_else(|| {
+                        let sig = class_info.methods.get(&method_key).ok_or_else(|| {
                             CompileError::new(
                                 span,
                                 &format!(
@@ -243,10 +246,10 @@ impl Checker {
                                 ),
                             )
                         })?;
-                        if let Some(visibility) = class_info.method_visibilities.get(method) {
+                        if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
                             let declaring_class = class_info
                                 .method_declaring_classes
-                                .get(method)
+                                .get(&method_key)
                                 .map(String::as_str)
                                 .unwrap_or(class_name.as_str());
                             if !self.can_access_member(declaring_class, visibility) {
@@ -261,8 +264,11 @@ impl Checker {
                                 ));
                             }
                         }
-                        let declared_flags =
-                            Self::declared_method_param_flags(class_info, method, false);
+                        let declared_flags = Self::declared_method_param_flags(
+                            class_info,
+                            &method_key,
+                            false,
+                        );
                         let effective_sig =
                             Self::callable_sig_for_declared_params(sig, &declared_flags);
                         Ok(Self::callable_wrapper_sig(&effective_sig))

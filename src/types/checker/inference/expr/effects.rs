@@ -458,7 +458,8 @@ impl Checker {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 let skip_contextual_callback =
                     self.variable_targets_preg_replace_callback(var.as_str());
-                let descriptor_args = self.callable_param_names.contains(var);
+                let descriptor_args = self.callable_param_names.contains(var)
+                    || self.callable_array_targets.contains_key(var);
                 for (idx, arg) in expanded_args.iter().enumerate() {
                     if skip_contextual_callback && idx == 1 {
                         continue;
