@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Only one trailing generated collector can be synthesized because its actual count is known.
-//! - Source variadics and hidden argc slots are rejected instead of entering an unsafe ABI.
+//! - A source variadic keeps its physical entry, and no entry may drop an injected hidden argc.
 //! - The wrapper publishes its collector owner before entering PHP and preserves every return word.
 
 use std::collections::{HashMap, HashSet};
@@ -61,7 +61,14 @@ pub(crate) fn plan_method_abi(
     Ok(MethodAbiPlan::AppendEmptyCollector)
 }
 
-/// Selects a source-vtable entry, rejecting source variadics that need hidden actual count.
+/// Selects a source-vtable entry, keeping every source variadic on its raw physical entry.
+///
+/// A source variadic reports its generated slots through `uses_physical_func_args_abi()`, so
+/// every vtable caller already dispatches it through `_class_vtable_ptrs` or
+/// `_class_static_vtable_ptrs`, and the operand path cannot reach it because
+/// `source_visible_signature()` refuses to project a hidden actual count. The source slot is
+/// therefore the same raw entry, with or without that hidden count. A fixed signature carrying
+/// an injected hidden argc has no such caller and must never be published without the slot.
 pub(crate) fn source_vtable_entry_symbol(
     class_name: &str,
     method_name: &str,
@@ -71,13 +78,13 @@ pub(crate) fn source_vtable_entry_symbol(
     if physical.variadic.is_some()
         && !crate::func_args::sig_collects_surplus_args(physical)
     {
-        if crate::func_args::sig_has_hidden_argc_param(physical) {
-            return Err(
-                "source method vtable cannot omit a source variadic hidden actual-count parameter"
-                    .to_string(),
-            );
-        }
         return Ok(physical_method_symbol(class_name, method_name, kind));
+    }
+    if crate::func_args::sig_has_hidden_argc_param(physical) {
+        return Err(
+            "source method vtable cannot omit a source variadic hidden actual-count parameter"
+                .to_string(),
+        );
     }
     source_method_entry_symbol(class_name, method_name, physical, kind)
 }
@@ -299,13 +306,33 @@ pub(crate) fn emit_method_adapter(
     Ok(())
 }
 
+/// Returns true when two contracts pass the same argument words in the same order.
+///
+/// The planner bridges generated `func_args` slots, not declared types. A compiler-injected
+/// declaration routinely names a narrower type than the contract it satisfies, and a variadic
+/// parameter keeps whatever name its declaration wrote, so comparing either would report a
+/// difference that has no ABI behind it. Declared type compatibility is the checker's contract
+/// and is validated long before codegen runs. Arity, by-reference passing, and the register
+/// class or word count of a parameter do change the entry, so those stay exact.
 fn same_parameter_abi(left: &FunctionSig, right: &FunctionSig) -> bool {
-    left.params
-        .iter()
-        .map(|(_, ty)| ty.codegen_repr())
-        .eq(right.params.iter().map(|(_, ty)| ty.codegen_repr()))
-        && left.ref_params == right.ref_params
-        && left.variadic == right.variadic
+    left.ref_params == right.ref_params
+        && left.variadic.is_some() == right.variadic.is_some()
+        && left.params.len() == right.params.len()
+        && left
+            .params
+            .iter()
+            .zip(right.params.iter())
+            .all(|((_, left_ty), (_, right_ty))| same_physical_param_abi(left_ty, right_ty))
+}
+
+/// Returns true when two declared parameter types occupy the same argument registers and words.
+fn same_physical_param_abi(left: &PhpType, right: &PhpType) -> bool {
+    let left = left.codegen_repr();
+    let right = right.codegen_repr();
+    left == right
+        || (left.register_count() == right.register_count()
+            && left.stack_size() == right.stack_size()
+            && left.is_float_reg() == right.is_float_reg())
 }
 
 fn physical_method_symbol(class_name: &str, method_name: &str, kind: MethodKind) -> String {
@@ -460,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn source_vtable_rejects_a_source_variadic_hidden_actual_count() {
+    fn source_vtable_keeps_source_variadics_raw_and_never_drops_an_injected_hidden_argc() {
         let mut physical = signature(
             vec![("values".to_string(), PhpType::Mixed)],
             Some("values".to_string()),
@@ -478,9 +505,48 @@ mod tests {
         physical.defaults.insert(0, None);
         physical.ref_params.insert(0, false);
         physical.declared_params.insert(0, false);
-        assert!(source_vtable_entry_symbol("C", "sort", &physical, MethodKind::Static)
+        // The hidden actual count rides the same physical entry every vtable caller already uses
+        // for a source variadic, so the source slot stays the raw symbol.
+        assert_eq!(
+            source_vtable_entry_symbol("C", "sort", &physical, MethodKind::Static).unwrap(),
+            static_method_symbol("C", "sort")
+        );
+
+        // A fixed signature carrying the injected count has no such caller and must be rejected.
+        let mut fixed = physical.clone();
+        fixed.variadic = None;
+        assert!(source_vtable_entry_symbol("C", "sort", &fixed, MethodKind::Static)
             .unwrap_err()
             .contains("actual-count"));
+    }
+
+    #[test]
+    fn planner_accepts_a_narrower_injected_parameter_declaration() {
+        // A compiler-injected implementation may declare `Iterator $iterator` where the
+        // interface it satisfies declares `mixed $value`: one pointer word either way.
+        let caller = signature(
+            vec![
+                ("offset".to_string(), PhpType::Mixed),
+                ("value".to_string(), PhpType::Mixed),
+            ],
+            None,
+        );
+        let mut physical = caller.clone();
+        physical.params[1] = (
+            "iterator".to_string(),
+            PhpType::Object("Iterator".to_string()),
+        );
+        assert_eq!(
+            plan_method_abi(&caller, &physical).unwrap(),
+            MethodAbiPlan::Direct
+        );
+
+        // A parameter that changes register class is still an unsupported difference.
+        let mut float_physical = caller.clone();
+        float_physical.params[1] = ("value".to_string(), PhpType::Float);
+        assert!(plan_method_abi(&caller, &float_physical)
+            .unwrap_err()
+            .contains("unsupported physical signature difference"));
     }
 
     #[test]
