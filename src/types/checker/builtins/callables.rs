@@ -1444,15 +1444,20 @@ pub(crate) fn check_call_user_func(
             checker.infer_descriptor_call_arg_type(arg, env)?;
         }
     }
-    let has_traversable_spread = checker.call_has_traversable_spread(&args[1..], env)?;
+    let has_traversable_spread =
+        checker.descriptor_call_has_traversable_spread(&args[1..], env)?;
     if let ExprKind::FirstClassCallable(target) = &args[0].kind {
-        let sig = checker.specialize_first_class_callable_target_for_descriptor_call(
-            target,
-            &args[1..],
-            span,
-            env,
-        )?;
-        let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
+        let sig = if has_traversable_spread {
+            checker.resolve_first_class_callable_sig(target, span, env)?
+        } else {
+            checker.specialize_first_class_callable_target_for_descriptor_call(
+                target,
+                &args[1..],
+                span,
+                env,
+            )?
+        };
+        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
             &sig,
             &args[1..],
             span,
@@ -1463,17 +1468,21 @@ pub(crate) fn check_call_user_func(
     }
     if let ExprKind::Variable(var_name) = &args[0].kind {
         if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() {
-            let sig = checker.specialize_first_class_callable_target_for_descriptor_call(
-                &target,
-                &args[1..],
-                span,
-                env,
-            )?;
+            let sig = if has_traversable_spread {
+                checker.resolve_first_class_callable_sig(&target, span, env)?
+            } else {
+                checker.specialize_first_class_callable_target_for_descriptor_call(
+                    &target,
+                    &args[1..],
+                    span,
+                    env,
+                )?
+            };
             checker.callable_sigs.insert(var_name.clone(), sig.clone());
             checker
                 .closure_return_types
                 .insert(var_name.clone(), sig.return_type.clone());
-            let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
+            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,
                 &args[1..],
                 span,
@@ -1484,7 +1493,7 @@ pub(crate) fn check_call_user_func(
         }
         if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
             let sig = checker.resolve_first_class_callable_sig(&target, args[0].span, env)?;
-            let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
+            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,
                 &args[1..],
                 span,
@@ -1515,7 +1524,7 @@ pub(crate) fn check_call_user_func(
         // container before its signature is read here.
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
-            let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
+            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,
                 &args[1..],
                 span,
@@ -1524,11 +1533,15 @@ pub(crate) fn check_call_user_func(
             )?;
             return Ok(ret_ty);
         }
-        let cb_args = args[1..].to_vec();
-        let ret_ty = checker.check_function_call(&cb_name, &cb_args, span, env)?;
-        // The declaration was only instantiated by the call above, so the collector is promoted
-        // once its signature exists. Idempotent, so the earlier attempt costs nothing.
-        checker.promote_descriptor_variadic_container(&cb_name)?;
+        let target = CallableTarget::Function(Name::from(cb_name.clone()));
+        let sig = checker.resolve_first_class_callable_sig(&target, span, env)?;
+        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            &sig,
+            &args[1..],
+            span,
+            env,
+            "call_user_func() callback",
+        )?;
         return Ok(ret_ty);
     }
     if let Some(ret_ty) =
@@ -1546,7 +1559,7 @@ pub(crate) fn check_call_user_func(
         return Ok(ret_ty);
     }
     if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
-        let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
+        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
             &sig,
             &args[1..],
             span,

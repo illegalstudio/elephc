@@ -414,13 +414,59 @@ impl Checker {
             PhpType::AssocArray { value, .. } => Ok(*value),
             PhpType::Mixed => Ok(PhpType::Mixed),
             ty if ty.is_php_array() => Ok(PhpType::Mixed),
-            PhpType::Iterable if allow_traversable => Ok(PhpType::Mixed),
-            PhpType::Object(ref class_name)
-                if allow_traversable && self.object_type_implements_iterable(class_name) =>
-            {
+            ty if allow_traversable && self.descriptor_spread_source_is_traversable(&ty) => {
                 Ok(PhpType::Mixed)
             }
             _ => Err(CompileError::new(span, "Spread operator requires an array")),
         }
     }
+
+    /// Returns whether descriptor runtime iteration can consume this non-array source type.
+    pub(crate) fn descriptor_spread_source_is_traversable(&self, ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Iterable => true,
+            PhpType::Object(class_name) => {
+                matches_builtin_traversable_name(class_name)
+                    || self.object_type_implements_iterable(class_name)
+                    || self
+                        .classes
+                        .keys()
+                        .chain(self.interfaces.keys())
+                        .find(|known| known.eq_ignore_ascii_case(class_name))
+                        .is_some_and(|known| self.object_type_implements_iterable(known))
+            }
+            PhpType::Union(members) => members
+                .iter()
+                .all(|member| match member {
+                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
+                    other => self.descriptor_spread_source_is_traversable(other),
+                }),
+            _ => false,
+        }
+    }
+
+    /// Returns whether a descriptor call contains a runtime Traversable spread source.
+    pub(crate) fn descriptor_call_has_traversable_spread(
+        &mut self,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        for arg in args {
+            let ExprKind::Spread(inner) = &arg.kind else {
+                continue;
+            };
+            let ty = self.infer_type(inner, env)?;
+            if self.descriptor_spread_source_is_traversable(&ty) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// Recognizes the three intrinsic interface names accepted by descriptor iteration.
+fn matches_builtin_traversable_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("Traversable")
+        || name.eq_ignore_ascii_case("Iterator")
+        || name.eq_ignore_ascii_case("IteratorAggregate")
 }

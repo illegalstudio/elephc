@@ -290,6 +290,7 @@ fn plan_named_call_args(
                 }
                 seen_spread = true;
                 prefix_args.push(PrefixSourceArg::Spread {
+                    source_index,
                     expr: (**inner).clone(),
                     span: arg.span,
                     is_assoc_named_provider: assoc_spread_sources
@@ -362,10 +363,10 @@ fn plan_named_call_args(
                 positional_idx += 1;
             }
             PrefixSourceArg::Spread {
+                source_index,
                 expr,
                 span,
                 is_assoc_named_provider,
-                ..
             } => {
                 if is_assoc_named_provider {
                     continue;
@@ -415,6 +416,21 @@ fn plan_named_call_args(
                         guaranteed_present,
                     });
                     positional_idx += 1;
+                }
+                if sig.variadic.is_some() && !has_regular_named_bound && max_len == 0 {
+                    let spread = Expr::new(ExprKind::Spread(Box::new(expr)), span);
+                    variadic_args.push(PlannedVariadicArg {
+                        source_index,
+                        key: None,
+                        expr: spread.clone(),
+                    });
+                    if source_values[source_index].is_none() {
+                        source_values[source_index] = Some(PlannedSourceValue::Variadic {
+                            source_index,
+                            key: None,
+                            expr: spread,
+                        });
+                    }
                 }
             }
             PrefixSourceArg::StaticNamedCursor { param_idx } => {
@@ -513,6 +529,7 @@ enum PrefixSourceArg {
         expr: Expr,
     },
     Spread {
+        source_index: usize,
         expr: Expr,
         span: Span,
         is_assoc_named_provider: bool,

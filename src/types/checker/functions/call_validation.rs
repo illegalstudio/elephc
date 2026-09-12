@@ -442,30 +442,6 @@ impl Checker {
         )
     }
 
-    /// Validates a signature-known descriptor invocation that can walk Traversable spreads.
-    ///
-    /// Unlike the by-reference-spread variant, this keeps the existing rejection for reference
-    /// parameters while allowing only the source containers the descriptor unpacker supports.
-    pub(crate) fn check_known_callable_call_allowing_traversable_spread(
-        &mut self,
-        sig: &FunctionSig,
-        args: &[Expr],
-        span: crate::span::Span,
-        caller_env: &TypeEnv,
-        callee_desc: &str,
-    ) -> Result<PhpType, CompileError> {
-        self.check_known_callable_call_with_options(
-            sig,
-            args,
-            span,
-            caller_env,
-            callee_desc,
-            false,
-            false,
-            true,
-        )
-    }
-
     /// Shared implementation for known callable call validation.
     ///
     /// `coercive_param_binding` opts the callee into PHP's coercive parameter binding for its
@@ -574,6 +550,9 @@ impl Checker {
                     }
                 }
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
+                    let runtime_unboxed_callable = expected_ty.codegen_repr() == PhpType::Callable
+                        && actual_ty.codegen_repr() == PhpType::Mixed
+                        && !supplied_reference;
                     if sig.declared_params.get(param_idx).copied().unwrap_or(false)
                         && supplied_reference
                     {
@@ -591,7 +570,9 @@ impl Checker {
                     // path. Builtin signatures carry `declared_params: false` throughout
                     // (`crate::builtins::registry`), so this never fires for an internal
                     // function whose parameter types the checker does not consume.
-                    if sig.declared_params.get(param_idx).copied().unwrap_or(false) {
+                    if !runtime_unboxed_callable
+                        && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                    {
                         self.require_strict_types_param_binding(
                             expected_ty,
                             &actual_ty,
@@ -606,7 +587,7 @@ impl Checker {
                         && !Self::types_compatible(expected_ty, &actual_ty)
                         && !self.type_accepts(expected_ty, &actual_ty)
                         && self.tracked_callable_array_target(arg).is_some();
-                    if !proven_callable_array {
+                    if !proven_callable_array && !runtime_unboxed_callable {
                         if coercive_param_binding
                             && sig.declared_params.get(param_idx).copied().unwrap_or(false)
                         {
@@ -698,7 +679,7 @@ impl Checker {
     /// An UNDECLARED collector has no source contract, so its storage element is the answer; that
     /// is also the path builtin variadics take, whose registry-derived parameter types carry no
     /// type syntax.
-    fn variadic_argument_element_type(
+    pub(super) fn variadic_argument_element_type(
         &self,
         sig: &FunctionSig,
         span: crate::span::Span,
@@ -727,9 +708,9 @@ impl Checker {
     ///
     /// Argument unpacking can project existing callable descriptors from `array<Callable>`, but
     /// lowering has no element-wise conversion from PHP callable arrays such as `[$object, 'm']`
-    /// into descriptor values. Opaque element types are rejected too, because accepting them
-    /// would make checker success depend on a runtime conversion that does not exist.
-    fn validate_callable_spread_elements(
+    /// into descriptor values. Mixed elements remain valid because Callable parameter lowering
+    /// unboxes the cell and validates its descriptor tag at runtime.
+    pub(super) fn validate_callable_spread_elements(
         &mut self,
         sig: &FunctionSig,
         args: &[Expr],
@@ -828,7 +809,10 @@ impl Checker {
     ) -> Result<(), CompileError> {
         let spread = Expr::new(ExprKind::Spread(Box::new(source.clone())), span);
         let element_ty = self.infer_descriptor_call_arg_type(&spread, caller_env)?;
-        if element_ty.codegen_repr() == PhpType::Callable {
+        if matches!(
+            element_ty.codegen_repr(),
+            PhpType::Callable | PhpType::Mixed
+        ) {
             return Ok(());
         }
         let detail = if matches!(

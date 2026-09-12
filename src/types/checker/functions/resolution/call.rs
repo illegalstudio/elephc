@@ -128,6 +128,13 @@ impl Checker {
                 &format!("Function '{}'", name),
                 caller_env,
             )?;
+            self.validate_callable_spread_elements(
+                &effective_sig,
+                args,
+                &plan,
+                caller_env,
+                &format!("Function '{}'", name),
+            )?;
             let defaults = plan.default_argument_mask();
             let normalized_args = plan.normalized_args();
             if self.respecialize_resolved_function_params_if_needed(
@@ -238,6 +245,13 @@ impl Checker {
             span,
             &format!("Function '{}'", name),
             caller_env,
+        )?;
+        self.validate_callable_spread_elements(
+            &normalization_sig,
+            args,
+            &plan,
+            caller_env,
+            &format!("Function '{}'", name),
         )?;
         let defaults = plan.default_argument_mask();
         let normalized_args = plan.normalized_args();

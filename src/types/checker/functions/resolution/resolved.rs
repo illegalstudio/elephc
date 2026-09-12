@@ -106,36 +106,12 @@ impl Checker {
             }
         }
         let regular_param_count = crate::types::call_args::regular_param_count(effective_sig);
-        let variadic_index = effective_sig.variadic.as_ref().and_then(|variadic_name| {
-            effective_sig
-                .params
-                .iter()
-                .position(|(param_name, _)| param_name == variadic_name)
-        });
-        let variadic_elem_ty = if let Some(variadic_index) = variadic_index {
-            match &effective_sig.params[variadic_index].1 {
-                PhpType::Array(elem) => Some((**elem).clone()),
-                PhpType::Iterable => effective_sig
-                    .param_type_exprs
-                    .get(variadic_index)
-                    .and_then(Option::as_ref)
-                    .map(|type_expr| {
-                        self.resolve_declared_param_type_hint(
-                            type_expr,
-                            span,
-                            &format!(
-                                "Function '{}' variadic parameter ${}",
-                                name,
-                                effective_sig.variadic.as_deref().unwrap_or_default()
-                            ),
-                        )
-                    })
-                    .transpose()?,
-                _ => None,
-            }
-        } else {
-            None
-        };
+        let variadic_index = crate::types::signatures::variadic_param_index(effective_sig);
+        let variadic_elem_ty = self.variadic_argument_element_type(
+            effective_sig,
+            span,
+            &format!("Function '{}'", name),
+        )?;
         let mut param_idx = 0usize;
         for arg in args {
             let actual_ty = self.infer_type(arg, caller_env)?;
@@ -165,6 +141,9 @@ impl Checker {
                     }
                 }
                 if let Some((param_name, expected_ty)) = effective_sig.params.get(param_idx) {
+                    let runtime_unboxed_callable = expected_ty.codegen_repr() == PhpType::Callable
+                        && actual_ty.codegen_repr() == PhpType::Mixed
+                        && !supplied_reference;
                     if effective_sig
                         .declared_params
                         .get(param_idx)
@@ -185,7 +164,8 @@ impl Checker {
                     // An inferred parameter's "expected" type is just what earlier call sites
                     // produced, so coercing against it would invent a conversion PHP does not
                     // perform.
-                    if effective_sig
+                    if !runtime_unboxed_callable
+                        && effective_sig
                         .declared_params
                         .get(param_idx)
                         .copied()
@@ -200,7 +180,7 @@ impl Checker {
                             Some((name, param_name.as_str())),
                             supplied_reference,
                         )?;
-                    } else {
+                    } else if !runtime_unboxed_callable {
                         self.require_compatible_arg_type(
                             expected_ty,
                             &actual_ty,
