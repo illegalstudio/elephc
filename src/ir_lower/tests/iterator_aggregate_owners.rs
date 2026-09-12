@@ -189,6 +189,15 @@ fn assert_single_owner_lifetime(function: &Function, target: &str) {
                     block.name
                 );
             }
+            Terminator::Unreachable
+                if block.name.starts_with("descriptor.unpack.guard.throw") =>
+            {
+                assert!(
+                    !live,
+                    "{target}: owner still published at {} terminator",
+                    block.name
+                );
+            }
             Terminator::Fatal { .. } | Terminator::Unreachable => {}
             Terminator::GeneratorSuspend { .. } => panic!("{target}: fixture has no generator"),
         }

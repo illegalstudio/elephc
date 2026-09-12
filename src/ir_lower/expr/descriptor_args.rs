@@ -144,7 +144,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                     None
                 }
                 .unwrap_or_else(|| lower_expr(ctx, value));
-                bind_descriptor_unpack_named(ctx, &state, key, value, arg.span);
+                bind_descriptor_unpack_named(ctx, &state, key, value, None, arg.span);
             }
             _ => {
                 let value = if let Some(var_name) =
@@ -155,7 +155,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                     lower_expr(ctx, arg)
                 };
                 positional_index += 1;
-                bind_descriptor_unpack_positional(ctx, &state, value, arg.span);
+                bind_descriptor_unpack_positional(ctx, &state, value, None, arg.span);
             }
         }
     }

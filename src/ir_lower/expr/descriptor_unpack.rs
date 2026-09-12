@@ -31,8 +31,8 @@
 //!   `crate::ir_lower::stmt::terminate_throw`. That is deliberate, and it is safe under exactly
 //!   one invariant: every heap value this walk owns at a rejection point is published as a
 //!   call-operand owner record (the destination container, the pinned source, and the key and
-//!   value slots). The invalid-key arm retires the innermost `getIterator()` owner locally before
-//!   terminating, while BOTH rejection forms reach `__rt_throw_current`, whose
+//!   value slots). Every rejection after iterator setup retires the innermost `getIterator()`
+//!   owner locally before terminating, while BOTH rejection forms reach `__rt_throw_current`, whose
 //!   `__rt_exception_cleanup_frames` retires those records innermost-first before the handler
 //!   resumes. `terminate_throw` cannot be used here: it emits the ENCLOSING loop frames'
 //!   `PopCallOperandOwner` cleanups, and at a rejection point this walk's own records sit on top
@@ -83,10 +83,11 @@ pub(super) fn bind_descriptor_unpack_positional(
     ctx: &mut LoweringContext<'_, '_>,
     state: &DescriptorUnpackState,
     value: LoweredValue,
+    iterator_owner: Option<LocalSlotId>,
     span: Span,
 ) {
     let (value, owner) = root_descriptor_binding_value(ctx, value, span);
-    reject_positional_after_named(ctx, state, span);
+    reject_positional_after_named(ctx, state, iterator_owner, span);
     let key = ctx.load_local(&state.next_index, Some(span));
     insert_descriptor_entry(ctx, state, key, value, span);
     if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, span); }
@@ -109,10 +110,11 @@ pub(super) fn bind_descriptor_unpack_named(
     state: &DescriptorUnpackState,
     key: LoweredValue,
     value: LoweredValue,
+    iterator_owner: Option<LocalSlotId>,
     span: Span,
 ) {
     let (value, owner) = root_descriptor_binding_value(ctx, value, span);
-    reject_duplicate_name(ctx, state, key, span);
+    reject_duplicate_name(ctx, state, key, iterator_owner, span);
     insert_descriptor_entry(ctx, state, key, value, span);
     if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, span); }
     store_expr_into_temp(
@@ -216,20 +218,19 @@ pub(super) fn lower_descriptor_unpack_source(
 
     ctx.builder.position_at_end(positional_key);
     let value = borrow_unpack_entry(ctx, &value_slot, span);
-    bind_descriptor_unpack_positional(ctx, state, value, span);
+    bind_descriptor_unpack_positional(ctx, state, value, iterator_owner, span);
     branch_to(ctx, entry_done);
 
     ctx.builder.position_at_end(named_key);
     let key = borrow_unpack_entry(ctx, &key_slot, span);
     let value = borrow_unpack_entry(ctx, &value_slot, span);
-    bind_descriptor_unpack_named(ctx, state, key, value, span);
+    bind_descriptor_unpack_named(ctx, state, key, value, iterator_owner, span);
     branch_to(ctx, entry_done);
 
     ctx.builder.position_at_end(invalid_key);
-    // This is the only locally constructed rejection after IterStart. Retire its innermost
-    // getIterator owner before the Throw terminator, leaving source/key/value records published
-    // for the ordinary exception unwinder. The duplicate-name helper never returns and enters
-    // that unwinder directly, so its owner remains unwind-managed.
+    // Retire the innermost getIterator owner before the Throw terminator, leaving
+    // source/key/value records published for the ordinary exception unwinder. The guarded
+    // positional and duplicate-name rejections above apply the same rule on their throw arms.
     if let Some(slot) = iterator_owner {
         ctx.retire_iter_start_owner(slot, span);
     }
@@ -300,6 +301,7 @@ fn root_descriptor_binding_value(
 fn reject_positional_after_named(
     ctx: &mut LoweringContext<'_, '_>,
     state: &DescriptorUnpackState,
+    iterator_owner: Option<LocalSlotId>,
     span: Span,
 ) {
     let named = ctx.load_local(&state.named_seen, Some(span));
@@ -312,12 +314,13 @@ fn reject_positional_after_named(
         Op::ICmp.default_effects(),
         Some(span),
     );
-    guard_unpack(
+    guard_unpack_with_iterator_owner(
         ctx,
         allowed,
         UnpackRejection::Fixed(
             "Cannot use positional argument after named argument during unpacking",
         ),
+        iterator_owner,
         span,
     );
 }
@@ -334,6 +337,7 @@ fn reject_duplicate_name(
     ctx: &mut LoweringContext<'_, '_>,
     state: &DescriptorUnpackState,
     key: LoweredValue,
+    iterator_owner: Option<LocalSlotId>,
     span: Span,
 ) {
     let hash = load_published_container(ctx, state.owner, state.hash_ty.clone(), span);
@@ -354,7 +358,13 @@ fn reject_duplicate_name(
         Op::ICmp.default_effects(),
         Some(span),
     );
-    guard_unpack(ctx, free, UnpackRejection::DuplicateName(key), span);
+    guard_unpack_with_iterator_owner(
+        ctx,
+        free,
+        UnpackRejection::DuplicateName(key),
+        iterator_owner,
+        span,
+    );
 }
 
 /// Rejects a source PHP cannot unpack, before any iteration state is created.
@@ -458,6 +468,35 @@ fn guard_unpack(
         else_args: Vec::new(),
     });
     ctx.builder.position_at_end(throw);
+    throw_unpack_rejection(ctx, rejection, span);
+    ctx.builder.position_at_end(ok);
+}
+
+/// Continues on a true constraint, retiring the innermost iterator owner before rejection.
+///
+/// Only guards emitted after `IterStart` use this form. The iterator record is at the top of the
+/// owner stack, so the rejection branch can retire it without disturbing the source/key/value
+/// records that the exception unwinder owns.
+fn guard_unpack_with_iterator_owner(
+    ctx: &mut LoweringContext<'_, '_>,
+    valid: LoweredValue,
+    rejection: UnpackRejection,
+    iterator_owner: Option<LocalSlotId>,
+    span: Span,
+) {
+    let ok = ctx.builder.create_named_block("descriptor.unpack.guard.ok", Vec::new());
+    let throw = ctx.builder.create_named_block("descriptor.unpack.guard.throw", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: valid.value,
+        then_target: ok,
+        then_args: Vec::new(),
+        else_target: throw,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(throw);
+    if let Some(slot) = iterator_owner {
+        ctx.retire_iter_start_owner(slot, span);
+    }
     throw_unpack_rejection(ctx, rejection, span);
     ctx.builder.position_at_end(ok);
 }

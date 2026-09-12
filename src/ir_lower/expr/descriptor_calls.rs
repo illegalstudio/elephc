@@ -135,7 +135,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             ExprKind::NamedArg { name, value } => {
                 let key = lower_string_literal(ctx, name, arg);
                 let value = lower_untyped_descriptor_invoker_arg_value(ctx, value);
-                bind_descriptor_unpack_named(ctx, &state, key, value, arg.span);
+                bind_descriptor_unpack_named(ctx, &state, key, value, None, arg.span);
             }
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
@@ -143,7 +143,7 @@ pub(super) fn lower_untyped_descriptor_invoker_hash_container(
             }
             _ => {
                 let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
-                bind_descriptor_unpack_positional(ctx, &state, value, arg.span);
+                bind_descriptor_unpack_positional(ctx, &state, value, None, arg.span);
             }
         }
     }
