@@ -2573,10 +2573,26 @@ fn call_target_with_pushed_args(
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
     save_concat_offset_before_nested_call(emitter);
+    emit_restore_invoker_php_frame_head(emitter);
     abi::emit_call_reg(emitter, call_reg);
+    emit_restore_invoker_php_frame_head(emitter);
     let return_ty = if sig.by_ref_return { PhpType::Pointer(None) } else { sig.return_type.clone() };
     restore_concat_offset_after_nested_call(emitter, &return_ty, owns_string_return);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
+}
+
+/// Republishes the real PHP caller activation around the synthetic descriptor target.
+///
+/// Argument normalization may enter runtime helpers before the indirect call. The invoker's
+/// exception record already snapshots the caller activation head, so reusing that stable slot
+/// prevents a helper or an invisible synthetic builtin wrapper from severing the reader chain
+/// consumed by `debug_backtrace()`. Repeating the store after a normal return also gives later
+/// invoker cleanup the same caller head without making the synthetic wrapper PHP-visible.
+fn emit_restore_invoker_php_frame_head(emitter: &mut Emitter) {
+    emitter.comment("republish descriptor invoker PHP caller frame");
+    let scratch = abi::temp_int_reg(emitter.target);
+    abi::load_at_offset(emitter, scratch, INVOKER_BOUNDARY_BASE_OFFSET - 8);
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
 /// Saves the current concat offset before the nested callable target runs.
@@ -3360,6 +3376,40 @@ mod tests {
         };
         emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
         emitter.output()
+    }
+
+    /// Descriptor targets inherit the real PHP frame reader across their invisible wrapper.
+    #[test]
+    fn invokers_republish_the_php_frame_head_around_target_calls_on_all_targets() {
+        let sig = crate::types::first_class_callable_builtin_sig("debug_backtrace").unwrap();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let asm = emit_invoker_asm(name, &sig, "backtrace_invoker");
+            let indirect_call = match target.arch {
+                Arch::AArch64 => "blr x19",
+                Arch::X86_64 => "call r12",
+            };
+            let call = asm
+                .find(indirect_call)
+                .unwrap_or_else(|| panic!("{name}: missing descriptor target call\n{asm}"));
+            let before = &asm[..call];
+            let after = &asm[call + indirect_call.len()..];
+            let marker = "republish descriptor invoker PHP caller frame";
+            let before_restore = before
+                .rfind(marker)
+                .unwrap_or_else(|| panic!("{name}: missing frame restore before target\n{asm}"));
+            let after_restore = after
+                .find(marker)
+                .unwrap_or_else(|| panic!("{name}: missing frame restore after target\n{asm}"));
+            assert!(
+                before[before_restore..].contains("_exc_call_frame_top"),
+                "{name}: pre-call restore does not publish the PHP frame head\n{asm}",
+            );
+            assert!(
+                after[after_restore..].contains("_exc_call_frame_top"),
+                "{name}: post-call restore does not publish the PHP frame head\n{asm}",
+            );
+        }
     }
 
     /// Every invoker keeps container slot 0 as the first user argument and synthesizes hidden argc.
