@@ -30,8 +30,9 @@
 //!   name, `Op::ThrowNamedParameterOverwrite` then `Terminator::Unreachable`) rather than
 //!   `crate::ir_lower::stmt::terminate_throw`. That is deliberate, and it is safe under exactly
 //!   one invariant: every heap value this walk owns at a rejection point is published as a
-//!   call-operand owner record (the destination container, the pinned source, the key and value
-//!   slots, and the `getIterator()` result), and BOTH exits reach `__rt_throw_current`, whose
+//!   call-operand owner record (the destination container, the pinned source, and the key and
+//!   value slots). The invalid-key arm retires the innermost `getIterator()` owner locally before
+//!   terminating, while BOTH rejection forms reach `__rt_throw_current`, whose
 //!   `__rt_exception_cleanup_frames` retires those records innermost-first before the handler
 //!   resumes. `terminate_throw` cannot be used here: it emits the ENCLOSING loop frames'
 //!   `PopCallOperandOwner` cleanups, and at a rejection point this walk's own records sit on top
@@ -225,6 +226,13 @@ pub(super) fn lower_descriptor_unpack_source(
     branch_to(ctx, entry_done);
 
     ctx.builder.position_at_end(invalid_key);
+    // This is the only locally constructed rejection after IterStart. Retire its innermost
+    // getIterator owner before the Throw terminator, leaving source/key/value records published
+    // for the ordinary exception unwinder. The duplicate-name helper never returns and enters
+    // that unwinder directly, so its owner remains unwind-managed.
+    if let Some(slot) = iterator_owner {
+        ctx.retire_iter_start_owner(slot, span);
+    }
     throw_unpack_rejection(
         ctx,
         UnpackRejection::Fixed("Keys must be of type int|string during argument unpacking"),
