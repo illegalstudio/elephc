@@ -10,6 +10,7 @@
 //! - Effects are deliberately conservative; purity must not be claimed for code that can observe or mutate PHP/runtime state.
 
 use super::*;
+use super::exception_flow::active_expr_thrown_types;
 
 mod aliases;
 mod calls;
@@ -222,10 +223,15 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
     }
 }
 
-/// Returns true if `expr` may produce observable side effects (writes, calls, output, or throws).
-/// Used by DCE to determine whether discarding the expression would be observable.
+/// Returns true if `expr` may produce observable side effects, including a throw raised while
+/// retiring the value it materializes.
+///
+/// The coarse effect model describes evaluation itself. During DCE, the active exception-flow
+/// analysis additionally describes implicit destructor execution at the discard site. Keeping
+/// both terms here prevents a pure closure invocation from disappearing before catch routing can
+/// observe that retiring its captures or bound receiver may throw.
 pub(super) fn expr_is_observable(expr: &Expr) -> bool {
-    expr_effect(expr).is_observable()
+    expr_effect(expr).is_observable() || !active_expr_thrown_types(expr).is_empty()
 }
 
 /// Computes the combined `Effect` for an expression, including all sub-expressions and call effects.

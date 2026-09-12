@@ -681,7 +681,7 @@ impl ExceptionFlowAnalysis {
                 // `unset` is a PHP language CONSTRUCT the parser models as a call node, not a
                 // callee this analysis dispatches on: it retires the storage it names.
                 if name.as_str().eq_ignore_ascii_case("unset") {
-                    thrown = thrown.combined(self.overwrite_cleanup_throws());
+                    return thrown.combined(self.overwrite_cleanup_throws());
                 }
                 if let Some(summary) = self.function_throws.get(name.as_str()) {
                     return thrown.combined(summary.clone());
