@@ -29516,6 +29516,14 @@ echo get_resource_type($evaluated["STDOUT"]);
 /// second collector, while validating visible arity would reject the physical argument array.
 #[test]
 fn test_eval_method_bridge_enters_physical_collector_methods_through_raw_symbols() {
+    fn calls_symbol(assembly: &str, symbol: &str) -> bool {
+        assembly.lines().any(|line| {
+            let line = line.trim();
+            line.strip_prefix("bl ") == Some(symbol)
+                || line.strip_prefix("call ") == Some(symbol)
+        })
+    }
+
     let dir = make_cli_test_dir("elephc_eval_method_physical_collector");
     let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
         r#"<?php
@@ -29557,14 +29565,14 @@ echo eval($code);
             )),
             "the eval bridge should own a physical body for {class_name}::{source_method}:\n{instance_bridge}"
         );
+        let raw_symbol = format!("_method_{class_name}_{symbol_method}");
         assert!(
-            instance_bridge.contains(&format!("_method_{class_name}_{symbol_method}")),
+            calls_symbol(instance_bridge, &raw_symbol),
             "the eval bridge should call the raw symbol for {class_name}::{source_method}:\n{instance_bridge}"
         );
+        let source_adapter = format!("_method_source_abi_{class_name}_{symbol_method}");
         assert!(
-            !instance_bridge.contains(&format!(
-                "_method_source_abi_{class_name}_{symbol_method}"
-            )),
+            !calls_symbol(instance_bridge, &source_adapter),
             "the eval bridge must not enter the source adapter for {class_name}::{source_method}:\n{instance_bridge}"
         );
     }
@@ -29579,11 +29587,17 @@ echo eval($code);
         "the eval bridge should own a body for the static collector twin:\n{static_bridge}"
     );
     assert!(
-        static_bridge.contains("_static_EvalPhysicalCollector_collectstatic"),
+        calls_symbol(
+            static_bridge,
+            "_static_EvalPhysicalCollector_collectstatic"
+        ),
         "the eval bridge should call the raw static collector symbol:\n{static_bridge}"
     );
     assert!(
-        !static_bridge.contains("_static_source_abi_EvalPhysicalCollector_collectstatic"),
+        !calls_symbol(
+            static_bridge,
+            "_static_source_abi_EvalPhysicalCollector_collectstatic"
+        ),
         "the eval bridge must not enter the static source adapter:\n{static_bridge}"
     );
     let _ = fs::remove_dir_all(&dir);
