@@ -33,7 +33,7 @@ fn hidden_argument_snapshot_enables_backtrace_activations_without_a_core_instruc
         },
         FunctionParam {
             name: crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
-            ir_type: IrType::Heap(crate::ir::HeapKind::Array),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Array),
             php_type: PhpType::Array(Box::new(PhpType::Mixed)),
             by_ref: false,
             variadic: true,
