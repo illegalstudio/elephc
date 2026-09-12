@@ -96,17 +96,22 @@ fn native_function_binding_releases_partial_type_conversions() {
     let mut values = FakeOps::default();
     let mut context = ElephcEvalContext::new();
     let caller = values.string("7").unwrap();
+    let invalid = values.string("not an array").unwrap();
     let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 2);
     assert!(function.set_param_type(0, EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)));
     assert!(function.set_param_type(1, EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false)));
-    assert!(function.set_param_default(1, NativeCallableDefault::String("not an array".into())));
     let outcome = bind_evaluated_native_function_args(
-        &function, vec![EvaluatedCallArg { name: None, value: caller, ref_target: None }],
+        &function,
+        vec![
+            EvaluatedCallArg { name: None, value: caller, ref_target: None },
+            EvaluatedCallArg { name: None, value: invalid, ref_target: None },
+        ],
         &mut context, &mut values,
     );
     assert!(matches!(outcome, Err(EvalStatus::RuntimeFatal)));
     assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1);
-    assert_eq!(values.cell_owners.values().sum::<usize>(), 1);
+    assert_eq!(values.cell_owners[&(invalid.as_ptr() as usize)], 1);
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 2);
 }
 
 /// A failing later default does not strand cells allocated for earlier omitted parameters.
@@ -114,15 +119,30 @@ fn native_function_binding_releases_partial_type_conversions() {
 fn native_function_binding_releases_partial_default_materialization() {
     let mut values = FakeOps::default();
     let mut context = ElephcEvalContext::new();
-    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 2);
+    let supplied = values.int(3).unwrap();
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 3);
+    assert!(function.set_param_name(0, "first"));
+    assert!(function.set_param_name(1, "second"));
+    assert!(function.set_param_name(2, "third"));
     assert!(function.set_param_default(0, NativeCallableDefault::String("first".into())));
     assert!(function.set_param_default(1, NativeCallableDefault::Array(vec![
         crate::context::NativeCallableArrayDefaultElement::positional(NativeCallableDefault::Int(1)),
     ])));
+    assert!(function.set_param_default(2, NativeCallableDefault::Int(3)));
     values.fail_array_set_call(0);
-    let outcome = bind_evaluated_native_function_args(&function, Vec::new(), &mut context, &mut values);
+    let outcome = bind_evaluated_native_function_args(
+        &function,
+        vec![EvaluatedCallArg {
+            name: Some("third".into()),
+            value: supplied,
+            ref_target: None,
+        }],
+        &mut context,
+        &mut values,
+    );
     assert!(matches!(outcome, Err(EvalStatus::UnsupportedConstruct)));
-    assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+    assert_eq!(values.cell_owners[&(supplied.as_ptr() as usize)], 1);
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 1);
 }
 
 /// A named-only call over an earlier missing required slot retires every binding it already made.
