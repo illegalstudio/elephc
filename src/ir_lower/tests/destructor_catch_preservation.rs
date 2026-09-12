@@ -15,6 +15,8 @@
 //!   ARM64-first.
 //! - The quiet-destructor control pins that the handler is kept because the destructor can
 //!   THROW, not because a destructor exists.
+//! - Local retirement consumes bounded cleanup's caught flag so an unchanged outer throw keeps
+//!   running `finally`, while a newly produced destructor throw still propagates.
 //! - The precision fixtures at the end pin the opposite direction: an exactly known retirement
 //!   routes only its own destructor class, and a callable whose frame is proven to retire
 //!   nothing does not import the program-wide destructor domain. Both are asserted at the EIR
@@ -114,6 +116,28 @@ function rebindWithSameFrameCatch(): string {
 echo rebindWithSameFrameCatch();
 "#;
 
+/// A Mixed local retired while an unmatched outer exception is already running `finally`.
+const PENDING_FINALLY_OVERWRITE_SOURCE: &str = r#"<?php
+class ThrowingFinallyRebound {
+    public function __destruct() { throw new RuntimeException('rebound'); }
+}
+function makeThrowingFinallyRebound(): mixed { return new ThrowingFinallyRebound(); }
+function rebindDuringPendingFinally(): void {
+    $held = makeThrowingFinallyRebound();
+    try {
+        throw new RuntimeException('outer');
+    } finally {
+        $held = 42;
+        echo 'finally-finished';
+    }
+}
+try {
+    rebindDuringPendingFinally();
+} catch (RuntimeException $error) {
+    echo $error->getMessage();
+}
+"#;
+
 /// A quiet destructor over the same shape, which must still lose its unreachable handler.
 const QUIET_DESTRUCTOR_SOURCE: &str = r#"<?php
 class ResultPayload {
@@ -167,6 +191,36 @@ fn function_assembly(module: &crate::ir::Module, name: &str, target: &str) -> St
     let body = &asm[start..];
     let end = body.find("\n.globl ").unwrap_or(body.len());
     body[..end].to_string()
+}
+
+/// Verifies one bounded local retirement distinguishes older and newly produced exceptions.
+fn assert_local_retirement_exception_gate(body: &str, target: &str) {
+    let bounded = body
+        .find("__rt_cleanup_preserve_exception")
+        .unwrap_or_else(|| panic!("{target}: overwrite cleanup must be bounded:\n{body}"));
+    let retirement = &body[bounded..];
+    let caught_condition = if target == "linux-x86_64" {
+        "test rax, rax"
+    } else {
+        "cbz x0, 1f"
+    };
+    let condition = retirement
+        .find(caught_condition)
+        .unwrap_or_else(|| panic!("{target}: retirement must inspect the caught flag:\n{body}"));
+    let conditional_throw = if target == "linux-x86_64" {
+        "jne __rt_throw_current"
+    } else {
+        "b __rt_throw_current"
+    };
+    let propagate = retirement[condition..]
+        .find(conditional_throw)
+        .map(|offset| condition + offset)
+        .unwrap_or_else(|| panic!("{target}: a new destructor throw must propagate:\n{body}"));
+    assert!(
+        !retirement[..condition].contains("_exc_value"),
+        "{target}: local retirement must use the helper's caught flag, not pending state:\n{body}",
+    );
+    assert!(condition < propagate, "{target}: test the caught flag before propagation");
 }
 
 /// Verifies a throwing argument-temporary destructor keeps its handler through EIR and assembly.
@@ -235,34 +289,25 @@ fn mixed_local_overwrite_bounds_destructor_cleanup_on_every_target() {
             "{target}: the old Mixed owner must retire before replacement",
         );
         let body = function_assembly(&module, "rebindWithSameFrameCatch", target);
-        let bounded = body
-            .find("__rt_cleanup_preserve_exception")
-            .unwrap_or_else(|| panic!("{target}: overwrite cleanup must be bounded:\n{body}"));
-        let retirement = &body[bounded..];
-        let pending = retirement
-            .find("_exc_value")
-            .map(|offset| bounded + offset)
-            .unwrap_or_else(|| panic!("{target}: overwrite cleanup must inspect pending state:\n{body}"));
-        let conditional_throw = if target == "linux-x86_64" {
-            "jne __rt_throw_current"
-        } else {
-            "b __rt_throw_current"
-        };
-        let propagate = retirement
-            .find(conditional_throw)
-            .map(|offset| bounded + offset)
-            .unwrap_or_else(|| panic!("{target}: pending destructor throw must propagate:\n{body}"));
-        assert!(pending < propagate, "{target}: inspect pending state before propagation");
-        let condition = if target == "linux-x86_64" {
-            "test rax, rax"
-        } else {
-            "cbz x0, 1f"
-        };
-        assert!(
-            body[pending..propagate].contains(condition),
-            "{target}: only a non-null pending throw may propagate:\n{body}",
+        assert_local_retirement_exception_gate(&body, target);
+    }
+}
+
+/// Verifies retirement inside an active `finally` leaves an unchanged outer exception pending.
+#[test]
+fn pending_finally_overwrite_bypasses_local_retirement_rethrow_on_every_target() {
+    for target in TARGETS {
+        let (module, function) = lower_function(
+            PENDING_FINALLY_OVERWRITE_SOURCE,
+            target,
+            "rebindDuringPendingFinally",
         );
-        assert!(bounded < propagate, "{target}: restore the handler before propagation");
+        assert!(
+            function.instructions.iter().any(|inst| inst.op == Op::ReleaseLocalSlot),
+            "{target}: the replaced Mixed owner must retire inside finally",
+        );
+        let body = function_assembly(&module, "rebindDuringPendingFinally", target);
+        assert_local_retirement_exception_gate(&body, target);
     }
 }
 

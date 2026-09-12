@@ -10,7 +10,7 @@
 //! - Effects are deliberately conservative; purity must not be claimed for code that can observe or mutate PHP/runtime state.
 
 use super::*;
-use super::exception_flow::active_expr_thrown_types;
+use super::exception_flow::{active_expr_thrown_types, active_stmt_thrown_types};
 
 mod aliases;
 mod calls;
@@ -49,16 +49,17 @@ fn binary_op_may_throw(op: &BinOp, right: &Expr) -> bool {
     }
 }
 
-/// Returns true if any statement in `stmts` may throw an exception.
-/// Shorthand for checking `block_effect(stmts).may_throw`.
+/// Returns true if any statement in `stmts` may throw, including implicit destruction.
 pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool {
     block_effect(stmts).may_throw
+        || stmts
+            .iter()
+            .any(|stmt| !active_stmt_thrown_types(stmt).is_empty())
 }
 
-/// Returns true if `stmt` may throw an exception.
-/// Shorthand for `stmt_effect(stmt).may_throw`.
+/// Returns true if `stmt` may throw, including a destructor run by implicit retirement.
 pub(super) fn stmt_may_throw(stmt: &Stmt) -> bool {
-    stmt_effect(stmt).may_throw
+    stmt_effect(stmt).may_throw || !active_stmt_thrown_types(stmt).is_empty()
 }
 
 /// Computes the combined `Effect` for a single statement, including all nested expressions.

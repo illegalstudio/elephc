@@ -171,6 +171,64 @@ echo run();"
     );
 }
 
+/// Verifies rebinding cleanup keeps its handler through pruning, normalization, and DCE.
+#[test]
+fn test_throwing_local_rebind_preserves_a_same_frame_catch_through_all_optimizer_phases() {
+    let tokens = crate::lexer::tokenize(&format!(
+        "<?php{THROWING_DESTRUCTOR_DECLARATIONS}
+function run(): string {{
+    $held = new Detonator();
+    try {{ $held = 42; return 'no'; }}
+    catch (CleanupFailure $error) {{ return 'caught'; }}
+}}
+echo run();"
+    ))
+    .expect("fixture must tokenize");
+    let program = crate::parser::parse(&tokens).expect("fixture must parse");
+    let optimizer = PostTypecheckOptimizer::new(&program);
+
+    let program = optimizer.prune(program, HashSet::new());
+    assert!(has_catch(&program), "pruning hoisted a throwing rebind out of its try: {program:?}");
+    let program = optimizer.normalize(program, HashSet::new());
+    assert!(
+        has_catch(&program),
+        "normalization hoisted a throwing rebind out of its try: {program:?}",
+    );
+    let program = optimizer.eliminate_dead_code(program, HashSet::new());
+    assert!(
+        has_catch(&program),
+        "DCE pruned the same-frame destructor catch: {program:?}",
+    );
+}
+
+/// Verifies a quiet local rebind still permits the same optimizer simplifications.
+#[test]
+fn test_quiet_local_rebind_does_not_keep_an_unreachable_catch() {
+    let tokens = crate::lexer::tokenize(
+        r#"<?php
+class CleanupFailure extends Exception {}
+class Quiet { public function __destruct() { echo 'quiet'; } }
+function run(): string {
+    $held = new Quiet();
+    try { $held = 42; return 'no'; }
+    catch (CleanupFailure $error) { return 'caught'; }
+}
+echo run();
+"#,
+    )
+    .expect("fixture must tokenize");
+    let program = crate::parser::parse(&tokens).expect("fixture must parse");
+    let optimizer = PostTypecheckOptimizer::new(&program);
+    let program = optimizer.prune(program, HashSet::new());
+    let program = optimizer.normalize(program, HashSet::new());
+    let program = optimizer.eliminate_dead_code(program, HashSet::new());
+
+    assert!(
+        !has_catch(&program),
+        "a quiet local retirement must not retain an unreachable catch: {program:?}",
+    );
+}
+
 /// Verifies a non-throwing destructor still lets an unreachable catch be pruned.
 ///
 /// This is the control that proves the model is gated on a destructor that can actually THROW

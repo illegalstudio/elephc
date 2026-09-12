@@ -324,8 +324,9 @@ pub(super) fn release_local_ref_cell_owner(
 /// decision sound. The slot is either zero (prologue zero-initializes cleanup
 /// locals, and the null-guarded release helpers skip zero) or an owned value
 /// boxed by a previous retaining store, so releasing it is always balanced.
-/// A refcounted retirement is bounded before it propagates a destructor throw,
-/// preserving the active handler in the SAME PHP frame.
+/// A refcounted retirement is bounded before it propagates a newly produced destructor throw,
+/// preserving the active handler in the SAME PHP frame without re-raising an older exception
+/// whose unwind is already running this code through a `finally` body.
 pub(super) fn lower_release_local_slot(
     ctx: &mut FunctionContext<'_>,
     inst_id: InstId,
@@ -363,7 +364,7 @@ pub(super) fn lower_release_local_slot(
     Ok(())
 }
 
-/// Clears one local owner, completes its deep release, then propagates a pending destructor throw.
+/// Clears one local owner, completes its deep release, then propagates only a new destructor throw.
 fn emit_refcounted_local_slot_retirement(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
@@ -375,7 +376,6 @@ fn emit_refcounted_local_slot_retirement(
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
     abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     abi::emit_decref_preserving_exception(ctx.emitter, ty);
-    abi::emit_load_symbol_to_reg(ctx.emitter, result, "_exc_value", 0);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
     ctx.emitter.label(&done);
 }

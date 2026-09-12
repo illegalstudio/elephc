@@ -380,7 +380,7 @@ impl PostTypecheckOptimizer {
         })
     }
 
-    /// Normalizes control flow using the shared callable-effect summary.
+    /// Normalizes control flow using the shared callable-effect and exception-flow summaries.
     ///
     /// Takes the same `binding_decision_spans` as `eliminate_dead_code` because this phase is the
     /// SECOND cloning pass: `control::prune_switch_stmt` rewrites a single-case switch on a
@@ -389,17 +389,21 @@ impl PostTypecheckOptimizer {
     /// `control::switch::single_case_rewrite_would_clone_a_decision`.
     pub fn normalize(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
         with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+            with_callable_effect_analysis(&self.callable_effects, || {
+                with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+            })
         })
     }
 
-    /// Prunes constant control-flow branches using the shared callable-effect summary.
+    /// Prunes constant branches using the shared callable-effect and exception-flow summaries.
     ///
     /// Installs `binding_decision_spans` for the same reason `normalize` does — the two phases run
     /// the same `prune_block`, so the cloning switch rewrite is reachable from both.
     pub fn prune(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
         with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+            with_callable_effect_analysis(&self.callable_effects, || {
+                with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+            })
         })
     }
 

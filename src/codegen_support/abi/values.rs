@@ -105,14 +105,14 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
-/// Releases a typed owner during frame unwinding without letting a destructor skip other locals.
+/// Releases a typed owner without escaping cleanup, leaving the newly-caught flag in the result.
 pub fn emit_decref_preserving_exception(emitter: &mut Emitter, ty: &PhpType) {
     if let Some(entry) = refcount_release_helper(ty) {
         emit_unary_cleanup_preserving_exception(emitter, entry, int_result_reg(emitter));
     }
 }
 
-/// Calls a unary cleanup entry with an owned payload, accumulating any exception in native state.
+/// Calls unary cleanup, accumulating its exception and returning whether this call caught one.
 pub fn emit_unary_cleanup_preserving_exception(emitter: &mut Emitter, entry: &str, payload: &str) {
     let arg0 = super::int_arg_reg_name(emitter.target, 0);
     let arg1 = super::int_arg_reg_name(emitter.target, 1);
