@@ -1154,7 +1154,7 @@ function unrelated_trace(): array {
     .unwrap();
 
     let output = elephc_command(&dir)
-        .args(["--emit", "staticlib", "--emit-asm", "collector.php"])
+        .args(["--emit", "staticlib", "collector.php"])
         .output()
         .expect("failed to compile the collector-bearing static library");
     assert!(

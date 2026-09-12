@@ -562,10 +562,12 @@ mod tests {
             add_internal_collector(&mut export);
             emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false);
             let asm = emitter.output();
-            let boundary = match target.arch {
-                Arch::AArch64 => &asm[asm.find("_roundtrip:").unwrap()..],
-                Arch::X86_64 => &asm[asm.find("roundtrip:").unwrap()..],
+            let public_label = if matches!(target.platform, Platform::MacOS) {
+                "_roundtrip:"
+            } else {
+                "roundtrip:"
             };
+            let boundary = &asm[asm.find(public_label).unwrap()..];
             let setjmp = boundary.find("setjmp").unwrap();
             let allocate = boundary.find("__rt_array_new").unwrap();
             let publish = boundary.find("__rt_cleanup_call_operand_owner").unwrap();
