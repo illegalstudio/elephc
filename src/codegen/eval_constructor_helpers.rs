@@ -1101,7 +1101,7 @@ fn emit_aarch64_validate_constructor_arg_count(
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for arity validation
     let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
-    emitter.instruction("str x0, [sp, #32]");                                   // save the supplied constructor argument count
+    emitter.instruction("str x0, [x29, #-8]");                                  // save argc frame-relative, clear of the borrowed argument spill
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the constructor signature
     if slot.zero_default_first_arg {
@@ -1170,7 +1170,7 @@ fn emit_aarch64_prepare_constructor_args(
         if slot.zero_default_first_arg && index == 0 {
             let default_label = format!("{}_arg_{}_default", body_label, index);
             let done_label = format!("{}_arg_{}_done", body_label, index);
-            emitter.instruction("ldr x9, [sp, #32]");                           // reload argc before selecting the optional constructor default
+            emitter.instruction("ldr x9, [x29, #-8]");                          // reload argc before selecting the optional constructor default
             emitter.instruction(&format!("cbz x9, {}", default_label));         // omitted SplFixedArray size uses PHP's zero default
             emit_aarch64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
@@ -2019,5 +2019,162 @@ mod argument_ownership_tests {
         let params = [PhpType::Array(Box::new(PhpType::Mixed))];
         let slots = eval_ref_arg_slots(&params, &[true], true);
         assert!(slots[0].raw_refcounted_owned);
+    }
+}
+
+#[cfg(test)]
+mod zero_default_argument_tests {
+    use super::*;
+    use crate::codegen::eval_callable_helpers::emit_eval_callable_descriptor_support;
+    use crate::codegen::platform::Target;
+
+    const SUPPORTED_TARGETS: &[&str] = &[
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ];
+
+    /// Builds the `SplFixedArray::__construct` slot shape, the only zero-default bridge slot.
+    ///
+    /// `collect_class_constructor_slot` derives exactly this shape for `SplFixedArray`: a single
+    /// `int` parameter bridged to the runtime helper, with `zero_default_first_arg` set because
+    /// PHP declares `__construct(int $size = 0)`.
+    fn spl_fixed_array_slot() -> EvalConstructorSlot {
+        let runtime_helper = IntrinsicCall::instance_method("SplFixedArray", "__construct")
+            .and_then(IntrinsicCall::runtime_helper);
+        assert!(runtime_helper.is_some(), "SplFixedArray::__construct lost its runtime helper");
+        EvalConstructorSlot {
+            class_id: 11,
+            class_name: "SplFixedArray".to_string(),
+            impl_class: "SplFixedArray".to_string(),
+            visibility: Visibility::Public,
+            allowed_scopes: Vec::new(),
+            params: vec![PhpType::Int],
+            ref_params: vec![false],
+            supported: true,
+            runtime_helper,
+            zero_default_first_arg: true,
+        }
+    }
+
+    /// Emits arity validation followed by argument staging for the zero-default slot.
+    fn zero_default_staging_asm(target: Target) -> String {
+        let module = Module::new(target);
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let callable_support =
+            emit_eval_callable_descriptor_support(&module, &mut emitter, &mut data, false);
+        let slot = spl_fixed_array_slot();
+        match target.arch {
+            Arch::AArch64 => {
+                emit_aarch64_validate_constructor_arg_count(&module, &mut emitter, &slot, "fail");
+                emit_aarch64_prepare_constructor_args(
+                    &module,
+                    &mut emitter,
+                    &mut data,
+                    &slot,
+                    "fail",
+                    &callable_support,
+                );
+            }
+            Arch::X86_64 => {
+                emit_x86_64_validate_constructor_arg_count(&module, &mut emitter, &slot, "fail");
+                emit_x86_64_prepare_constructor_args(
+                    &module,
+                    &mut emitter,
+                    &mut data,
+                    &slot,
+                    "fail",
+                    &callable_support,
+                );
+            }
+        }
+        emitter.output()
+    }
+
+    /// The saved argc survives the receiver push that separates its store from its reload.
+    ///
+    /// Staging pushes the unboxed receiver between the two, which moves SP by one temporary slot
+    /// on both ABIs. A stack-pointer-relative reload therefore reads the receiver instead of argc
+    /// and `SplFixedArray::__construct()` with no arguments never reaches its zero default. Both
+    /// targets must address argc through the helper's frame pointer.
+    #[test]
+    fn zero_default_argc_is_reloaded_frame_relative_on_every_target() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = zero_default_staging_asm(target);
+            let (save, reload, receiver_push) = match target.arch {
+                Arch::AArch64 => (
+                    "str x0, [x29, #-8]",
+                    "ldr x9, [x29, #-8]",
+                    "str x0, [sp, #-16]!",
+                ),
+                Arch::X86_64 => (
+                    "mov QWORD PTR [rbp - 8], rax",
+                    "mov r10, QWORD PTR [rbp - 8]",
+                    "mov QWORD PTR [rsp], rax",
+                ),
+            };
+            assert_eq!(asm.matches(save).count(), 1, "{name}: {asm}");
+            assert_eq!(asm.matches(reload).count(), 1, "{name}: {asm}");
+            let save_at = asm.find(save).unwrap();
+            let push_at = asm.find(receiver_push).unwrap();
+            let reload_at = asm.find(reload).unwrap();
+            assert!(save_at < push_at, "{name}: {asm}");
+            assert!(push_at < reload_at, "{name}: {asm}");
+        }
+    }
+
+    /// The argc slot never aliases the frame slot `emit_borrowed_argument` spills into.
+    ///
+    /// On ARM64 the bridge frame places the borrowed argument at `[x29, #-16]`, which is the same
+    /// byte as the literal `[sp, #32]` the arity check used to write. Reusing it silently
+    /// destroyed argc as soon as the first argument was borrowed.
+    #[test]
+    fn zero_default_argc_slot_is_disjoint_from_the_borrowed_argument_spill() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = zero_default_staging_asm(target);
+            let (argc_slot, borrow_slot) = match target.arch {
+                Arch::AArch64 => ("[x29, #-8]", "[x29, #-16]"),
+                Arch::X86_64 => ("[rbp - 8]", "[rbp - 40]"),
+            };
+            assert_ne!(argc_slot, borrow_slot, "{name}");
+            assert!(asm.contains(argc_slot), "{name}: {asm}");
+            assert!(asm.contains(borrow_slot), "{name}: {asm}");
+            if matches!(target.arch, Arch::AArch64) {
+                assert!(!asm.contains("[sp, #32]"), "{name}: {asm}");
+            }
+        }
+    }
+
+    /// An omitted `SplFixedArray` size still stages PHP's zero default instead of a borrow.
+    #[test]
+    fn omitted_spl_fixed_array_size_branches_to_the_zero_default() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let module = Module::new(target);
+            let slot = spl_fixed_array_slot();
+            let body_label = constructor_body_label(&module, &slot);
+            let asm = zero_default_staging_asm(target);
+            let default_label = format!("{}_arg_0_default", body_label);
+            let done_label = format!("{}_arg_0_done", body_label);
+            let branch = match target.arch {
+                Arch::AArch64 => format!("cbz x9, {}", default_label),
+                Arch::X86_64 => format!("jz {}", default_label),
+            };
+            assert!(asm.contains(&branch), "{name}: {asm}");
+            assert!(asm.contains(&format!("{}:", default_label)), "{name}: {asm}");
+            assert!(asm.contains(&format!("{}:", done_label)), "{name}: {asm}");
+            let default_at = asm.find(&format!("{}:", default_label)).unwrap();
+            let done_at = asm.find(&format!("{}:", done_label)).unwrap();
+            assert!(default_at < done_at, "{name}: {asm}");
+            assert!(
+                asm.find(&branch).unwrap() < asm.find("__rt_mixed_cast_int").unwrap(),
+                "{name}: {asm}"
+            );
+        }
     }
 }
