@@ -10,6 +10,8 @@
 //!   or return types, so this bridge is emitted into the user assembly.
 //! - This method-call slice supports public methods plus protected/private
 //!   methods when the active eval class scope satisfies PHP visibility.
+//! - A method carrying a generated argument collector is reached through its source
+//!   adapter, so a slot validates the PHP-visible arity, not the physical one.
 
 use std::collections::BTreeMap;
 
@@ -23,6 +25,9 @@ use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, LocalKind, Module};
+use crate::codegen_support::source_method_adapters::{
+    MethodKind, source_method_entry_symbol, source_visible_signature, uses_physical_func_args_abi,
+};
 use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -48,6 +53,7 @@ struct EvalMethodSlot {
     ref_params: Vec<bool>,
     return_ty: PhpType,
     is_hidden_shadow: bool,
+    entry_symbol: String,
     runtime_helper: Option<&'static str>,
 }
 
@@ -193,6 +199,46 @@ fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
     class_ids
 }
 
+/// How the eval bridge reaches one instance method implementation.
+enum EvalMethodEntry {
+    /// The declared signature is already PHP-visible and the raw method symbol accepts it.
+    Raw(String),
+    /// Generated `func_args` slots sit behind a source adapter the visible arity enters.
+    Adapted(crate::types::FunctionSig, String),
+    /// The generated ABI cannot be bridged from eval, so this method gets no slot.
+    Unsupported,
+}
+
+/// Resolves the PHP-visible signature and entry symbol for one instance method implementation.
+///
+/// Only a generated argument collector changes anything here. Every other method keeps its
+/// declared signature and raw symbol, including a source variadic, whose hidden actual count
+/// `source_visible_signature()` deliberately refuses to project. The physical signature is read
+/// from the implementing class because that owner is what `emit_source_method_adapters()` keys
+/// its adapters on, so an inherited method resolves to the same entry its ancestor published.
+fn eval_instance_method_entry(
+    module: &Module,
+    impl_class: &str,
+    method: &str,
+    declared: &crate::types::FunctionSig,
+) -> EvalMethodEntry {
+    let physical = module
+        .class_infos
+        .get(impl_class)
+        .and_then(|class_info| class_info.methods.get(method))
+        .unwrap_or(declared);
+    if !uses_physical_func_args_abi(physical) {
+        return EvalMethodEntry::Raw(method_symbol(impl_class, method));
+    }
+    let (Ok(source), Ok(symbol)) = (
+        source_visible_signature(physical),
+        source_method_entry_symbol(impl_class, method, physical, MethodKind::Instance),
+    ) else {
+        return EvalMethodEntry::Unsupported;
+    };
+    EvalMethodEntry::Adapted(source, symbol)
+}
+
 /// Adds bridge-supported instance methods for one class.
 fn collect_class_method_slots(
     module: &Module,
@@ -212,10 +258,7 @@ fn collect_class_method_slots(
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
         let visibility = method_visibility(class_info, method);
-        if !method_visibility_supported(visibility)
-            || !method_signature_supported(sig)
-            || !method_return_supported(&sig.return_type)
-        {
+        if !method_visibility_supported(visibility) {
             continue;
         }
         let impl_class = class_info
@@ -224,6 +267,18 @@ fn collect_class_method_slots(
             .map(String::as_str)
             .unwrap_or(class_name);
         let runtime_helper = eval_runtime_backed_instance_method_helper(class_name, method);
+        let entry = match runtime_helper {
+            Some(_) => EvalMethodEntry::Raw(method_symbol(impl_class, method)),
+            None => eval_instance_method_entry(module, impl_class, method, sig),
+        };
+        let (sig, entry_symbol) = match &entry {
+            EvalMethodEntry::Raw(symbol) => (sig, symbol),
+            EvalMethodEntry::Adapted(source, symbol) => (source, symbol),
+            EvalMethodEntry::Unsupported => continue,
+        };
+        if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
+            continue;
+        }
         if runtime_helper.is_none()
             && !emitted_methods.contains(&(impl_class.to_string(), method.clone(), false))
         {
@@ -240,6 +295,7 @@ fn collect_class_method_slots(
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
             return_ty: sig.return_type.codegen_repr(),
             is_hidden_shadow: false,
+            entry_symbol: entry_symbol.clone(),
             runtime_helper,
         });
     }
@@ -261,10 +317,7 @@ fn collect_hidden_private_ancestor_method_slots(
         methods.sort_by_key(|(method, _)| method.as_str());
         for (method, sig) in methods {
             let visibility = method_visibility(ancestor_info, method);
-            if visibility != &Visibility::Private
-                || !method_signature_supported(sig)
-                || !method_return_supported(&sig.return_type)
-            {
+            if visibility != &Visibility::Private {
                 continue;
             }
             let impl_class = ancestor_info
@@ -272,6 +325,15 @@ fn collect_hidden_private_ancestor_method_slots(
                 .get(method)
                 .map(String::as_str)
                 .unwrap_or(ancestor_name);
+            let entry = eval_instance_method_entry(module, impl_class, method, sig);
+            let (sig, entry_symbol) = match &entry {
+                EvalMethodEntry::Raw(symbol) => (sig, symbol),
+                EvalMethodEntry::Adapted(source, symbol) => (source, symbol),
+                EvalMethodEntry::Unsupported => continue,
+            };
+            if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
+                continue;
+            }
             if !emitted_methods.contains(&(impl_class.to_string(), method.clone(), false)) {
                 continue;
             }
@@ -286,6 +348,7 @@ fn collect_hidden_private_ancestor_method_slots(
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
                 return_ty: sig.return_type.codegen_repr(),
                 is_hidden_shadow: true,
+                entry_symbol: entry_symbol.clone(),
                 runtime_helper: None,
             });
         }
@@ -1343,11 +1406,8 @@ fn emit_aarch64_method_bodies(
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
-        let callee = slot
-            .runtime_helper
-            .map(str::to_string)
-            .unwrap_or_else(|| method_symbol(&slot.impl_class, &slot.method));
-        abi::emit_call_label(emitter, &callee);
+        let callee = slot.runtime_helper.unwrap_or(slot.entry_symbol.as_str());
+        abi::emit_call_label(emitter, callee);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
         emit_box_method_result(module, emitter, &slot.return_ty);
@@ -1403,11 +1463,8 @@ fn emit_x86_64_method_bodies(
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
-        let callee = slot
-            .runtime_helper
-            .map(str::to_string)
-            .unwrap_or_else(|| method_symbol(&slot.impl_class, &slot.method));
-        abi::emit_call_label(emitter, &callee);
+        let callee = slot.runtime_helper.unwrap_or(slot.entry_symbol.as_str());
+        abi::emit_call_label(emitter, callee);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
         emit_box_method_result(module, emitter, &slot.return_ty);
@@ -2474,6 +2531,161 @@ mod catalog_tests {
                 elephc_builtin_contract::lookup_class(name).is_some(),
                 "{name} is not in the shared class catalog"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod source_entry_tests {
+    use super::*;
+    use crate::codegen::platform::{Platform, Target};
+    use crate::codegen_support::source_method_adapters::source_method_adapter_symbol;
+    use crate::types::FunctionSig;
+
+    /// Builds a fixed-arity signature with the given parameter types.
+    fn signature(params: Vec<(String, PhpType)>) -> FunctionSig {
+        let len = params.len();
+        FunctionSig {
+            params,
+            param_type_exprs: vec![None; len],
+            param_attributes: vec![Vec::new(); len],
+            defaults: vec![None; len],
+            return_type: PhpType::Mixed,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; len],
+            declared_params: vec![true; len],
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
+    /// Appends the generated trailing argument collector the `func_args` pass injects.
+    fn with_generated_collector(mut sig: FunctionSig) -> FunctionSig {
+        sig.params.push((
+            crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ));
+        sig.param_type_exprs.push(None);
+        sig.param_attributes.push(Vec::new());
+        sig.defaults.push(None);
+        sig.ref_params.push(false);
+        sig.declared_params.push(false);
+        sig.variadic = Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string());
+        sig
+    }
+
+    /// Returns one empty module per architecture the backend emits eval helpers for.
+    fn modules() -> Vec<Module> {
+        vec![
+            Module::new(Target::new(Platform::Linux, Arch::X86_64)),
+            Module::new(Target::new(Platform::Linux, Arch::AArch64)),
+            Module::new(Target::new(Platform::MacOS, Arch::AArch64)),
+        ]
+    }
+
+    /// A method without generated slots keeps the declared arity and the raw method symbol.
+    #[test]
+    fn plain_methods_keep_the_declared_signature_and_raw_symbol() {
+        let declared = signature(vec![("handler".to_string(), PhpType::Callable)]);
+        for module in modules() {
+            match eval_instance_method_entry(&module, "XMLParser", "setHandler", &declared) {
+                EvalMethodEntry::Raw(symbol) => {
+                    assert_eq!(symbol, method_symbol("XMLParser", "setHandler"));
+                }
+                _ => panic!("a method without generated slots must resolve to its raw entry"),
+            }
+        }
+    }
+
+    /// A generated collector is hidden from PHP: the visible arity drops it and the call
+    /// enters through the source adapter rather than the physical method symbol.
+    #[test]
+    fn hidden_collector_methods_project_visible_arity_and_enter_the_source_adapter() {
+        let visible = signature(vec![
+            ("start".to_string(), PhpType::Callable),
+            ("end".to_string(), PhpType::Callable),
+        ]);
+        let physical = with_generated_collector(visible.clone());
+        for module in modules() {
+            match eval_instance_method_entry(&module, "Handlers", "setElementHandler", &physical) {
+                EvalMethodEntry::Adapted(source, symbol) => {
+                    assert_eq!(source.params.len(), visible.params.len());
+                    assert_eq!(source.ref_params, visible.ref_params);
+                    assert!(source.variadic.is_none());
+                    assert_eq!(source.return_type, physical.return_type);
+                    assert_eq!(
+                        symbol,
+                        source_method_adapter_symbol(
+                            "Handlers",
+                            "setElementHandler",
+                            MethodKind::Instance
+                        )
+                    );
+                    assert_ne!(symbol, method_symbol("Handlers", "setElementHandler"));
+                }
+                _ => panic!("a generated collector must resolve to its source adapter"),
+            }
+        }
+    }
+
+    /// An inherited implementation resolves against the class that owns the body, which is
+    /// the same owner `emit_source_method_adapters()` published the adapter under, so a
+    /// descendant reaches the ancestor entry instead of a symbol no emitter ever wrote.
+    #[test]
+    fn inherited_implementations_resolve_against_the_implementing_owner() {
+        let physical =
+            with_generated_collector(signature(vec![("data".to_string(), PhpType::Str)]));
+        for module in modules() {
+            match eval_instance_method_entry(&module, "BaseParser", "parseInto", &physical) {
+                EvalMethodEntry::Adapted(_, symbol) => {
+                    assert_eq!(
+                        symbol,
+                        source_method_adapter_symbol(
+                            "BaseParser",
+                            "parseInto",
+                            MethodKind::Instance
+                        )
+                    );
+                    assert_ne!(
+                        symbol,
+                        source_method_adapter_symbol(
+                            "DerivedParser",
+                            "parseInto",
+                            MethodKind::Instance
+                        )
+                    );
+                }
+                _ => panic!("an inherited collector must share the owner's source adapter"),
+            }
+        }
+    }
+
+    /// A source variadic keeps its raw physical entry, and the hidden actual-count form the
+    /// projection refuses to bridge drops out of the bridge instead of being mis-emitted.
+    #[test]
+    fn source_variadics_stay_raw_and_unbridgeable_shapes_get_no_slot() {
+        let mut variadic = signature(vec![("values".to_string(), PhpType::Mixed)]);
+        variadic.variadic = Some("values".to_string());
+        let mut with_hidden_count = variadic.clone();
+        with_hidden_count.params.push((
+            crate::func_args::HIDDEN_ARGC_PARAM.to_string(),
+            PhpType::Int,
+        ));
+        with_hidden_count.param_type_exprs.push(None);
+        with_hidden_count.param_attributes.push(Vec::new());
+        with_hidden_count.defaults.push(None);
+        with_hidden_count.ref_params.push(false);
+        with_hidden_count.declared_params.push(false);
+        for module in modules() {
+            assert!(matches!(
+                eval_instance_method_entry(&module, "Collector", "add", &variadic),
+                EvalMethodEntry::Raw(_)
+            ));
+            assert!(matches!(
+                eval_instance_method_entry(&module, "Collector", "add", &with_hidden_count),
+                EvalMethodEntry::Unsupported
+            ));
         }
     }
 }

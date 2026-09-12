@@ -29507,3 +29507,63 @@ echo get_resource_type($evaluated["STDOUT"]);
     );
     assert_eq!(out, "count:keys:value:stream");
 }
+
+/// Verifies the eval method bridge calls a hidden-collector source method through its source
+/// adapter, for the declaring class and for a descendant that inherits the implementation.
+///
+/// A method that reads `func_get_args()` grows a generated trailing collector parameter, so its
+/// physical symbol no longer matches the arity PHP sees. The bridge must validate the projected
+/// visible arity and enter through `_method_source_abi_*`; calling the raw physical symbol
+/// leaves the collector argument unsupplied and the call fails without a pending Throwable.
+#[test]
+fn test_eval_method_bridge_enters_hidden_collector_methods_through_the_source_adapter() {
+    let dir = make_cli_test_dir("elephc_eval_method_source_adapter");
+    let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class BaseCollector {
+    public function collect(string $label): string {
+        return $label . ":" . count(func_get_args());
+    }
+}
+class DerivedCollector extends BaseCollector {
+}
+$object = new DerivedCollector();
+$code = 'return $object->collect("tag");';
+echo eval($code);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(
+        user_asm.contains("_method_source_abi_BaseCollector_collect"),
+        "a hidden-collector method should publish a source adapter:\n{user_asm}"
+    );
+    let bridge = user_asm
+        .split("--- eval bridge: user method call ---")
+        .nth(1)
+        .and_then(|section| {
+            section
+                .split("--- eval bridge: user static method call ---")
+                .next()
+        })
+        .expect("the eval instance method bridge should be emitted");
+    for class_name in ["BaseCollector", "DerivedCollector"] {
+        assert!(
+            bridge.contains(&format!(
+                "__elephc_eval_method_{class_name}_BaseCollector_collect"
+            )),
+            "the eval bridge should own a method body for {class_name}:\n{bridge}"
+        );
+    }
+    assert!(
+        bridge.contains("_method_source_abi_BaseCollector_collect"),
+        "the eval bridge should enter the source adapter:\n{bridge}"
+    );
+    assert!(
+        !bridge.contains("_method_BaseCollector_collect"),
+        "the eval bridge must not call the physical symbol that still wants the collector:\n{bridge}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
