@@ -23,28 +23,50 @@ fn hidden_argument_snapshot_enables_backtrace_activations_without_a_core_instruc
         IrType::Void,
         PhpType::Void,
     );
+    function.params = vec![
+        FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        },
+        FunctionParam {
+            name: crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            ir_type: IrType::Heap(crate::ir::HeapKind::Array),
+            php_type: PhpType::Array(Box::new(PhpType::Mixed)),
+            by_ref: false,
+            variadic: true,
+        },
+    ];
+    // Public metadata may omit compiler-owned ABI parameters. Frame publication must use the
+    // physical EIR layout, which remains authoritative for the reader callback.
     function.signature = Some(FunctionSig {
-        params: vec![
-            ("value".to_string(), PhpType::Int),
-            (
-                crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
-                PhpType::Array(Box::new(PhpType::Mixed)),
-            ),
-        ],
-        param_type_exprs: vec![None, None],
-        param_attributes: vec![Vec::new(), Vec::new()],
-        defaults: vec![None, None],
+        params: vec![("value".to_string(), PhpType::Int)],
+        param_type_exprs: vec![None],
+        param_attributes: vec![Vec::new()],
+        defaults: vec![None],
         return_type: PhpType::Void,
         declared_return: false,
         by_ref_return: false,
-        ref_params: vec![false, false],
-        declared_params: vec![true, false],
-        variadic: Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string()),
+        ref_params: vec![false],
+        declared_params: vec![true],
+        variadic: None,
         deprecation: None,
     });
     module.add_function(function);
 
-    assert!(module_uses_backtrace(&module));
+    let backtrace_enabled = module_uses_backtrace(&module);
+    assert!(backtrace_enabled);
+    let layout = layout_for_function(
+        &module.functions[0],
+        target,
+        false,
+        true,
+        backtrace_enabled,
+    );
+    assert!(layout.backtrace_activation);
+    assert!(layout.exception_activation_offset.is_some());
 }
 
 /// Both dynamic constructor opcodes reserve the hand-used receiver register on every target.

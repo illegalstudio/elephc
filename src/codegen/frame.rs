@@ -196,12 +196,18 @@ pub(super) fn module_uses_backtrace(module: &Module) -> bool {
 ///
 /// Descriptor-only calls to `debug_backtrace()` and `debug_print_backtrace()` do not leave a
 /// `CoreBuiltin` instruction in EIR. The argument-introspection pass marks their reachability by
-/// retaining a generated collector, count, or source-variadic snapshot in each PHP frame. Reading
-/// that marker here keeps activation emission aligned with the frontend gate. A frame using the
-/// same storage for `func_get_args()` is an intentional conservative match: it costs an inactive
-/// reader slot but cannot change PHP behavior.
+/// retaining a generated collector, count, or source-variadic snapshot in each PHP frame. The
+/// physical EIR parameters are authoritative because public signature metadata may omit generated
+/// ABI slots. Reading both shapes here keeps activation emission aligned with the frontend gate. A
+/// frame using the same storage for `func_get_args()` is an intentional conservative match: it
+/// costs an inactive reader slot but cannot change PHP behavior.
 fn function_keeps_backtrace_argument_snapshot(function: &Function) -> bool {
-    function.signature.as_ref().is_some_and(|signature| {
+    function.params.iter().any(|param| {
+        matches!(
+            param.name.as_str(),
+            crate::func_args::HIDDEN_ARGS_PARAM | crate::func_args::HIDDEN_ARGC_PARAM
+        )
+    }) || function.signature.as_ref().is_some_and(|signature| {
         crate::func_args::sig_collects_surplus_args(signature)
             || crate::func_args::sig_has_hidden_argc_param(signature)
     }) || function.locals.iter().any(|local| {
