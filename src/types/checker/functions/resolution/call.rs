@@ -138,6 +138,26 @@ impl Checker {
             let defaults = plan.default_argument_mask();
             let descriptor_projections = plan.descriptor_projection_mask();
             let normalized_args = plan.normalized_args();
+            if descriptor_projections
+                .iter()
+                .enumerate()
+                .any(|(index, projected)| {
+                    *projected
+                        && effective_sig
+                            .ref_params
+                            .get(index)
+                            .copied()
+                            .unwrap_or(false)
+                })
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                        name
+                    ),
+                ));
+            }
             if self.respecialize_resolved_function_params_if_needed(
                 name,
                 &normalized_args,

@@ -148,8 +148,16 @@ echo invokeSpreadDescriptor([SpreadDescriptorTarget::hit(...)]);
         let call = function
             .instructions
             .iter()
-            .find(|instruction| instruction.op == Op::Call)
-            .unwrap();
+            .find(|instruction| {
+                if instruction.op != Op::Call {
+                    return false;
+                }
+                let Some(crate::ir::Immediate::Data(callee)) = instruction.immediate else {
+                    return false;
+                };
+                module.data.strings[callee.as_raw() as usize] == "consumeSpreadDescriptor"
+            })
+            .expect("the spread guard's exception constructor must not hide the target call");
         assert_eq!(
             function.value(call.operands[0]).unwrap().php_type.codegen_repr(),
             PhpType::Callable,
@@ -270,6 +278,67 @@ echo invokeDescriptorTargets(new DescriptorValues(), new DescriptorMethods());
                 .count(),
             3,
             "{target}: every untyped FCC target must use descriptor-aware Traversable unpacking",
+        );
+    }
+}
+
+/// Descriptor planning defers runtime spread keys and their projected value types to the binder.
+#[test]
+fn descriptor_spread_keys_and_object_values_remain_runtime_bound_on_every_target() {
+    use crate::ir::Op;
+
+    let source = r#"<?php
+class DescriptorMarker {}
+class NamedDescriptorValues implements IteratorAggregate {
+    public function getIterator(): Traversable { yield 'left' => new DescriptorMarker(); }
+}
+function joinDescriptorMarkers(DescriptorMarker $left, DescriptorMarker $right): string {
+    return 'joined';
+}
+function invokeNamedDescriptor(
+    callable $callback,
+    Traversable $values,
+    DescriptorMarker $right,
+): string {
+    return call_user_func($callback, ...$values, right: $right);
+}
+echo invokeNamedDescriptor(
+    joinDescriptorMarkers(...),
+    new NamedDescriptorValues(),
+    new DescriptorMarker(),
+);
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "invokeNamedDescriptor")
+            .unwrap();
+        assert!(
+            function
+                .instructions
+                .iter()
+                .any(|instruction| instruction.op == Op::CallableDescriptorInvoke),
+            "{target}: the runtime-keyed spread must reach the descriptor binder",
+        );
+        assert!(
+            function
+                .instructions
+                .iter()
+                .any(|instruction| instruction.op == Op::IterStart),
+            "{target}: the Traversable source must retain its runtime key walk",
         );
     }
 }

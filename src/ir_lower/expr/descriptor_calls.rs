@@ -24,9 +24,13 @@ pub(super) fn lower_literal_callable_array_expr_call(
     {
         return Some(lower_static_method_descriptor_call(ctx, &receiver, &method, args, expr));
     }
-    instance_array_callable_target(ctx, items)?;
+    let target = instance_array_callable_target(ctx, items)?;
+    let signature = signature_for_static_callable_binding(ctx, target);
     let lowered_callee = lower_expr(ctx, callee);
-    let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
+    let result_type = signature
+        .as_ref()
+        .map(|sig| descriptor_invoker_result_type(Some(sig)))
+        .unwrap_or_else(|| dynamic_callable_result_type(ctx, lowered_callee.value, expr));
     let lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
     let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
     Some(emit_callable_descriptor_invoke(

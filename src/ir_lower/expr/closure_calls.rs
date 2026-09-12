@@ -16,6 +16,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     }
     let mut result_type = None;
     let mut instance_signature = None;
+    let descriptor_signature = ctx.callable_param_signature(var).cloned();
     if let Some(target) = ctx.static_callable_local(var) {
         result_type = Some(static_callable_return_type(ctx, &target));
         instance_signature = instance_callable_signature(&target).cloned();
@@ -24,11 +25,25 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         }
     }
     let callable = ctx.load_local(var, Some(expr.span));
-    let result_type = result_type.unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+    let result_type = result_type
+        .or_else(|| {
+            descriptor_signature
+                .as_ref()
+                .map(|sig| descriptor_invoker_result_type(Some(sig)))
+        })
+        .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
     if instance_signature.is_none() {
         let callable = root_descriptor_callback(ctx, callable, result_type, expr.span);
-        let arg_container =
-            lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
+        let arg_container = if descriptor_signature.is_some() {
+            lower_descriptor_invoker_arg_container_for_call_user_func(
+                ctx,
+                args,
+                descriptor_signature.as_ref(),
+                expr.span,
+            )
+        } else {
+            lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+        };
         return emit_callable_descriptor_invoke(ctx, callable, arg_container, expr.span);
     }
     let mut operands = vec![callable.value];

@@ -102,6 +102,19 @@ fn assoc_spread_sources(args: &[Expr], env: &TypeEnv) -> Vec<bool> {
         .collect()
 }
 
+/// Marks every non-static spread that reaches a descriptor invoker as a runtime key provider.
+///
+/// Unlike direct-call lowering, descriptor unpack preserves the source's actual int/string keys
+/// and decides positional versus named binding while iterating. A statically indexed source can
+/// still provide only positional keys, but treating an unresolved spread as positional during
+/// checking would incorrectly report missing or duplicate parameters before that runtime walk.
+fn descriptor_spread_sources(args: &[Expr]) -> Vec<bool> {
+    call_args::expand_static_assoc_spread_args(args)
+        .iter()
+        .map(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+        .collect()
+}
+
 /// Returns true if the expression is or expands to an assoc-array at runtime,
 /// which means spread arguments from it should be treated as named arguments.
 fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
@@ -214,7 +227,8 @@ impl Checker {
         callee_desc: &str,
         env: &TypeEnv,
     ) -> Result<call_args::CallArgPlan, CompileError> {
-        let allow_unknown_named_variadic = !crate::func_args::sig_collects_surplus_args(sig);
+        let allow_unknown_named_variadic =
+            sig.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(sig);
         self.plan_call_args(
             sig,
             args,
@@ -224,6 +238,33 @@ impl Checker {
             allow_unknown_named_variadic,
             env,
         )
+    }
+
+    /// Plans a descriptor invocation without guessing the keys of a dynamic unpack source.
+    ///
+    /// The runtime descriptor binder validates key types, order, aliases, duplicates and arity.
+    /// The checker still expands fully static associative spreads and retains PHP's syntactic
+    /// ordering errors, but leaves every remaining spread as a possible named-key provider.
+    fn plan_descriptor_call_args(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+    ) -> Result<call_args::CallArgPlan, CompileError> {
+        let allow_unknown_named_variadic =
+            sig.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(sig);
+        let descriptor_spread_sources = descriptor_spread_sources(args);
+        call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+            sig,
+            args,
+            span,
+            call_args::regular_param_count(sig),
+            false,
+            allow_unknown_named_variadic,
+            &descriptor_spread_sources,
+        )
+        .map_err(|err| call_arg_plan_error(sig, callee_desc, err))
     }
 
     /// Plans builtin arguments while retaining which parameter slots came from caller source.
@@ -405,7 +446,7 @@ impl Checker {
             callee_desc,
             true,
             coercive,
-            false,
+            true,
         )
     }
 
@@ -446,6 +487,9 @@ impl Checker {
     ///
     /// `coercive_param_binding` opts the callee into PHP's coercive parameter binding for its
     /// declared parameters; see `check_user_declared_call` for when that is sound.
+    /// `descriptor_invocation` selects the descriptor binder as one indivisible contract:
+    /// Traversable sources, runtime key planning and by-value Mixed projections are enabled
+    /// together, so no caller can accidentally request only one part of that representation.
     fn check_known_callable_call_with_options(
         &mut self,
         sig: &FunctionSig,
@@ -455,9 +499,13 @@ impl Checker {
         callee_desc: &str,
         allow_by_ref_spread: bool,
         coercive_param_binding: bool,
-        allow_traversable_spread: bool,
+        descriptor_invocation: bool,
     ) -> Result<PhpType, CompileError> {
-        let plan = self.plan_named_call_args(sig, args, span, callee_desc, caller_env)?;
+        let plan = if descriptor_invocation {
+            self.plan_descriptor_call_args(sig, args, span, callee_desc)?
+        } else {
+            self.plan_named_call_args(sig, args, span, callee_desc, caller_env)?
+        };
         self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
         let defaults = plan.default_argument_mask();
         let descriptor_projections = plan.descriptor_projection_mask();
@@ -535,7 +583,16 @@ impl Checker {
 
         let mut param_idx = 0usize;
         for arg in args {
-            let actual_ty = if allow_traversable_spread {
+            let descriptor_projected = descriptor_invocation
+                && descriptor_projections
+                    .get(param_idx)
+                    .copied()
+                    .unwrap_or(false);
+            let actual_ty = if descriptor_projected {
+                // Descriptor unpack reads a runtime-keyed Mixed cell. Its binder owns the tag
+                // check against the selected parameter after deciding which slot this key fills.
+                PhpType::Mixed
+            } else if descriptor_invocation {
                 self.infer_descriptor_call_arg_type(arg, caller_env)?
             } else {
                 self.infer_type(arg, caller_env)?
@@ -566,12 +623,8 @@ impl Checker {
                     }
                 }
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
-                    let runtime_unboxed_callable = expected_ty.codegen_repr() == PhpType::Callable
-                        && actual_ty.codegen_repr() == PhpType::Mixed
-                        && descriptor_projections
-                            .get(param_idx)
-                            .copied()
-                            .unwrap_or(false)
+                    let runtime_descriptor_projection = actual_ty.codegen_repr() == PhpType::Mixed
+                        && descriptor_projected
                         && !supplied_reference;
                     if sig.declared_params.get(param_idx).copied().unwrap_or(false)
                         && supplied_reference
@@ -590,7 +643,7 @@ impl Checker {
                     // path. Builtin signatures carry `declared_params: false` throughout
                     // (`crate::builtins::registry`), so this never fires for an internal
                     // function whose parameter types the checker does not consume.
-                    if !runtime_unboxed_callable
+                    if !runtime_descriptor_projection
                         && sig.declared_params.get(param_idx).copied().unwrap_or(false)
                     {
                         self.require_strict_types_param_binding(
@@ -609,7 +662,7 @@ impl Checker {
                         && self
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
-                    if !proven_callable_array && !runtime_unboxed_callable {
+                    if !proven_callable_array && !runtime_descriptor_projection {
                         if coercive_param_binding
                             && sig.declared_params.get(param_idx).copied().unwrap_or(false)
                         {

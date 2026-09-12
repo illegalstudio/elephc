@@ -148,6 +148,55 @@ fn static_callable_array_string_results_are_owned_and_staged_on_all_targets() {
     }
 }
 
+/// Propagated callable-parameter signatures keep direct and CUFA string results concrete.
+#[test]
+fn callable_parameter_descriptor_string_results_stay_owned_on_all_targets() {
+    let source = r#"<?php
+        function descriptor_string(string $value): string { return '[' . $value . ']'; }
+        function invoke_descriptor_direct(callable $callback, array $arguments): string {
+            return $callback(...$arguments);
+        }
+        function invoke_descriptor_cufa(callable $callback, array $arguments): string {
+            return call_user_func_array($callback, $arguments);
+        }
+        echo invoke_descriptor_direct(descriptor_string(...), ['direct']);
+        echo invoke_descriptor_cufa(descriptor_string(...), ['cufa']);
+    "#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for function_name in ["invoke_descriptor_direct", "invoke_descriptor_cufa"] {
+            let function = module
+                .functions
+                .iter()
+                .find(|function| function.name == function_name)
+                .unwrap();
+            let invoke = function
+                .instructions
+                .iter()
+                .find(|instruction| instruction.op == Op::CallableDescriptorInvoke)
+                .expect("the callable parameter must use descriptor invocation");
+            let result = invoke
+                .result
+                .expect("the descriptor string invocation must return a value");
+            let metadata = function.value(result).unwrap();
+            assert_eq!(metadata.php_type, crate::types::PhpType::Str, "{target}/{function_name}");
+            assert_eq!(metadata.ownership, Ownership::Owned, "{target}/{function_name}");
+            assert_eq!(invoke.result_ownership, Ownership::Owned, "{target}/{function_name}");
+        }
+    }
+}
+
 /// Handler registration retires internal boxes and descriptors without consuming a caller's box.
 #[test]
 fn handler_graphs_release_only_their_prepared_owners_on_all_targets() {

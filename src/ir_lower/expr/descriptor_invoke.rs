@@ -164,7 +164,8 @@ pub(super) fn lower_dynamic_call_user_func_array(
     let callback = lower_expr(ctx, callback_expr);
     // The decision between the ref-marker builder and a plain array expression is made from the
     // argument SYNTAX, before either one emits anything, so the callback can be published first.
-    let callback = root_descriptor_callback(ctx, callback, PhpType::Mixed, expr.span);
+    let result_type = descriptor_invoker_result_type(signature.as_ref());
+    let callback = root_descriptor_callback(ctx, callback, result_type, expr.span);
     let arg_array = match descriptor_invoker_ref_marker_array_items(arg_array_expr) {
         Some(items) => lower_descriptor_invoker_arg_array_for_call_user_func_array(
             ctx,
@@ -203,6 +204,17 @@ pub(super) fn callable_descriptor_signature_for_expr(
             .and_then(|target| signature_for_static_callable_binding(ctx, target))
             .or_else(|| invokable_object_signature_for_expr(ctx, callback)),
     }
+}
+
+/// Returns the concrete result storage carried by a known descriptor signature.
+///
+/// Keeping the fallback boxed is essential for runtime-opaque callbacks. Once the checker has
+/// propagated a target signature, however, emitting `Mixed` would force a later return-boundary
+/// cast to detach refcounted payloads without the exact ownership metadata the descriptor ABI
+/// provides for the concrete result.
+pub(super) fn descriptor_invoker_result_type(sig: Option<&FunctionSig>) -> PhpType {
+    sig.map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
+        .unwrap_or(PhpType::Mixed)
 }
 
 /// Returns the `__invoke` signature for an invokable object callback expression.
@@ -419,9 +431,7 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     sig: Option<&FunctionSig>,
     expr: &Expr,
 ) -> LoweredValue {
-    let result_type = sig
-        .map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
-        .unwrap_or(PhpType::Mixed);
+    let result_type = descriptor_invoker_result_type(sig);
     let callback = root_descriptor_callback(ctx, callback, result_type, expr.span);
     let arg_container =
         lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span);
