@@ -123,14 +123,19 @@ pub(super) fn eval_aot_interface_method_names(
 }
 
 /// Returns generated/AOT method names for one runtime class-like symbol.
+///
+/// `reflection_method_names` hands back an OWNED container whose every read also hands back an
+/// owned key and an owned element. Decoding therefore goes through the shared metadata decoder,
+/// which retires all three, instead of a local copy that only read them: a local copy retired
+/// neither the boxed index nor the fetched name cell, so declaring one eval class against one
+/// generated interface stranded two Mixed cells and the name payload behind them. The owned
+/// variant also retires the container when decoding fails part way through.
 pub(super) fn eval_aot_method_names(
     class_like: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
     let method_names = values.reflection_method_names(class_like)?;
-    let names = eval_runtime_string_array_to_vec(method_names, values)?;
-    values.release(method_names)?;
-    Ok(names)
+    crate::interpreter::builtins::eval_owned_runtime_string_array_to_vec(method_names, values)
 }
 
 /// Builds one generated/AOT abstract parent method requirement from metadata.
@@ -250,30 +255,6 @@ pub(super) fn eval_native_signature_interface_method(
             .collect(),
     )
     .with_return_type(signature.return_type().cloned())
-}
-
-/// Copies a runtime string array into Rust-owned strings for declaration validation.
-pub(super) fn eval_runtime_string_array_to_vec(
-    array: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<String>, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut result = Vec::with_capacity(len);
-    for position in 0..len {
-        let key = values.int(position as i64)?;
-        let value = values.array_get(array, key)?;
-        result.push(eval_runtime_string_value(value, values)?);
-    }
-    Ok(result)
-}
-
-/// Reads one runtime string cell as UTF-8 metadata.
-pub(super) fn eval_runtime_string_value(
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<String, EvalStatus> {
-    let bytes = values.string_bytes(value)?;
-    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Validates that one eval class provides methods required by one eval interface.

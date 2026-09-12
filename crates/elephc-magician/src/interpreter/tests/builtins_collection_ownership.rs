@@ -97,6 +97,29 @@ fn owned_metadata_array_decoder_releases_container_on_every_exit() {
     }
 }
 
+/// Generated interface metadata decoding retires every boxed index and name cell, not just the container.
+///
+/// `eval_aot_method_names` reads reflection method names through this decoder, and a reader that
+/// only consumed the container stranded one boxed index plus one fetched name cell per position.
+/// Declaring a single eval class against one generated interface runs that walk twice, so a
+/// one-method interface such as `Countable` leaked four Mixed cells and both name payloads.
+#[test]
+fn owned_metadata_array_decoder_releases_every_index_and_name_owner() {
+    let mut values = FakeOps::default();
+    let first = values.string_bytes_value(b"count").unwrap();
+    let second = values.string_bytes_value(b"offsetGet").unwrap();
+    let array = values.alloc(FakeValue::Array(vec![first, second]));
+    let names =
+        crate::interpreter::builtins::eval_owned_runtime_string_array_to_vec(array, &mut values)
+            .unwrap();
+    assert_eq!(names, vec!["count".to_string(), "offsetGet".to_string()]);
+    // One boxed index and one fetched name per position, plus the container itself.
+    assert_eq!(values.releases.len(), 5);
+    assert!(values.releases.contains(&first));
+    assert!(values.releases.contains(&second));
+    assert!(values.releases.contains(&array));
+}
+
 /// Relation array construction retires decoded names and partial results after insertion errors.
 #[test]
 fn class_relation_array_builder_cleans_nonempty_results_on_failure() {
