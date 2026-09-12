@@ -435,7 +435,11 @@ fn check_object_or_array_callable_call(
         // and `$obj->$m($a)` desugar to.
         checker.record_unresolved_callee_argument_aliases(callback_args);
         for arg in callback_args {
-            checker.infer_type(arg, env)?;
+            if descriptor_traversable_spread {
+                checker.infer_descriptor_call_arg_type(arg, env)?;
+            } else {
+                checker.infer_type(arg, env)?;
+            }
         }
         return Ok(Some(PhpType::Mixed));
     }

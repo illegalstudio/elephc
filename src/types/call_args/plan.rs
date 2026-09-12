@@ -118,6 +118,23 @@ impl CallArgPlan {
             .collect()
     }
 
+    /// Marks normalized values projected from a dynamic spread into regular parameter slots.
+    ///
+    /// The checker uses this provenance to permit runtime descriptor unboxing only for values
+    /// that lowering will actually extract from a spread container. A direct `Mixed` argument
+    /// must not gain the same exception merely because its normalized expression has that type.
+    pub(crate) fn descriptor_projection_mask(&self) -> Vec<bool> {
+        if let Some(args) = &self.passthrough_args {
+            return vec![false; args.len()];
+        }
+
+        self.regular_args
+            .iter()
+            .map(|arg| matches!(arg, PlannedRegularArg::SpreadElement { .. }))
+            .chain(self.variadic_args.iter().map(|_| false))
+            .collect()
+    }
+
     /// Returns `true` if any source argument used the spread (`...`) operator.
     pub(crate) fn has_spread_args(&self) -> bool {
         self.source_args

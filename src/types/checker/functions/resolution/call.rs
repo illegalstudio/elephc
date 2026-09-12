@@ -136,6 +136,7 @@ impl Checker {
                 &format!("Function '{}'", name),
             )?;
             let defaults = plan.default_argument_mask();
+            let descriptor_projections = plan.descriptor_projection_mask();
             let normalized_args = plan.normalized_args();
             if self.respecialize_resolved_function_params_if_needed(
                 name,
@@ -154,6 +155,7 @@ impl Checker {
                 &effective_sig,
                 &normalized_args,
                 &defaults,
+                &descriptor_projections,
                 span,
                 caller_env,
             );
@@ -307,12 +309,23 @@ impl Checker {
                             decl.span,
                             &format!("Function '{}' parameter ${}", name, decl.params[i]),
                         )?;
-                        self.require_compatible_arg_type(
-                            &declared_ty,
-                            &ty,
-                            arg.span,
-                            &format!("Function '{}' parameter ${}", name, decl.params[i]),
-                        )?;
+                        // `validate_callable_spread_elements` above has already established that
+                        // this spread is eligible for runtime descriptor validation. Only that
+                        // projected Mixed value may be unboxed into a declared Callable slot, and
+                        // never into a by-reference binding whose lvalue identity cannot come from
+                        // a descriptor projection.
+                        let descriptor_projected_callable = matches!(arg.kind, ExprKind::Spread(_))
+                            && !decl.ref_params.get(i).copied().unwrap_or(false)
+                            && declared_ty.codegen_repr() == PhpType::Callable
+                            && ty.codegen_repr() == PhpType::Mixed;
+                        if !descriptor_projected_callable {
+                            self.require_compatible_arg_type(
+                                &declared_ty,
+                                &ty,
+                                arg.span,
+                                &format!("Function '{}' parameter ${}", name, decl.params[i]),
+                            )?;
+                        }
                         param_types.push((decl.params[i].clone(), declared_ty));
                     } else if matches!(ty, PhpType::Never) {
                         let param_ty = decl

@@ -22,11 +22,13 @@ impl Checker {
     /// signature and do not need re-specialization or deprecation warnings.
     /// `default_args` preserves the planner's distinction between declaration defaults
     /// and explicit caller arguments, which alone require a by-reference lvalue.
+    /// `descriptor_projections` preserves which normalized values came from spread slots.
     pub(crate) fn check_function_call_pre_normalized(
         &mut self,
         name: &str,
         normalized_args: &[Expr],
         default_args: &[bool],
+        descriptor_projections: &[bool],
         span: crate::span::Span,
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
@@ -42,6 +44,7 @@ impl Checker {
             &effective_sig,
             normalized_args,
             default_args,
+            descriptor_projections,
             span,
             caller_env,
         )
@@ -62,6 +65,7 @@ impl Checker {
         effective_sig: &FunctionSig,
         args: &[Expr],
         default_args: &[bool],
+        descriptor_projections: &[bool],
         span: crate::span::Span,
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
@@ -121,6 +125,19 @@ impl Checker {
             if param_idx < regular_param_count {
                 let supplied_reference = effective_sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     && !default_args.get(param_idx).copied().unwrap_or(false);
+                let descriptor_projected = descriptor_projections
+                    .get(param_idx)
+                    .copied()
+                    .unwrap_or(false);
+                if supplied_reference && descriptor_projected {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                            name
+                        ),
+                    ));
+                }
                 if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
@@ -143,6 +160,7 @@ impl Checker {
                 if let Some((param_name, expected_ty)) = effective_sig.params.get(param_idx) {
                     let runtime_unboxed_callable = expected_ty.codegen_repr() == PhpType::Callable
                         && actual_ty.codegen_repr() == PhpType::Mixed
+                        && descriptor_projected
                         && !supplied_reference;
                     if effective_sig
                         .declared_params
@@ -203,6 +221,18 @@ impl Checker {
                 if let (Some(vname), Some(expected_ty)) =
                     (effective_sig.variadic.as_ref(), variadic_elem_ty.as_ref())
                 {
+                    if variadic_index
+                        .and_then(|index| effective_sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        self.require_strict_types_param_binding(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("Function '{}' variadic parameter ${}", name, vname),
+                        )?;
+                    }
                     self.require_compatible_arg_type(
                         expected_ty,
                         &actual_ty,

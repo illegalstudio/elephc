@@ -609,8 +609,13 @@ impl Checker {
                 {
                     return Ok(ret_ty);
                 }
-                let specialized_sig =
-                    self.specialize_first_class_callable_target(&target, args, expr.span, env)?;
+                let specialized_sig = if self.callable_param_names.contains(var) {
+                    self.specialize_first_class_callable_target_for_descriptor_call(
+                        &target, args, expr.span, env,
+                    )?
+                } else {
+                    self.specialize_first_class_callable_target(&target, args, expr.span, env)?
+                };
                 self.callable_sigs
                     .insert(var.to_string(), specialized_sig.clone());
                 self.closure_return_types
@@ -750,14 +755,21 @@ impl Checker {
                         )? {
                             return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                         }
-                        let specialized_sig = self.specialize_first_class_callable_target(
-                            &target, args, expr.span, env,
-                        )?;
+                        let descriptor_args = self.callable_param_names.contains(var_name);
+                        let specialized_sig = if descriptor_args {
+                            self.specialize_first_class_callable_target_for_descriptor_call(
+                                &target, args, expr.span, env,
+                            )?
+                        } else {
+                            self.specialize_first_class_callable_target(
+                                &target, args, expr.span, env,
+                            )?
+                        };
                         self.callable_sigs
                             .insert(var_name.clone(), specialized_sig.clone());
                         self.closure_return_types
                             .insert(var_name.clone(), specialized_sig.return_type.clone());
-                        let ret_ty = if self.callable_param_names.contains(var_name) {
+                        let ret_ty = if descriptor_args {
                             self.check_known_callable_call_allowing_by_ref_spread(
                                 &specialized_sig,
                                 args,
@@ -810,9 +822,10 @@ impl Checker {
                 {
                     return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                 }
-                let sig =
-                    self.specialize_first_class_callable_target(target, args, expr.span, env)?;
-                let ret_ty = self.check_known_callable_call(
+                let sig = self.specialize_first_class_callable_target_for_descriptor_call(
+                    target, args, expr.span, env,
+                )?;
+                let ret_ty = self.check_known_callable_call_allowing_by_ref_spread(
                     &sig,
                     args,
                     expr.span,

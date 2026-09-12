@@ -723,6 +723,26 @@ fn test_callable_parameter_spread_accepts_descriptor_elements() {
     );
 }
 
+/// A direct Mixed argument is not a descriptor projection and stays outside Callable unboxing.
+#[test]
+fn test_error_direct_mixed_argument_does_not_gain_descriptor_unboxing() {
+    for source in [
+        "<?php function consume(callable $callback): int { return $callback(); } function forward(mixed $value): int { return consume($value); } echo forward(null);",
+        "<?php function consume(callable $callback): int { return $callback(); } function forward(callable $dispatch, mixed $value): int { return $dispatch($value); } echo forward(consume(...), null);",
+    ] {
+        expect_error(source, "parameter $callback expects Callable, got Mixed");
+    }
+}
+
+/// A spread cannot synthesize the lvalue identity required by a by-reference Callable parameter.
+#[test]
+fn test_error_callable_parameter_by_ref_spread_stays_rejected() {
+    expect_error(
+        "<?php class ByRefSpreadTarget { public static function hit(): int { return 1; } } function consume(callable &$callback, int $count): int { return $callback() + $count; } function forward(array $callbacks): int { return consume(...$callbacks, count: 1); } echo forward([ByRefSpreadTarget::hit(...)]);",
+        "cannot be invoked with spread arguments when it has pass-by-reference parameters",
+    );
+}
+
 /// Descriptor calls may walk Traversable spreads for untyped string and callable-array targets.
 #[test]
 fn test_untyped_call_user_func_targets_accept_traversable_spreads() {

@@ -296,11 +296,13 @@ impl Checker {
                 }
                 let plan = self.plan_named_call_args(&base_sig, args, span, "first-class callable", env)?;
                 let defaults = plan.default_argument_mask();
+                let descriptor_projections = plan.descriptor_projection_mask();
                 let normalized_args = plan.normalized_args();
                 self.check_function_call_pre_normalized(
                     name.as_str(),
                     &normalized_args,
                     &defaults,
+                    &descriptor_projections,
                     span,
                     env,
                 )?;
@@ -345,30 +347,10 @@ impl Checker {
         span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<FunctionSig, CompileError> {
-        if !self.call_has_traversable_spread(args, env)? {
+        if !self.descriptor_call_has_traversable_spread(args, env)? {
             return self.specialize_first_class_callable_target(target, args, span, env);
         }
         self.resolve_first_class_callable_sig(target, span, env)
-    }
-
-    /// Returns whether a descriptor call contains a spread backed by Traversable storage.
-    pub(crate) fn call_has_traversable_spread(
-        &mut self,
-        args: &[Expr],
-        env: &TypeEnv,
-    ) -> Result<bool, CompileError> {
-        for arg in args {
-            let ExprKind::Spread(inner) = &arg.kind else {
-                continue;
-            };
-            let ty = self.infer_type(inner, env)?;
-            if matches!(ty, PhpType::Iterable)
-                || matches!(&ty, PhpType::Object(class_name) if self.object_type_implements_iterable(class_name))
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 
     /// Recompiles `name` for the descriptor container contract when it collects a variadic tail.

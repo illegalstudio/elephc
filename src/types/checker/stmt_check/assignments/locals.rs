@@ -381,6 +381,14 @@ pub(super) fn update_callable_assignment_metadata(
     ty: &PhpType,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    if let ExprKind::StringLiteral(callback) = &callable_source.kind {
+        if let Some(function_name) = checker.canonical_function_name_folded(callback) {
+            // Lowering tracks a statically known function-name string as a descriptor target.
+            // Promote its variadic storage at the same point so a later dynamic
+            // `call_user_func_array($name, $args)` can preserve unknown string keys in the tail.
+            checker.promote_descriptor_variadic_container(&function_name)?;
+        }
+    }
     update_callable_array_assignment_metadata(checker, name, callable_source, env)?;
 
     if *ty == PhpType::Callable {

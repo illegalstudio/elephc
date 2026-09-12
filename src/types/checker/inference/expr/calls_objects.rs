@@ -466,6 +466,7 @@ impl Checker {
 
 /// Recognizes the three intrinsic interface names accepted by descriptor iteration.
 fn matches_builtin_traversable_name(name: &str) -> bool {
+    let name = name.trim_start_matches('\\');
     name.eq_ignore_ascii_case("Traversable")
         || name.eq_ignore_ascii_case("Iterator")
         || name.eq_ignore_ascii_case("IteratorAggregate")

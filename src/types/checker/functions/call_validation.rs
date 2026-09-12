@@ -460,6 +460,7 @@ impl Checker {
         let plan = self.plan_named_call_args(sig, args, span, callee_desc, caller_env)?;
         self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
         let defaults = plan.default_argument_mask();
+        let descriptor_projections = plan.descriptor_projection_mask();
         let normalized_args = plan.normalized_args();
         let args = normalized_args.as_slice();
         let effective_arg_count = args
@@ -552,6 +553,10 @@ impl Checker {
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
                     let runtime_unboxed_callable = expected_ty.codegen_repr() == PhpType::Callable
                         && actual_ty.codegen_repr() == PhpType::Mixed
+                        && descriptor_projections
+                            .get(param_idx)
+                            .copied()
+                            .unwrap_or(false)
                         && !supplied_reference;
                     if sig.declared_params.get(param_idx).copied().unwrap_or(false)
                         && supplied_reference
