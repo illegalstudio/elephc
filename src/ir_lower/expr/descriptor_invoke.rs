@@ -465,6 +465,13 @@ pub(super) fn emit_callable_descriptor_invoke(
         Op::CallableDescriptorInvoke.default_effects(),
         Some(span),
     );
+    if ctx.builder.value_php_type(result.value).codegen_repr() == PhpType::Str {
+        // The descriptor ABI returns an owned Mixed box. Concrete string lowering detaches the
+        // string through `__rt_mixed_cast_string` before consuming that box, so the resulting
+        // buffer is an exact owner rather than the scratch-or-owned ambiguity of general Str ops.
+        ctx.builder
+            .set_value_ownership(result.value, Ownership::Owned);
+    }
     // Retiring the container or the callback destroys a captured object or an argument the
     // container still owns, and those destructors run PHP code that can throw into a catch in
     // this same frame. The result is already staged when they do.

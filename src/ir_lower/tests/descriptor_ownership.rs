@@ -9,6 +9,51 @@
 
 use crate::ir::Op;
 
+/// Concrete descriptor strings transfer one exact owner and retire it after expression use.
+#[test]
+fn concrete_descriptor_string_results_are_owned_and_released_once_on_all_targets() {
+    let source = r#"<?php
+        class DescriptorStringResult {
+            public function value(): string { return "descriptor-result"; }
+        }
+        function discard_descriptor_string(DescriptorStringResult $receiver): void {
+            ($receiver->value(...))();
+        }
+        discard_descriptor_string(new DescriptorStringResult());
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "discard_descriptor_string")
+            .unwrap();
+        let invoke = function
+            .instructions
+            .iter()
+            .find(|inst| inst.op == Op::CallableDescriptorInvoke)
+            .expect("instance first-class callable must use the descriptor ABI");
+        let result = invoke.result.expect("descriptor string invocation must produce a result");
+        let metadata = function.value(result).unwrap();
+        assert_eq!(metadata.php_type, crate::types::PhpType::Str, "{target}");
+        assert_eq!(metadata.ownership, crate::ir::Ownership::Owned, "{target}");
+        assert_eq!(
+            function
+                .instructions
+                .iter()
+                .filter(|inst| inst.op == Op::Release && inst.operands == [result])
+                .count(),
+            1,
+            "{target}",
+        );
+    }
+}
+
 /// Handler registration retires internal boxes and descriptors without consuming a caller's box.
 #[test]
 fn handler_graphs_release_only_their_prepared_owners_on_all_targets() {

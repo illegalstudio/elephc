@@ -10,10 +10,20 @@
 
 use crate::codegen::{CodegenIrError, Result};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::ir::Ownership;
 use crate::types::PhpType;
 
 /// Converts an owned result box and retires it unless the caller retains the Mixed representation.
-pub(super) fn emit_unbox_owned_descriptor_result(emitter: &mut Emitter, ty: &PhpType) -> Result<()> {
+pub(super) fn emit_unbox_owned_descriptor_result(
+    emitter: &mut Emitter,
+    ty: &PhpType,
+    ownership: Ownership,
+) -> Result<()> {
+    if *ty == PhpType::Str && ownership != Ownership::Owned {
+        return Err(CodegenIrError::invalid_module(format!(
+            "concrete descriptor string result must own its detached buffer, got {ownership:?}",
+        )));
+    }
     let cast = match ty {
         PhpType::Mixed | PhpType::Union(_) => return Ok(()),
         PhpType::Void | PhpType::Never => {
@@ -41,7 +51,8 @@ pub(super) fn emit_unbox_owned_descriptor_result(emitter: &mut Emitter, ty: &Php
     if *ty == PhpType::TaggedScalar {
         emit_tagged_scalar_result(emitter);
     }
-    // String conversion detaches string payloads; scalar conversions borrow no heap children.
+    // String conversion detaches an owned payload that the EIR result must retire exactly once;
+    // scalar conversions borrow no heap children.
     abi::emit_push_result_value(emitter, ty);
     abi::emit_load_temporary_stack_slot(emitter, result, 16);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
@@ -119,17 +130,48 @@ mod tests {
                 (PhpType::TaggedScalar, "__rt_mixed_unbox"),
             ] {
                 let mut emitter = Emitter::new(target);
-                emit_unbox_owned_descriptor_result(&mut emitter, &ty).unwrap();
+                let ownership = if ty == PhpType::Str {
+                    Ownership::Owned
+                } else {
+                    Ownership::for_php_type(&ty)
+                };
+                emit_unbox_owned_descriptor_result(&mut emitter, &ty, ownership).unwrap();
                 let asm = emitter.output();
                 assert_eq!(asm.matches("__rt_decref_mixed").count(), 1, "{name}: {ty:?}");
                 assert!(asm.find(cast).unwrap() < asm.find("__rt_decref_mixed").unwrap(), "{name}: {ty:?}");
             }
             let mut emitter = Emitter::new(target);
-            emit_unbox_owned_descriptor_result(&mut emitter, &PhpType::Mixed).unwrap();
+            emit_unbox_owned_descriptor_result(
+                &mut emitter,
+                &PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .unwrap();
             assert!(emitter.output().is_empty(), "{name}");
             let mut emitter = Emitter::new(target);
-            emit_unbox_owned_descriptor_result(&mut emitter, &PhpType::Void).unwrap();
+            emit_unbox_owned_descriptor_result(
+                &mut emitter,
+                &PhpType::Void,
+                Ownership::NonHeap,
+            )
+            .unwrap();
             assert_eq!(emitter.output().matches("__rt_decref_mixed").count(), 1, "{name}");
+        }
+    }
+
+    /// A concrete descriptor string must carry the owner produced by its Mixed cast.
+    #[test]
+    fn concrete_string_descriptor_results_fail_closed_without_owned_metadata() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let error = emit_unbox_owned_descriptor_result(
+                &mut emitter,
+                &PhpType::Str,
+                Ownership::MaybeOwned,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("must own its detached buffer"), "{name}: {error}");
+            assert!(emitter.output().is_empty(), "{name}");
         }
     }
 
@@ -141,6 +183,7 @@ mod tests {
             emit_unbox_owned_descriptor_result(
                 &mut emitter,
                 &PhpType::Array(Box::new(PhpType::Mixed)),
+                Ownership::Owned,
             )
             .unwrap();
             let asm = emitter.output();

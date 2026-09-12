@@ -2969,7 +2969,12 @@ fn store_descriptor_invoker_result(
         return Ok(());
     };
     let result_type = ctx.value_php_type(result)?.codegen_repr();
-    results::emit_unbox_owned_descriptor_result(ctx.emitter, &result_type)?;
+    let result_ownership = ctx.value_ownership(result)?;
+    results::emit_unbox_owned_descriptor_result(
+        ctx.emitter,
+        &result_type,
+        result_ownership,
+    )?;
     ctx.store_result_value(result)
 }
 
