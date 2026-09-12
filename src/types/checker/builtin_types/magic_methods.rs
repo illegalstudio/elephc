@@ -8,13 +8,40 @@
 //!
 //! Key details:
 //! - Dummy AST members carry type contracts only; runtime behavior is implemented elsewhere.
+//! - Arity and variadic rules are checked against the SOURCE-visible signature: the
+//!   `func_args` pass may have appended its hidden collector to any method (every frame gets
+//!   one as soon as the program contains an `eval()`), and that synthetic parameter must not
+//!   make a contract-compliant magic method look variadic or over-long.
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{TypeExpr, Visibility};
+use crate::parser::ast::{ClassMethod, TypeExpr, Visibility};
 use crate::types::PhpType;
 
 use super::super::Checker;
+
+/// Returns the parameters the source actually declared for `method`.
+///
+/// Only `crate::func_args::HIDDEN_ARGS_PARAM` is filtered out. Every other parameter, including
+/// a user-declared variadic, stays visible so the contract rules below keep rejecting it.
+fn source_param_count(method: &ClassMethod) -> usize {
+    method
+        .params
+        .iter()
+        .filter(|(name, ..)| name != crate::func_args::HIDDEN_ARGS_PARAM)
+        .count()
+}
+
+/// Returns whether the source declared a variadic parameter on `method`.
+///
+/// The `func_args` collector occupies the same AST slot as a source variadic, so comparing the
+/// name is the only way to tell a PHP-visible `...$args` from the generated one.
+fn declares_source_variadic(method: &ClassMethod) -> bool {
+    method
+        .variadic
+        .as_deref()
+        .is_some_and(|variadic| variadic != crate::func_args::HIDDEN_ARGS_PARAM)
+}
 
 /// Patches the type signatures for the property/method interception magic
 /// methods on user-declared classes to enforce PHP-correct parameter types.
@@ -102,7 +129,7 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                         continue;
                     }
-                    if !method.params.is_empty() || method.variadic.is_some() {
+                    if source_param_count(method) != 0 || declares_source_variadic(method) {
                         errors.push(CompileError::new(
                             method.span,
                             &format!(
@@ -142,7 +169,7 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                         continue;
                     }
-                    if method.params.len() != 1 || method.variadic.is_some() {
+                    if source_param_count(method) != 1 || declares_source_variadic(method) {
                         errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must take 1 argument: {}::__get", class_name),
@@ -164,7 +191,7 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                         continue;
                     }
-                    if method.params.len() != 2 || method.variadic.is_some() {
+                    if source_param_count(method) != 2 || declares_source_variadic(method) {
                         errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must take 2 arguments: {}::__set", class_name),
@@ -186,7 +213,7 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                         continue;
                     }
-                    if method.params.len() != 1 || method.variadic.is_some() {
+                    if source_param_count(method) != 1 || declares_source_variadic(method) {
                         errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must take 1 argument: {}::__isset", class_name),
@@ -219,7 +246,7 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                         continue;
                     }
-                    if method.params.len() != 1 || method.variadic.is_some() {
+                    if source_param_count(method) != 1 || declares_source_variadic(method) {
                         errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must take 1 argument: {}::__unset", class_name),
@@ -252,7 +279,7 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                         continue;
                     }
-                    if method.params.len() != 2 || method.variadic.is_some() {
+                    if source_param_count(method) != 2 || declares_source_variadic(method) {
                         errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must take 2 arguments: {}::__call", class_name),
@@ -282,7 +309,7 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                         continue;
                     }
-                    if !method.params.is_empty() || method.variadic.is_some() {
+                    if source_param_count(method) != 0 || declares_source_variadic(method) {
                         errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must take 0 arguments: {}::__clone", class_name),
@@ -314,7 +341,7 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                         continue;
                     }
-                    if !method.params.is_empty() || method.variadic.is_some() {
+                    if source_param_count(method) != 0 || declares_source_variadic(method) {
                         errors.push(CompileError::new(
                             method.span,
                             &format!(
@@ -341,7 +368,7 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                         continue;
                     }
-                    if method.params.len() != 2 || method.variadic.is_some() {
+                    if source_param_count(method) != 2 || declares_source_variadic(method) {
                         errors.push(CompileError::new(
                             method.span,
                             &format!(

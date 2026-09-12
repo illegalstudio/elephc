@@ -18,7 +18,7 @@ use crate::codegen::{
     emit_release_pushed_refcounted_temp_after_array_push,
 };
 use crate::ir::{Instruction, Op, ValueDef, ValueId};
-use crate::names::{function_symbol, label_fragment, method_symbol, php_symbol_key};
+use crate::names::{function_symbol, label_fragment, php_symbol_key};
 use crate::parser::ast::Visibility;
 use crate::types::{FunctionSig, PhpType};
 
@@ -26,7 +26,8 @@ use super::super::context::FunctionContext;
 use super::super::shared_state::RuntimeInstanceMethodDescriptorTemplate;
 use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
-    emit_call_arg_temp_cleanups, emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
+    emit_call_arg_temp_cleanups, emit_direct_resolved_method_call,
+    emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
     emit_runtime_builtin_wrapper_inline, emit_runtime_callable_invoker_inline,
     emit_runtime_callable_invoker_with_string_owner,
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
@@ -1654,7 +1655,12 @@ fn runtime_array_instance_method_targets(
     for (class_name, class_info) in classes {
         let mut methods = class_info.methods.iter().collect::<Vec<_>>();
         methods.sort_by(|left, right| left.0.cmp(right.0));
-        for (method_name, sig) in methods {
+        for (method_name, physical_sig) in methods {
+            let Ok(sig) = crate::codegen_support::source_method_adapters::source_visible_signature(
+                physical_sig,
+            ) else {
+                continue;
+            };
             if sig.params.len() != arg_count || sig.variadic.is_some() {
                 continue;
             }
@@ -1680,7 +1686,7 @@ fn runtime_array_instance_method_targets(
                 method_key,
                 method_name: method_name.clone(),
                 impl_class,
-                sig: sig.clone(),
+                sig,
             });
         }
     }
@@ -2210,10 +2216,22 @@ fn emit_runtime_array_instance_method_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(
-        ctx.emitter,
-        &method_symbol(&target.impl_class, &target.method_key),
-    );
+    let resolved = super::MethodCallTarget {
+        impl_class: target.impl_class.clone(),
+        method_key: target.method_key.clone(),
+        dynamic_slot: None,
+        params: target
+            .sig
+            .params
+            .iter()
+            .map(|(_, ty)| ty.codegen_repr())
+            .collect(),
+        ref_params: target.sig.ref_params.clone(),
+        return_ty: target.sig.return_type.clone(),
+        by_ref_return: target.sig.by_ref_return,
+        source_abi: true,
+    };
+    emit_direct_resolved_method_call(ctx, &resolved)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.sig.return_type)?;

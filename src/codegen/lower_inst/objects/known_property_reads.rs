@@ -425,14 +425,7 @@ pub(super) fn lower_magic_get_prop(
         )));
     }
     emit_magic_get_args(ctx, object, property)?;
-    if let Some(slot) = target.dynamic_slot {
-        super::super::emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&target.impl_class, &target.method_key),
-        );
-    }
+    super::super::emit_resolved_method_call(ctx, &target)?;
     store_method_call_result(ctx, inst, &target)
 }
 

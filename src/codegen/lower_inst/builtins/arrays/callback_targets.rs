@@ -104,22 +104,34 @@ pub(super) fn static_method_callback_target_inner(
             owner, callback_name
         ))
     })?;
-    if sig.params.len() != visible_arg_types.len() {
+    let source_sig = crate::codegen_support::source_method_adapters::source_visible_signature(sig)
+        .map_err(CodegenIrError::unsupported)?;
+    if source_sig.params.len() != visible_arg_types.len() {
         return Err(CodegenIrError::unsupported(format!(
             "{} '{}' with {} visible args for {} params",
             owner,
             callback_name,
             visible_arg_types.len(),
-            sig.params.len()
+            source_sig.params.len()
         )));
     }
-    require_static_method_callback_param_types(owner, callback_name, sig, visible_arg_types)?;
+    require_static_method_callback_param_types(owner, callback_name, &source_sig, visible_arg_types)?;
     Ok(Some(StaticMethodCallbackTarget {
-        entry_label: static_method_symbol(impl_class, &method_key),
+        entry_label: crate::codegen_support::source_method_adapters::source_method_entry_symbol(
+            impl_class,
+            &method_key,
+            sig,
+            crate::codegen_support::source_method_adapters::MethodKind::Static,
+        )
+        .map_err(CodegenIrError::unsupported)?,
         called_class: StaticCallbackCalledClass::Immediate(receiver_info.class_id),
         dynamic_slot: None,
         env_source: None,
-        param_types: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
+        param_types: source_sig
+            .params
+            .iter()
+            .map(|(_, ty)| ty.codegen_repr())
+            .collect(),
         return_ty: sig.return_type.codegen_repr(),
     }))
 }
@@ -164,22 +176,39 @@ pub(super) fn static_late_bound_method_callback_target(
             owner, callback_name
         ))
     })?;
-    if sig.params.len() != visible_arg_types.len() {
+    let source_sig = crate::codegen_support::source_method_adapters::source_visible_signature(sig)
+        .map_err(CodegenIrError::unsupported)?;
+    if source_sig.params.len() != visible_arg_types.len() {
         return Err(CodegenIrError::unsupported(format!(
             "{} '{}' with {} visible args for {} params",
             owner,
             callback_name,
             visible_arg_types.len(),
-            sig.params.len()
+            source_sig.params.len()
         )));
     }
-    require_static_method_callback_param_types(owner, &callback_name, sig, visible_arg_types)?;
+    require_static_method_callback_param_types(
+        owner,
+        &callback_name,
+        &source_sig,
+        visible_arg_types,
+    )?;
     Ok(Some(StaticMethodCallbackTarget {
-        entry_label: static_method_symbol(impl_class, &method_key),
+        entry_label: crate::codegen_support::source_method_adapters::source_method_entry_symbol(
+            impl_class,
+            &method_key,
+            sig,
+            crate::codegen_support::source_method_adapters::MethodKind::Static,
+        )
+        .map_err(CodegenIrError::unsupported)?,
         called_class: StaticCallbackCalledClass::Env,
         dynamic_slot: receiver_info.static_vtable_slots.get(&method_key).copied(),
         env_source: Some(static_callback_env_source(ctx)?),
-        param_types: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
+        param_types: source_sig
+            .params
+            .iter()
+            .map(|(_, ty)| ty.codegen_repr())
+            .collect(),
         return_ty: sig.return_type.codegen_repr(),
     }))
 }
@@ -259,16 +288,23 @@ pub(super) fn instance_method_sort_callback_target(
             owner, callback.name
         ))
     })?;
-    if sig.params.len() != visible_arg_types.len() {
+    let source_sig = crate::codegen_support::source_method_adapters::source_visible_signature(sig)
+        .map_err(CodegenIrError::unsupported)?;
+    if source_sig.params.len() != visible_arg_types.len() {
         return Err(CodegenIrError::unsupported(format!(
             "{} '{}' with {} visible args for {} params",
             owner,
             callback.name,
             visible_arg_types.len(),
-            sig.params.len()
+            source_sig.params.len()
         )));
     }
-    require_static_method_callback_param_types(owner, &callback.name, sig, visible_arg_types)?;
+    require_static_method_callback_param_types(
+        owner,
+        &callback.name,
+        &source_sig,
+        visible_arg_types,
+    )?;
     let impl_class = class_info
         .method_impl_classes
         .get(&method_key)
@@ -281,9 +317,19 @@ pub(super) fn instance_method_sort_callback_target(
         )));
     }
     Ok(Some(InstanceMethodCallbackTarget {
-        entry_label: method_symbol(impl_class, &method_key),
+        entry_label: crate::codegen_support::source_method_adapters::source_method_entry_symbol(
+            impl_class,
+            &method_key,
+            sig,
+            crate::codegen_support::source_method_adapters::MethodKind::Instance,
+        )
+        .map_err(CodegenIrError::unsupported)?,
         receiver,
-        param_types: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
+        param_types: source_sig
+            .params
+            .iter()
+            .map(|(_, ty)| ty.codegen_repr())
+            .collect(),
         return_ty: sig.return_type.codegen_repr(),
     }))
 }

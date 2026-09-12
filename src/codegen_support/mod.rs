@@ -34,6 +34,7 @@ pub(crate) mod reflection;
 pub(crate) mod runtime;
 mod runtime_features;
 pub(crate) mod sentinels;
+pub(crate) mod source_method_adapters;
 pub(crate) mod stream_filters;
 pub(crate) mod tls;
 pub(crate) mod try_handlers;

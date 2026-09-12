@@ -401,12 +401,19 @@ fn finalize_user_asm(
     }
     let runtime_interfaces = runtime_referenced_interfaces(module, &allowed_class_names);
     let runtime_classes = runtime_class_infos(module);
+    crate::codegen_support::source_method_adapters::emit_source_method_adapters(
+        &mut emitter,
+        &runtime_classes,
+        Some(&allowed_class_names),
+    )
+    .map_err(CodegenIrError::invalid_module)?;
     crate::codegen::interface_wrappers::emit_interface_return_wrappers(
         &mut emitter,
         &runtime_interfaces,
         &runtime_classes,
         Some(&allowed_class_names),
-    );
+    )
+    .map_err(CodegenIrError::invalid_module)?;
     emit_intrinsic_method_wrappers(module, &mut emitter);
     if emit.is_library() {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
@@ -446,7 +453,8 @@ fn finalize_user_asm(
         // prints it in every fatal error.
         module.source_path.as_deref(),
         module.target,
-    );
+    )
+    .map_err(CodegenIrError::invalid_module)?;
 
     let data_output = data.emit(module.target);
     let mut user_asm = emitter.output();

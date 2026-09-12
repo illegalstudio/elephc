@@ -172,23 +172,27 @@ pub(super) fn emit_static_callback_dynamic_call(ctx: &mut FunctionContext<'_>, s
     let hidden_called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let class_id_scratch = abi::temp_int_reg(ctx.emitter.target);
     let dispatch_scratch = abi::symbol_scratch_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!(
+    ctx.emitter.instruction(&format!(                                           // preserve the forwarded called-class id across static-vtable address materialization
         "mov {}, {}",
         class_id_scratch, hidden_called_class_reg
-    ));                                                                         // preserve the forwarded called-class id across static-vtable address materialization
-    abi::emit_symbol_address(ctx.emitter, dispatch_scratch, "_class_static_vtable_ptrs");
+    ));
+    abi::emit_symbol_address(
+        ctx.emitter,
+        dispatch_scratch,
+        "_class_source_static_vtable_ptrs",
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // load the class-specific static-vtable pointer from the global table
                 "ldr {}, [{}, {}, lsl #3]",
                 dispatch_scratch, dispatch_scratch, class_id_scratch
-            ));                                                                 // load the class-specific static-vtable pointer from the global table
+            ));
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // load the class-specific static-vtable pointer from the global table
                 "mov {}, QWORD PTR [{} + {} * 8]",
                 dispatch_scratch, dispatch_scratch, class_id_scratch
-            ));                                                                 // load the class-specific static-vtable pointer from the global table
+            ));
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_scratch, dispatch_scratch, slot * 8);

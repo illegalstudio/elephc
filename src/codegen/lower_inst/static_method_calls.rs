@@ -123,7 +123,13 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     if let Some(slot) = dynamic_static_slot {
-        emit_dynamic_static_method_call(ctx, slot);
+        emit_dynamic_static_method_call_with_abi(
+            ctx,
+            slot,
+            !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(
+                callee_sig,
+            ),
+        );
     } else {
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
     }
@@ -187,10 +193,7 @@ pub(super) fn lower_lexical_instance_static_method_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(
-        ctx.emitter,
-        &method_symbol(&target.impl_class, &target.method_key),
-    );
+    emit_direct_resolved_method_call(ctx, &target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
@@ -201,6 +204,15 @@ pub(super) fn lower_lexical_instance_static_method_call(
 
 /// Emits an indirect static-vtable call for a late-bound `static::method()` receiver.
 pub(super) fn emit_dynamic_static_method_call(ctx: &mut FunctionContext<'_>, slot: usize) {
+    emit_dynamic_static_method_call_with_abi(ctx, slot, false);
+}
+
+/// Emits late-static dispatch through either the physical or source-ABI table.
+pub(super) fn emit_dynamic_static_method_call_with_abi(
+    ctx: &mut FunctionContext<'_>,
+    slot: usize,
+    source_abi: bool,
+) {
     let hidden_called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let class_id_scratch = abi::temp_int_reg(ctx.emitter.target);
     let dispatch_scratch = abi::symbol_scratch_reg(ctx.emitter);
@@ -212,7 +224,12 @@ pub(super) fn emit_dynamic_static_method_call(ctx: &mut FunctionContext<'_>, slo
             ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
         }
     }
-    abi::emit_symbol_address(ctx.emitter, dispatch_scratch, "_class_static_vtable_ptrs");
+    let table = if source_abi {
+        "_class_source_static_vtable_ptrs"
+    } else {
+        "_class_static_vtable_ptrs"
+    };
+    abi::emit_symbol_address(ctx.emitter, dispatch_scratch, table);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table

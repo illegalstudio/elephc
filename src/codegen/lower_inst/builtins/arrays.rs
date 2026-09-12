@@ -19,7 +19,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::codegen_support::runtime::HashMapResultKind;
 use crate::codegen_support::DeferredCallbackWrapper;
 use crate::ir::{BlockId, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
-use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method_symbol};
+use crate::names::{function_symbol, php_symbol_key};
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 use super::super::super::context::FunctionContext;

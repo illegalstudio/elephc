@@ -18,6 +18,7 @@ pub(super) struct MethodCallTarget {
     pub(super) ref_params: Vec<bool>,
     pub(super) return_ty: PhpType,
     pub(super) by_ref_return: bool,
+    pub(super) source_abi: bool,
 }
 
 /// Concrete runtime class branch available to a `Mixed` receiver method call.

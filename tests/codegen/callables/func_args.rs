@@ -499,3 +499,95 @@ echo once_only("first", "second");
     );
     assert_eq!(out, "first:1");
 }
+
+/// Engine magic-hook callers use source arity even when each body has a physical collector.
+#[test]
+fn test_func_args_method_adapters_cover_magic_property_string_and_destructor_hooks() {
+    let out = compile_and_run(
+        r#"<?php
+class AdaptedMagic {
+    public function __toString(): string { return "str" . func_num_args(); }
+    public function __get(string $name): mixed { return $name . func_num_args(); }
+    public function __set(string $name, mixed $value): void { echo $name, $value, func_num_args(), "|"; }
+    public function __destruct() { echo "drop", func_num_args(); }
+}
+$value = new AdaptedMagic();
+echo $value, "|", $value->missing, "|";
+$value->written = 7;
+"#,
+    );
+    assert_eq!(out, "str0|missing1|written72|drop0");
+}
+
+/// Runtime hook tables and injected interfaces call collector-bearing methods through adapters.
+#[test]
+fn test_func_args_method_adapters_cover_serialization_json_and_countable_hooks() {
+    let out = compile_and_run(
+        r#"<?php
+class AdaptedHooks implements Countable, JsonSerializable {
+    public int $value = 4;
+    public function count(): int { return $this->value + func_num_args(); }
+    public function jsonSerialize(): mixed { return ["json" => func_num_args()]; }
+    public function __serialize(): array { return ["value" => $this->value, "argc" => func_num_args()]; }
+    public function __unserialize(array $data): void { $this->value = $data["value"] + func_num_args(); }
+}
+$item = new AdaptedHooks();
+$mixed = $item;
+echo count($mixed), "|", json_encode($item), "|";
+$copy = unserialize(serialize($item));
+echo $copy->value;
+"#,
+    );
+    assert_eq!(out, "4|{\"json\":0}|5");
+}
+
+/// A call typed against an injected parent uses the source vtable for an adapted override.
+#[test]
+fn test_func_args_source_vtable_dispatches_injected_parent_override() {
+    let out = compile_and_run(
+        r#"<?php
+class AdaptedDate extends DateTime {
+    public function format(string $format): string { return $format . func_num_args(); }
+}
+function renderDate(DateTime $date): string { return $date->format("Y"); }
+echo renderDate(new AdaptedDate());
+"#,
+    );
+    assert_eq!(out, "Y1");
+}
+
+/// Sort callback wrappers enter methods with source arity, including late-static dispatch.
+#[test]
+fn test_func_args_method_adapters_cover_sort_method_callback_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+class AdaptedSortBase {
+    public static function sort(array $values): string {
+        usort($values, static::compare(...));
+        return implode('', $values);
+    }
+    public static function compare(int $left, int $right): int {
+        return func_num_args() === 2 ? $left <=> $right : 0;
+    }
+}
+class AdaptedSortChild extends AdaptedSortBase {
+    public static function compare(int $left, int $right): int {
+        return func_num_args() === 2 ? $right <=> $left : 0;
+    }
+}
+class AdaptedInstanceSort {
+    public function compare(int $left, int $right): int {
+        return func_num_args() === 2 ? $left <=> $right : 0;
+    }
+}
+$direct = [3, 1, 2];
+usort($direct, AdaptedSortBase::compare(...));
+echo implode('', $direct), '|', AdaptedSortChild::sort([3, 1, 2]), '|';
+$instance = [3, 1, 2];
+$sorter = new AdaptedInstanceSort();
+usort($instance, $sorter->compare(...));
+echo implode('', $instance);
+"#,
+    );
+    assert_eq!(out, "123|321|123");
+}
