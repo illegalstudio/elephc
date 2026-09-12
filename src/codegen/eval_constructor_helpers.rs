@@ -2024,10 +2024,20 @@ mod argument_ownership_tests {
     /// bridge-side owner would have no matching release and would leak once per constructor call.
     #[test]
     fn by_value_constructor_arguments_do_not_acquire_bridge_owners_on_every_target() {
-        for param_ty in [PhpType::Str, PhpType::Object("Payload".to_string())] {
+        for param_ty in [
+            PhpType::Str,
+            PhpType::Object("Payload".to_string()),
+            // A typed source variadic reached from eval is promoted to this storage before EIR
+            // lowering. The bridge must pass the raw Mixed-cell container the binder created,
+            // rather than treating it as an inline array of the declared element type.
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ] {
             for name in SUPPORTED_TARGETS {
                 let target = Target::parse(name).unwrap();
                 let asm = constructor_argument_asm(target, param_ty.clone(), false);
+                if param_ty == PhpType::Array(Box::new(PhpType::Mixed)) {
+                    assert!(asm.contains("__rt_mixed_unbox"), "{name}: {asm}");
+                }
                 assert!(!asm.contains("__rt_incref"), "{name} {param_ty:?}: {asm}");
                 assert!(!asm.contains("__rt_decref"), "{name} {param_ty:?}: {asm}");
             }

@@ -95,6 +95,7 @@ impl Checker {
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             eval_barrier_active: false,
+            eval_native_callables_reachable: false,
             flow_typed_returns: HashMap::new(),
             null_probe_scope_is_top_level: false,
             pending_null_probe_roots: Vec::new(),

@@ -2686,7 +2686,7 @@ return $second;');
     );
     assert!(
         out.stderr.contains(
-            "call_user_func(): Argument #1 ($rest) must be passed by reference, value given"
+            "eval_ref_tail_writer(): Argument #1 ($rest) must be passed by reference, value given"
         ),
         "unexpected stderr: {}",
         out.stderr

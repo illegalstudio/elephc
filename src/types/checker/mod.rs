@@ -200,6 +200,12 @@ pub(crate) struct Checker {
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because
     /// eval fragments can create caller-scope variables at runtime.
     pub eval_barrier_active: bool,
+    /// Whether any checked `eval()` can select an AOT callable through the runtime registry.
+    ///
+    /// Function resolution can encounter eval while the selected function itself is still in
+    /// flight, so the driver repeats the idempotent variadic-container promotion after all free
+    /// functions have signatures.
+    pub eval_native_callables_reachable: bool,
     /// Types recorded for `return <expr>;` statements at the moment each one was checked,
     /// keyed by the statement node's address in the AST plus its span.
     ///

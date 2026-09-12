@@ -29547,23 +29547,25 @@ echo eval($code);
                 .next()
         })
         .expect("the eval instance method bridge should be emitted");
-    for (class_name, method) in [
-        ("CURLFile", "getFilename"),
-        ("EvalPhysicalCollector", "collect"),
+    for (class_name, source_method, symbol_method) in [
+        ("CURLFile", "getFilename", "getfilename"),
+        ("EvalPhysicalCollector", "collect", "collect"),
     ] {
         assert!(
             instance_bridge.contains(&format!(
-                "__elephc_eval_method_{class_name}_{class_name}_{method}"
+                "__elephc_eval_method_{class_name}_{class_name}_{symbol_method}"
             )),
-            "the eval bridge should own a physical body for {class_name}::{method}:\n{instance_bridge}"
+            "the eval bridge should own a physical body for {class_name}::{source_method}:\n{instance_bridge}"
         );
         assert!(
-            instance_bridge.contains(&format!("_method_{class_name}_{method}")),
-            "the eval bridge should call the raw symbol for {class_name}::{method}:\n{instance_bridge}"
+            instance_bridge.contains(&format!("_method_{class_name}_{symbol_method}")),
+            "the eval bridge should call the raw symbol for {class_name}::{source_method}:\n{instance_bridge}"
         );
         assert!(
-            !instance_bridge.contains(&format!("_method_source_abi_{class_name}_{method}")),
-            "the eval bridge must not enter the source adapter for {class_name}::{method}:\n{instance_bridge}"
+            !instance_bridge.contains(&format!(
+                "_method_source_abi_{class_name}_{symbol_method}"
+            )),
+            "the eval bridge must not enter the source adapter for {class_name}::{source_method}:\n{instance_bridge}"
         );
     }
     let static_bridge = user_asm
@@ -29572,16 +29574,16 @@ echo eval($code);
         .expect("the eval static method bridge should be emitted");
     assert!(
         static_bridge.contains(
-            "__elephc_eval_static_method_body_EvalPhysicalCollector_EvalPhysicalCollector_collectStatic"
+            "__elephc_eval_static_method_body_EvalPhysicalCollector_EvalPhysicalCollector_collectstatic"
         ),
         "the eval bridge should own a body for the static collector twin:\n{static_bridge}"
     );
     assert!(
-        static_bridge.contains("_static_EvalPhysicalCollector_collectStatic"),
+        static_bridge.contains("_static_EvalPhysicalCollector_collectstatic"),
         "the eval bridge should call the raw static collector symbol:\n{static_bridge}"
     );
     assert!(
-        !static_bridge.contains("_static_source_abi_EvalPhysicalCollector_collectStatic"),
+        !static_bridge.contains("_static_source_abi_EvalPhysicalCollector_collectstatic"),
         "the eval bridge must not enter the static source adapter:\n{static_bridge}"
     );
     let _ = fs::remove_dir_all(&dir);

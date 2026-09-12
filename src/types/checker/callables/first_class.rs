@@ -508,6 +508,50 @@ impl Checker {
         crate::types::signatures::promote_variadic_to_descriptor_container(sig);
     }
 
+    /// Gives every eval-reachable native variadic the container Magician actually constructs.
+    ///
+    /// Unlike a statically resolved first-class callable, `eval()` can name any method or
+    /// constructor through a runtime string. Magician therefore binds every source variadic into
+    /// an array of boxed Mixed cells. A narrower native container such as `array<string>` would
+    /// interpret those cell pointers as inline string pairs and corrupt the first consumer.
+    /// Promoting only the storage type keeps `param_type_exprs` unchanged, so the binder still
+    /// coerces each element according to the PHP declaration and Reflection still reports it.
+    pub(crate) fn promote_eval_native_variadic_containers(&mut self) -> Result<(), CompileError> {
+        self.eval_native_callables_reachable = true;
+        let mut function_names = self
+            .fn_decls
+            .iter()
+            .filter(|(_, declaration)| {
+                declaration
+                    .variadic
+                    .as_deref()
+                    .is_some_and(|name| name != crate::func_args::HIDDEN_ARGS_PARAM)
+            })
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for (group, variants) in &self.function_variant_groups {
+            if variants.iter().any(|variant| function_names.contains(variant)) {
+                function_names.retain(|name| !variants.contains(name));
+                function_names.push(group.clone());
+            }
+        }
+        function_names.sort();
+        function_names.dedup();
+        for name in function_names {
+            self.promote_descriptor_variadic_container(&name)?;
+        }
+        for class_info in self.classes.values_mut() {
+            for signature in class_info
+                .methods
+                .values_mut()
+                .chain(class_info.static_methods.values_mut())
+            {
+                crate::types::signatures::promote_variadic_to_descriptor_container(signature);
+            }
+        }
+        Ok(())
+    }
+
     /// Promotes whatever callable a resolved [`CallableTarget`] names, for any of its three kinds.
     ///
     /// `resolve_first_class_callable_sig` covers the targets written as first-class callable
@@ -605,6 +649,74 @@ mod tests {
     use crate::parser::ast::{Stmt, StmtKind};
     use crate::codegen_support::platform::Target;
     use crate::types::PhpType;
+
+    /// Eval promotes free, method and constructor variadics to boxed-Mixed storage on every target.
+    ///
+    /// The declared `string` contract remains in `param_type_exprs`; only the physical collector
+    /// changes. Magician coerces each eval argument against that source contract before filling
+    /// the collector, while the native body reads the cells through their real Mixed layout.
+    #[test]
+    fn eval_native_variadics_use_the_native_bridge_container_on_every_target() {
+        let source = r#"<?php
+function evalTypedFreeVariadic(string ...$parts): int { return count($parts); }
+class EvalTypedVariadicBridge {
+    public function __construct(string ...$parts) {}
+    public static function collect(string ...$parts): int { return count($parts); }
+}
+eval('new EvalTypedVariadicBridge("a", "b");');
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let checked =
+                crate::types::checker::check_types(&program, target).expect("check");
+            let function = checked
+                .functions
+                .get("evalTypedFreeVariadic")
+                .expect("typed free variadic signature");
+            let function_index = crate::types::signatures::variadic_param_index(function)
+                .expect("source variadic slot");
+            assert_eq!(
+                function.params[function_index].1,
+                crate::types::signatures::descriptor_variadic_container(),
+                "{name}: eval-native free function binding requires boxed-Mixed storage",
+            );
+            assert_eq!(
+                function.param_type_exprs[function_index],
+                Some(crate::parser::ast::TypeExpr::Str),
+                "{name}: free function promotion must preserve string coercion metadata",
+            );
+            let class = checked
+                .classes
+                .get("EvalTypedVariadicBridge")
+                .expect("typed variadic fixture class");
+            for (method, signature) in [
+                ("__construct", class.methods.get("__construct")),
+                ("collect", class.static_methods.get("collect")),
+            ] {
+                let signature = signature.expect("typed variadic method signature");
+                let index = crate::types::signatures::variadic_param_index(signature)
+                    .expect("source variadic slot");
+                assert_eq!(
+                    signature.params[index].1,
+                    crate::types::signatures::descriptor_variadic_container(),
+                    "{name} {method}: eval-native binding requires boxed-Mixed storage",
+                );
+                assert_eq!(
+                    signature.param_type_exprs[index],
+                    Some(crate::parser::ast::TypeExpr::Str),
+                    "{name} {method}: storage promotion must preserve string coercion metadata",
+                );
+            }
+        }
+    }
 
     /// A variadic reached only through a callable descriptor compiles for the dynamic container.
     ///

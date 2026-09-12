@@ -1150,9 +1150,11 @@ pub(crate) fn lower_eval_native_default_helpers(
         function.source_signature = Some(source_signature(&function_name, &signature));
         function.signature = Some(eir_runtime_metadata_signature(&signature));
         let body = [Stmt::new(StmtKind::Return(Some(default)), Span::dummy())];
+        // The helper inherits class scope through `current_class` below. It must not enter the
+        // separate property-initializer path, which skips `body` and expects an object receiver.
         let closures = lower_body_into_function(
             &mut function,
-            Some(&class_info),
+            None,
             &mut module.data,
             &body,
             TypeEnv::new(),

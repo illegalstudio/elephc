@@ -180,6 +180,11 @@ impl Checker {
             // The magician archive contains the encoding-aware `mb_strlen()` implementation;
             // macOS exposes iconv through a separate system library while Linux keeps it in libc.
             self.require_macos_builtin_library("iconv");
+            // Eval can select any generated method or constructor by a runtime string. Magician
+            // collects every source variadic in a boxed-Mixed array, so the native frame must use
+            // that same storage even when PHP declared a narrower element type. The declaration's
+            // type expression remains authoritative for per-element coercion and Reflection.
+            self.promote_eval_native_variadic_containers()?;
             self.infer_type(&args[0], env)?;
             return Ok(Some(PhpType::Mixed));
         }
