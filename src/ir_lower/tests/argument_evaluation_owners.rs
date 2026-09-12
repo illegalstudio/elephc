@@ -549,10 +549,10 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
     }
 }
 
-/// Spread staging consumes only a borrow while its published source owner remains in the ledger.
+/// The runtime-key binder publishes its spread source through later argument evaluation.
 #[test]
-fn spread_temp_store_does_not_consume_the_evaluation_owner_lease() {
-    use crate::ir::{Immediate, LocalKind, Op, Ownership};
+fn boxed_spread_source_stays_published_through_later_argument_evaluation() {
+    use crate::ir::{Immediate, LocalKind, Op};
 
     let source = r#"<?php
 function createOwnedSpread(string $text): array { return [$text]; }
@@ -575,46 +575,70 @@ function exerciseOwnedSpread(string $text): void {
             .iter()
             .find(|function| function.name == "exerciseOwnedSpread")
             .unwrap();
-        let borrowed_spread = function.instructions.iter().find_map(|inst| {
-            let value = inst.result?;
-            if inst.op != Op::Borrow {
-                return None;
-            }
-            let stored = *inst.operands.first()?;
-            let slot = function.instructions.iter().find_map(|store| {
-                let Immediate::LocalSlot(slot) = store.immediate.as_ref()? else {
+        let call = |callee: &str| {
+            function
+                .instructions
+                .iter()
+                .enumerate()
+                .find_map(|(index, inst)| {
+                    let Some(Immediate::Data(name)) = inst.immediate else {
+                        return None;
+                    };
+                    (inst.op == Op::Call
+                        && module.data.function_names[name.as_raw() as usize]
+                            .eq_ignore_ascii_case(callee))
+                    .then_some((index, inst.result?))
+                })
+                .unwrap_or_else(|| panic!("{target}: call to {callee} must be lowered"))
+        };
+        let (source_call, source) = call("createOwnedSpread");
+        let (later_call, _) = call("createOwnedSpreadLater");
+        let (acquire, lease) = function
+            .instructions
+            .iter()
+            .enumerate()
+            .find_map(|(index, inst)| {
+                (index > source_call && inst.op == Op::Acquire && inst.operands == [source])
+                    .then_some((index, inst.result?))
+            })
+            .expect("spread source must be retained by the runtime-key binder");
+        let (store, slot) = function
+            .instructions
+            .iter()
+            .enumerate()
+            .find_map(|(index, inst)| {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
                     return None;
                 };
-                (store.op == Op::StoreLocal
-                    && store.operands == [stored]
-                    && function.locals[(*slot).as_raw() as usize].kind == LocalKind::OwnedTemp)
-                .then_some(*slot)
-            })?;
-            function.value(value).is_some_and(|value| {
-                    value.ownership == Ownership::Borrowed
-                        && (value.php_type.is_php_array()
-                            || matches!(
-                                value.php_type.codegen_repr(),
-                                crate::types::PhpType::Array(_)
-                                    | crate::types::PhpType::AssocArray { .. }
-                            ))
+                (index > acquire
+                    && inst.op == Op::StoreLocal
+                    && inst.operands == [lease]
+                    && function.locals[slot.as_raw() as usize].kind == LocalKind::HiddenTemp)
+                .then_some((index, slot))
+            })
+            .expect("spread binder must store its retained source");
+        let owner_op = |op| {
+            function
+                .instructions
+                .iter()
+                .enumerate()
+                .find_map(|(index, inst)| {
+                    (inst.op == op && inst.immediate == Some(Immediate::LocalSlot(slot)))
+                        .then_some(index)
                 })
-            .then_some((value, slot))
-        }).expect("spread evaluation must expose a borrowed owner view");
-        let staged = function.instructions.iter().find_map(|inst| {
-            (inst.op == Op::Acquire && inst.operands == [borrowed_spread.0]).then_some(inst.result?)
-        }).expect("spread temp must acquire its borrowed evaluation view");
-        assert!(function.instructions.iter().any(|inst| {
-            inst.op == Op::StoreLocal && inst.operands == [staged]
-        }), "{target}: spread temp must store its own acquired lease");
-        assert!(!function.instructions.iter().any(|inst| {
-            inst.op == Op::Release && inst.operands == [borrowed_spread.0]
-        }), "{target}: spread staging must not release the borrowed ledger value");
-        assert_evaluation_owner_retires_once(
-            function,
-            borrowed_spread.0,
-            borrowed_spread.1,
-            target,
+                .unwrap_or_else(|| panic!("{target}: spread source owner must emit {op:?}"))
+        };
+        let push = owner_op(Op::PushCallOperandOwner);
+        let pop = owner_op(Op::PopCallOperandOwner);
+        let release = owner_op(Op::ReleaseLocalSlot);
+        assert!(
+            source_call < acquire
+                && acquire < store
+                && store < push
+                && push < later_call
+                && later_call < pop
+                && pop < release,
+            "{target}: the spread source stays unwind-visible through later argument evaluation",
         );
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }

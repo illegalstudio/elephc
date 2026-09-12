@@ -43,7 +43,13 @@ pub(super) fn lower_boxed_spread_args(
         span,
     };
     for _ in &sig.params {
-        state.slots.push(initialize_slot(ctx, PhpType::Mixed, &Expr::new(ExprKind::Null, span)));
+        state
+            .slots
+            .push(initialize_owned_slot(
+                ctx,
+                PhpType::Mixed,
+                &Expr::new(ExprKind::Null, span),
+            ));
         state.filled.push(initialize_slot(ctx, PhpType::Bool, &Expr::new(ExprKind::BoolLiteral(false), span)));
     }
     let mut sources = Vec::new();
@@ -55,12 +61,12 @@ pub(super) fn lower_boxed_spread_args(
                 let index = crate::types::call_args::named_param_index(sig, sig.params.len(), name)
                     .expect("shared planner validated fixed named argument");
                 bind_named(ctx, &state, index, &value);
-                clear_slot(ctx, &value, span);
+                retire_slot(ctx, &value, span);
             }
             _ => {
                 let value = root_value(ctx, arg);
                 bind_positional(ctx, &state, &value);
-                clear_slot(ctx, &value, span);
+                retire_slot(ctx, &value, span);
             }
         }
     }
@@ -74,23 +80,36 @@ pub(super) fn lower_boxed_spread_args(
     }
     // An invalid surplus value can own an object with a PHP destructor. Keep
     // every source alive until all source effects and arity checks have run.
-    for source in sources {
-        clear_slot(ctx, &source, span);
+    for source in sources.into_iter().rev() {
+        retire_slot(ctx, &source, span);
     }
     let mut operands = Vec::with_capacity(state.slots.len());
-    for slot in state.slots {
+    for slot in &state.slots {
         let value = ctx.load_local(&slot, Some(span));
         let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
         ctx.builder.set_value_ownership(owned.value, Ownership::Owned);
         operands.push(owned.value);
-        clear_slot(ctx, &slot, span);
+    }
+    for slot in state.slots.into_iter().rev() {
+        retire_slot(ctx, &slot, span);
     }
     Some(coerce_operands_to_params(ctx, sig, operands))
 }
 
 /// Stores an expression in a rooted slot whose boxed layout does not depend on its current value.
 fn root_value(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> String {
-    initialize_slot(ctx, PhpType::Mixed, expr)
+    initialize_owned_slot(ctx, PhpType::Mixed, expr)
+}
+
+/// Creates and publishes a refcounted temporary for same-frame exception cleanup.
+fn initialize_owned_slot(
+    ctx: &mut LoweringContext<'_, '_>,
+    ty: PhpType,
+    expr: &Expr,
+) -> String {
+    let name = initialize_slot(ctx, ty, expr);
+    register_owned_call_operand(ctx, ctx.local_slots[&name], expr.span);
+    name
 }
 
 /// Creates a compiler-private local and initializes it using ordinary retaining-store semantics.
@@ -100,10 +119,9 @@ fn initialize_slot(ctx: &mut LoweringContext<'_, '_>, ty: PhpType, expr: &Expr) 
     slot
 }
 
-/// Retires one rooted temporary after all consumers have acquired their own references.
-fn clear_slot(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
-    let null = lower_null(ctx, &Expr::new(ExprKind::Null, span));
-    ctx.unset_local(slot, null, Some(span));
+/// Retires one published temporary after all consumers have acquired their own references.
+fn retire_slot(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
+    retire_owned_call_operand(ctx, ctx.local_slots[slot], span);
 }
 
 /// Iterates a boxed source with the normal runtime iterator, preserving sparse and named keys.
@@ -111,8 +129,16 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
     let source_slot = root_value(ctx, source);
     let source = ctx.load_local(&source_slot, Some(state.span));
     let (iterator, iterator_owner) = ctx.emit_iter_start(source, false, state.span);
-    let key_slot = initialize_slot(ctx, PhpType::Mixed, &Expr::new(ExprKind::Null, state.span));
-    let value_slot = initialize_slot(ctx, PhpType::Mixed, &Expr::new(ExprKind::Null, state.span));
+    let key_slot = initialize_owned_slot(
+        ctx,
+        PhpType::Mixed,
+        &Expr::new(ExprKind::Null, state.span),
+    );
+    let value_slot = initialize_owned_slot(
+        ctx,
+        PhpType::Mixed,
+        &Expr::new(ExprKind::Null, state.span),
+    );
     let header = ctx.builder.create_named_block("spread.iter.next", Vec::new());
     let body = ctx.builder.create_named_block("spread.iter.body", Vec::new());
     let exit = ctx.builder.create_named_block("spread.iter.exit", Vec::new());
@@ -160,11 +186,11 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
     // stores release these values, and the exit path retires the final pair.
     branch(ctx, header);
     ctx.builder.position_at_end(exit);
+    retire_slot(ctx, &value_slot, state.span);
+    retire_slot(ctx, &key_slot, state.span);
     if let Some(slot) = iterator_owner {
         ctx.retire_iter_start_owner(slot, state.span);
     }
-    clear_slot(ctx, &key_slot, state.span);
-    clear_slot(ctx, &value_slot, state.span);
     source_slot
 }
 
