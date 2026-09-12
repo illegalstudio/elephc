@@ -568,7 +568,7 @@ impl Checker {
                 self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
                 self.record_unresolved_callee_argument_aliases(args);
                 for arg in args {
-                    self.infer_type(arg, env)?;
+                    self.infer_descriptor_call_arg_type(arg, env)?;
                 }
                 return Ok(PhpType::Mixed);
             }
@@ -658,7 +658,7 @@ impl Checker {
         self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
-            self.infer_type(arg, env)?;
+            self.infer_descriptor_call_arg_type(arg, env)?;
         }
         Ok(self
             .closure_return_types
@@ -694,7 +694,7 @@ impl Checker {
             self.require_no_spread_after_named_args(args, &callee_desc)?;
             self.record_unresolved_callee_argument_aliases(args);
             for arg in args {
-                self.infer_type(arg, env)?;
+                self.infer_descriptor_call_arg_type(arg, env)?;
             }
             return Ok(PhpType::Mixed);
         }
@@ -833,7 +833,7 @@ impl Checker {
         // recoverable from a recorded closure shape, but the PARAMETER binding modes are not.
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
-            self.infer_type(arg, env)?;
+            self.infer_descriptor_call_arg_type(arg, env)?;
         }
         // Try to determine return type from closure signature
         match &callee.kind {
@@ -869,7 +869,7 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
-            self.infer_type(arg, env)?;
+            self.infer_descriptor_call_arg_type(arg, env)?;
         }
         Ok(PhpType::Mixed)
     }
@@ -1311,8 +1311,13 @@ impl Checker {
         let regular_param_count = crate::types::call_args::regular_param_count(&sig);
         let mut changed = false;
         let mut param_idx = 0usize;
+        let descriptor_args = self.callable_param_names.contains(var);
         for arg in &normalized_args {
-            let actual_ty = self.infer_type(arg, env)?;
+            let actual_ty = if descriptor_args {
+                self.infer_descriptor_call_arg_type(arg, env)?
+            } else {
+                self.infer_type(arg, env)?
+            };
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }

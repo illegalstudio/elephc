@@ -11,7 +11,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -304,6 +304,22 @@ impl Checker {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Returns the callable target tracked for a two-element callable-array local.
+    ///
+    /// This is intentionally narrower than general callable-signature resolution. In
+    /// particular, it does not validate the target as a zero-argument invocation and it does
+    /// not classify every `Array(Mixed)` value as callable. The matching EIR path materializes
+    /// this target as a descriptor before crossing a `callable` parameter boundary.
+    pub(crate) fn tracked_callable_array_target(
+        &self,
+        expr: &Expr,
+    ) -> Option<CallableTarget> {
+        let ExprKind::Variable(name) = &expr.kind else {
+            return None;
+        };
+        self.callable_array_targets.get(name).cloned()
     }
 
     /// Extracts the element callable signature from an expression that yields an array of callables.

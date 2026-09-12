@@ -16,7 +16,11 @@
 //!   Compiler-internal types with no PHP spelling stay a hard error.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use std::collections::HashMap;
+
+use crate::parser::ast::{
+    BinOp, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
+};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -98,6 +102,54 @@ fn restore_narrowed_var(env: &mut TypeEnv, var: &str, saved: &Option<PhpType>) {
             env.remove(var);
         }
     }
+}
+
+/// Intersects callable-array facts from every reachable branch of a control-flow join.
+///
+/// Instance-method arrays additionally require one shared assignment identity across all exits:
+/// lowering captures each assignment's receiver in a hidden slot, so equal source expressions in
+/// separate branches do not prove equal runtime receivers. Static targets need no capture and
+/// remain usable whenever every reachable branch resolves to the same method.
+fn joined_callable_array_targets(
+    exits: &[HashMap<String, CallableTarget>],
+    versions: &[HashMap<String, u64>],
+) -> (HashMap<String, CallableTarget>, HashMap<String, u64>) {
+    let Some(first) = exits.first() else {
+        return (HashMap::new(), HashMap::new());
+    };
+    let targets = first
+        .iter()
+        .filter(|(name, target)| {
+            exits
+                .iter()
+                .skip(1)
+                .all(|exit| exit.get(name.as_str()) == Some(*target))
+        })
+        .filter(|(name, target)| {
+            if !matches!(target, CallableTarget::Method { .. }) {
+                return true;
+            }
+            let Some(first_version) = versions.first().and_then(|exit| exit.get(name.as_str()))
+            else {
+                return false;
+            };
+            versions
+                .iter()
+                .skip(1)
+                .all(|exit| exit.get(name.as_str()) == Some(first_version))
+        })
+        .map(|(name, target)| (name.clone(), target.clone()))
+        .collect::<HashMap<_, _>>();
+    let retained_versions = targets
+        .keys()
+        .filter_map(|name| {
+            versions
+                .first()
+                .and_then(|exit| exit.get(name))
+                .map(|version| (name.clone(), *version))
+        })
+        .collect();
+    (targets, retained_versions)
 }
 
 /// Names a `foreach` source that PHP accepts but can never iterate, or `None` when the type
@@ -281,6 +333,8 @@ impl Checker {
                 // the foreach value variable joins with its real element type.
                 stabilize_loop_storage(self, stmt.span, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -307,6 +361,8 @@ impl Checker {
                     errors.extend(self.check_body(body, env));
                 }
                 self.break_continue_depth -= 1;
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -346,9 +402,14 @@ impl Checker {
                 let mut join_key: Option<String> = None;
                 let mut then_exit_ty: Option<PhpType> = None;
                 let single_clause = clauses.len() == 1;
+                let mut callable_target_exits = Vec::new();
+                let mut callable_target_version_exits = Vec::new();
 
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
+                    let branch_entry_targets = self.callable_array_targets.clone();
+                    let branch_entry_target_versions =
+                        self.callable_array_target_versions.clone();
 
                     if let Some(guard) = self.guard_narrowing(cond, env)? {
                         applied_any_guard = true;
@@ -379,6 +440,13 @@ impl Checker {
                             join_key = Some(guard.var.clone());
                             then_exit_ty = branch_exit.cloned();
                         }
+                        if !self.body_cannot_fall_through(body) {
+                            callable_target_exits.push(self.callable_array_targets.clone());
+                            callable_target_version_exits
+                                .push(self.callable_array_target_versions.clone());
+                        }
+                        self.callable_array_targets = branch_entry_targets;
+                        self.callable_array_target_versions = branch_entry_target_versions;
                         restore_narrowed_var(env, &guard.var, &saved);
 
                         // The fallthrough env for the rest of the chain (next elseif or else)
@@ -391,6 +459,13 @@ impl Checker {
                                 errors.extend(error.flatten());
                             }
                         }
+                        if !self.body_cannot_fall_through(body) {
+                            callable_target_exits.push(self.callable_array_targets.clone());
+                            callable_target_version_exits
+                                .push(self.callable_array_target_versions.clone());
+                        }
+                        self.callable_array_targets = branch_entry_targets;
+                        self.callable_array_target_versions = branch_entry_target_versions;
                     }
                 }
 
@@ -408,6 +483,17 @@ impl Checker {
                     }
                     else_falls_through = !self.body_cannot_fall_through(body);
                 }
+                if else_falls_through {
+                    callable_target_exits.push(self.callable_array_targets.clone());
+                    callable_target_version_exits
+                        .push(self.callable_array_target_versions.clone());
+                }
+                let (joined_targets, joined_target_versions) = joined_callable_array_targets(
+                    &callable_target_exits,
+                    &callable_target_version_exits,
+                );
+                self.callable_array_targets = joined_targets;
+                self.callable_array_target_versions = joined_target_versions;
                 if let Some(key) = &join_key {
                     if else_falls_through {
                         else_exit_ty = Some(env.get(key).cloned());
@@ -457,6 +543,8 @@ impl Checker {
                 stabilize_loop_storage(self, stmt.span, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -488,6 +576,8 @@ impl Checker {
                         }
                     }
                 }
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -511,6 +601,8 @@ impl Checker {
                     self.check_stmt(s, env)?;
                 }
                 let errors = self.check_break_continue_target_body(body, env);
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -588,6 +680,8 @@ impl Checker {
                     errors.extend(self.check_body(body, env));
                     self.finally_break_continue_bases.pop();
                 }
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -778,6 +872,8 @@ impl Checker {
 
     /// Copies callable signature, capture, first-class target, and callable-array metadata.
     fn copy_foreach_callable_metadata(&mut self, dest: &str, src: &str) {
+        let copied_target_version = self.callable_array_target_versions.get(src).copied();
+        self.mark_callable_array_target_write(dest);
         if let Some(return_ty) = self.closure_return_types.get(src).cloned() {
             self.closure_return_types.insert(dest.to_string(), return_ty);
         } else {
@@ -796,6 +892,10 @@ impl Checker {
         if let Some(target) = self.callable_array_targets.get(src).cloned() {
             self.callable_array_targets
                 .insert(dest.to_string(), target);
+            if let Some(version) = copied_target_version {
+                self.callable_array_target_versions
+                    .insert(dest.to_string(), version);
+            }
         } else {
             self.callable_array_targets.remove(dest);
         }
@@ -809,6 +909,7 @@ impl Checker {
 
     /// Clears callable metadata for a foreach key or value binding.
     fn clear_foreach_callable_metadata(&mut self, dest: &str) {
+        self.mark_callable_array_target_write(dest);
         self.closure_return_types.remove(dest);
         self.callable_sigs.remove(dest);
         self.callable_captures.remove(dest);

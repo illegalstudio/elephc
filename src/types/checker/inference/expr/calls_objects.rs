@@ -167,18 +167,7 @@ impl Checker {
                 )
             }
             ExprKind::Spread(inner) => {
-                let ty = self.infer_type(inner, env)?;
-                match ty {
-                    PhpType::Array(elem_ty) => Ok(*elem_ty),
-                    PhpType::AssocArray { value, .. } => Ok(*value),
-                    // The boxed spread boundary validates the runtime tag before reading storage.
-                    PhpType::Mixed => Ok(PhpType::Mixed),
-                    ty if ty.is_php_array() => Ok(PhpType::Mixed),
-                    _ => Err(CompileError::new(
-                        expr.span,
-                        "Spread operator requires an array",
-                    )),
-                }
+                self.infer_spread_element_type(inner, expr.span, env, false)
             }
             ExprKind::NamedArg { value, .. } => self.infer_type(value, env),
             ExprKind::ClosureCall { var, args } => {
@@ -389,6 +378,48 @@ impl Checker {
                 unreachable!("MagicConstant must be lowered before type inference")
             }
             _ => unreachable!("basic expression routed to call/object inference"),
+        }
+    }
+
+    /// Infers one argument on a callable-descriptor path.
+    ///
+    /// Descriptor invokers own a runtime iterator walk, so they can accept Traversable spread
+    /// sources. Generic user calls deliberately use ordinary `infer_type` and remain array-only
+    /// until their lowering gains the same walk.
+    pub(crate) fn infer_descriptor_call_arg_type(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        match &expr.kind {
+            ExprKind::Spread(inner) => {
+                self.infer_spread_element_type(inner, expr.span, env, true)
+            }
+            _ => self.infer_type(expr, env),
+        }
+    }
+
+    /// Returns the element type supplied by a spread source under the selected lowering policy.
+    fn infer_spread_element_type(
+        &mut self,
+        inner: &Expr,
+        span: crate::span::Span,
+        env: &TypeEnv,
+        allow_traversable: bool,
+    ) -> Result<PhpType, CompileError> {
+        let ty = self.infer_type(inner, env)?;
+        match ty {
+            PhpType::Array(elem_ty) => Ok(*elem_ty),
+            PhpType::AssocArray { value, .. } => Ok(*value),
+            PhpType::Mixed => Ok(PhpType::Mixed),
+            ty if ty.is_php_array() => Ok(PhpType::Mixed),
+            PhpType::Iterable if allow_traversable => Ok(PhpType::Mixed),
+            PhpType::Object(ref class_name)
+                if allow_traversable && self.object_type_implements_iterable(class_name) =>
+            {
+                Ok(PhpType::Mixed)
+            }
+            _ => Err(CompileError::new(span, "Spread operator requires an array")),
         }
     }
 }

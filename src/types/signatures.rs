@@ -147,6 +147,59 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
     wrapper_sig
 }
 
+/// The storage contract a variadic collector needs when a callable DESCRIPTOR may fill it.
+///
+/// A descriptor container holds exactly the arguments PHP supplied, names included, and the
+/// invoker's tail collector copies every unconsumed name into an associative hash. The callee
+/// therefore has to read its variadic parameter through the runtime heap kind instead of as
+/// static indexed storage, which is exactly what `array<mixed>` means to the backend: a
+/// Mixed-element indexed array may carry runtime-promoted hash storage, so its iteration
+/// dispatches on the heap kind (`crate::codegen::lower_inst::iterators`) and its release walks
+/// hash entries when that is what the block holds (`__rt_decref_array`).
+///
+/// `array<mixed>` rather than the `iterable` marker a direct unknown-named call installs: that
+/// marker has its own runtime shape, and a variadic body is ordinary PHP that may still call
+/// `count($rest)` or index it, neither of which accepts `iterable`. Both shapes iterate the same
+/// way, and `array<mixed>` is also what `callable_wrapper_sig` already publishes to callers, so
+/// the promoted callee and its descriptor agree by construction.
+pub(crate) fn descriptor_variadic_container() -> PhpType {
+    PhpType::Array(Box::new(PhpType::Mixed))
+}
+
+/// Returns whether `sig`'s variadic collector still carries a shape no descriptor can fill.
+///
+/// An UNDECLARED variadic starts out as `array<int>` (the compiler-wide untyped fallback), and
+/// nothing narrows it when the function is only ever reached through a callable descriptor:
+/// there is no call site whose named arguments the checker could see. A body compiled for
+/// `array<int>` reads an associative tail's hash header as indexed storage (entry count as the
+/// length, the insertion-order head slot as element 0) and releases it as an indexed array,
+/// which leaks every persisted string key. Promoting it to [`descriptor_variadic_container`] is
+/// what keeps the callee and the invoker on one container contract.
+///
+/// A declared `int ...$xs` keeps its declared element contract, and a by-reference variadic is
+/// already `Mixed`; `array<mixed>` and the `iterable` marker are already dynamic.
+pub(crate) fn variadic_needs_descriptor_container(sig: &FunctionSig) -> bool {
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return false;
+    };
+    let Some(index) = sig
+        .params
+        .iter()
+        .position(|(name, _)| name == variadic_name)
+    else {
+        return false;
+    };
+    if sig.declared_params.get(index).copied().unwrap_or(false)
+        || sig.ref_params.get(index).copied().unwrap_or(false)
+    {
+        return false;
+    }
+    match &sig.params[index].1 {
+        PhpType::Array(elem) => elem.codegen_repr() != PhpType::Mixed,
+        _ => false,
+    }
+}
+
 /// Looks up a builtin function's canonical call signature.
 ///
 /// Consults the builtin registry first, then the explicitly enumerated
@@ -310,6 +363,57 @@ mod tests {
             variadic: Some("values".to_string()),
             deprecation: None,
         }
+    }
+
+    /// A variadic collector a DESCRIPTOR may fill must be readable through the runtime heap kind.
+    ///
+    /// The descriptor invoker copies every unconsumed NAME into an associative tail hash, so a
+    /// callee compiled for `array<int>` reads that hash's header as indexed storage: the entry
+    /// count becomes the length and the insertion-order head slot becomes element 0. The promoted
+    /// marker must also be a fixed point, or every further descriptor would re-resolve the body.
+    #[test]
+    fn an_untyped_variadic_collector_needs_the_descriptor_container() {
+        let mut sig = variadic_sig(vec![
+            ("head".to_string(), PhpType::Int),
+            ("values".to_string(), PhpType::Array(Box::new(PhpType::Int))),
+        ]);
+        assert!(
+            variadic_needs_descriptor_container(&sig),
+            "array<int> storage cannot carry a named tail entry",
+        );
+
+        sig.params[1].1 = descriptor_variadic_container();
+        assert!(
+            !variadic_needs_descriptor_container(&sig),
+            "the promoted container must be a fixed point",
+        );
+
+        sig.params[1].1 = PhpType::Iterable;
+        assert!(
+            !variadic_needs_descriptor_container(&sig),
+            "the iterable marker is already dispatched on the runtime heap kind",
+        );
+
+        sig.params[1].1 = PhpType::Array(Box::new(PhpType::Int));
+        sig.declared_params[1] = true;
+        assert!(
+            !variadic_needs_descriptor_container(&sig),
+            "a declared `int ...$values` keeps its declared element contract",
+        );
+
+        sig.declared_params[1] = false;
+        sig.ref_params[1] = true;
+        assert!(
+            !variadic_needs_descriptor_container(&sig),
+            "a by-reference variadic is already Mixed",
+        );
+
+        sig.ref_params[1] = false;
+        sig.variadic = None;
+        assert!(
+            !variadic_needs_descriptor_container(&sig),
+            "a signature without a variadic has no collector to promote",
+        );
     }
 
     /// Builds the parameter metadata for callable wrapper sig retypes existing non array variadic.

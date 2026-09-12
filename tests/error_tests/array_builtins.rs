@@ -669,6 +669,30 @@ fn test_error_spread_non_array() {
     );
 }
 
+/// Verifies that an object the checker can PROVE is not Traversable stays rejected statically.
+///
+/// Lowering does carry a runtime guard for this case, but a program whose source says the value
+/// can never be unpacked is refused at compile time, exactly like the scalar case below. The
+/// runtime guard is still covered where it belongs, through a `mixed` source
+/// (`tests/codegen/runtime_gc/descriptor_unpack_keys.rs`).
+#[test]
+fn test_spread_still_rejects_a_proven_non_traversable_object() {
+    expect_error(
+        "<?php class Plain { public int $value = 1; } function add(int $first, int $second): int { return $first + $second; } echo add(...new Plain());",
+        "Spread operator requires an array",
+    );
+}
+
+/// Verifies the narrowness of that widening: a scalar source stays rejected, so accepting
+/// Traversable did not turn the spread check into a no-op.
+#[test]
+fn test_spread_still_rejects_a_scalar_source() {
+    expect_error(
+        "<?php function add(int $first, int $second): int { return $first + $second; } $n = 5; echo add(...$n);",
+        "Spread operator requires an array",
+    );
+}
+
 /// Verifies that error static property array push requires array.
 #[test]
 fn test_error_static_property_array_push_requires_array() {

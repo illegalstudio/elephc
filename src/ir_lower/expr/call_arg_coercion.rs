@@ -38,8 +38,56 @@ pub(super) fn lower_arg_with_signature(
         return value;
     }
     promote_reference_return_local_argument(ctx, sig, index, arg);
+    if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, arg) {
+        return lowered.value;
+    }
     let lowered = lower_expr(ctx, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Materializes a tracked callable-array local as the descriptor required by a Callable slot.
+///
+/// The PHP local remains an ordinary array. Only this value crossing the typed parameter
+/// boundary changes representation. Instance receivers were captured into a hidden local when
+/// the callable array was assigned, so constructing the descriptor here does not evaluate the
+/// original receiver expression again.
+pub(super) fn lower_tracked_callable_array_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> Option<LoweredValue> {
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        || sig.params.get(index)?.1.codegen_repr() != PhpType::Callable
+    {
+        return None;
+    }
+    let ExprKind::Variable(_) = &arg.kind else {
+        return None;
+    };
+    let target = match static_callable_binding_for_expr(ctx, arg)? {
+        StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
+            CallableTarget::StaticMethod { receiver, method }
+        }
+        StaticCallableBinding::InstanceMethod {
+            object,
+            method,
+            direct_call: true,
+            ..
+        } => {
+            CallableTarget::Method { object, method }
+        }
+        StaticCallableBinding::UserFunction(_)
+        | StaticCallableBinding::ExternFunction(_)
+        | StaticCallableBinding::Builtin(_)
+        | StaticCallableBinding::Closure { .. }
+        | StaticCallableBinding::StaticMethod { .. }
+        | StaticCallableBinding::InstanceMethod {
+            direct_call: false,
+            ..
+        } => return None,
+    };
+    Some(lower_first_class_callable(ctx, &target, arg))
 }
 
 /// Gives an escaping by-reference return a managed owner for a caller local.

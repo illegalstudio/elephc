@@ -72,7 +72,7 @@ pub(crate) struct FinallyFrame {
 }
 
 /// Compile-time callable target tracked for straight-line local FCC calls.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum StaticCallableBinding {
     UserFunction(String),
     ExternFunction(String),
@@ -99,7 +99,7 @@ pub(crate) enum StaticCallableBinding {
 }
 
 /// Captured closure value recorded at closure creation time for static calls.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClosureCapture {
     pub value: ValueId,
 }
@@ -3567,6 +3567,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Clears the compile-time callable association for one local.
     pub(crate) fn clear_static_callable_local(&mut self, name: &str) {
         self.static_callable_locals.remove(name);
+    }
+
+    /// Captures the straight-line callable facts at a control-flow split.
+    pub(crate) fn static_callable_locals_snapshot(
+        &self,
+    ) -> HashMap<String, StaticCallableBinding> {
+        self.static_callable_locals.clone()
+    }
+
+    /// Restores the callable facts for one control-flow arm or completed join.
+    pub(crate) fn restore_static_callable_locals(
+        &mut self,
+        snapshot: HashMap<String, StaticCallableBinding>,
+    ) {
+        self.static_callable_locals = snapshot;
     }
 
     /// Clears the compile-time `ReflectionClass` association for one local.

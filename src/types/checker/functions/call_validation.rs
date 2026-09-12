@@ -8,6 +8,8 @@
 //! Key details:
 //! - Diagnostics should map shared planner errors back to source spans without duplicating call semantics.
 
+use std::collections::HashSet;
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::call_args::{self, CallArgPlanError};
@@ -349,6 +351,7 @@ impl Checker {
             callee_desc,
             false,
             false,
+            false,
         )
     }
 
@@ -378,6 +381,7 @@ impl Checker {
             callee_desc,
             false,
             coercive,
+            false,
         )
     }
 
@@ -401,6 +405,7 @@ impl Checker {
             callee_desc,
             true,
             coercive,
+            false,
         )
     }
 
@@ -433,6 +438,31 @@ impl Checker {
             callee_desc,
             true,
             false,
+            true,
+        )
+    }
+
+    /// Validates a signature-known descriptor invocation that can walk Traversable spreads.
+    ///
+    /// Unlike the by-reference-spread variant, this keeps the existing rejection for reference
+    /// parameters while allowing only the source containers the descriptor unpacker supports.
+    pub(crate) fn check_known_callable_call_allowing_traversable_spread(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            false,
+            true,
         )
     }
 
@@ -449,8 +479,10 @@ impl Checker {
         callee_desc: &str,
         allow_by_ref_spread: bool,
         coercive_param_binding: bool,
+        allow_traversable_spread: bool,
     ) -> Result<PhpType, CompileError> {
         let plan = self.plan_named_call_args(sig, args, span, callee_desc, caller_env)?;
+        self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
         let defaults = plan.default_argument_mask();
         let normalized_args = plan.normalized_args();
         let args = normalized_args.as_slice();
@@ -516,7 +548,11 @@ impl Checker {
 
         let mut param_idx = 0usize;
         for arg in args {
-            let actual_ty = self.infer_type(arg, caller_env)?;
+            let actual_ty = if allow_traversable_spread {
+                self.infer_descriptor_call_arg_type(arg, caller_env)?
+            } else {
+                self.infer_type(arg, caller_env)?
+            };
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }
@@ -568,25 +604,34 @@ impl Checker {
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                     }
-                    if coercive_param_binding
-                        && sig.declared_params.get(param_idx).copied().unwrap_or(false)
-                    {
-                        self.require_bound_param_arg_type(
-                            expected_ty,
-                            &actual_ty,
-                            arg,
-                            caller_env,
-                            &format!("{} parameter ${}", callee_desc, param_name),
-                            None,
-                            supplied_reference,
-                        )?;
-                    } else {
-                        self.require_compatible_arg_type(
-                            expected_ty,
-                            &actual_ty,
-                            arg.span,
-                            &format!("{} parameter ${}", callee_desc, param_name),
-                        )?;
+                    // A tracked callable array is accepted only where EIR materializes a real
+                    // descriptor for the declared Callable slot. Untracked Array(Mixed) values
+                    // remain ordinary arrays and retain the type error.
+                    let proven_callable_array = matches!(expected_ty, PhpType::Callable)
+                        && !Self::types_compatible(expected_ty, &actual_ty)
+                        && !self.type_accepts(expected_ty, &actual_ty)
+                        && self.tracked_callable_array_target(arg).is_some();
+                    if !proven_callable_array {
+                        if coercive_param_binding
+                            && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        {
+                            self.require_bound_param_arg_type(
+                                expected_ty,
+                                &actual_ty,
+                                arg,
+                                caller_env,
+                                &format!("{} parameter ${}", callee_desc, param_name),
+                                None,
+                                supplied_reference,
+                            )?;
+                        } else {
+                            self.require_compatible_arg_type(
+                                expected_ty,
+                                &actual_ty,
+                                arg.span,
+                                &format!("{} parameter ${}", callee_desc, param_name),
+                            )?;
+                        }
                     }
                 }
             } else {
@@ -630,5 +675,124 @@ impl Checker {
         }
 
         Ok(sig.return_type.clone())
+    }
+
+    /// Rejects dynamic spreads that could feed raw array storage into a `Callable` slot.
+    ///
+    /// Argument unpacking can project existing callable descriptors from `array<Callable>`, but
+    /// lowering has no element-wise conversion from PHP callable arrays such as `[$object, 'm']`
+    /// into descriptor values. Opaque element types are rejected too, because accepting them
+    /// would make checker success depend on a runtime conversion that does not exist.
+    fn validate_callable_spread_elements(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        plan: &call_args::CallArgPlan,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<(), CompileError> {
+        if !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+            return Ok(());
+        }
+        let regular_param_count = call_args::regular_param_count(sig);
+        let variadic_is_callable = call_args::variadic_element_type(sig)
+            .is_some_and(|ty| ty.codegen_repr() == PhpType::Callable);
+        let mut checked_spreads = HashSet::new();
+
+        if !plan.regular_args.is_empty() {
+            for (param_idx, planned) in plan.regular_args.iter().enumerate() {
+                let call_args::PlannedRegularArg::SpreadElement {
+                    spread_expr,
+                    spread_span,
+                    ..
+                } = planned
+                else {
+                    continue;
+                };
+                if sig
+                    .params
+                    .get(param_idx)
+                    .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Callable)
+                    && checked_spreads.insert(*spread_span)
+                {
+                    self.require_callable_descriptor_spread(
+                        spread_expr,
+                        *spread_span,
+                        caller_env,
+                        callee_desc,
+                    )?;
+                }
+            }
+        } else {
+            let mut positional_idx = 0usize;
+            for arg in args {
+                if let ExprKind::Spread(inner) = &arg.kind {
+                    let feeds_callable = sig
+                        .params
+                        .iter()
+                        .take(regular_param_count)
+                        .skip(positional_idx)
+                        .any(|(_, ty)| ty.codegen_repr() == PhpType::Callable)
+                        || variadic_is_callable;
+                    if feeds_callable && checked_spreads.insert(arg.span) {
+                        self.require_callable_descriptor_spread(
+                            inner,
+                            arg.span,
+                            caller_env,
+                            callee_desc,
+                        )?;
+                    }
+                } else if !matches!(arg.kind, ExprKind::NamedArg { .. }) {
+                    positional_idx = positional_idx.saturating_add(1);
+                }
+            }
+        }
+
+        if variadic_is_callable {
+            for arg in args {
+                let ExprKind::Spread(inner) = &arg.kind else {
+                    continue;
+                };
+                if checked_spreads.insert(arg.span) {
+                    self.require_callable_descriptor_spread(
+                        inner,
+                        arg.span,
+                        caller_env,
+                        callee_desc,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Requires one dynamic spread source to expose actual callable descriptor elements.
+    fn require_callable_descriptor_spread(
+        &mut self,
+        source: &Expr,
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<(), CompileError> {
+        let spread = Expr::new(ExprKind::Spread(Box::new(source.clone())), span);
+        let element_ty = self.infer_descriptor_call_arg_type(&spread, caller_env)?;
+        if element_ty.codegen_repr() == PhpType::Callable {
+            return Ok(());
+        }
+        let detail = if matches!(
+            element_ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) {
+            "callable-array elements are not converted to descriptors during argument unpacking"
+        } else {
+            "the spread element type is not a proven callable descriptor"
+        };
+        Err(CompileError::new(
+            span,
+            &format!(
+                "{} spread feeding a Callable parameter must contain Callable descriptors: {}",
+                callee_desc, detail
+            ),
+        ))
     }
 }

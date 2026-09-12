@@ -62,6 +62,7 @@ impl Checker {
                             )
                         });
                 }
+                self.promote_descriptor_variadic_container(function_name)?;
                 if let Some(sig) = self.functions.get(function_name) {
                     let effective_sig =
                         Self::callable_sig_for_declared_params(sig, &sig.declared_params);
@@ -70,6 +71,7 @@ impl Checker {
                 if let Some(decl) = self.fn_decls.get(function_name).cloned() {
                     let param_types = self.initial_function_param_types(function_name, &decl)?;
                     self.resolve_function_signature(function_name, &decl, param_types)?;
+                    self.promote_descriptor_variadic_container(function_name)?;
                     if let Some(sig) = self.functions.get(function_name) {
                         let effective_sig =
                             Self::callable_sig_for_declared_params(sig, &sig.declared_params);
@@ -315,6 +317,92 @@ impl Checker {
         self.resolve_first_class_callable_sig(target, span, env)
     }
 
+    /// Specializes a first-class target for a descriptor invocation such as `call_user_func()`.
+    ///
+    /// A Traversable spread has no statically addressable elements, so ordinary direct-call
+    /// specialization cannot synthesize array-index reads for its parameter slots. Preserve the
+    /// already-checked fallback signature and let descriptor-aware validation accept the runtime
+    /// iterator walk. Array spreads and calls without spreads keep the existing specialization.
+    pub(crate) fn specialize_first_class_callable_target_for_descriptor_call(
+        &mut self,
+        target: &CallableTarget,
+        args: &[Expr],
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<FunctionSig, CompileError> {
+        if !self.call_has_traversable_spread(args, env)? {
+            return self.specialize_first_class_callable_target(target, args, span, env);
+        }
+        self.resolve_first_class_callable_sig(target, span, env)
+    }
+
+    /// Returns whether a descriptor call contains a spread backed by Traversable storage.
+    pub(crate) fn call_has_traversable_spread(
+        &mut self,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        for arg in args {
+            let ExprKind::Spread(inner) = &arg.kind else {
+                continue;
+            };
+            let ty = self.infer_type(inner, env)?;
+            if matches!(ty, PhpType::Iterable)
+                || matches!(&ty, PhpType::Object(class_name) if self.object_type_implements_iterable(class_name))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Recompiles `name` for the descriptor container contract when it collects a variadic tail.
+    ///
+    /// Handing out a first-class callable makes the function reachable through a descriptor
+    /// invoker, whose container holds exactly the arguments PHP supplied, names included. The
+    /// invoker's tail collector copies every unconsumed name into an associative hash, so the
+    /// callee must read its variadic parameter through the runtime heap kind. An UNDECLARED
+    /// variadic does not: it carries the untyped `array<int>` fallback, and nothing narrows it
+    /// here because a descriptor call site has no named arguments the checker can see. The body
+    /// then reads the tail hash's header as indexed storage (entry count as the length, the
+    /// insertion-order head slot as element 0) and releases it as an indexed array, leaking the
+    /// persisted string keys.
+    ///
+    /// `crate::types::signatures::descriptor_variadic_container` is the storage the invoker's own
+    /// tail collector fills and the one `callable_wrapper_sig` already publishes to callers, so
+    /// all three agree on one callee shape. The signature is re-resolved through
+    /// `resolve_function_signature` rather than patched in place, because the body's own checked
+    /// metadata (foreach storage types above all) has to be recorded against the promoted
+    /// parameter type. It is idempotent: `array<mixed>` is already dynamic, so a second
+    /// descriptor for the same function changes nothing.
+    fn promote_descriptor_variadic_container(&mut self, name: &str) -> Result<(), CompileError> {
+        if self.resolving_functions.contains(name) {
+            return Ok(());
+        }
+        let Some(sig) = self.functions.get(name) else {
+            return Ok(());
+        };
+        if !crate::types::signatures::variadic_needs_descriptor_container(sig) {
+            return Ok(());
+        }
+        let variadic_name = sig.variadic.clone();
+        let mut param_types = sig.params.clone();
+        let Some((_, variadic_ty)) = param_types
+            .iter_mut()
+            .find(|(param_name, _)| Some(param_name.as_str()) == variadic_name.as_deref())
+        else {
+            return Ok(());
+        };
+        *variadic_ty = crate::types::signatures::descriptor_variadic_container();
+        // Only a declaration can be re-resolved. A variant group keeps its current shape rather
+        // than receiving a signature its per-variant bodies were not checked against.
+        let Some(decl) = self.fn_decls.get(name).cloned() else {
+            return Ok(());
+        };
+        self.resolve_function_signature(name, &decl, param_types)?;
+        Ok(())
+    }
+
     /// Infers the return type of a first-class callable target without performing specialization.
     ///
     /// Delegates to `resolve_first_class_callable_sig` and extracts the `return_type` field.
@@ -328,5 +416,84 @@ impl Checker {
         Ok(self
             .resolve_first_class_callable_sig(target, span, env)?
             .return_type)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::Target;
+    use crate::types::PhpType;
+
+    /// A variadic reached only through a callable descriptor compiles for the dynamic container.
+    ///
+    /// `keepsSpareName` has no direct call site, so nothing else can tell the checker that its
+    /// `...$rest` may receive a NAME: the descriptor invoker's tail collector copies every
+    /// unconsumed name into an associative hash, and a body compiled for the untyped `array<int>`
+    /// fallback reads that hash's header as indexed storage. That is exactly how `['z' => 9]`
+    /// printed as `i0=13`: entry count 1 as the length, the insertion-order head slot (FNV-1a of
+    /// `"z"` modulo the 16-slot capacity) as element 0, while the hash's persisted string key
+    /// leaked, because an indexed release never frees hash keys.
+    ///
+    /// The second function is the scope control: a variadic with only direct positional call sites
+    /// must keep its specialized `array<int>` storage, so the promotion cannot quietly box every
+    /// variadic in the program.
+    #[test]
+    fn a_descriptor_variadic_is_dynamic_on_every_target() {
+        let source = r#"<?php
+function keepsSpareName(int $a, ...$rest): string {
+    $out = (string) $a;
+    foreach ($rest as $key => $value) {
+        $out .= '|' . (is_string($key) ? 's' : 'i') . $key . '=' . $value;
+    }
+    return $out;
+}
+function positionalOnlyTail(...$rest): int { return count($rest); }
+function spareNamedArray(): array { return [0 => 1, 'z' => 9]; }
+function unpackSpareName(callable $callback): mixed { return $callback(...spareNamedArray()); }
+echo unpackSpareName(keepsSpareName(...)), ':', positionalOnlyTail(1, 2);
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let checked =
+                crate::types::checker::check_types(&program, target).expect("check");
+
+            let descriptor_tail = checked
+                .functions
+                .get("keepsSpareName")
+                .expect("the first-class callable target keeps a signature")
+                .params
+                .last()
+                .expect("the variadic occupies the last parameter slot")
+                .clone();
+            assert_eq!(
+                descriptor_tail.1,
+                crate::types::signatures::descriptor_variadic_container(),
+                "{name}: a descriptor-reachable variadic must read its tail through the \
+                 runtime heap kind, not as indexed array<int> storage",
+            );
+
+            let direct_tail = checked
+                .functions
+                .get("positionalOnlyTail")
+                .expect("the directly called variadic keeps a signature")
+                .params
+                .last()
+                .expect("the variadic occupies the last parameter slot")
+                .clone();
+            assert_eq!(
+                direct_tail.1,
+                PhpType::Array(Box::new(PhpType::Int)),
+                "{name}: a variadic with only positional direct call sites must keep its \
+                 specialized element storage",
+            );
+        }
     }
 }

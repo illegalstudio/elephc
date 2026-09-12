@@ -380,9 +380,20 @@ fn check_object_or_array_callable_call(
     env: &TypeEnv,
     allow_by_ref_spread: bool,
     allow_runtime_callable_array: bool,
+    descriptor_traversable_spread: bool,
 ) -> Result<Option<PhpType>, CompileError> {
     if let ExprKind::Variable(var_name) = &callback.kind {
         if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
+            if descriptor_traversable_spread {
+                return check_descriptor_callable_target_call(
+                    checker,
+                    &target,
+                    callback_args,
+                    callback,
+                    env,
+                )
+                .map(Some);
+            }
             return check_callable_target_call(
                 checker,
                 &target,
@@ -396,6 +407,18 @@ fn check_object_or_array_callable_call(
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
+    if descriptor_traversable_spread {
+        if let Some(target) = resolve_literal_callable_target(checker, callback, env)? {
+            return check_descriptor_callable_target_call(
+                checker,
+                &target,
+                callback_args,
+                callback,
+                env,
+            )
+            .map(Some);
+        }
+    }
     if runtime_callable_array_type(&callback_ty) {
         if !allow_runtime_callable_array {
             return Err(CompileError::new(
@@ -419,6 +442,20 @@ fn check_object_or_array_callable_call(
             .get(&class_name)
             .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
         {
+            if descriptor_traversable_spread {
+                let target = CallableTarget::Method {
+                    object: Box::new(callback.clone()),
+                    method: "__invoke".to_string(),
+                };
+                return check_descriptor_callable_target_call(
+                    checker,
+                    &target,
+                    callback_args,
+                    callback,
+                    env,
+                )
+                .map(Some);
+            }
             return if allow_by_ref_spread {
                 checker.infer_method_call_on_class_type_allowing_by_ref_spread(
                     &class_name,
@@ -444,6 +481,20 @@ fn check_object_or_array_callable_call(
         return Ok(None);
     };
     if let Some(receiver) = static_callable_receiver(checker, receiver, callback.span)? {
+        if descriptor_traversable_spread {
+            let target = CallableTarget::StaticMethod {
+                receiver,
+                method: method.to_string(),
+            };
+            return check_descriptor_callable_target_call(
+                checker,
+                &target,
+                callback_args,
+                callback,
+                env,
+            )
+            .map(Some);
+        }
         return if allow_by_ref_spread {
             checker.infer_static_method_call_type_allowing_by_ref_spread(
                 &receiver,
@@ -461,6 +512,20 @@ fn check_object_or_array_callable_call(
     let Some(class_name) = checker.invokable_class_for_type(&receiver_ty) else {
         return Ok(None);
     };
+    if descriptor_traversable_spread {
+        let target = CallableTarget::Method {
+            object: Box::new(receiver.clone()),
+            method: method.to_string(),
+        };
+        return check_descriptor_callable_target_call(
+            checker,
+            &target,
+            callback_args,
+            callback,
+            env,
+        )
+        .map(Some);
+    }
     if allow_by_ref_spread {
         checker
             .infer_method_call_on_class_type_allowing_by_ref_spread(
@@ -476,6 +541,49 @@ fn check_object_or_array_callable_call(
             .infer_method_call_on_class_type(&class_name, method, callback_args, callback, env)
             .map(Some)
     }
+}
+
+/// Validates a resolved callback through the descriptor invoker's spread policy.
+fn check_descriptor_callable_target_call(
+    checker: &mut Checker,
+    target: &CallableTarget,
+    callback_args: &[Expr],
+    callback: &Expr,
+    env: &TypeEnv,
+) -> Result<PhpType, CompileError> {
+    let sig = checker.resolve_first_class_callable_sig(target, callback.span, env)?;
+    checker.check_known_callable_call_allowing_by_ref_spread(
+        &sig,
+        callback_args,
+        callback.span,
+        env,
+        "call_user_func() callback",
+    )
+}
+
+/// Resolves a literal two-element callable array before the runtime-array fallback.
+fn resolve_literal_callable_target(
+    checker: &mut Checker,
+    callback: &Expr,
+    env: &TypeEnv,
+) -> Result<Option<CallableTarget>, CompileError> {
+    let Some((receiver, method)) = callable_array_parts(callback) else {
+        return Ok(None);
+    };
+    if let Some(receiver) = static_callable_receiver(checker, receiver, callback.span)? {
+        return Ok(Some(CallableTarget::StaticMethod {
+            receiver,
+            method: method.to_string(),
+        }));
+    }
+    let receiver_ty = checker.infer_type(receiver, env)?;
+    if checker.invokable_class_for_type(&receiver_ty).is_none() {
+        return Ok(None);
+    }
+    Ok(Some(CallableTarget::Method {
+        object: Box::new(receiver.clone()),
+        method: method.to_string(),
+    }))
 }
 
 /// Resolves a receiver-bound callable return type when argument details are runtime-only.
@@ -980,6 +1088,7 @@ fn check_callback_builtin_call_in_engine_frame(
             env,
             false,
             callback_builtin_allows_runtime_callable_array(label),
+            false,
         )?
     {
         return Ok(ret_ty);
@@ -1258,6 +1367,7 @@ pub(crate) fn check_call_user_func_array(
             env,
             true,
             true,
+            false,
         )?
     {
         if !call_user_func_array_arg_container_is_supported(&arg_array_ty) {
@@ -1316,13 +1426,22 @@ pub(crate) fn check_call_user_func(
     span: crate::span::Span,
     env: &TypeEnv,
 ) -> Result<PhpType, CompileError> {
-    for arg in args {
-        checker.infer_type(arg, env)?;
+    for (index, arg) in args.iter().enumerate() {
+        if index == 0 {
+            checker.infer_type(arg, env)?;
+        } else {
+            checker.infer_descriptor_call_arg_type(arg, env)?;
+        }
     }
+    let has_traversable_spread = checker.call_has_traversable_spread(&args[1..], env)?;
     if let ExprKind::FirstClassCallable(target) = &args[0].kind {
-        let sig =
-            checker.specialize_first_class_callable_target(target, &args[1..], span, env)?;
-        let ret_ty = checker.check_known_callable_call(
+        let sig = checker.specialize_first_class_callable_target_for_descriptor_call(
+            target,
+            &args[1..],
+            span,
+            env,
+        )?;
+        let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
             &sig,
             &args[1..],
             span,
@@ -1333,7 +1452,7 @@ pub(crate) fn check_call_user_func(
     }
     if let ExprKind::Variable(var_name) = &args[0].kind {
         if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() {
-            let sig = checker.specialize_first_class_callable_target(
+            let sig = checker.specialize_first_class_callable_target_for_descriptor_call(
                 &target,
                 &args[1..],
                 span,
@@ -1343,7 +1462,18 @@ pub(crate) fn check_call_user_func(
             checker
                 .closure_return_types
                 .insert(var_name.clone(), sig.return_type.clone());
-            let ret_ty = checker.check_known_callable_call(
+            let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
+                &sig,
+                &args[1..],
+                span,
+                env,
+                "call_user_func() callback",
+            )?;
+            return Ok(ret_ty);
+        }
+        if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
+            let sig = checker.resolve_first_class_callable_sig(&target, args[0].span, env)?;
+            let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
                 &sig,
                 &args[1..],
                 span,
@@ -1370,7 +1500,7 @@ pub(crate) fn check_call_user_func(
             .canonical_function_name_folded(cb_name)
             .unwrap_or_else(|| cb_name.clone());
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
-            let ret_ty = checker.check_known_callable_call(
+            let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
                 &sig,
                 &args[1..],
                 span,
@@ -1392,12 +1522,13 @@ pub(crate) fn check_call_user_func(
             env,
             true,
             true,
+            has_traversable_spread,
         )?
     {
         return Ok(ret_ty);
     }
     if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
-        let ret_ty = checker.check_known_callable_call(
+        let ret_ty = checker.check_known_callable_call_allowing_traversable_spread(
             &sig,
             &args[1..],
             span,
@@ -1413,7 +1544,7 @@ pub(crate) fn check_call_user_func(
         // would alias the local, so the arguments lose kill/retype eligibility.
         checker.record_unresolved_callee_argument_aliases(&args[1..]);
         for arg in &args[1..] {
-            checker.infer_type(arg, env)?;
+            checker.infer_descriptor_call_arg_type(arg, env)?;
         }
         return Ok(PhpType::Mixed);
     }
@@ -1425,7 +1556,7 @@ pub(crate) fn check_call_user_func(
         // return type is not statically known, so the call yields Mixed.
         checker.record_unresolved_callee_argument_aliases(&args[1..]);
         for arg in &args[1..] {
-            checker.infer_type(arg, env)?;
+            checker.infer_descriptor_call_arg_type(arg, env)?;
         }
         return Ok(PhpType::Mixed);
     }

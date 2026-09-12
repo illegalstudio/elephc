@@ -62,6 +62,8 @@ impl Checker {
             callable_array_return_sigs: HashMap::new(),
             callable_captures: HashMap::new(),
             callable_array_targets: HashMap::new(),
+            callable_array_target_versions: HashMap::new(),
+            next_callable_array_target_version: 0,
             first_class_callable_targets: HashMap::new(),
             reflection_class_targets: HashMap::new(),
             interfaces: HashMap::new(),

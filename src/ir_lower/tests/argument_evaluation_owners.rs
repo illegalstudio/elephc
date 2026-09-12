@@ -650,18 +650,19 @@ function exerciseDescriptorOwners(callable $callback): void {
             .instructions
             .iter()
             .enumerate()
-            .filter_map(|(array_index, inst)| {
-                (inst.op == Op::ArrayNew).then_some((array_index, inst.result?))
+            .filter_map(|(container_index, inst)| {
+                matches!(inst.op, Op::ArrayNew | Op::HashNew)
+                    .then_some((container_index, inst.result?))
             })
             .collect::<Vec<_>>();
         assert_eq!(containers.len(), 2, "{target}: both descriptor calls need containers");
-        for (ordinal, (array_index, container)) in containers.into_iter().enumerate() {
+        for (ordinal, (container_index, container)) in containers.into_iter().enumerate() {
             let (store_index, slot) = function
                 .instructions
                 .iter()
                 .enumerate()
                 .find_map(|(index, inst)| {
-                    if index <= array_index || inst.op != Op::StoreLocal {
+                    if index <= container_index || inst.op != Op::StoreLocal {
                         return None;
                     }
                     let stored = *inst.operands.first()?;
@@ -707,7 +708,7 @@ function exerciseDescriptorOwners(callable $callback): void {
                 })
                 .expect("descriptor construction owner retirement");
             assert!(
-                array_index < store_index
+                container_index < store_index
                     && store_index < push_index
                     && push_index < argument_call
                     && argument_call < pop_index,
@@ -718,7 +719,7 @@ function exerciseDescriptorOwners(callable $callback): void {
                 .instructions
                 .iter()
                 .filter(|inst| {
-                    inst.op == Op::ArrayPush
+                    matches!(inst.op, Op::ArrayPush | Op::DescriptorArgSet)
                         && inst
                             .span
                             .is_some_and(|span| span.line == argument_line)
@@ -738,9 +739,9 @@ function exerciseDescriptorOwners(callable $callback): void {
     }
 }
 
-/// A sole declared-array spread reaches descriptor validation without raw indexed operations.
+/// A sole declared-array spread is normalized into one raw-key descriptor container.
 #[test]
-fn descriptor_sole_boxed_spread_preserves_its_container_on_all_targets() {
+fn descriptor_sole_boxed_spread_normalizes_one_container_on_all_targets() {
     use crate::ir::{Op, ValueDef};
 
     let source = r#"<?php
@@ -765,13 +766,32 @@ function invokeBoxedDescriptorSpread(callable $callback): mixed {
                 container = producer.operands[0];
                 continue;
             }
-            assert_eq!(producer.op, Op::Call, "{target}: preserve the original boxed array");
+            assert_eq!(producer.op, Op::MixedBox, "{target}: box the normalized descriptor hash");
             assert_eq!(producer.result_php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+            container = producer.operands[0];
+            let ValueDef::Instruction { inst, .. } = function.value(container).unwrap().def else {
+                panic!("{target}: the normalized hash must be an instruction result");
+            };
+            assert_eq!(
+                function.instruction(inst).unwrap().op,
+                Op::LoadLocal,
+                "{target}: the descriptor must consume the published normalized hash",
+            );
             break;
         }
+        assert_eq!(
+            function.instructions.iter().filter(|inst| inst.op == Op::HashNew).count(),
+            1,
+            "{target}: the spread needs exactly one normalized descriptor hash",
+        );
+        assert_eq!(
+            function.instructions.iter().filter(|inst| inst.op == Op::Call).count(),
+            1,
+            "{target}: the source expression must be evaluated once",
+        );
         assert!(!function.instructions.iter().any(|inst| {
             matches!(inst.op, Op::ArrayNew | Op::ArrayLen | Op::ArrayGet)
-        }), "{target}: boxed argument keys must reach the invoker without indexed reinterpretation");
+        }), "{target}: boxed argument keys must be walked without indexed reinterpretation");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

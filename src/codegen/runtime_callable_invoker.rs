@@ -632,14 +632,7 @@ fn emit_loaded_indexed_array_callback_call(
     }
 
     if sig.variadic.is_some() {
-        let variadic_elem_ty = sig
-            .params
-            .last()
-            .and_then(|(_, ty)| match ty {
-                PhpType::Array(elem) => Some((**elem).clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| elem_ty.clone());
+        let variadic_elem_ty = invoker_variadic_elem_ty(sig, &elem_ty);
         let source_base = shape.visible_regular;
         let prefix = shape.collector_prefix();
         let owner_index = shape.variadic_owner_index();
@@ -2620,6 +2613,29 @@ fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &Ph
     abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
 }
 
+/// Returns the element type a variadic collector's storage holds, for BOTH container shapes.
+///
+/// One decision, because the two argument builders fill the SAME callee slot: the indexed builder
+/// allocates `__rt_array_new` storage and the associative one a hash, and a callee compiled for
+/// one element representation cannot read the other. `PhpType::Iterable` is the checker's other
+/// dynamic container marker, installed for a variadic an unknown named argument reaches (see
+/// `crate::types::signatures::descriptor_variadic_container`): its elements are boxed `Mixed`,
+/// which is what the callee's heap-kind-dispatched iteration expects. Reading the marker as "not
+/// an array" and falling back to the CONTAINER's element type instead handed a dynamic callee raw
+/// scalar slots whenever that container was not itself Mixed-element.
+///
+/// `container_elem_ty` remains the fallback for a signature with no typed variadic slot at all.
+fn invoker_variadic_elem_ty(sig: &FunctionSig, container_elem_ty: &PhpType) -> PhpType {
+    sig.params
+        .last()
+        .and_then(|(_, ty)| match ty {
+            PhpType::Array(elem) => Some((**elem).clone()),
+            PhpType::Iterable => Some(PhpType::Mixed),
+            _ => None,
+        })
+        .unwrap_or_else(|| container_elem_ty.clone())
+}
+
 /// Emits an associative variadic array argument from remaining hash entries.
 #[allow(clippy::too_many_arguments)]
 fn emit_loaded_assoc_variadic_array_arg(
@@ -2632,15 +2648,7 @@ fn emit_loaded_assoc_variadic_array_arg(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    let variadic_elem_ty = sig
-        .params
-        .last()
-        .and_then(|(_, ty)| match ty {
-            PhpType::Array(elem) => Some((**elem).clone()),
-            PhpType::Iterable => Some(PhpType::Mixed),
-            _ => None,
-        })
-        .unwrap_or_else(|| elem_ty.clone());
+    let variadic_elem_ty = invoker_variadic_elem_ty(sig, elem_ty);
     let variadic_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
         value: Box::new(variadic_elem_ty.clone()),

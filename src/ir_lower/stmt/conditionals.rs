@@ -8,6 +8,9 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use std::collections::HashMap;
+
+use crate::ir_lower::context::StaticCallableBinding;
 use crate::types::TypeEnv;
 
 /// One reachable arm of an `if` chain together with its deferred merge edge.
@@ -18,6 +21,8 @@ struct IfArmExit {
     types: TypeEnv,
     /// Definitely-initialized slots at the end of this arm.
     initialized: HashSet<LocalSlotId>,
+    /// Compile-time callable targets that remain valid at the end of this arm.
+    static_callables: HashMap<String, StaticCallableBinding>,
 }
 
 /// Lowers an `if` / `elseif` / `else` chain and joins all reachable arm types once.
@@ -46,7 +51,9 @@ pub(super) fn lower_if(
     if !merge_reachable {
         ctx.builder.terminate(Terminator::Unreachable);
     }
+    let joined_callables = ctx.static_callable_locals_snapshot();
     ctx.clear_static_callable_locals();
+    ctx.restore_static_callable_locals(joined_callables);
 }
 
 /// Recursively emits one condition node and records every reachable arm against one shared merge.
@@ -65,6 +72,7 @@ fn lower_if_chain(
     let cond_value = ctx.truthy_consuming(cond_value, Some(condition.span));
     let split_initialized = ctx.initialized_slots_snapshot();
     let split_types = ctx.local_types_snapshot();
+    let split_static_callables = ctx.static_callable_locals_snapshot();
     // Interior-alias markers are a MAY fact, so the arms are unioned rather than sequenced.
     // Without this, `if (..) { $r = &$a[0]; } else { $r = &$o->p; }` would take whichever arm
     // was lowered last as the answer for both.
@@ -82,6 +90,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types.clone());
+    ctx.restore_static_callable_locals(split_static_callables.clone());
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
     let mut merge_reachable = false;
@@ -92,10 +101,10 @@ fn lower_if_chain(
     }
 
     let then_borrowed_refs = ctx.borrowed_element_ref_locals_snapshot();
-    ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types);
+    ctx.restore_static_callable_locals(split_static_callables);
     ctx.restore_borrowed_element_ref_locals(split_borrowed_refs);
     let else_reachable =
         if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
@@ -155,6 +164,7 @@ fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExi
         tail,
         types: ctx.local_types_snapshot(),
         initialized: ctx.initialized_slots_snapshot(),
+        static_callables: ctx.static_callable_locals_snapshot(),
     });
 }
 
@@ -168,6 +178,9 @@ fn finish_if_type_join(
     if arms.len() < 2 {
         if let Some(arm) = arms.first() {
             ctx.restore_local_types(arm.types.clone());
+            ctx.restore_static_callable_locals(arm.static_callables.clone());
+        } else {
+            ctx.restore_static_callable_locals(HashMap::new());
         }
         for arm in &arms {
             ctx.builder.position_at_end(arm.tail);
@@ -180,6 +193,7 @@ fn finish_if_type_join(
     }
 
     let joined = join_arm_types(ctx, &arms);
+    let joined_callables = join_arm_static_callables(&arms);
     let saved_types = ctx.local_types_snapshot();
     for arm in &arms {
         ctx.restore_local_types(arm.types.clone());
@@ -195,6 +209,26 @@ fn finish_if_type_join(
     for (name, ty) in joined {
         ctx.set_local_type(&name, ty);
     }
+    ctx.restore_static_callable_locals(joined_callables);
+}
+
+/// Intersects static callable facts across every reachable arm of an `if` join.
+fn join_arm_static_callables(
+    arms: &[IfArmExit],
+) -> HashMap<String, StaticCallableBinding> {
+    let Some(first) = arms.first() else {
+        return HashMap::new();
+    };
+    first
+        .static_callables
+        .iter()
+        .filter(|(name, target)| {
+            arms.iter().skip(1).all(|arm| {
+                arm.static_callables.get(name.as_str()) == Some(*target)
+            })
+        })
+        .map(|(name, target)| (name.clone(), target.clone()))
+        .collect()
 }
 
 /// Computes the common post-merge type facts that every reachable arm can represent safely.

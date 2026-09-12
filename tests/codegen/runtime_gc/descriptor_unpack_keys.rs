@@ -24,6 +24,34 @@
 
 use crate::support::*;
 
+/// Callable-array arguments become descriptors before entering a Callable slot, and only the
+/// descriptor invocation paths accept a Traversable spread source.
+#[test]
+fn test_core_callable_array_param_and_cuf_walk_traversable_descriptor_args() {
+    let source = r#"<?php
+class PairIterator implements Iterator {
+    private int $i = 0;
+    public function current(): mixed { return $this->i + 1; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i++; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+}
+class PairAggregate implements IteratorAggregate {
+    public function getIterator(): Iterator { return new PairIterator(); }
+}
+class CallableArrayAdder {
+    public function add(int $first, int $second): int { return $first * 10 + $second; }
+}
+function throughCallableParam(callable $callback): mixed {
+    return $callback(...new PairAggregate());
+}
+$callback = [new CallableArrayAdder(), 'add'];
+echo throughCallableParam($callback), ':', call_user_func($callback, ...new PairAggregate());
+"#;
+    assert_eq!(compile_and_run_tagged(source), "12:12");
+}
+
 /// Integer keys renumber positionally and string keys bind by name, through both call forms.
 #[test]
 fn test_core_descriptor_unpack_binds_sparse_and_named_keys() {
@@ -224,15 +252,23 @@ echo invokeNamedCallable(consumeNamedCallable(...)), ':', invokeNamedCallable(co
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// A statically known non-Traversable object still gets a catchable unpack error.
+/// A non-Traversable object reaching the unpack walk gets a catchable error, not a leak.
+///
+/// The object arrives through a `mixed` source, which is the only way it reaches the walk: the
+/// checker rejects unpacking a source it can PROVE is neither an array nor a Traversable
+/// (`tests/error_tests/array_builtins.rs`), so a directly spread `new NotUnpackable()` never
+/// compiles. `mixed` keeps the runtime guard in `reject_non_iterable_source` as the deciding
+/// check, which is what this fixture is for: the refusal must retire the evaluated source, so
+/// its destructor runs before the catch and the heap stays clean across repeats.
 #[test]
-fn test_core_descriptor_rejects_a_typed_non_traversable_source_in_frame() {
+fn test_core_descriptor_rejects_a_runtime_non_traversable_source_in_frame() {
     let source = r#"<?php
 class NotUnpackable { public function __destruct() { echo 'released|'; } }
+function opaqueSource(): mixed { return new NotUnpackable(); }
 function neverUnpack(int $value): void { echo 'called|'; }
 function rejectObjectSource(callable $callback): string {
     try {
-        $callback(...new NotUnpackable());
+        $callback(...opaqueSource());
         return 'bound';
     } catch (Error $error) { return $error->getMessage(); }
 }

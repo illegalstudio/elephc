@@ -100,6 +100,15 @@ fn lower_planned_source_arg(
             if sig.ref_params.get(param_index).copied().unwrap_or(false) {
                 return lower_arg_with_signature(ctx, sig, param_index, source.expr());
             }
+            if let Some(lowered) =
+                lower_tracked_callable_array_param(ctx, sig, param_index, source.expr())
+            {
+                return if source_index + 1 < plan.source_args.len() {
+                    root_evaluated_call_argument(ctx, lowered, source.expr().span).value
+                } else {
+                    lowered.value
+                };
+            }
         }
     }
     let value = lower_call_source_arg(ctx, &plan.source_args[source_index]);

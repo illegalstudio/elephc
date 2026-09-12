@@ -625,6 +625,14 @@ fn update_callable_array_assignment_metadata(
     callable_source: &Expr,
     env: &TypeEnv,
 ) -> Result<(), CompileError> {
+    let copied_target_version = match &callable_source.kind {
+        ExprKind::Variable(source_name) => checker
+            .callable_array_target_versions
+            .get(source_name)
+            .copied(),
+        _ => None,
+    };
+    checker.mark_callable_array_target_write(name);
     if let Some(target) = resolve_callable_array_target(checker, callable_source, env)? {
         checker
             .callable_array_targets
@@ -634,6 +642,11 @@ fn update_callable_array_assignment_metadata(
             checker
                 .callable_array_targets
                 .insert(name.to_string(), target);
+            if let Some(version) = copied_target_version {
+                checker
+                    .callable_array_target_versions
+                    .insert(name.to_string(), version);
+            }
         } else {
             checker.callable_array_targets.remove(name);
         }
@@ -1070,6 +1083,8 @@ fn update_list_unpack_callable_metadata(
 /// variable name so later element reads can be treated as callable variables with
 /// a known signature. This helper mirrors that metadata onto a list-unpack target.
 fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
+    let copied_target_version = checker.callable_array_target_versions.get(src).copied();
+    checker.mark_callable_array_target_write(dest);
     if let Some(return_ty) = checker.closure_return_types.get(src).cloned() {
         checker
             .closure_return_types
@@ -1091,6 +1106,11 @@ fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
         checker
             .callable_array_targets
             .insert(dest.to_string(), target);
+        if let Some(version) = copied_target_version {
+            checker
+                .callable_array_target_versions
+                .insert(dest.to_string(), version);
+        }
     } else {
         checker.callable_array_targets.remove(dest);
     }
@@ -1105,6 +1125,7 @@ fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
 
 /// Clears all callable metadata for a list-unpack destination.
 fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
+    checker.mark_callable_array_target_write(dest);
     checker.closure_return_types.remove(dest);
     checker.callable_sigs.remove(dest);
     checker.callable_captures.remove(dest);

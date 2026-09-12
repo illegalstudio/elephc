@@ -113,6 +113,10 @@ pub(crate) struct Checker {
     pub callable_captures: HashMap<String, Vec<(String, PhpType, bool)>>,
     /// Tracks callable-array targets assigned to variables, keyed by variable name.
     pub callable_array_targets: HashMap<String, CallableTarget>,
+    /// Identifies the assignment that produced each callable-array target fact.
+    pub callable_array_target_versions: HashMap<String, u64>,
+    /// Monotonic source for callable-array target assignment identities.
+    pub next_callable_array_target_version: u64,
     /// Tracks first-class callable targets assigned to variables, keyed by variable name.
     pub first_class_callable_targets: HashMap<String, CallableTarget>,
     /// Tracks `ReflectionClass` locals whose reflected class is statically known.
@@ -599,9 +603,20 @@ impl Checker {
         self.callable_sigs.remove(name);
         self.callable_captures.remove(name);
         self.callable_array_targets.remove(name);
+        self.mark_callable_array_target_write(name);
         self.first_class_callable_targets.remove(name);
         self.reflection_class_targets.remove(name);
         self.foreach_key_locals.remove(name);
+    }
+
+    /// Records that one local's callable-array target fact was assigned or invalidated.
+    pub(crate) fn mark_callable_array_target_write(&mut self, name: &str) {
+        self.next_callable_array_target_version =
+            self.next_callable_array_target_version.wrapping_add(1);
+        self.callable_array_target_versions.insert(
+            name.to_string(),
+            self.next_callable_array_target_version,
+        );
     }
 
     /// Records that a reference was taken to the storage `expr` names, so the local at the root
