@@ -19,6 +19,20 @@ impl FakeOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let method = method.to_ascii_lowercase();
+        if method == "__clone" && args.is_empty() {
+            let object_id = object.as_ptr() as usize;
+            let declaring_class = self
+                .object_classes
+                .get(&object_id)
+                .cloned()
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            let called_class = crate::context::native_frame_called_class_override_for_frame(
+                &declaring_class,
+            );
+            self.native_clone_calls
+                .push((declaring_class, called_class));
+            return self.null();
+        }
         match (self.get(object), method.as_str()) {
             (FakeValue::Iterator { .. }, "rewind") if args.is_empty() => {
                 let id = object.as_ptr() as usize;

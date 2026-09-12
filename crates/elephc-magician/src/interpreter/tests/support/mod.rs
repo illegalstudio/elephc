@@ -92,6 +92,8 @@ pub(super) struct FakeOps {
     /// counter would keep advancing exactly as the buggy runtime's did.
     pub(super) inert_resources: std::collections::HashSet<i64>,
     pub(super) object_classes: HashMap<usize, String>,
+    /// Native clone calls recorded as `(declaring frame class, called class override)`.
+    pub(super) native_clone_calls: Vec<(String, Option<String>)>,
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
     /// Zero-based release call that consumes its owner but reports an injected cleanup exception.

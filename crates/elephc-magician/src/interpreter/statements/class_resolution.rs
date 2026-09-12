@@ -260,7 +260,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
             );
         }
     }
-    let dynamic_native_clone_hook_scope = if clone_method.is_none() {
+    let dynamic_native_clone_hook = if clone_method.is_none() {
         if let Some(class_name) = dynamic_class_name.as_deref() {
             eval_dynamic_native_clone_hook_is_callable(class_name, context, values)?
         } else {
@@ -269,10 +269,10 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     } else {
         None
     };
-    let should_call_aot_clone_hook = if dynamic_class_name.is_none() {
+    let aot_clone_hook = if dynamic_class_name.is_none() {
         eval_aot_clone_hook_is_callable(object, context, values)?
     } else {
-        false
+        None
     };
 
     let clone = values.object_clone_shallow(object)?;
@@ -291,10 +291,10 @@ pub(in crate::interpreter) fn eval_object_clone_result(
                 values,
             )?;
             eval_release_value(context, values, result)?;
-        } else if let Some(scope) = dynamic_native_clone_hook_scope {
+        } else if let Some(hook) = dynamic_native_clone_hook {
             let result = eval_native_method_call_with_scope(
-                &scope,
-                None,
+                &hook.declaring_class,
+                Some(&hook.called_class),
                 clone,
                 "__clone",
                 Vec::new(),
@@ -303,19 +303,33 @@ pub(in crate::interpreter) fn eval_object_clone_result(
             )?;
             values.release(result)?;
         }
-    } else if should_call_aot_clone_hook {
-        let result = values.method_call(clone, "__clone", Vec::new())?;
+    } else if let Some(hook) = aot_clone_hook {
+        let result = eval_native_method_call_with_scope(
+            &hook.declaring_class,
+            Some(&hook.called_class),
+            clone,
+            "__clone",
+            Vec::new(),
+            context,
+            values,
+        )?;
         values.release(result)?;
     }
     Ok(clone)
 }
 
-/// Returns the declaring scope for an inherited generated/AOT `__clone()` hook.
+/// Generated clone-hook scopes needed by native method dispatch.
+pub(super) struct EvalNativeCloneHook {
+    declaring_class: String,
+    called_class: String,
+}
+
+/// Returns the declaring and called scopes for an inherited generated/AOT `__clone()` hook.
 pub(super) fn eval_dynamic_native_clone_hook_is_callable(
     class_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<String>, EvalStatus> {
+) -> Result<Option<EvalNativeCloneHook>, EvalStatus> {
     let Some((declaring_class, visibility, is_static, is_abstract)) =
         eval_dynamic_class_native_method_metadata(class_name, "__clone", context, values)?
     else {
@@ -327,7 +341,10 @@ pub(super) fn eval_dynamic_native_clone_hook_is_callable(
     if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
         return eval_throw_clone_access_error(&declaring_class, visibility, context, values);
     }
-    Ok(Some(declaring_class))
+    Ok(Some(EvalNativeCloneHook {
+        declaring_class,
+        called_class: class_name.to_string(),
+    }))
 }
 
 /// Calls one generated/AOT method while presenting an explicit PHP class scope to the bridge.
@@ -447,17 +464,17 @@ pub(super) fn eval_dynamic_class_native_constant_metadata(
     Ok(Some((declaring_class, visibility)))
 }
 
-/// Returns whether an accessible instance AOT `__clone()` hook should run.
+/// Returns the declaring and called scopes for an accessible instance AOT `__clone()` hook.
 pub(super) fn eval_aot_clone_hook_is_callable(
     object: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
+) -> Result<Option<EvalNativeCloneHook>, EvalStatus> {
     let class_name = eval_runtime_object_class_name(object, values)?;
     let Some((declaring_class, visibility, is_static, is_abstract)) =
         eval_aot_method_dispatch_metadata(&class_name, "__clone", values)?
     else {
-        return Ok(false);
+        return Ok(None);
     };
     if is_static || is_abstract {
         return Err(EvalStatus::RuntimeFatal);
@@ -465,7 +482,10 @@ pub(super) fn eval_aot_clone_hook_is_callable(
     if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
         return eval_throw_clone_access_error(&declaring_class, visibility, context, values);
     }
-    Ok(true)
+    Ok(Some(EvalNativeCloneHook {
+        declaring_class,
+        called_class: class_name,
+    }))
 }
 
 /// Reads the PHP-visible runtime class name for one AOT object handle.
