@@ -11,6 +11,7 @@
 use crate::errors::CompileError;
 use crate::types::{packed_type_size, PhpType};
 
+use super::object_types::canonical_builtin_iterable_interface_name;
 use super::super::Checker;
 
 impl Checker {
@@ -113,6 +114,9 @@ impl Checker {
             }
             crate::parser::ast::TypeExpr::Named(name) => {
                 let name_str = name.as_str();
+                if let Some(canonical) = canonical_builtin_iterable_interface_name(name_str) {
+                    return Ok(PhpType::Object(canonical.to_string()));
+                }
                 match name_str.to_ascii_lowercase().as_str() {
                     "string" => Ok(PhpType::Str),
                     "mixed" => Ok(PhpType::Mixed),

@@ -253,12 +253,7 @@ impl Checker {
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
                 } else if let PhpType::Object(class_name) = &arr_ty {
-                    let is_iter = self.class_implements_interface(class_name, "Iterator")
-                        || self.interface_extends_interface(class_name, "Iterator");
-                    let is_iter_agg = self
-                        .class_implements_interface(class_name, "IteratorAggregate")
-                        || self.interface_extends_interface(class_name, "IteratorAggregate");
-                    if !is_iter && !is_iter_agg {
+                    if !self.object_type_implements_iterable(class_name) {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!(

@@ -11,10 +11,26 @@
 use std::collections::HashSet;
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::{EnumInfo, PhpType, TypeEnv};
 
 use super::super::Checker;
+
+/// Returns PHP's canonical spelling for a global builtin iterable interface name.
+///
+/// Matching the complete normalized name keeps a namespaced user interface such as
+/// `Domain\Traversable` nominal and prevents it from acquiring builtin foreach semantics.
+pub(super) fn canonical_builtin_iterable_interface_name(
+    type_name: &str,
+) -> Option<&'static str> {
+    match php_symbol_key(type_name.trim_start_matches('\\')).as_str() {
+        "traversable" => Some("Traversable"),
+        "iterator" => Some("Iterator"),
+        "iteratoraggregate" => Some("IteratorAggregate"),
+        _ => None,
+    }
+}
 
 impl Checker {
     /// Checks whether the current class context can access a member with the given visibility
@@ -134,7 +150,8 @@ impl Checker {
     /// Returns true if `type_name` (a class or interface) implements `Iterator` or
     /// `IteratorAggregate`, which are the interfaces that make a type usable in `foreach`.
     pub(crate) fn object_type_implements_iterable(&self, type_name: &str) -> bool {
-        if type_name == "Traversable" {
+        let type_name = type_name.trim_start_matches('\\');
+        if canonical_builtin_iterable_interface_name(type_name).is_some() {
             return true;
         }
         if self.classes.contains_key(type_name) {

@@ -64,6 +64,38 @@ fn test_error_by_reference_foreach_rejects_iterable_type() {
     );
 }
 
+/// Builtin iterator-interface parameters are valid foreach sources in every canonical spelling.
+#[test]
+fn test_foreach_accepts_builtin_iterator_interface_parameter_types() {
+    let sources = [
+        "<?php function walk(Traversable $items): void { foreach ($items as $value) {} }",
+        "<?php function walk(Iterator $items): void { foreach ($items as $value) {} }",
+        "<?php function walk(IteratorAggregate $items): void { foreach ($items as $value) {} }",
+        r"<?php function walk(\tRaVeRsAbLe $items): void { foreach ($items as $value) {} }",
+        r"<?php namespace Domain; function walk(\TrAvErSaBlE $items): void { foreach ($items as $value) {} }",
+    ];
+    for source in sources {
+        assert!(
+            check_source(source).is_ok(),
+            "builtin iterator interface should be foreach-compatible: {source}",
+        );
+    }
+}
+
+/// Nominal objects and namespaced lookalikes do not inherit builtin Traversable behavior.
+#[test]
+fn test_foreach_rejects_non_iterable_objects_and_namespaced_traversable_lookalikes() {
+    for source in [
+        "<?php class Plain {} function walk(Plain $items): void { foreach ($items as $value) {} }",
+        r"<?php namespace Domain; interface Traversable {} function walk(Traversable $items): void { foreach ($items as $value) {} }",
+    ] {
+        expect_error(
+            source,
+            "to implement Iterator or IteratorAggregate",
+        );
+    }
+}
+
 /// Verifies that by-reference foreach over a parameter typed `Iterator` is rejected.
 /// Input: `function f(Iterator $items) { foreach ($items as &$value) {} }`
 #[test]
