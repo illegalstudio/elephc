@@ -1,16 +1,16 @@
 ---
-title: "xml_parser_get_option() — internals"
+title: "xml_parser_get_option() - internals"
 description: "Compiler internals for xml_parser_get_option(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 921
+  order: 946
 ---
 
-## `xml_parser_get_option()` — internals
+## `xml_parser_get_option()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1616](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1616) (`xml_parser_get_option`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`:1589](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1589) (`xml_parser_get_option`)
 - **Function symbol**: `xml_parser_get_option()`
 
 

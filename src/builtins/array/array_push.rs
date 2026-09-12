@@ -9,9 +9,9 @@
 //!   by-ref plus a variadic `values` param. The legacy CHECK arm enforced exactly 2
 //!   arguments, so `min_args: 2, max_args: 2` reproduce that enforcement in `check_arity`
 //!   only; `function_sig` and the parity gate keep the variadic shape from the golden.
-//! - The `ref` marker on `array` is mandatory — it is what makes by-reference mutation
+//! - The `ref` marker on `array` is mandatory: it is what makes by-reference mutation
 //!   lower correctly (ir_lower reads `ref_params` from the registry sig).
-//! - Returns `Void` (not PHP's int count) — reproducing the legacy behavior exactly.
+//! - Returns `Void` (not PHP's int count), preserving the existing return contract.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -25,15 +25,15 @@ builtin! {
     ),
 }
 
-/// Validates the first argument is an indexed array for an `array_push` call.
+/// Validates indexed arrays and boxed PHP array declarations for an `array_push` call.
 ///
 /// Arity (exactly 2 args) is pre-validated by `check_arity`. Both arguments are inferred
-/// to produce any side effects; the first must be an indexed array or the call is rejected.
-/// Returns `Void` — matching the legacy checker behavior.
+/// to produce any side effects; the first must carry a supported array type.
+/// Returns `Void`, matching the existing checker behavior.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let _val_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if let PhpType::Array(_) = arr_ty {
+    if matches!(arr_ty, PhpType::Array(_)) || arr_ty.is_php_array() {
         Ok(PhpType::Void)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))

@@ -275,8 +275,8 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_intersect_key()` | `array_intersect_key($arr1, $arr2): array` | Keys in both |
 | `array_diff_assoc()` | `array_diff_assoc($arr1, $arr2): array` | Entries of $arr1 whose `(key, value)` pair is absent from $arr2 (values compared as `(string)$a === (string)$b`). Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
 | `array_intersect_assoc()` | `array_intersect_assoc($arr1, $arr2): array` | Entries of $arr1 whose `(key, value)` pair is present in $arr2 (values compared as strings). Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
-| `array_udiff()` | `array_udiff($arr1, $arr2, $cmp): array` | Values in $arr1 not in $arr2, equality decided by the two-argument comparator (`$cmp($a, $b) === 0`). Supports string / function / non-capturing closure comparators. |
-| `array_uintersect()` | `array_uintersect($arr1, $arr2, $cmp): array` | Values in both arrays, equality decided by the comparator (`$cmp($a, $b) === 0`). |
+| `array_udiff()` | `array_udiff($arr1, $arr2, $cmp): array` | Two-array form: keeps values absent from $arr2, preserving $arr1 keys and value types. The comparator result is cast to int before testing equality with zero. Supports closures, function names and first-class callables. |
+| `array_uintersect()` | `array_uintersect($arr1, $arr2, $cmp): array` | Two-array form: keeps values also present in $arr2, preserving $arr1 keys and value types. The comparator result is cast to int before testing equality with zero. |
 | `array_unique()` | `array_unique($arr): array` | Remove duplicates, keeping each survivor's original key — an indexed input therefore returns a sparse, hash-shaped result (keys `0, 1, 3` for `[1,2,2,3,1]`), exactly as in PHP |
 | `array_reverse()` | `array_reverse($arr, $preserve_keys = false): array` | Reverse order. `$preserve_keys` must be a literal `bool` in AOT mode because it changes the result shape: `true` keeps the original integer keys, producing an integer-keyed array |
 | `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys |
@@ -303,13 +303,13 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `natsort()` | `natsort($arr): void` | Natural order sort |
 | `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
-| `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort `$arr1` ascending (stable) and reorder `$arr2` in tandem; both are sorted in place (by reference). **Two indexed arrays of scalar elements**; sort flags, descending order, and >2 arrays are follow-ups. |
+| `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort equal-length indexed arrays in place by ascending row order: compare `$arr1`, then `$arr2` for ties. AOT accepts two concrete integer arrays or two boxed scalar arrays (for example through declared `array` parameters), not one of each. Concrete string/float arrays, associative arrays, sort flags, and more than two arrays are unsupported. |
 | `array_rand()` | `array_rand($arr): int` | Pick one random key |
 | `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |
-| `array_filter()` | `array_filter($arr, $callback, $mode = ARRAY_FILTER_USE_VALUE): array` | Filter where callback is truthy; mode selects value, key, or both callback args |
+| `array_filter()` | `array_filter($arr, $callback = null, $mode = 0): array` | Preserve keys and values accepted by the callback; omitted/null callbacks remove empty values |
 | `array_reduce()` | `array_reduce($arr, $callback, $init): int` | Reduce to single value |
-| `array_walk()` | `array_walk($arr, $callback): void` | Call callback on each element |
-| `array_walk_recursive()` | `array_walk_recursive($arr, $callback): void` | Apply `$callback` to each non-array leaf value, recursing into nested indexed/associative arrays. Leaf values must share a scalar type (consistent with `array_walk`: leaf passed by value, no key argument). |
+| `array_walk()` | `array_walk($arr, $callback): void` | Call a callback on each element. Boxed PHP arrays support writable value references and keys, subject to the reference-escape restrictions below. |
+| `array_walk_recursive()` | `array_walk_recursive($arr, $callback): void` | Apply a callback to non-array leaves. The concrete-array path requires homogeneous scalar leaves and passes values without keys. The boxed PHP-array path supports writable leaf references and keys, subject to the restrictions below. |
 | `array_find()` | `array_find($arr, $callback): mixed` | (PHP 8.4) Returns the first element for which `$callback($value)` is truthy, or `null` if none match. |
 | `array_any()` | `array_any($arr, $callback): bool` | (PHP 8.4) `true` if `$callback($value)` is truthy for at least one element. |
 | `array_all()` | `array_all($arr, $callback): bool` | (PHP 8.4) `true` if `$callback($value)` is truthy for every element. |
@@ -321,13 +321,33 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `function_exists()` | `function_exists(string $name): bool` | Check if a global or fully-qualified function name is defined. A literal name const-folds; any other string expression is matched case-insensitively at run time against the functions this binary declares |
 | `isset()` | `isset($var, ...$vars): int` | Check that every variable or offset is defined and not null. Like PHP, the probed variable does not have to exist: `isset($neverDefined)` is `false`, `empty($neverDefined)` is `true`, `$neverDefined ?? "d"` is `"d"`, and `unset($neverDefined)` is a no-op. A name that is *also* assigned elsewhere in the same scope must still be defined before it is probed |
 
-`array_filter()` accepts `ARRAY_FILTER_USE_VALUE` (`0`), `ARRAY_FILTER_USE_BOTH` (`1`), and `ARRAY_FILTER_USE_KEY` (`2`). Invalid mode values throw `ValueError`.
+`array_filter()` preserves integer and string keys, including holes, and supports declared PHP arrays with heterogeneous values. Its callback can receive values (`0`), both value and key (`ARRAY_FILTER_USE_BOTH`, `1`), or keys (`ARRAY_FILTER_USE_KEY`, `2`). PHP profiles through 8.5 treat other integer modes as value-only; PHP 8.6 rejects them with a catchable `ValueError`, including for empty arrays and null callbacks. The `ARRAY_FILTER_USE_VALUE` name is available in PHP 8.6. Callback results use PHP truthiness rather than requiring a boolean return.
+
+`array_map()` also resolves boxed callbacks extracted from PHP arrays, including
+captured closures, function names, packed `[object, method]` pairs, and invokable
+objects available in the compiled program. Invalid boxed callbacks throw
+`TypeError`. With one source array, a `null` callback returns an independent
+array value with the original keys and copy-on-write behavior. The AOT path
+currently accepts one source array, not the multi-array zip form.
 
 > Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` stores mixed result elements when the selected callback return shape is only known at runtime. `array_map()` also runs over a heterogeneous (boxed `mixed`) input array: each element is passed to the callback as a `mixed` value, so a callback with a `mixed` (or untyped) parameter sees and can return each element with its original runtime type.
 > When a parameter is declared only as `array`, its element type is initially unknown. Array-callback checking preserves explicit callback parameter declarations and uses them to type the closure body instead of fabricating an `int` element. Known element types are still checked normally, and this contextual rule does not make `mixed` globally compatible with object, array, or other refcounted declarations. `array_map()` currently rejects known object-element arrays because its callback runtime does not yet support that input layout.
 > `call_user_func_array()` also accepts dynamic indexed and associative argument arrays for callbacks with a known signature, including userland variadic callbacks. When a callable value has no single static signature at the call site, elephc emits an AOT runtime dispatch over user functions and closure/FCC wrappers available in that codegen context, then applies the matched target's descriptor metadata: parameter names, defaults, by-reference flags, variadic position, return shape, captures, hidden receiver arguments, and callable shape. Runtime string callback names dispatch over user functions, supported builtins, and public static-method strings by case-insensitive name matching, materialize the matched descriptor, and invoke its generated descriptor invoker. Descriptor invokers receive a temporary boxed Mixed clone of the argument container and inspect its runtime tag to handle indexed arrays and associative hashes through the same signature-level wrapper, so the source `$args` remains usable with its original static layout after the call. String keys bind named parameters; unconsumed string and numeric keys are copied into `...$rest` for variadic callbacks. Dynamic arrays passed to by-reference callback parameters use temporary reference cells, so callback writes do not mutate the source argument array.
 
 Unannotated callback parameters are typed from the array in every array builtin that takes a callback — `array_all()`, `array_any()`, `array_filter()`, `array_find()`, `array_map()`, `array_reduce()`, `array_udiff()`, `array_uintersect()`, `array_walk()`, `array_walk_recursive()`, `uasort()`, `uksort()` and `usort()`. Value parameters get the element type and key parameters get the key type, so `array_filter($words, fn($v) => strlen($v) > 3)`, `uksort($byName, fn($a, $b) => strlen($a) <=> strlen($b))` and `array_walk($byName, function ($v, $k) { echo strlen($k); })` all check without hand-written type hints. Explicit hints stay authoritative.
+
+### Walking boxed PHP arrays
+
+The AOT path for boxed PHP arrays, including declared `array` parameters, passes
+the callback a writable element reference and its key. Recursive walks do this
+for leaf values. Copies made before the walk keep their original values.
+
+This path requires a visible native function, closure, or method descriptor.
+Opaque eval/extern callbacks, first-class wrapper descriptors, and builtin adapters are
+rejected. The borrowed element reference must not escape the callback through a
+closure capture or a property reference: those operations throw a catchable
+`Error`. Ordinary compiler-managed references are unaffected. These restrictions
+are specific to the boxed walk path and are not a claim of full PHP parity.
 
 ### Sorting runtime-typed indexed arrays
 

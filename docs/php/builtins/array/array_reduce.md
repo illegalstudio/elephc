@@ -8,7 +8,7 @@ sidebar:
 ## array_reduce()
 
 ```php
-function array_reduce(array $array, callable $callback, mixed $initial = null): int
+function array_reduce(array $array, callable $callback, mixed $initial = null): mixed
 ```
 
 Iteratively reduces an array to a single value using a callback function.
@@ -18,14 +18,14 @@ Iteratively reduces an array to a single value using a callback function.
 - `$callback` (`callable`)
 - `$initial` (`mixed`), default `null`, optional
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_reduce.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_reduce.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_reduce.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_reduce.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

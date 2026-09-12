@@ -10,6 +10,7 @@
 //! - Effects are deliberately conservative; purity must not be claimed for code that can observe or mutate PHP/runtime state.
 
 use super::*;
+use super::exception_flow::{active_expr_thrown_types, active_stmt_thrown_types};
 
 mod aliases;
 mod calls;
@@ -48,16 +49,17 @@ fn binary_op_may_throw(op: &BinOp, right: &Expr) -> bool {
     }
 }
 
-/// Returns true if any statement in `stmts` may throw an exception.
-/// Shorthand for checking `block_effect(stmts).may_throw`.
+/// Returns true if any statement in `stmts` may throw, including implicit destruction.
 pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool {
     block_effect(stmts).may_throw
+        || stmts
+            .iter()
+            .any(|stmt| !active_stmt_thrown_types(stmt).is_empty())
 }
 
-/// Returns true if `stmt` may throw an exception.
-/// Shorthand for `stmt_effect(stmt).may_throw`.
+/// Returns true if `stmt` may throw, including a destructor run by implicit retirement.
 pub(super) fn stmt_may_throw(stmt: &Stmt) -> bool {
-    stmt_effect(stmt).may_throw
+    stmt_effect(stmt).may_throw || !active_stmt_thrown_types(stmt).is_empty()
 }
 
 /// Computes the combined `Effect` for a single statement, including all nested expressions.
@@ -79,7 +81,12 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::StaticPropertyAssign { value, .. } => {
             expr_effect(value).with_side_effects()
         }
-        StmtKind::RefAssign { .. } => Effect::PURE.with_side_effects(),
+        // The source can call PHP or resolve a property, and rebinding can retire a target
+        // whose destructor throws or changes globals. Keep the enclosing exception boundary.
+        StmtKind::RefAssign { source, .. } => expr_effect(source)
+            .with_side_effects()
+            .with_may_throw()
+            .with_writes_globals(),
         StmtKind::ArrayPush { value, .. } | StmtKind::StaticPropertyArrayPush { value, .. } => {
             expr_effect(value).with_side_effects().with_may_throw()
         }
@@ -217,10 +224,15 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
     }
 }
 
-/// Returns true if `expr` may produce observable side effects (writes, calls, output, or throws).
-/// Used by DCE to determine whether discarding the expression would be observable.
+/// Returns true if `expr` may produce observable side effects, including a throw raised while
+/// retiring the value it materializes.
+///
+/// The coarse effect model describes evaluation itself. During DCE, the active exception-flow
+/// analysis additionally describes implicit destructor execution at the discard site. Keeping
+/// both terms here prevents a pure closure invocation from disappearing before catch routing can
+/// observe that retiring its captures or bound receiver may throw.
 pub(super) fn expr_is_observable(expr: &Expr) -> bool {
-    expr_effect(expr).is_observable()
+    expr_effect(expr).is_observable() || !active_expr_thrown_types(expr).is_empty()
 }
 
 /// Computes the combined `Effect` for an expression, including all sub-expressions and call effects.
@@ -246,8 +258,16 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::Spread(inner) => expr_effect(inner),
+        | ExprKind::PtrCast { expr: inner, .. } => expr_effect(inner),
+        ExprKind::Spread(inner) => {
+            let evaluated = expr_effect(inner);
+            if matches!(inner.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
+                evaluated
+            } else {
+                // Dynamic unpacking validates the source and may enter iterator code.
+                evaluated.with_side_effects().with_may_throw().with_writes_globals()
+            }
+        }
         ExprKind::Print(inner) => expr_effect(inner).with_side_effects(),
         ExprKind::Clone(inner) => expr_effect(inner)
             .with_side_effects()
@@ -362,10 +382,14 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             ),
         ExprKind::ArrayAccess { array, index } => {
             let evaluated = expr_effect(array).combine(expr_effect(index));
+            if super::binding_decisions::is_buffer_read_site(expr.span) {
+                // Keep bounds failures observable, but only operand evaluation can
+                // invoke user code. Native buffer reads do not emit PHP warnings.
+                return evaluated.with_side_effects().with_may_throw();
+            }
             match statically_known_array_read(array, index) {
                 Some(true) => evaluated,
-                Some(false) => evaluated.with_side_effects(),
-                None => evaluated.with_side_effects().with_may_throw(),
+                Some(false) | None => evaluated.with_side_effects().with_may_throw().with_writes_globals(),
             }
         }
         ExprKind::Ternary {

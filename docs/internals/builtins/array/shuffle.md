@@ -1,16 +1,16 @@
 ---
-title: "shuffle() — internals"
+title: "shuffle() - internals"
 description: "Compiler internals for shuffle(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 66
 ---
 
-## `shuffle()` — internals
+## `shuffle()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/shuffle.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/shuffle.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

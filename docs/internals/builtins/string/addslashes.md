@@ -1,16 +1,16 @@
 ---
-title: "addslashes() — internals"
+title: "addslashes() - internals"
 description: "Compiler internals for addslashes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 753
+  order: 779
 ---
 
-## `addslashes()` — internals
+## `addslashes()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/addslashes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/addslashes.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

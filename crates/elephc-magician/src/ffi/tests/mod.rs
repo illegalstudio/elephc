@@ -14,6 +14,7 @@ use super::context::*;
 use super::declared_symbols::*;
 use super::execute::*;
 use super::native_functions::*;
+use super::native_constants::*;
 use super::native_methods::*;
 use super::scope::*;
 use super::symbols::*;
@@ -35,6 +36,7 @@ mod class_metadata;
 mod context_symbols;
 mod native_functions;
 mod native_methods;
+mod native_user_constants;
 mod scope_execution;
 
 const TEST_NATIVE_DEFAULT_NULL: u64 = 0;

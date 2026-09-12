@@ -16,7 +16,9 @@ use crate::types::{FunctionSig, PhpType};
 use super::super::Checker;
 
 /// Builds a `FunctionSig` from a parsed class method, resolving parameter and return type
-/// annotations through the checker. Parameters without type hints default to `PhpType::Int`.
+/// annotations through the checker. Parameters without type hints use a declared default's
+/// syntactic type when one exists, matching free-function signature construction, and otherwise
+/// default to `PhpType::Int`.
 /// Validates that each declared parameter's default value is compatible with its resolved type.
 /// Infers return type from method body when no return annotation is present.
 pub(crate) fn build_method_sig(
@@ -29,22 +31,12 @@ pub(crate) fn build_method_sig(
         .params
         .iter()
         .enumerate()
-        .map(|(i, (n, type_ann, _, _))| {
-            // PHP's __unserialize($data) always receives the associative array
-            // produced by __serialize(). A bare `array` hint resolves to an indexed
-            // Array(Mixed) (rejecting $data['key']); type the first parameter as a
-            // string/int-keyed assoc array so both the ABI and the body agree.
-            // Scoped to user-defined methods (real span): synthetic SPL __unserialize
-            // bodies are written for an indexed `array` and are called directly with
-            // one (e.g. SplDoublyLinkedList), so they must keep Array(Mixed).
+        .map(|(i, (n, type_ann, default, _))| {
+            // User hydration hooks receive a PHP array with arbitrary integer/string
+            // keys. Use its boxed declaration contract, including for untyped hooks.
+            // Synthetic SPL hooks retain their explicit raw Array(Mixed) ABI.
             if method_key == "__unserialize" && i == 0 && method.span.line != 0 {
-                return Ok((
-                    n.clone(),
-                    PhpType::AssocArray {
-                        key: Box::new(PhpType::Mixed),
-                        value: Box::new(PhpType::Mixed),
-                    },
-                ));
+                return Ok((n.clone(), PhpType::php_array()));
             }
             let ty = match type_ann {
                 Some(type_ann) => checker.resolve_declared_param_type_hint(
@@ -52,7 +44,10 @@ pub(crate) fn build_method_sig(
                     method.span,
                     &format!("Method parameter ${}", n),
                 )?,
-                None => PhpType::Int,
+                None => default
+                    .as_ref()
+                    .map(super::super::infer_expr_type_syntactic)
+                    .unwrap_or(PhpType::Int),
             };
             Ok((n.clone(), ty))
         })
@@ -206,24 +201,81 @@ pub(crate) fn visibility_rank(visibility: &Visibility) -> u8 {
     }
 }
 
-/// Counts how many parameters in `sig` are required (have no default).
-/// The variadic parameter, if present, is never considered required even if it has no default.
-pub(crate) fn required_param_count(sig: &FunctionSig) -> usize {
-    sig.defaults
-        .iter()
-        .enumerate()
-        .filter(|(idx, default)| {
-            if sig.variadic.is_some() && *idx + 1 == sig.defaults.len() {
-                return false;
-            }
-            default.is_none()
-        })
-        .count()
+/// The parameter shape a signature's SOURCE declared, with generated slots removed.
+///
+/// `crate::func_args` appends hidden slots (the surplus-argument collector, and the actual-count
+/// parameter that accompanies a source variadic) to every frame it captures, and it captures all
+/// of them as soon as the program contains an `eval()` or a backtrace call. Those slots are not
+/// declared parameters, so comparing them against a compiler-injected parent signature, which
+/// can never carry one, would report a difference the source never wrote.
+struct SourceVisibleShape {
+    param_count: usize,
+    ref_params: Vec<bool>,
+    has_defaults: Vec<bool>,
+    variadic: Option<String>,
+}
+
+impl SourceVisibleShape {
+    /// Projects `sig` onto the parameters its source declared.
+    fn of(sig: &FunctionSig) -> Self {
+        let generated: Vec<bool> = sig
+            .params
+            .iter()
+            .map(|(name, _)| {
+                name == crate::func_args::HIDDEN_ARGS_PARAM
+                    || name == crate::func_args::HIDDEN_ARGC_PARAM
+            })
+            .collect();
+        let keep = |index: usize| !generated.get(index).copied().unwrap_or(false);
+        Self {
+            param_count: generated.iter().filter(|hidden| !**hidden).count(),
+            ref_params: sig
+                .ref_params
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| keep(*index))
+                .map(|(_, by_ref)| *by_ref)
+                .collect(),
+            has_defaults: sig
+                .defaults
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| keep(*index))
+                .map(|(_, default)| default.is_some())
+                .collect(),
+            variadic: sig
+                .variadic
+                .clone()
+                .filter(|variadic| variadic != crate::func_args::HIDDEN_ARGS_PARAM),
+        }
+    }
+
+    /// Counts the declared parameters a caller must supply.
+    ///
+    /// A variadic parameter is never required, even without a default, which is why the shape
+    /// keeps the variadic name rather than folding it into the default flags.
+    fn required_param_count(&self) -> usize {
+        self.has_defaults
+            .iter()
+            .enumerate()
+            .filter(|(index, has_default)| {
+                if self.variadic.is_some() && *index + 1 == self.has_defaults.len() {
+                    return false;
+                }
+                !**has_default
+            })
+            .count()
+    }
 }
 
 /// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
 /// Checks parameter count, ref params, defaults layout, variadic flag, and required param count.
 /// Reports errors with `context` and `kind` (e.g., "overriding method") in the message.
+///
+/// `compare_generated_abi` is true only when both signatures originate in PHP source. Compiler-
+/// injected contracts are synthesized after the `func_args` pass and can never carry its hidden
+/// collector or actual-count parameter, so comparing those slots against such a contract would
+/// report an ABI difference the source never declared.
 pub(crate) fn validate_signature_compatibility(
     span: crate::span::Span,
     owner_name: &str,
@@ -232,14 +284,18 @@ pub(crate) fn validate_signature_compatibility(
     parent_sig: &FunctionSig,
     kind: &str,
     context: &str,
+    compare_generated_abi: bool,
 ) -> Result<(), CompileError> {
     // The hidden variadic that collects surplus positional arguments for
     // `func_num_args()`/`func_get_args()`/`func_get_arg()` is a real ABI parameter, so an
     // inherited signature that does not carry it cannot dispatch to a body that does.
     // Report that directly instead of the generic parameter-count mismatch, which names a
     // parameter the source never wrote.
-    if crate::func_args::sig_collects_surplus_args(child_sig)
-        != crate::func_args::sig_collects_surplus_args(parent_sig)
+    if compare_generated_abi
+        && (crate::func_args::sig_collects_surplus_args(child_sig)
+            != crate::func_args::sig_collects_surplus_args(parent_sig)
+            || crate::func_args::sig_has_hidden_argc_param(child_sig)
+                != crate::func_args::sig_has_hidden_argc_param(parent_sig))
     {
         return Err(CompileError::new(
             span,
@@ -250,7 +306,10 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child_sig.params.len() != parent_sig.params.len() {
+    let child = SourceVisibleShape::of(child_sig);
+    let parent = SourceVisibleShape::of(parent_sig);
+
+    if child.param_count != parent.param_count {
         return Err(CompileError::new(
             span,
             &format!(
@@ -260,7 +319,7 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child_sig.ref_params != parent_sig.ref_params {
+    if child.ref_params != parent.ref_params {
         return Err(CompileError::new(
             span,
             &format!(
@@ -270,17 +329,7 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    let child_defaults: Vec<bool> = child_sig
-        .defaults
-        .iter()
-        .map(|default| default.is_some())
-        .collect();
-    let parent_defaults: Vec<bool> = parent_sig
-        .defaults
-        .iter()
-        .map(|default| default.is_some())
-        .collect();
-    if child_defaults != parent_defaults {
+    if child.has_defaults != parent.has_defaults {
         return Err(CompileError::new(
             span,
             &format!(
@@ -290,7 +339,7 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child_sig.variadic != parent_sig.variadic {
+    if child.variadic != parent.variadic {
         return Err(CompileError::new(
             span,
             &format!(
@@ -300,7 +349,7 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if required_param_count(child_sig) != required_param_count(parent_sig) {
+    if child.required_param_count() != parent.required_param_count() {
         return Err(CompileError::new(
             span,
             &format!(
@@ -370,6 +419,24 @@ pub(crate) fn late_static_return_compatible(
     )))
 }
 
+/// Returns whether a class-like symbol was declared in PHP source.
+///
+/// Unknown owners stay strict. Only a symbol proven compiler-injected may suppress comparison of
+/// the generated `func_args` ABI slots.
+pub(super) fn declaration_is_source(checker: &Checker, owner: &str) -> bool {
+    checker
+        .classes
+        .get(owner)
+        .map(|info| info.declaration_span != crate::span::Span::dummy())
+        .or_else(|| {
+            checker
+                .interfaces
+                .get(owner)
+                .map(|info| info.declaration_span != crate::span::Span::dummy())
+        })
+        .unwrap_or(true)
+}
+
 /// Validates that `method` can override `parent_sig` in class `class_name`.
 /// Builds the child signature via `build_method_sig`, skips validation for `__construct`,
 /// checks signature compatibility, and ensures the child does not remove a declared
@@ -381,6 +448,7 @@ pub(crate) fn validate_override_signature(
     parent_sig: &FunctionSig,
     parent_late_static_return: Option<&TypeExpr>,
     is_static: bool,
+    parent_declaration_is_source: bool,
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
     let class_name = class.name.as_str();
@@ -396,6 +464,7 @@ pub(crate) fn validate_override_signature(
         parent_sig,
         kind,
         "overriding",
+        parent_declaration_is_source,
     )?;
     if parent_sig.declared_return && !child_sig.declared_return {
         return Err(CompileError::new(

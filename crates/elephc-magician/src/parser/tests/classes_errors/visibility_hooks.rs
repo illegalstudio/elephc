@@ -10,6 +10,20 @@
 
 use super::super::support::*;
 
+/// Backed hooks accept defaults without relaxing the virtual-property default restriction.
+#[test]
+fn parse_fragment_accepts_backed_property_hook_defaults() {
+    for hooks in ["get => $this->id;", "set => $value;", "set { $this->id = $value; }"] {
+        let source = format!("class HookDefault {{ public int $id = 7 {{ {hooks} }} }}");
+        let program = parse_fragment(source.as_bytes()).expect("backed hook default should parse");
+        let EvalStmt::ClassDecl(class) = &program.statements()[0] else {
+            panic!("expected class declaration");
+        };
+        assert!(!class.properties()[0].is_virtual());
+        assert_eq!(class.properties()[0].default(), Some(&EvalExpr::Const(EvalConst::Int(7))));
+    }
+}
+
 /// Verifies private and protected class members lower with explicit visibility metadata.
 #[test]
 fn parse_fragment_accepts_private_and_protected_class_members() {
@@ -379,8 +393,8 @@ fn parse_fragment_rejects_invalid_readonly_class_properties() {
 /// Verifies eval rejects property hook forms that need broader class contracts.
 #[test]
 fn parse_fragment_rejects_invalid_property_hooks() {
-    parse_fragment(b"class DynEvalHookDefault { public int $id = 1 { get => $this->id; } }")
-        .expect_err("hooked properties cannot have defaults in eval");
+    parse_fragment(b"class DynEvalHookDefault { public int $id = 1 { get => 42; } }")
+        .expect_err("virtual properties cannot have defaults in eval");
     parse_fragment(b"class DynEvalHookStatic { public static int $id { get => 1; } }")
         .expect_err("static properties cannot have hooks in eval");
     parse_fragment(b"class DynEvalHookByRefSet { public int $id { &set => 1; } }")

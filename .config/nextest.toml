@@ -82,6 +82,17 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(parity_function_first_class_callable_dispatch)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# This single-compile fixture force-loads the full PDO surface and static archive. Its first
+# cold run reached the 60s boundary on Linux x86_64 and macOS, while the isolated retries
+# passed, so keep the global budget unchanged and allow this exact link to finish once.
+[[profile.default.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=dynamic_argument_tracks_linked_bridges)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=dynamic_argument_tracks_linked_bridges)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # The `codegen::eval` fixtures compile, link (against the Magician staticlib), and
 # run several programs per test — five in the largest — at ~7-8s per program on
 # a fast Linux box and appreciably more on the shared macOS runners, where the
@@ -94,6 +105,69 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [[profile.ci.overrides]]
 filter = 'test(/codegen::eval::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+# Core eval GC fixtures use opaque eval and link Magician just like codegen::eval.
+# Collection comparisons and heap-debug/tagged controls often compile twice.
+# Multiple macOS runs have exceeded 60s in different members of this same family.
+# Give the whole named family the existing eval budget, not unrelated AOT/GC tests.
+# The compiled-program watchdog remains 60s independently of this outer budget.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# These eval fixtures live outside the Core eval GC naming family. Boxed method
+# arguments hit 60s on both macOS attempts; hook-default and post-eval instanceof
+# controls passed only on retry at 59.687s and 58.843s respectively. The latter
+# controls compile three and two programs. Keep their guards scoped by exact name.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::callables::core_reflection::test_core_get_class_methods_accepts_boxed_arguments)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::callables::core_reflection::test_core_get_class_methods_accepts_boxed_arguments)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::callables::core_hook_introspection::test_core_hook_defaults_initialize_backing_storage_without_setter)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::callables::core_hook_introspection::test_core_hook_defaults_initialize_backing_storage_without_setter)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_post_eval_dynamic_class_name_target_balances_detached_strings)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_post_eval_dynamic_class_name_target_balances_detached_strings)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# This fixture compiles the web prelude together with native closures and opaque
+# eval handlers. Keep HTTP requests bounded in the fixture while allowing a cold
+# compiler/linker run to finish on shared macOS runners.
+[[profile.default.overrides]]
+filter = 'test(web_resets_core_handlers_between_requests)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(web_resets_core_handlers_between_requests)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# This ownership fixture likewise compiles the web prelude with opaque eval and
+# then drives several requests. Both retries on macOS CI reached nextest's exact
+# 60s termination boundary without a test panic or server diagnostic.
+[[profile.default.overrides]]
+filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+slow-timeout = { period = "180s", terminate-after = 1 }
 
 # PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
 # also rebuild the optional system-client archive on a cold local cache.

@@ -16,7 +16,7 @@ use crate::types::PhpType;
 /// Uses thread-local `ACTIVE_FUNCTION_EFFECTS` for user-defined functions. Falls back to
 /// Registry builtins consume their shared descriptor; unknown calls remain conservative.
 pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Effect {
-    with_active_function_effects(|effects| effects.and_then(|effects| effects.get(name).copied()))
+    let effect = with_active_function_effects(|effects| effects.and_then(|effects| effects.get(name).copied()))
     .unwrap_or_else(|| {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let arg_types = semantic_optimizer_arg_types(def, args);
@@ -38,7 +38,14 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
         } else {
             conservative_call_effect()
         }
-    })
+    });
+    if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+        // Unpacking can fail before even a pure builtin executes. Its arity guard
+        // must remain observable when the caller discards the builtin result.
+        effect.with_may_throw()
+    } else {
+        effect
+    }
 }
 
 /// Returns the callback operand and callback-free intrinsic effects for a typed runtime builtin.
@@ -288,7 +295,7 @@ pub(in crate::optimize) fn instance_property_read_effect(
         effect = effect.combine(instance_method_call_effect(object, "__get"));
     }
     if warns_missing {
-        effect = effect.with_side_effects();
+        effect = effect.with_side_effects().with_may_throw().with_writes_globals();
     }
     effect
 }

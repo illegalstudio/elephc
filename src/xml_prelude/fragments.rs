@@ -867,40 +867,103 @@ function xml_set_object(XMLParser $parser, mixed $object): bool {
 // can type an unannotated handler closure's parameters from the event it will receive;
 // their lowering calls these `__elephc_`-prefixed twins.
 
-function __elephc_xml_set_element_handler(XMLParser $parser, mixed $start_handler, mixed $end_handler): bool {
-    return $parser->__elephc_set_element_handler($start_handler, $end_handler);
+function __elephc_xml_set_element_handler(mixed $parser, mixed $start_handler, mixed $end_handler): bool {
+    if ($parser instanceof XMLParser) {
+        return $parser->__elephc_set_element_handler($start_handler, $end_handler);
+    }
+    $__parser_type = match (gettype($parser)) {
+        "integer" => "int", "double" => "float", "boolean" => "bool", "NULL" => "null",
+        "object" => get_class($parser), default => gettype($parser),
+    };
+    throw new TypeError('xml_set_element_handler(): Argument #1 ($parser) must be of type XMLParser, ' . $__parser_type . " given");
 }
 
-function __elephc_xml_set_character_data_handler(XMLParser $parser, mixed $handler): bool {
-    return $parser->__elephc_set_character_data_handler($handler);
+function __elephc_xml_set_character_data_handler(mixed $parser, mixed $handler): bool {
+    if ($parser instanceof XMLParser) {
+        return $parser->__elephc_set_character_data_handler($handler);
+    }
+    $__parser_type = match (gettype($parser)) {
+        "integer" => "int", "double" => "float", "boolean" => "bool", "NULL" => "null",
+        "object" => get_class($parser), default => gettype($parser),
+    };
+    throw new TypeError('xml_set_character_data_handler(): Argument #1 ($parser) must be of type XMLParser, ' . $__parser_type . " given");
 }
 
-function __elephc_xml_set_processing_instruction_handler(XMLParser $parser, mixed $handler): bool {
-    return $parser->__elephc_set_processing_instruction_handler($handler);
+function __elephc_xml_set_processing_instruction_handler(mixed $parser, mixed $handler): bool {
+    if ($parser instanceof XMLParser) {
+        return $parser->__elephc_set_processing_instruction_handler($handler);
+    }
+    $__parser_type = match (gettype($parser)) {
+        "integer" => "int", "double" => "float", "boolean" => "bool", "NULL" => "null",
+        "object" => get_class($parser), default => gettype($parser),
+    };
+    throw new TypeError('xml_set_processing_instruction_handler(): Argument #1 ($parser) must be of type XMLParser, ' . $__parser_type . " given");
 }
 
-function __elephc_xml_set_default_handler(XMLParser $parser, mixed $handler): bool {
-    return $parser->__elephc_set_default_handler($handler);
+function __elephc_xml_set_default_handler(mixed $parser, mixed $handler): bool {
+    if ($parser instanceof XMLParser) {
+        return $parser->__elephc_set_default_handler($handler);
+    }
+    $__parser_type = match (gettype($parser)) {
+        "integer" => "int", "double" => "float", "boolean" => "bool", "NULL" => "null",
+        "object" => get_class($parser), default => gettype($parser),
+    };
+    throw new TypeError('xml_set_default_handler(): Argument #1 ($parser) must be of type XMLParser, ' . $__parser_type . " given");
 }
 
-function __elephc_xml_set_unparsed_entity_decl_handler(XMLParser $parser, mixed $handler): bool {
-    return $parser->__elephc_set_unparsed_entity_decl_handler($handler);
+function __elephc_xml_set_unparsed_entity_decl_handler(mixed $parser, mixed $handler): bool {
+    if ($parser instanceof XMLParser) {
+        return $parser->__elephc_set_unparsed_entity_decl_handler($handler);
+    }
+    $__parser_type = match (gettype($parser)) {
+        "integer" => "int", "double" => "float", "boolean" => "bool", "NULL" => "null",
+        "object" => get_class($parser), default => gettype($parser),
+    };
+    throw new TypeError('xml_set_unparsed_entity_decl_handler(): Argument #1 ($parser) must be of type XMLParser, ' . $__parser_type . " given");
 }
 
-function __elephc_xml_set_notation_decl_handler(XMLParser $parser, mixed $handler): bool {
-    return $parser->__elephc_set_notation_decl_handler($handler);
+function __elephc_xml_set_notation_decl_handler(mixed $parser, mixed $handler): bool {
+    if ($parser instanceof XMLParser) {
+        return $parser->__elephc_set_notation_decl_handler($handler);
+    }
+    $__parser_type = match (gettype($parser)) {
+        "integer" => "int", "double" => "float", "boolean" => "bool", "NULL" => "null",
+        "object" => get_class($parser), default => gettype($parser),
+    };
+    throw new TypeError('xml_set_notation_decl_handler(): Argument #1 ($parser) must be of type XMLParser, ' . $__parser_type . " given");
 }
 
-function __elephc_xml_set_external_entity_ref_handler(XMLParser $parser, mixed $handler): bool {
-    return $parser->__elephc_set_external_entity_ref_handler($handler);
+function __elephc_xml_set_external_entity_ref_handler(mixed $parser, mixed $handler): bool {
+    if ($parser instanceof XMLParser) {
+        return $parser->__elephc_set_external_entity_ref_handler($handler);
+    }
+    $__parser_type = match (gettype($parser)) {
+        "integer" => "int", "double" => "float", "boolean" => "bool", "NULL" => "null",
+        "object" => get_class($parser), default => gettype($parser),
+    };
+    throw new TypeError('xml_set_external_entity_ref_handler(): Argument #1 ($parser) must be of type XMLParser, ' . $__parser_type . " given");
 }
 
-function __elephc_xml_set_start_namespace_decl_handler(XMLParser $parser, mixed $handler): bool {
-    return $parser->__elephc_set_start_namespace_decl_handler($handler);
+function __elephc_xml_set_start_namespace_decl_handler(mixed $parser, mixed $handler): bool {
+    if ($parser instanceof XMLParser) {
+        return $parser->__elephc_set_start_namespace_decl_handler($handler);
+    }
+    $__parser_type = match (gettype($parser)) {
+        "integer" => "int", "double" => "float", "boolean" => "bool", "NULL" => "null",
+        "object" => get_class($parser), default => gettype($parser),
+    };
+    throw new TypeError('xml_set_start_namespace_decl_handler(): Argument #1 ($parser) must be of type XMLParser, ' . $__parser_type . " given");
 }
 
-function __elephc_xml_set_end_namespace_decl_handler(XMLParser $parser, mixed $handler): bool {
-    return $parser->__elephc_set_end_namespace_decl_handler($handler);
+function __elephc_xml_set_end_namespace_decl_handler(mixed $parser, mixed $handler): bool {
+    if ($parser instanceof XMLParser) {
+        return $parser->__elephc_set_end_namespace_decl_handler($handler);
+    }
+    $__parser_type = match (gettype($parser)) {
+        "integer" => "int", "double" => "float", "boolean" => "bool", "NULL" => "null",
+        "object" => get_class($parser), default => gettype($parser),
+    };
+    throw new TypeError('xml_set_end_namespace_decl_handler(): Argument #1 ($parser) must be of type XMLParser, ' . $__parser_type . " given");
 }
 
 function xml_parse(XMLParser $parser, string $data, bool $is_final = false): int {

@@ -1,16 +1,16 @@
 ---
-title: "stream_filter_remove() — internals"
+title: "stream_filter_remove() - internals"
 description: "Compiler internals for stream_filter_remove(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 368
 ---
 
-## `stream_filter_remove()` — internals
+## `stream_filter_remove()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_filter_remove.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_filter_remove.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -48,3 +48,67 @@ pub(super) fn lower_gc_collect(ctx: &mut FunctionContext<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Lowers a PHP-visible collector control or status operation through typed runtime helpers.
+pub(super) fn lower_gc_control(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let Some(Immediate::I64(raw_op)) = inst.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "gc_control requires a typed selector immediate",
+        ));
+    };
+    let op = crate::ir::GcControlOp::from_i64(raw_op).ok_or_else(|| {
+        CodegenIrError::invalid_module(format!("unknown gc_control selector {raw_op}"))
+    })?;
+    match op {
+        crate::ir::GcControlOp::Collect => {
+            abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
+        }
+        crate::ir::GcControlOp::Disable => {
+            abi::emit_call_label(ctx.emitter, "__rt_gc_disable");
+        }
+        crate::ir::GcControlOp::Enable => {
+            abi::emit_call_label(ctx.emitter, "__rt_gc_enable");
+        }
+        crate::ir::GcControlOp::Enabled => {
+            abi::emit_call_label(ctx.emitter, "__rt_gc_enabled");
+        }
+        crate::ir::GcControlOp::MemCaches => {
+            abi::emit_call_label(ctx.emitter, "__rt_gc_mem_caches");
+        }
+        crate::ir::GcControlOp::Running
+        | crate::ir::GcControlOp::Protected
+        | crate::ir::GcControlOp::Runs
+        | crate::ir::GcControlOp::Collected
+        | crate::ir::GcControlOp::Roots => {
+            match ctx.emitter.target.arch {
+                crate::codegen::platform::Arch::AArch64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "x0", op.as_i64());
+                }
+                crate::codegen::platform::Arch::X86_64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "rdi", op.as_i64());
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_gc_status_metric");
+        }
+        crate::ir::GcControlOp::ApplicationTime
+        | crate::ir::GcControlOp::CollectorTime
+        | crate::ir::GcControlOp::DestructorTime
+        | crate::ir::GcControlOp::FreeTime => {
+            match ctx.emitter.target.arch {
+                crate::codegen::platform::Arch::AArch64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "x0", op.as_i64());
+                    abi::emit_call_label(ctx.emitter, "__rt_gc_status_metric");
+                    ctx.emitter.instruction("fmov d0, x0");
+                }
+                crate::codegen::platform::Arch::X86_64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "rdi", op.as_i64());
+                    abi::emit_call_label(ctx.emitter, "__rt_gc_status_metric");
+                    ctx.emitter.instruction("movq xmm0, rax");
+                }
+            }
+        }
+    }
+    store_if_result(ctx, inst)
+}

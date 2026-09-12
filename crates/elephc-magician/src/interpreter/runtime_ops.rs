@@ -20,7 +20,28 @@ use crate::value::RuntimeCellHandle;
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Publishes a successful eval-owned resource close to a shared native inventory.
+    fn resource_closed(&mut self, _resource: RuntimeCellHandle) -> Result<(), EvalStatus> { Ok(()) }
+
+    /// Writes a diagnostic already dispatched and filtered by its precise PHP error level.
+    fn warning_unhandled(&mut self, message: &str) -> Result<(), EvalStatus> {
+        self.warning(message)
+    }
+
+    /// Materializes one suspended native PHP frame, or returns None at the end of the stack.
+    fn runtime_backtrace_entry(&mut self, _index: usize, _options: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+
+    /// Returns the process resource inventory when a shared native runtime is available.
+    fn runtime_resource_inventory(&mut self, _selector: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Calls a typed boxed-cell runtime builtin when this implementation supports it.
+    /// Arguments are borrowed for the call. A successful result owns an independent
+    /// lease, or carries borrowed provenance so its caller can retain it before cleanup.
+    /// Returning `None` declines dispatch without consuming any argument.
     ///
     /// Test and embedding implementations inherit this adapter over the existing
     /// value-operation contract. The generated-runtime adapter overrides it with
@@ -86,6 +107,59 @@ pub trait RuntimeValueOps {
         Ok(Some(result))
     }
 
+    /// Gets or replaces the process-wide error-reporting mask through the generated runtime.
+    ///
+    /// Pure interpreter implementations return `UnsupportedConstruct` so the
+    /// eval context can retain its local mask.
+    fn runtime_error_reporting(
+        &mut self,
+        _replacement: Option<i64>,
+    ) -> Result<i64, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Installs a process-wide user error handler through the generated runtime.
+    fn runtime_error_handler_set(
+        &mut self,
+        _callback: Option<RuntimeCellHandle>,
+        _levels: i64,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Restores the prior process-wide user error handler through the generated runtime.
+    fn runtime_error_handler_restore(&mut self) -> Result<(), EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Invokes the active process-wide user error handler with borrowed callback arguments.
+    ///
+    /// Returns `Ok(None)` when no handler covers `level`, otherwise returns the
+    /// handler's owned boxed result for exact-false classification by eval.
+    fn runtime_error_handler_dispatch(
+        &mut self,
+        _level: i64,
+        _args: &[RuntimeCellHandle],
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Installs a process-wide exception handler through the generated runtime.
+    ///
+    /// Pure interpreter implementations return `UnsupportedConstruct` so the
+    /// eval context can use its local handler stack instead.
+    fn runtime_exception_handler_set(
+        &mut self,
+        _callback: Option<RuntimeCellHandle>,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Restores the prior process-wide exception handler through the generated runtime.
+    fn runtime_exception_handler_restore(&mut self) -> Result<(), EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
     /// Creates a runtime indexed-array cell with room for at least `capacity` elements.
     fn array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -127,6 +201,8 @@ pub trait RuntimeValueOps {
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Writes one element to a runtime array-like Mixed cell and returns the target cell.
+    /// Borrows the receiver, key, and value. Storage retains the value; callers must
+    /// release temporary key/value owners separately. The returned receiver adds no owner.
     fn array_set(
         &mut self,
         array: RuntimeCellHandle,
@@ -140,17 +216,35 @@ pub trait RuntimeValueOps {
         array: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let len = self.array_len(array)?;
-        let mut result = match self.type_tag(array)? {
+        let result = match self.type_tag(array)? {
             EVAL_TAG_ARRAY => self.array_new(len)?,
             EVAL_TAG_ASSOC => self.assoc_new(len)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         };
-        for position in 0..len {
-            let key = self.array_iter_key(array, position)?;
-            let value = self.array_get(array, key)?;
-            result = self.array_set(result, key, value)?;
+        let mut operands = Vec::new();
+        let mut copied = (|| {
+            for position in 0..len {
+                let key = self.array_iter_key(array, position)?;
+                operands.push(key);
+                let value = self.array_get(array, key)?;
+                operands.push(value);
+                self.array_set(result, key, value)?;
+            }
+            Ok(())
+        })();
+        for operand in operands {
+            if !operand.is_borrowed() {
+                let released = self.release(operand);
+                if copied.is_ok() { copied = released; }
+            }
         }
-        Ok(result)
+        match copied {
+            Ok(()) => Ok(result),
+            Err(status) => {
+                let _ = self.release(result);
+                Err(status)
+            }
+        }
     }
 
     /// Reads a named property from a runtime object held in a boxed Mixed cell.
@@ -167,13 +261,24 @@ pub trait RuntimeValueOps {
         property: &str,
     ) -> Result<bool, EvalStatus>;
 
-    /// Writes a named property on a runtime object held in a boxed Mixed cell.
+    /// Writes a named property while borrowing both boxed operands.
+    /// Stored values acquire an independent reference; callers still own their input leases.
     fn property_set(
         &mut self,
         object: RuntimeCellHandle,
         property: &str,
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus>;
+
+    /// Uninitializes an authorized typed native slot, returning false for eval-only storage.
+    /// The native owner is released after the slot receives its uninitialized marker.
+    fn unset_native_typed_property(
+        &mut self,
+        _object: RuntimeCellHandle,
+        _property: &str,
+    ) -> Result<bool, EvalStatus> {
+        Ok(false)
+    }
 
     /// Reads a generated/AOT static property through the generated bridge.
     fn static_property_get(
@@ -434,7 +539,7 @@ pub trait RuntimeValueOps {
     /// Creates an invoker-only by-reference marker for a staged Mixed slot.
     fn invoker_ref_cell(
         &mut self,
-        slot: *mut RuntimeCellHandle,
+        slot: *mut *mut crate::value::RuntimeCell,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Creates an invoker-only by-reference marker for a staged raw one-word slot.
@@ -493,8 +598,38 @@ pub trait RuntimeValueOps {
     /// Releases one owned runtime cell that is no longer held by the eval scope.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
+    /// Forces a cycle-collection pass and returns the number of reclaimed graph nodes.
+    fn gc_collect_cycles(&mut self) -> Result<i64, EvalStatus>;
+
+    /// Disables automatic cycle-collection safe points.
+    fn gc_disable(&mut self) -> Result<(), EvalStatus>;
+
+    /// Enables automatic cycle-collection safe points.
+    fn gc_enable(&mut self) -> Result<(), EvalStatus>;
+
+    /// Reports whether automatic cycle collection is enabled.
+    fn gc_enabled(&mut self) -> Result<bool, EvalStatus>;
+
+    /// Releases detachable allocator caches and returns the reclaimed byte count.
+    fn gc_mem_caches(&mut self) -> Result<i64, EvalStatus>;
+
+    /// Reads one integer GC status metric using the shared runtime selector ABI.
+    fn gc_status_metric(&mut self, metric: u64) -> Result<i64, EvalStatus>;
+
+    /// Reads one floating-point GC status metric through the shared scalar selector ABI.
+    fn gc_status_time(&mut self, metric: u64) -> Result<f64, EvalStatus>;
+
     /// Retains one runtime cell so the eval caller receives an independent owner.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Retains hidden object-owned edges for native GC; arena-backed adapters need no extra owners.
+    fn retain_object_children(
+        &mut self,
+        _object: RuntimeCellHandle,
+        _children: &[RuntimeCellHandle],
+    ) -> Result<(), EvalStatus> {
+        Ok(())
+    }
 
     /// Emits or suppresses one PHP runtime warning through the target runtime.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus>;

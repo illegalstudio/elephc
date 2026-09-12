@@ -1,11 +1,11 @@
 ---
-title: "imageopenpolygon() — internals"
+title: "imageopenpolygon() - internals"
 description: "Compiler internals for imageopenpolygon(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 517
 ---
 
-## `imageopenpolygon()` — internals
+## `imageopenpolygon()` - internals
 
 ## Where it lives
 

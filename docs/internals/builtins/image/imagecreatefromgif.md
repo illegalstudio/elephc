@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefromgif() — internals"
+title: "imagecreatefromgif() - internals"
 description: "Compiler internals for imagecreatefromgif(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 487
 ---
 
-## `imagecreatefromgif()` — internals
+## `imagecreatefromgif()` - internals
 
 ## Where it lives
 

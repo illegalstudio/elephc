@@ -7527,6 +7527,24 @@ echo ":"; echo function_exists("microtime");');
     assert_eq!(out, "now:named:call:array:1");
 }
 
+/// Verifies eval GC builtins cross the live generated-runtime ABI on CI hosts.
+#[test]
+fn test_eval_dispatches_gc_builtins_through_runtime_hooks() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo gc_enabled() ? "on" : "bad"; echo ":";
+gc_disable(); echo gc_enabled() ? "bad" : "off"; echo ":";
+call_user_func("gc_enable"); echo gc_enabled() ? "on" : "bad"; echo ":";
+$status = call_user_func("gc_status");
+echo count($status) === 12 ? "shape" : "bad"; echo ":";
+echo $status["threshold"] === 0 && $status["buffer_size"] === 0 ? "unbuffered" : "bad"; echo ":";
+echo is_float($status["application_time"]) && $status["application_time"] >= 0.0 ? "timed" : "bad"; echo ":";
+echo call_user_func("gc_mem_caches") >= 0 ? "cache" : "bad";');
+"#,
+    );
+    assert_eq!(out, "on:off:on:shape:unbuffered:timed:cache");
+}
+
 /// Verifies eval realpath-cache builtins expose elephc's empty-cache convention.
 #[test]
 fn test_eval_dispatches_realpath_cache_builtin_calls() {
@@ -17317,52 +17335,79 @@ abstract class EvalIfaceInheritedPropertyChild extends EvalIfaceInheritedPropert
     );
 }
 
-/// Verifies eval rejects PHP-forbidden callable/static type atoms by declaration position.
-#[test]
-fn test_eval_rejects_invalid_property_and_parameter_type_atoms() {
-    for source in [
-        r#"<?php
+/// Keeps each forbidden declaration in its own compile/link/run budget and CI shard.
+macro_rules! eval_invalid_type_atom_case {
+    ($name:ident, $source:expr $(,)?) => {
+        /// Verifies one declaration-position rejection without batching native compiler runs.
+        #[test]
+        fn $name() {
+            let err = compile_and_run_expect_failure($source);
+            assert!(
+                err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+                "stderr did not contain eval unsupported-construct diagnostic: {err}"
+            );
+        }
+    };
+}
+
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_callable_property,
+    r#"<?php
 eval('class EvalBadCallableProperty {
     public callable $value;
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_callable_interface_property,
+    r#"<?php
 eval('interface EvalBadCallableInterfaceProperty {
     public callable $value { get; }
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_callable_promoted,
+    r#"<?php
 eval('class EvalBadCallablePromoted {
     public function __construct(public callable $value) {}
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_parameter,
+    r#"<?php
 eval('function eval_bad_static_parameter(static $value) {}');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_self_return,
+    r#"<?php
 eval('function eval_bad_self_return(): self {}');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_return,
+    r#"<?php
 eval('function eval_bad_static_return(): static {}');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_method_parameter,
+    r#"<?php
 eval('class EvalBadStaticMethodParam {
     public function read(static $value) {}
 }');
 "#,
-        r#"<?php
+);
+eval_invalid_type_atom_case!(
+    test_eval_rejects_invalid_property_and_parameter_type_atoms_static_promoted,
+    r#"<?php
 eval('class EvalBadStaticPromoted {
     public function __construct(public static $value) {}
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-            "stderr did not contain eval unsupported-construct diagnostic: {err}"
-        );
-    }
-}
+);
 
 /// Verifies eval-declared plain abstract properties can be concretized by child storage.
 #[test]
@@ -26456,10 +26501,10 @@ echo "after";
     assert_eq!(out, "before:drop:A:after");
 }
 
-/// Verifies eval-declared object destructors run when cycle collection releases them.
+/// Explicit collection runs eval-declared destructors after their cyclic objects lose external roots.
 #[test]
 fn test_eval_dynamic_object_runs_destructor_after_cycle_collection() {
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalCycleDropBox {
     public function __construct($name) { $this->name = $name; }
@@ -26468,10 +26513,13 @@ eval('class EvalCycleDropBox {
 $box = new EvalCycleDropBox("A");
 $box->self = $box;
 unset($box);
+$collected = gc_collect_cycles();
+echo $collected > 0 ? "collected:" : "uncollected:";
 echo "after";');
 "#,
     );
-    assert_eq!(out, "drop:A:after");
+    assert!(out.success, "stdout={:?} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop:A:collected:after", "{}", out.stderr);
 }
 
 /// Verifies eval-declared subclasses inherit generated/AOT destructors.
@@ -29431,4 +29479,126 @@ return ":" . ($quiet ?? "fallback");');
         out.stderr
     );
     assert!(!out.stderr.contains("$quiet"), "{}", out.stderr);
+}
+
+/// Verifies eval receives the complete typed AOT Core constant inventory.
+#[test]
+fn test_eval_get_defined_constants_matches_aot_core_inventory() {
+    let out = compile_and_run(
+        r#"<?php
+$native = get_defined_constants(true)["Core"];
+$evaluated = eval('return get_defined_constants(true)["Core"];');
+$missing = 0;
+foreach ($native as $name => $value) {
+    if (!array_key_exists($name, $evaluated)) {
+        $missing++;
+    }
+}
+foreach ($evaluated as $name => $value) {
+    if (!array_key_exists($name, $native)) {
+        $missing++;
+    }
+}
+echo count($native) === count($evaluated) ? "count:" : "bad-count:";
+echo $missing === 0 ? "keys:" : "bad-keys:";
+echo $native["FNM_CASEFOLD"] === $evaluated["FNM_CASEFOLD"] ? "value:" : "bad-value:";
+echo get_resource_type($evaluated["STDOUT"]);
+"#,
+    );
+    assert_eq!(out, "count:keys:value:stream");
+}
+
+/// Verifies eval method bridges preserve the physical collector ABI for instance and static
+/// methods, including a statically rooted zero-argument curl prelude getter.
+///
+/// Magician materializes every hidden collector before calling the bridge. The bridge must keep
+/// that physical slot and call the raw method symbol. Entering a source adapter would append a
+/// second collector, while validating visible arity would reject the physical argument array.
+#[test]
+fn test_eval_method_bridge_enters_physical_collector_methods_through_raw_symbols() {
+    fn calls_symbol(assembly: &str, symbol: &str) -> bool {
+        assembly.lines().any(|line| {
+            let line = line.trim();
+            line.strip_prefix("bl ") == Some(symbol)
+                || line.strip_prefix("call ") == Some(symbol)
+        })
+    }
+
+    let dir = make_cli_test_dir("elephc_eval_method_physical_collector");
+    let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class EvalPhysicalCollector {
+    public function collect(string $label): string {
+        return $label . ":" . count(func_get_args());
+    }
+    public static function collectStatic(string $label): string {
+        return $label . ":" . count(func_get_args());
+    }
+}
+$file = new CURLFile("/tmp/a.txt");
+$file->getFilename();
+$object = new EvalPhysicalCollector();
+$code = 'return $file->getFilename() . $object->collect("instance") . EvalPhysicalCollector::collectStatic("static");';
+echo eval($code);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let instance_bridge = user_asm
+        .split("--- eval bridge: user method call ---")
+        .nth(1)
+        .and_then(|section| {
+            section
+                .split("--- eval bridge: user static method call ---")
+                .next()
+        })
+        .expect("the eval instance method bridge should be emitted");
+    for (class_name, source_method, symbol_method) in [
+        ("CURLFile", "getFilename", "getfilename"),
+        ("EvalPhysicalCollector", "collect", "collect"),
+    ] {
+        assert!(
+            instance_bridge.contains(&format!(
+                "__elephc_eval_method_{class_name}_{class_name}_{symbol_method}"
+            )),
+            "the eval bridge should own a physical body for {class_name}::{source_method}:\n{instance_bridge}"
+        );
+        let raw_symbol = format!("_method_{class_name}_{symbol_method}");
+        assert!(
+            calls_symbol(instance_bridge, &raw_symbol),
+            "the eval bridge should call the raw symbol for {class_name}::{source_method}:\n{instance_bridge}"
+        );
+        let source_adapter = format!("_method_source_abi_{class_name}_{symbol_method}");
+        assert!(
+            !calls_symbol(instance_bridge, &source_adapter),
+            "the eval bridge must not enter the source adapter for {class_name}::{source_method}:\n{instance_bridge}"
+        );
+    }
+    let static_bridge = user_asm
+        .split("--- eval bridge: user static method call ---")
+        .nth(1)
+        .expect("the eval static method bridge should be emitted");
+    assert!(
+        static_bridge.contains(
+            "__elephc_eval_static_method_body_EvalPhysicalCollector_EvalPhysicalCollector_collectstatic"
+        ),
+        "the eval bridge should own a body for the static collector twin:\n{static_bridge}"
+    );
+    assert!(
+        calls_symbol(
+            static_bridge,
+            "_static_EvalPhysicalCollector_collectstatic"
+        ),
+        "the eval bridge should call the raw static collector symbol:\n{static_bridge}"
+    );
+    assert!(
+        !calls_symbol(
+            static_bridge,
+            "_static_source_abi_EvalPhysicalCollector_collectstatic"
+        ),
+        "the eval bridge must not enter the static source adapter:\n{static_bridge}"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }

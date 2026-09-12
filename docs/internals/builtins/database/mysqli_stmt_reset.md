@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_reset() — internals"
+title: "mysqli_stmt_reset() - internals"
 description: "Compiler internals for mysqli_stmt_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 174
 ---
 
-## `mysqli_stmt_reset()` — internals
+## `mysqli_stmt_reset()` - internals
 
 ## Where it lives
 

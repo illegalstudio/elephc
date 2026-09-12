@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Exception matching and unwinding must keep handler-stack, call-frame cleanup, and class metadata invariants aligned.
+//! - Each abandoned activation is detached before its non-escaping callback can release user objects.
 
 use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::platform::Arch;
@@ -37,12 +38,13 @@ pub fn emit_exception_cleanup_frames(emitter: &mut Emitter) {
     emitter.instruction("cbz x20, __rt_exception_cleanup_frames_done");         // stop defensively if the stack unexpectedly bottoms out
     emitter.instruction("ldr x10, [x20, #8]");                                  // load the cleanup callback pointer for this activation
     emitter.instruction("ldr x11, [x20, #16]");                                 // load the saved frame pointer for this activation
+    emitter.instruction("ldr x20, [x20]");                                      // detach this abandoned activation before cleanup invokes user destructors
+    abi::emit_store_reg_to_symbol(emitter, "x20", "_exc_call_frame_top", 0);
     emitter.instruction("cbz x10, __rt_exception_cleanup_frames_next");         // skip callbacks for activations that have no cleanup work
     emitter.instruction("mov x0, x11");                                         // pass the unwound activation's frame pointer to its cleanup callback
     emitter.instruction("blr x10");                                             // run the per-function cleanup callback for this activation
 
     emitter.label("__rt_exception_cleanup_frames_next");
-    emitter.instruction("ldr x20, [x20]");                                      // advance to the previous activation record in the cleanup stack
     emitter.instruction("b __rt_exception_cleanup_frames_loop");                // continue unwinding older activations until the target is reached
 
     // -- publish the surviving activation record as the new top --
@@ -78,13 +80,14 @@ fn emit_exception_cleanup_frames_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_exception_cleanup_frames_done");               // stop defensively when no more activation records remain
     emitter.instruction("mov r10, QWORD PTR [r13 + 8]");                        // load the cleanup callback pointer for the current unwound activation
     emitter.instruction("mov r11, QWORD PTR [r13 + 16]");                       // load the saved frame pointer for the current unwound activation
+    emitter.instruction("mov r13, QWORD PTR [r13]");                            // detach this abandoned activation before cleanup invokes user destructors
+    abi::emit_store_reg_to_symbol(emitter, "r13", "_exc_call_frame_top", 0);
     emitter.instruction("test r10, r10");                                       // does this activation record have cleanup work to run?
     emitter.instruction("je __rt_exception_cleanup_frames_next");               // skip callback execution when the activation carries no cleanup hook
     emitter.instruction("mov rdi, r11");                                        // pass the unwound activation frame pointer into the cleanup callback ABI register
     emitter.instruction("call r10");                                            // run the per-function cleanup callback for this unwound activation record
 
     emitter.label("__rt_exception_cleanup_frames_next");
-    emitter.instruction("mov r13, QWORD PTR [r13]");                            // advance to the previous activation record in the cleanup stack
     emitter.instruction("jmp __rt_exception_cleanup_frames_loop");              // continue unwinding older activation records until the survivor is reached
 
     emitter.label("__rt_exception_cleanup_frames_done");
@@ -93,4 +96,32 @@ fn emit_exception_cleanup_frames_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop r12");                                             // restore the saved survivor activation register before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the throw helper
     emitter.instruction("ret");                                                 // return to the throw helper after unwound-frame cleanup
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Cleanup detaches the abandoned record before invoking its callback in executable and PIC runtimes.
+    #[test]
+    fn unwind_detaches_each_frame_before_calling_its_cleanup() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for pic in [false, true] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emitter.pic_data_refs = pic;
+                emit_exception_cleanup_frames(&mut emitter);
+                let (detach, call) = if emitter.target.arch == Arch::AArch64 {
+                    ("ldr x20, [x20]", "blr x10")
+                } else {
+                    ("mov r13, QWORD PTR [r13]", "call r10")
+                };
+                let asm = emitter.output();
+                let detach = asm.find(detach).unwrap();
+                let call = asm.find(call).unwrap();
+                assert!(detach < call, "{name}, PIC={pic}");
+                assert!(asm[detach..call].contains("_exc_call_frame_top"), "{name}, PIC={pic}");
+            }
+        }
+    }
 }

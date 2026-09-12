@@ -8,7 +8,7 @@
 //! Key details:
 //! - Decrement helpers are release paths for refcounted values and must balance recursive frees with GC cycle collection.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::platform::Arch;
 
 
@@ -45,15 +45,18 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     // -- inspect the full kind word so collector-only flags stay visible --
     emitter.instruction("ldr x11, [x0, #-8]");                                  // load the full 64-bit kind word from the heap header
 
-    // -- during cycle collection, skip unreachable refcounted children because they will be freed directly --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_gc_collecting");
-    emitter.instruction("ldr x12, [x12]");                                      // load the collector-active flag
-    emitter.instruction("cbz x12, __rt_decref_any_dispatch");                   // ordinary release path when no collection is running
+    // -- only the final sweep skips graph children that it reclaims directly --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_gc_freeing_unreachable");
+    emitter.instruction("ldr x12, [x12]");                                      // load sweep-only child-release suppression
+    emitter.instruction("cbz x12, __rt_decref_any_dispatch");                   // destructor callbacks still balance real graph owners
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this a refcounted indexed array?
     emitter.instruction("b.lo __rt_decref_any_dispatch");                       // strings should still be freed immediately
+    emitter.instruction("cmp x13, #7");                                         // owned reference cells are collector graph nodes
+    emitter.instruction("b.eq __rt_decref_any_graph_child");                    // apply sweep suppression to reference cells
     emitter.instruction("cmp x13, #6");                                         // is this within the refcounted array/hash/object/mixed/throwable range?
     emitter.instruction("b.hi __rt_decref_any_dispatch");                       // raw/untyped blocks are not part of refcounted graph cleanup
+    emitter.label("__rt_decref_any_graph_child");
     emitter.instruction("mov x14, #1");                                         // prepare a single-bit reachable mask
     emitter.instruction("lsl x14, x14, #16");                                   // x14 = GC reachable bit in the kind word
     emitter.instruction("tst x11, x14");                                        // does this child stay reachable from an external root?
@@ -72,6 +75,8 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_decref_any_object");                         // release objects through __rt_decref_object
     emitter.instruction("cmp x11, #5");                                         // is this a boxed mixed value?
     emitter.instruction("b.eq __rt_decref_any_mixed");                          // release mixed cells through __rt_decref_mixed
+    emitter.instruction("cmp x11, #7");                                         // recognize independently owned reference cells
+    emitter.instruction("b.eq __rt_decref_any_reference");                      // select a local dispatch stub for final-owner cell cleanup
     emitter.instruction("cmp x11, #6");                                         // is this a throwable object?
     emitter.instruction("b.eq __rt_decref_any_object");                         // release throwables through the object decref helper
     emitter.instruction("ret");                                                 // unknown/raw kinds need no release
@@ -90,6 +95,9 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_mixed");
     emitter.instruction("b __rt_decref_mixed");                                 // tail-call to mixed-cell decref
+
+    emitter.label("__rt_decref_any_reference");
+    abi::emit_jump(emitter, "__rt_reference_cell_release");
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release
@@ -121,6 +129,20 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r11, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
     emitter.instruction(&format!("cmp r11d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that the payload belongs to the x86_64 heap wrapper before dispatching a release helper
     emitter.instruction("jne __rt_decref_any_done");                            // foreign/static pointers must be ignored by the uniform x86_64 release dispatcher
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_gc_freeing_unreachable");
+    emitter.instruction("cmp QWORD PTR [r11], 0");                              // destructor callbacks use ordinary balanced reference counts
+    emitter.instruction("je __rt_decref_any_dispatch");                         // skip collector suppression outside the final sweep
+    emitter.instruction("test r10, 0x10000");                                   // surviving graph children still need ordinary decrements
+    emitter.instruction("jnz __rt_decref_any_dispatch");                        // preserve normal cleanup for reachable children
+    emitter.instruction("mov r11, r10");                                        // keep the full kind word until dispatch
+    emitter.instruction("and r11d, 0xff");                                      // inspect the concrete heap kind
+    emitter.instruction("cmp r11d, 2");                                         // strings and raw allocations are not swept graph nodes
+    emitter.instruction("jb __rt_decref_any_dispatch");                         // release non-graph children through their ordinary helper
+    emitter.instruction("cmp r11d, 5");                                         // the collector directly reclaims array, hash, object, and Mixed nodes
+    emitter.instruction("jbe __rt_decref_any_done");                            // never decrement already reclaimed or independently pinned doomed nodes
+    emitter.instruction("cmp r11d, 7");                                         // owned reference cells are independently swept graph nodes
+    emitter.instruction("je __rt_decref_any_done");                             // leave doomed cell retirement to the collector
+    emitter.label("__rt_decref_any_dispatch");
     emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for the concrete release dispatch
     emitter.instruction("cmp r10, 1");                                          // does this heap-backed payload own a persisted string buffer?
     emitter.instruction("je __rt_decref_any_string");                           // strings release through heap_free_safe on x86_64
@@ -132,6 +154,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_decref_any_object");                           // objects release through the x86_64 object decref helper
     emitter.instruction("cmp r10, 5");                                          // does this heap-backed payload point at a boxed mixed cell?
     emitter.instruction("je __rt_decref_any_mixed");                            // mixed cells release through the x86_64 mixed decref helper
+    emitter.instruction("cmp r10, 7");                                          // recognize independently owned reference cells
+    emitter.instruction("je __rt_decref_any_reference");                        // select a local dispatch stub for final-owner cell cleanup
     emitter.instruction("cmp r10, 6");                                          // does this heap-backed payload point at a throwable object (issue #448)?
     emitter.instruction("je __rt_decref_any_object");                           // throwables release through the x86_64 object decref helper like plain objects
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
@@ -150,6 +174,9 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_mixed");
     emitter.instruction("jmp __rt_decref_mixed");                               // tail-call to the mixed-box decref helper on x86_64
+
+    emitter.label("__rt_decref_any_reference");
+    abi::emit_jump(emitter, "__rt_reference_cell_release");
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release for null, foreign, or unsupported heap kinds

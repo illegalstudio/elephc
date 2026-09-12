@@ -57,7 +57,7 @@ pub(super) fn lower_typed_assign(
 }
 
 /// Coerces a typed local assignment into the storage shape required by the declared type.
-pub(super) fn coerce_typed_assign_value(
+pub(in crate::ir_lower) fn coerce_typed_assign_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     php_type: &PhpType,
@@ -71,12 +71,13 @@ pub(super) fn coerce_typed_assign_value(
     match target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
         target @ (PhpType::Callable | PhpType::Object(_)) if source_ty == PhpType::Mixed => {
+            let effects = Op::mixed_unbox_effects(&target);
             ctx.emit_value(
                 Op::MixedUnbox,
                 vec![value.value],
                 None,
                 target,
-                Op::MixedUnbox.default_effects(),
+                effects,
                 Some(span),
             )
         }
@@ -104,6 +105,17 @@ pub(super) fn lower_foreach(
     // objects, so `retain_object_foreach_source` returns them untouched and the flag still
     // describes `source`.
     let source = retain_object_foreach_source(ctx, source, array.span);
+    // Iterator initialization can invoke user code before the loop frame exists.
+    // Publish temporary sources first so a same-frame catch can unwind them.
+    // Every by-reference source is deliberately excluded because retaining it
+    // before IterStart would defeat the required copy-on-write split. Concrete
+    // array locals also need to remain a direct LoadLocal so the backend can
+    // publish the split payload back into the original slot.
+    let (source, source_owner) = if value_by_ref || source_is_borrowed_fetch {
+        (source, None)
+    } else {
+        crate::ir_lower::expr::root_owned_call_operand(ctx, source, array.span)
+    };
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
@@ -121,14 +133,7 @@ pub(super) fn lower_foreach(
             }
         }
     }
-    let iterator = ctx.emit_value(
-        Op::IterStart,
-        vec![source.value],
-        value_by_ref.then_some(Immediate::Bool(true)),
-        PhpType::Iterable,
-        Op::IterStart.default_effects(),
-        Some(array.span),
-    );
+    let (iterator, iterator_owner) = ctx.emit_iter_start(source, value_by_ref, array.span);
     // Take the loop's own lifetime reference on a borrowed fetch-for-write source after
     // `IterStart`.
     // The order is the whole point: `IterStart` splits a by-reference source through
@@ -190,17 +195,19 @@ pub(super) fn lower_foreach(
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
-    let cleanup = ctx
-        .value_is_owning_temporary(source)
-        .then_some(LoopCleanup {
+    let cleanup = (source_owner.is_none() && ctx.value_is_owning_temporary(source)).then_some(
+        LoopCleanup {
             value: source,
             span: array.span,
-        });
+        },
+    );
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
         cleanup,
+        source_owner: source_owner.map(|slot| (slot, array.span)),
         source_pin,
+        iterator_owner: iterator_owner.map(|slot| (slot, array.span)),
     });
     if let Some(key_var) = key_var {
         let key = ctx.emit_value(
@@ -247,7 +254,12 @@ pub(super) fn lower_foreach(
     // duration of the loop, so nothing else frees it once iteration ends. (For an
     // array the iterator aliases the source, so it must NOT be released separately
     // — that would double-free.)
-    if ctx.value_is_owning_temporary(source) {
+    if let Some(slot) = iterator_owner {
+        ctx.retire_iter_start_owner(slot, array.span);
+    }
+    if let Some(slot) = source_owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, array.span);
+    } else if ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(array.span));
     }
     // Normal termination is the exit this block IS, so the pin is dropped here. Every other way

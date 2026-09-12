@@ -180,10 +180,10 @@ foreach ($filtered as $value) { echo $value; }
     assert_eq!(out, "22040");
 }
 
-/// Verifies invalid literal modes throw a catchable `ValueError` before callback invocation.
+/// PHP 8.6 invalid literal modes throw a catchable ValueError before callback invocation.
 #[test]
 fn test_array_filter_invalid_literal_mode_throws_value_error() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         r#"<?php
 function keep_value($value) { echo "callback"; return true; }
 try {
@@ -193,14 +193,15 @@ try {
     echo "ValueError";
 }
 "#,
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "ValueError");
 }
 
-/// Verifies invalid runtime mode variables throw a catchable `ValueError`.
+/// PHP 8.6 invalid runtime modes throw a catchable ValueError.
 #[test]
 fn test_array_filter_invalid_runtime_mode_throws_value_error() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         r#"<?php
 function keep_value_runtime($value) { echo "callback"; return true; }
 $mode = 9;
@@ -211,6 +212,7 @@ try {
     echo "ValueError";
 }
 "#,
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "ValueError");
 }
@@ -274,7 +276,7 @@ echo array_reduce([1, 2, 3], $reduce, 0);
     let (user_asm, _runtime_asm, _required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
     assert!(
-        user_asm.contains("__rt_array_filter")
+        user_asm.contains("__rt_array_predicate_boxed")
             && user_asm.contains("__rt_array_walk")
             && user_asm.contains("__rt_array_reduce")
             && user_asm.contains("callable_invoker"),
@@ -902,6 +904,53 @@ exercise([false, false]);
 "#,
     );
     assert_eq!(out, "2:2:ww:rr:2:boolean:1:1:0:2");
+}
+
+/// Verifies boxed declared arrays preserve COW, by-reference writes, actual keys, and recursive
+/// leaf order when the callback receives runtime-typed Mixed values.
+#[test]
+fn test_declared_array_walks_preserve_references_keys_and_cow() {
+    let out = compile_and_run(
+        r#"<?php
+function walk_declared(array $values): void {
+    $copy = $values;
+    $alias = $values;
+    array_walk($values, static function (mixed &$value, mixed $key) use (&$alias): void {
+        if ($key === "first") {
+            $alias["first"] = 100;
+            unset($alias[7]);
+        }
+        echo gettype($value), "/", gettype($key), "/", $key, ";";
+        $value = $value + 10;
+    });
+    echo $values["first"], ",", $values[7], "|", $copy["first"], ",", $copy[7], "|";
+    echo $alias["first"], ",", count($alias), ":";
+}
+
+function walk_recursive_declared(array $values): void {
+    $copy = $values;
+    $alias = $values;
+    array_walk_recursive($values, static function (mixed &$value, mixed $key) use (&$alias): void {
+        if ($key === "leaf") {
+            $alias[9] = 40;
+            unset($alias["outer"]);
+        }
+        echo gettype($value), "/", gettype($key), "/", $key, ";";
+        $value = $value + 10;
+    });
+    echo $values["outer"]["leaf"], ",", $values[9], "|";
+    echo $copy["outer"]["leaf"], ",", $copy[9], "|", $alias[9], ",", count($alias);
+}
+
+walk_declared(["first" => 1, 7 => 2]);
+walk_recursive_declared(["outer" => ["leaf" => 3], 9 => 4]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "integer/string/first;integer/integer/7;11,12|1,2|100,1:\
+         integer/string/leaf;integer/integer/9;13,14|3,4|40,1"
+    );
 }
 
 /// Verifies the reported repro: array_map with an untyped closure over a heterogeneous

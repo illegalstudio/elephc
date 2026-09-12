@@ -50,8 +50,16 @@ pub(super) fn ensure_eval_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Ensures a persistent eval global-scope exists and stores its handle in scratch.
+/// Uses the main eval scope as global storage, or allocates a distinct function-global scope.
 pub(super) fn ensure_eval_global_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    if ctx.is_main {
+        // Top-level eval declarations and `global` inside eval functions share storage.
+        // Only EvalScope owns this handle; leave EvalGlobalScope null to avoid double-free.
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_SCOPE_HANDLE_OFFSET);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_GLOBAL_SCOPE_HANDLE_OFFSET);
+        return Ok(());
+    }
     let slot = eval_global_scope_slot(ctx)?;
     let offset = ctx.local_offset(slot)?;
     let ready = ctx.next_label("eval_global_scope_ready");
@@ -241,13 +249,13 @@ pub(super) fn emit_eval_called_class_name_result_x86_64(ctx: &mut FunctionContex
 
 /// Returns true when the current method frame can provide a late-static class id.
 pub(super) fn eval_late_static_class_id_available(ctx: &FunctionContext<'_>) -> bool {
-    ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM).is_some()
+    ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL).is_some()
         || ctx.local_slot_by_name("this").is_some()
 }
 
 /// Loads the late-static class id from the hidden static slot or `$this`.
 pub(super) fn emit_eval_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) -> Result<()> {
-    if let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) {
+    if let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) {
         let offset = ctx.local_offset(slot)?;
         abi::load_at_offset(ctx.emitter, reg, offset);
         return Ok(());

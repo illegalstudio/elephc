@@ -1,16 +1,16 @@
 ---
-title: "array_map() — internals"
+title: "array_map() - internals"
 description: "Compiler internals for array_map(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 23
 ---
 
-## `array_map()` — internals
+## `array_map()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_map.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_map.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_map(callable $callback, array $array, ...$arrays): array
+function array_map(?callable $callback, array $array, ...$arrays): array
 ```
 
 ## What the type checker enforces

@@ -121,13 +121,43 @@ impl Checker {
             }
             let mut effective_sig =
                 Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
-            let normalized_args = self.normalize_named_call_args(
+            let plan = self.plan_named_call_args(
                 &effective_sig,
                 args,
                 span,
                 &format!("Function '{}'", name),
                 caller_env,
             )?;
+            self.validate_callable_spread_elements(
+                &effective_sig,
+                args,
+                &plan,
+                caller_env,
+                &format!("Function '{}'", name),
+            )?;
+            let defaults = plan.default_argument_mask();
+            let descriptor_projections = plan.descriptor_projection_mask();
+            let normalized_args = plan.normalized_args();
+            if descriptor_projections
+                .iter()
+                .enumerate()
+                .any(|(index, projected)| {
+                    *projected
+                        && effective_sig
+                            .ref_params
+                            .get(index)
+                            .copied()
+                            .unwrap_or(false)
+                })
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                        name
+                    ),
+                ));
+            }
             if self.respecialize_resolved_function_params_if_needed(
                 name,
                 &normalized_args,
@@ -144,6 +174,8 @@ impl Checker {
                 &sig,
                 &effective_sig,
                 &normalized_args,
+                &defaults,
+                &descriptor_projections,
                 span,
                 caller_env,
             );
@@ -229,13 +261,23 @@ impl Checker {
             variadic: decl.variadic.clone(),
             deprecation: None,
         };
-        let normalized_args = self.normalize_named_call_args(
+        let plan = self.plan_named_call_args(
             &normalization_sig,
             args,
             span,
             &format!("Function '{}'", name),
             caller_env,
         )?;
+        self.validate_callable_spread_elements(
+            &normalization_sig,
+            args,
+            &plan,
+            caller_env,
+            &format!("Function '{}'", name),
+        )?;
+        let defaults = plan.default_argument_mask();
+        let descriptor_projections = plan.descriptor_projection_mask();
+        let normalized_args = plan.normalized_args();
         let args = normalized_args.as_slice();
         let effective_arg_count = args
             .iter()
@@ -288,12 +330,23 @@ impl Checker {
                             decl.span,
                             &format!("Function '{}' parameter ${}", name, decl.params[i]),
                         )?;
-                        self.require_compatible_arg_type(
-                            &declared_ty,
-                            &ty,
-                            arg.span,
-                            &format!("Function '{}' parameter ${}", name, decl.params[i]),
-                        )?;
+                        // `validate_callable_spread_elements` above has already established that
+                        // this spread is eligible for runtime descriptor validation. Only that
+                        // projected Mixed value may be unboxed into a declared Callable slot, and
+                        // never into a by-reference binding whose lvalue identity cannot come from
+                        // a descriptor projection.
+                        let descriptor_projected_callable = matches!(arg.kind, ExprKind::Spread(_))
+                            && !decl.ref_params.get(i).copied().unwrap_or(false)
+                            && declared_ty.codegen_repr() == PhpType::Callable
+                            && ty.codegen_repr() == PhpType::Mixed;
+                        if !descriptor_projected_callable {
+                            self.require_compatible_arg_type(
+                                &declared_ty,
+                                &ty,
+                                arg.span,
+                                &format!("Function '{}' parameter ${}", name, decl.params[i]),
+                            )?;
+                        }
                         param_types.push((decl.params[i].clone(), declared_ty));
                     } else if matches!(ty, PhpType::Never) {
                         let param_ty = decl
@@ -310,6 +363,22 @@ impl Checker {
                 }
                 arg_idx = decl.params.len();
             } else if arg_idx < decl.params.len() {
+                let supplied_reference = decl.ref_params.get(arg_idx).copied().unwrap_or(false)
+                    && !defaults.get(arg_idx).copied().unwrap_or(false);
+                if supplied_reference
+                    && descriptor_projections
+                        .get(arg_idx)
+                        .copied()
+                        .unwrap_or(false)
+                {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                            name
+                        ),
+                    ));
+                }
                 if ty == PhpType::Callable {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
                         self.callable_param_sigs.insert(
@@ -326,7 +395,7 @@ impl Checker {
                         );
                     }
                 }
-                if decl.ref_params.get(arg_idx).copied().unwrap_or(false) {
+                if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -356,23 +425,39 @@ impl Checker {
                         decl.span,
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
-                    if decl.ref_params.get(arg_idx).copied().unwrap_or(false) {
+                    // A tracked two-slot callable array crosses a declared `callable` boundary
+                    // as the descriptor EIR lowering materializes for this exact argument. The
+                    // already-resolved call validator applies the same exception; the first call
+                    // must not reject the underlying `Array(Mixed)` before it can publish the
+                    // function signature and reach that shared validator.
+                    let proven_callable_array = declared_ty.codegen_repr() == PhpType::Callable
+                        && !supplied_reference
+                        && !Self::types_compatible(&declared_ty, &ty)
+                        && !self.type_accepts(&declared_ty, &ty)
+                        && self
+                            .callable_array_param_target(arg, caller_env)?
+                            .is_some();
+                    if supplied_reference {
                         self.require_boxed_by_ref_storage(
                             &declared_ty,
                             &ty,
-                            arg.span,
+                            arg,
+                            caller_env,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
+                        self.record_php_array_reference_output(arg, &declared_ty, &ty, span);
                     }
-                    self.require_bound_param_arg_type(
-                        &declared_ty,
-                        &ty,
-                        arg,
-                        caller_env,
-                        &format!("Function '{}' parameter ${}", name, param_name),
-                        Some((name, decl.params[arg_idx].as_str())),
-                        decl.ref_params.get(arg_idx).copied().unwrap_or(false),
-                    )?;
+                    if !proven_callable_array {
+                        self.require_bound_param_arg_type(
+                            &declared_ty,
+                            &ty,
+                            arg,
+                            caller_env,
+                            &format!("Function '{}' parameter ${}", name, param_name),
+                            Some((name, decl.params[arg_idx].as_str())),
+                            supplied_reference,
+                        )?;
+                    }
                     let specialized_ty =
                         Self::specialize_generic_array_param_hint(&declared_ty, &ty);
                     param_types.push((decl.params[arg_idx].clone(), specialized_ty));

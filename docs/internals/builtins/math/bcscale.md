@@ -1,16 +1,16 @@
 ---
-title: "bcscale() — internals"
+title: "bcscale() - internals"
 description: "Compiler internals for bcscale(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 562
 ---
 
-## `bcscale()` — internals
+## `bcscale()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bcscale.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bcscale.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

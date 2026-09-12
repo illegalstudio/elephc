@@ -1,11 +1,11 @@
 ---
-title: "opcache_reset() — internals"
+title: "opcache_reset() - internals"
 description: "Compiler internals for opcache_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 619
+  order: 639
 ---
 
-## `opcache_reset()` — internals
+## `opcache_reset()` - internals
 
 ## Where it lives
 

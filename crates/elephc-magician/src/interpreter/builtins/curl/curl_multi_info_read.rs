@@ -39,23 +39,24 @@ pub(in crate::interpreter) fn eval_builtin_curl_multi_info_read_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["multi_handle", "queued_messages"],
-        &evaluated_args,
-        false,
-    )?;
-    let multi_handle = required_evaluated_ref_arg(&bound, 0)?;
-    let queued = optional_evaluated_ref_arg(&bound, 1);
-    let target = queued.as_ref().and_then(|arg| arg.ref_target.clone());
-    let supplied = queued.is_some();
-    eval_curl_multi_info_read_result(
-        multi_handle.value,
-        target,
-        supplied,
-        context,
-        values,
-    )
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+        let (bound, _) = bind_evaluated_ref_builtin_args(
+            &["multi_handle", "queued_messages"],
+            &evaluated_args,
+            false,
+        )?;
+        let multi_handle = required_evaluated_ref_arg(&bound, 0)?;
+        let queued = optional_evaluated_ref_arg(&bound, 1);
+        let target = queued.as_ref().and_then(|arg| arg.ref_target.clone());
+        let supplied = queued.is_some();
+        eval_curl_multi_info_read_result(
+            multi_handle.value,
+            target,
+            supplied,
+            context,
+            values,
+        )
+    })
 }
 
 /// Evaluates `curl_multi_info_read()` over plain eval expressions.
@@ -65,16 +66,8 @@ pub(in crate::interpreter) fn eval_builtin_curl_multi_info_read(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (multi_handle, target, supplied) = match args {
-        [multi_handle] => (eval_expr(multi_handle, context, scope, values)?, None, false),
-        [multi_handle, queued] => {
-            let multi_handle = eval_expr(multi_handle, context, scope, values)?;
-            let (_, target) = eval_call_arg_value(queued, context, scope, values)?;
-            (multi_handle, target, true)
-        }
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
-    eval_curl_multi_info_read_result(multi_handle, target, supplied, context, values)
+    let args = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+    eval_builtin_curl_multi_info_read_call(&args, context, scope, values)
 }
 
 /// Dispatches evaluated `curl_multi_info_read()` calls through the builtin leaf. This path

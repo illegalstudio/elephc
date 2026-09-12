@@ -1,16 +1,16 @@
 ---
-title: "is_double() — internals"
+title: "is_double() - internals"
 description: "Compiler internals for is_double(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 865
+  order: 891
 ---
 
-## `is_double()` — internals
+## `is_double()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_double.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_double.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

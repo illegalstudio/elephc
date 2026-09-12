@@ -1,11 +1,11 @@
 ---
-title: "timezone_open() — internals"
+title: "timezone_open() - internals"
 description: "Compiler internals for timezone_open(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 249
 ---
 
-## `timezone_open()` — internals
+## `timezone_open()` - internals
 
 ## Where it lives
 

@@ -9,6 +9,8 @@
 //! - `crate::version_prelude::inject_if_used`.
 //! - `crate::php_profile::sensitivity::scan`, which needs the SPAN of the first reference to
 //!   point a diagnostic at the construct that made a program profile-dependent.
+//! - `crate::optimize::exception_flow::destruction`, which asks whether a `__destruct`
+//!   declaration exists in a position its own summary collector never reaches.
 //!
 //! Key details:
 //! - The walk is generic over the target name so a single exhaustive traversal backs
@@ -91,6 +93,15 @@ pub(crate) enum SymbolKind {
     AsymmetricVisibility,
     /// A TYPED CLASS CONSTANT (`const string N = 'v'`), a PHP 8.3 form.
     TypedClassConst,
+    /// A `__destruct` METHOD DECLARATION, matched as a syntactic form rather than by name.
+    ///
+    /// [`Symbol::name`] is ignored. The exception-flow optimizer needs to know whether a
+    /// program declares a destructor ANYWHERE, including inside a trait, inside a class
+    /// declared in a conditional branch, and inside a class declared in a closure body,
+    /// because a destructor it cannot summarize must keep its program-wide destructor
+    /// summary conservative. Riding on this traversal is what makes that question answerable
+    /// without a second walk that could quietly miss a new `ExprKind`/`StmtKind`.
+    DestructorDeclaration,
 }
 
 /// How a call's first argument narrows a FUNCTION match.
@@ -273,7 +284,8 @@ fn name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::PipeOperator
         | SymbolKind::PropertyHooks
         | SymbolKind::AsymmetricVisibility
-        | SymbolKind::TypedClassConst => false,
+        | SymbolKind::TypedClassConst
+        | SymbolKind::DestructorDeclaration => false,
     }
 }
 
@@ -294,7 +306,8 @@ fn const_name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::PipeOperator
         | SymbolKind::PropertyHooks
         | SymbolKind::AsymmetricVisibility
-        | SymbolKind::TypedClassConst => false,
+        | SymbolKind::TypedClassConst
+        | SymbolKind::DestructorDeclaration => false,
     }
 }
 
@@ -358,7 +371,16 @@ fn class_property_refs(property: &ClassProperty, target: Symbol<'_>) -> Option<S
 
 /// Returns the span of the first reference to the function in a method's parameter
 /// defaults or body.
+///
+/// A [`SymbolKind::DestructorDeclaration`] search matches the DECLARATION itself, wherever
+/// the owning class-like declaration sits, including a body-less one: an abstract or
+/// interface `__destruct` still names a destructor the program can run through a subclass.
 fn class_method_refs(method: &ClassMethod, target: Symbol<'_>) -> Option<Span> {
+    if target.kind == SymbolKind::DestructorDeclaration
+        && method.name.eq_ignore_ascii_case("__destruct")
+    {
+        return Some(method.span);
+    }
     params_ref(&method.params, target)
         .or_else(|| method.body.iter().find_map(|stmt| stmt_refs(stmt, target)))
 }
@@ -680,9 +702,18 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
             .or_else(|| properties.iter().find_map(|p| class_property_refs(p, target)))
             .or_else(|| methods.iter().find_map(|m| class_method_refs(m, target)))
             .or_else(|| constants.iter().find_map(|c| class_const_refs(c, target))),
-        StmtKind::EnumDecl { cases, .. } => {
-            cases.iter().find_map(|case| enum_case_refs(case, target))
-        }
+        StmtKind::EnumDecl {
+            cases,
+            trait_uses,
+            methods,
+            constants,
+            ..
+        } => trait_uses
+            .iter()
+            .find_map(|tu| trait_use_refs(tu, target))
+            .or_else(|| cases.iter().find_map(|case| enum_case_refs(case, target)))
+            .or_else(|| methods.iter().find_map(|method| class_method_refs(method, target)))
+            .or_else(|| constants.iter().find_map(|constant| class_const_refs(constant, target))),
         StmtKind::PackedClassDecl { fields, .. } => {
             fields.iter().find_map(|f| packed_field_refs(f, target))
         }
@@ -793,6 +824,37 @@ mod tests {
             &parse(r#"<?php function f() { return opcache_reset(); }"#),
             RESET
         ));
+    }
+
+    /// An enum method can execute opaque eval source even though the enum has no destructor.
+    #[test]
+    fn detects_eval_inside_an_enum_method() {
+        let program = parse(r#"<?php
+enum EvalOwner {
+    case Ready;
+    public static function load(string $source): void { eval($source); }
+}
+"#);
+        assert!(first_reference(&program, Symbol::function("eval")).is_some());
+    }
+
+    /// A class declared in an enum method must participate in destructor-enumeration checks.
+    #[test]
+    fn detects_destructor_declared_inside_an_enum_method() {
+        let program = parse(r#"<?php
+enum DeclarationOwner {
+    case Ready;
+    public static function load(): void {
+        class NestedPayload {
+            public function __destruct() { throw new RuntimeException('cleanup'); }
+        }
+    }
+}
+"#);
+        assert!(first_reference(
+            &program,
+            Symbol::syntactic(SymbolKind::DestructorDeclaration),
+        ).is_some());
     }
 
     /// Case-insensitive matching, as PHP function names are.

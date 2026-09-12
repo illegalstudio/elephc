@@ -1,16 +1,16 @@
 ---
-title: "array_multisort() — internals"
+title: "array_multisort() - internals"
 description: "Compiler internals for array_multisort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 26
 ---
 
-## `array_multisort()` — internals
+## `array_multisort()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_multisort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_multisort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
+- **Effects**: `static (6 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_multisort(array $array1, int $array2): bool
+function array_multisort(array $array1, array $array2): bool
 ```
 
 ## What the type checker enforces

@@ -40,6 +40,7 @@ impl EvalStreamResources {
     pub(super) fn insert(&mut self, stream: EvalFileStream) -> i64 {
         let id = self.take_next_id();
         self.streams.insert(id, stream);
+        self.resource_types.insert(id, "stream");
         id
     }
 
@@ -121,6 +122,7 @@ impl EvalStreamResources {
     pub(super) fn insert_directory(&mut self, directory: EvalDirectoryStream) -> i64 {
         let id = self.take_next_id();
         self.directories.insert(id, directory);
+        self.resource_types.insert(id, "stream");
         id
     }
 
@@ -135,6 +137,7 @@ impl EvalStreamResources {
     pub(super) fn insert_stream_context(&mut self, context: EvalStreamContext) -> i64 {
         let id = self.take_next_id();
         self.stream_contexts.insert(id, context);
+        self.resource_types.insert(id, "stream-context");
         id
     }
 }

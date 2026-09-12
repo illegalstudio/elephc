@@ -624,9 +624,9 @@ fn emit_sprintf_warnings_aarch64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.instruction("stp x11, x12, [sp, #8]");                              // preserve class-name metadata across warning fragments
     abi::emit_symbol_address(emitter, "x1", "_diag_sprintf_object_numeric_prefix");
     emitter.instruction(&format!("mov x2, #{}", SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX.len())); // warning prefix byte length
-    emitter.instruction("bl __rt_diag_warning");                                // emit or suppress the warning prefix
+    emitter.instruction("bl __rt_diag_warning_fragment");                       // emit or suppress the warning prefix
     emitter.instruction("ldp x1, x2, [sp, #8]");                                // reload the class-name fragment
-    emitter.instruction("bl __rt_diag_warning");                                // emit or suppress the resolved class name
+    emitter.instruction("bl __rt_diag_warning_fragment");                       // emit or suppress the resolved class name
     emitter.instruction("ldr x9, [sp]");                                        // reload integer-versus-float warning kind
     emitter.instruction("cbnz x9, __rt_sprintf_numeric_warning_float");         // non-zero selects the float suffix
     abi::emit_symbol_address(emitter, "x1", "_diag_sprintf_object_to_int_suffix");
@@ -702,10 +702,10 @@ fn emit_sprintf_warnings_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) 
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // preserve class-name byte length
     emitter.instruction("lea rdi, [rip + _diag_sprintf_object_numeric_prefix]"); // warning prefix pointer
     emitter.instruction(&format!("mov esi, {}", SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX.len())); // warning prefix byte length
-    emitter.instruction("call __rt_diag_warning");                              // emit or suppress the warning prefix
+    emitter.instruction("call __rt_diag_warning_fragment");                     // emit or suppress the warning prefix
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the class-name byte length
-    emitter.instruction("call __rt_diag_warning");                              // emit or suppress the resolved class name
+    emitter.instruction("call __rt_diag_warning_fragment");                     // emit or suppress the resolved class name
     emitter.instruction("cmp QWORD PTR [rbp - 8], 0");                          // integer or float warning wording?
     emitter.instruction("jne __rt_sprintf_numeric_warning_float_x64");          // non-zero selects the float suffix
     emitter.instruction("lea rdi, [rip + _diag_sprintf_object_to_int_suffix]"); // integer warning suffix pointer

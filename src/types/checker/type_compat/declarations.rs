@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, TypeExpr};
-use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType};
+use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType, TypeEnv};
 
 use super::super::inference::syntactic::infer_expr_type_syntactic;
 use super::super::{Checker, FnDecl};
@@ -193,22 +193,38 @@ impl Checker {
         }
     }
 
-    /// Validates that `actual_ty` is suitable storage for a by-reference parameter whose
-    /// declared type needs boxed or nullable storage.
-    /// Returns an error if `actual_ty` is a concrete non-boxed type that cannot represent
-    /// writes of every value accepted by the by-reference parameter.
+    /// Validates boxed reference storage, including local array slots that EIR can widen.
+    /// Rejects concrete storage without a supported conversion before exposing its address.
     pub(crate) fn require_boxed_by_ref_storage(
-        &self,
+        &mut self,
         expected_ty: &PhpType,
         actual_ty: &PhpType,
-        span: crate::span::Span,
+        arg: &Expr,
+        env: &TypeEnv,
         context: &str,
     ) -> Result<(), CompileError> {
+        // The call lowering boxes PHP array locals before exposing their ref-cell address.
+        // This changes storage, not the declared values accepted by the reference parameter.
+        if expected_ty.is_php_array()
+            && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            return Ok(());
+        }
         if requires_by_ref_boxed_storage(expected_ty)
             && !supports_by_ref_boxed_storage(actual_ty)
         {
+            // `lower_by_ref_array_element_arg_with_signature` widens a local
+            // indexed array to Mixed slots before taking the element address.
+            // Only that addressable shape has this conversion, not arbitrary
+            // scalar locals, properties, nested places or tagged nullable slots.
+            if expected_ty.codegen_repr() == PhpType::Mixed
+                && matches!(arg.kind, ExprKind::ArrayAccess { .. })
+                && self.is_by_ref_argument_lvalue(arg, env)?
+            {
+                return Ok(());
+            }
             return Err(CompileError::new(
-                span,
+                arg.span,
                 &format!(
                     "{} requires a variable with mixed/union/nullable storage when passed by reference",
                     context
@@ -341,7 +357,7 @@ impl Checker {
     }
 
     /// Returns a bitvec indicating which parameters of a method have declared type hints.
-    /// Looks up the method by `method_name` and `is_static` in `class_info.method_decls`.
+    /// Local declarations provide the annotations; inherited methods retain them in their signature.
     pub(crate) fn declared_method_param_flags(
         class_info: &ClassInfo,
         method_name: &str,
@@ -365,7 +381,10 @@ impl Checker {
                     .chain(method.variadic.iter().map(|_| method.variadic_type.is_some()))
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_else(|| {
+                let signatures = if is_static { &class_info.static_methods } else { &class_info.methods };
+                signatures.get(&method_key).map(|sig| sig.declared_params.clone()).unwrap_or_default()
+            })
     }
 
     /// Adjusts a function signature so that parameters without declared type hints are marked

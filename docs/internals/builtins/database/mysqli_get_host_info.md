@@ -1,11 +1,11 @@
 ---
-title: "mysqli_get_host_info() — internals"
+title: "mysqli_get_host_info() - internals"
 description: "Compiler internals for mysqli_get_host_info(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 131
 ---
 
-## `mysqli_get_host_info()` — internals
+## `mysqli_get_host_info()` - internals
 
 ## Where it lives
 

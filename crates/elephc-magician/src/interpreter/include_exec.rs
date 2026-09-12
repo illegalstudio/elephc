@@ -13,7 +13,7 @@
 use super::*;
 use crate::parse_cache::parse_fragment_cached;
 
-/// Evaluates nested `eval(...)` calls against the current materialized scope.
+/// Copies and releases the source operand before parsing nested eval in the current scope.
 pub(super) fn eval_nested_eval(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -23,10 +23,15 @@ pub(super) fn eval_nested_eval(
     let [code] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let code = eval_expr(code, context, scope, values)?;
-    let code = values.string_bytes(code)?;
+    let source = eval_owned_expr(code, context, scope, values)?;
+    let code = values.string_bytes(source);
+    let released = eval_release_value(context, values, source);
+    let code = code.and_then(|code| released.map(|()| code))?;
     let program = parse_fragment_cached(&code).map_err(EvalParseError::status)?;
-    execute_program_with_context(context, program.as_ref(), scope, values)
+    context.push_eval_backtrace_boundary();
+    let outcome = execute_program_with_context(context, program.as_ref(), scope, values);
+    context.pop_eval_backtrace_boundary();
+    outcome
 }
 
 /// Evaluates an eval-fragment include or require expression.

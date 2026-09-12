@@ -50,6 +50,15 @@ impl LocalSlotAnalysis {
                     stored_slots.insert(slot);
                 }
             }
+            // `IterStart` writes a successful getIterator Mixed cell into this
+            // slot from the backend, so prologue zero-init and epilogue
+            // cleanup must treat it as a stored owner.
+            if inst.op == Op::IterStart {
+                if let Some(Immediate::IterStart { owner: Some(slot), .. }) = inst.immediate.as_ref()
+                {
+                    stored_slots.insert(*slot);
+                }
+            }
             if let Some(slot) =
                 ref_cell_target_slot(function, inst.op, inst.immediate.as_ref(), &inst.operands)
             {
@@ -138,7 +147,7 @@ fn ref_cell_target_slot(
 ) -> Option<LocalSlotId> {
     match (op, immediate) {
         (
-            Op::PromoteLocalRefCell | Op::AliasLocalRefCell,
+            Op::PromoteLocalRefCell | Op::AliasLocalRefCell | Op::BindRefCellPtr | Op::AdoptRefCellPtr,
             Some(Immediate::LocalSlotPair { first, .. }),
         ) => Some(*first),
         (
@@ -329,6 +338,10 @@ fn owned_parameter_slots(
     stored_slots: &HashSet<LocalSlotId>,
     ever_ref_cell_slots: &HashSet<LocalSlotId>,
 ) -> HashSet<LocalSlotId> {
+    // Eval can replace caller-visible parameters without an explicit EIR StoreLocal.
+    let eval_can_replace_locals = function.locals.iter().any(|local| {
+        matches!(local.kind, crate::ir::LocalKind::EvalScope | crate::ir::LocalKind::EvalGlobalScope)
+    });
     function
         .params
         .iter()
@@ -345,7 +358,8 @@ fn owned_parameter_slots(
                 && param.php_type.codegen_repr() != PhpType::Mixed;
             (stored_slots.contains(&slot)
                 || ever_ref_cell_slots.contains(&slot)
-                || prologue_boxes_owned_mixed)
+                || prologue_boxes_owned_mixed
+                || (eval_can_replace_locals && local.kind == crate::ir::LocalKind::PhpLocal))
                 .then_some(slot)
         })
         .collect()
@@ -393,6 +407,23 @@ mod tests {
     use crate::codegen::generate_user_asm_from_ir;
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership};
+
+    /// Eval replacement requires a by-value parameter owner even without explicit EIR stores.
+    #[test]
+    fn eval_scope_makes_visible_by_value_parameters_owned() {
+        for by_ref in [false, true] {
+            let mut function = Function::new("eval_parameter".to_string(), IrType::Void, PhpType::Void);
+            function.params.push(FunctionParam {
+                name: "value".to_string(), ir_type: IrType::Str, php_type: PhpType::Str,
+                by_ref, variadic: false,
+            });
+            let slot = function.add_local(Some("value".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+            function.add_local(Some("scope".to_string()), IrType::I64, PhpType::Int, LocalKind::EvalScope);
+            let analysis = LocalSlotAnalysis::new(&function);
+            assert!(!analysis.has_store(slot));
+            assert_eq!(analysis.owns_parameter_slot(slot), !by_ref);
+        }
+    }
 
     /// Verifies a later promotion does not flow backward into an earlier deferred release.
     #[test]
@@ -718,5 +749,50 @@ mod tests {
 
         generate_user_asm_from_ir(&module, false, false)
             .expect("dynamic ReleaseLocalSlot fixture should lower")
+    }
+
+    /// `IterStart` owner slots count as stored so prologue zero-init covers them.
+    #[test]
+    fn iter_start_owner_slot_counts_as_a_store() {
+        let mut function =
+            Function::new("iter_owner".to_string(), IrType::Void, PhpType::Void);
+        let owner = function.add_local(
+            Some("iter_owner".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::OwnedTemp,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let source = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    None,
+                    IrType::Heap(crate::ir::IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("array_new produces a value");
+            builder
+                .emit(
+                    Op::IterStart,
+                    vec![source],
+                    Some(Immediate::IterStart {
+                        by_ref: false,
+                        owner: Some(owner),
+                    }),
+                    IrType::Heap(crate::ir::IrHeapKind::Iterable),
+                    PhpType::Iterable,
+                    Ownership::MaybeOwned,
+                )
+                .expect("iter_start produces a value");
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert!(analysis.has_store(owner));
     }
 }

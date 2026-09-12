@@ -1,16 +1,16 @@
 ---
-title: "session_status() — internals"
+title: "session_status() - internals"
 description: "Compiler internals for session_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 905
+  order: 931
 ---
 
-## `session_status()` — internals
+## `session_status()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3017](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3017) (`session_status`)
+- **Lowering**: [`src/web_prelude/build.rs`:3059](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3059) (`session_status`)
 - **Function symbol**: `session_status()`
 
 

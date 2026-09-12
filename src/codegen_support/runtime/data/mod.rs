@@ -14,6 +14,7 @@ mod fixed;
 /// escape quoted directive operands the same way.
 pub(crate) mod instanceof;
 mod user;
+mod throwable_previous;
 
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
@@ -137,6 +138,13 @@ pub(crate) const ALLOC_OVERFLOW_MSG: &str =
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.
 pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
+/// Catchable TypeError for a magic serializer that returns a non-array value.
+pub(crate) const SERIALIZE_RETURN_ARRAY_MSG: &str = "__serialize() must return an array";
+/// Runtime warning prefix for legacy serializer return validation.
+pub(crate) const SLEEP_WARNING_PREFIX: &str = "Warning: serialize(): ";
+/// Class-qualified warning suffix for invalid legacy serializer property names.
+pub(crate) const SLEEP_WARNING_SUFFIX: &str =
+    "::__sleep() should return an array only containing the names of instance-variables to serialize\n";
 /// Prefix for a catchable TypeError naming a non-array `unserialize()` options argument.
 pub(crate) const UNSER_OPTIONS_TYPE_PREFIX: &str =
     "unserialize(): Argument #2 ($options) must be of type array, ";
@@ -155,6 +163,24 @@ pub(crate) const UNSER_ALLOWED_CLASSES_ENTRY_PREFIX: &str =
 pub(crate) const OBJECT_NOT_ARRAY_PREFIX: &str = "Cannot use object of type ";
 /// Suffix for PHP's catchable Error when an object is indexed like an array.
 pub(crate) const OBJECT_NOT_ARRAY_SUFFIX: &str = " as array";
+/// Prefix for PHP's catchable Error when a name and its positional alias both arrive.
+///
+/// A descriptor argument container can carry BOTH the positional key `0` and the name of the
+/// parameter that position binds. PHP rejects that combination outright rather than letting one
+/// silently win, so the message names the parameter: `Named parameter $a overwrites previous
+/// argument`.
+pub(crate) const NAMED_PARAMETER_OVERWRITE_PREFIX: &str = "Named parameter $";
+/// Suffix for PHP's catchable name/position collision Error.
+pub(crate) const NAMED_PARAMETER_OVERWRITE_SUFFIX: &str = " overwrites previous argument";
+/// Prefix for PHP's catchable Error naming an argument no parameter can accept.
+///
+/// Only a non-variadic callee raises it: a variadic one collects every unmatched name instead.
+pub(crate) const UNKNOWN_NAMED_PARAMETER_PREFIX: &str = "Unknown named parameter $";
+/// PHP's catchable Error when a positional entry follows a named one in a container.
+///
+/// Nothing runtime-dependent appears in it, so the Throwable points straight at these bytes.
+pub(crate) const POSITIONAL_AFTER_NAMED_MSG: &str =
+    "Cannot use positional argument after named argument";
 /// Prefix for PHP's catchable object-to-string conversion Error in an allowed-class list.
 pub(crate) const UNSER_OBJECT_STRING_ERROR_PREFIX: &str = "Object of class ";
 /// Suffix for PHP's catchable object-to-string conversion Error in an allowed-class list.

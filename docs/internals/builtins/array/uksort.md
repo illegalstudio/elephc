@@ -1,16 +1,16 @@
 ---
-title: "uksort() — internals"
+title: "uksort() - internals"
 description: "Compiler internals for uksort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 69
 ---
 
-## `uksort()` — internals
+## `uksort()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/uksort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/uksort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

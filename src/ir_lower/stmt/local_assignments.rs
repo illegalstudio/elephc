@@ -11,6 +11,7 @@ use super::*;
 
 /// Lowers a plain PHP local assignment.
 pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
+    crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     // PHP allows compound assignment on an undefined variable (`$x += 1`),
     // treating the undefined variable as null/0 with a warning. The type
     // checker injects the variable as `Void` and emits a warning. At the
@@ -181,6 +182,10 @@ pub(super) fn contextualize_local_assignment(
         ctx.local_type(name)
     };
     let contextual_repr = contextual_ty.codegen_repr();
+    if contextual_ty.is_php_array() {
+        let converted = coerce_typed_assign_value(ctx, lowered, &contextual_ty, span);
+        return (converted, contextual_ty);
+    }
     let has_loop_contract = local_has_loop_storage_contract(ctx, name, &contextual_ty);
 
     // A first assignment precedes the loop whose contract was computed from the final checker
@@ -312,4 +317,3 @@ pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, 
         }
     }
 }
-

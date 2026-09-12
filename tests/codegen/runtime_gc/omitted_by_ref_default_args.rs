@@ -1,39 +1,30 @@
 //! Purpose:
-//! Heap-balance coverage for a call that OMITS an optional by-reference argument
-//! (`f($x)` against `f($x, int &$out = 7)`). The callee still needs an address to write
-//! through, so the caller materializes a cell for it — and since no caller variable stands
-//! behind that cell, nothing ever reads it back.
+//! Heap-balance coverage for calls that omit optional by-reference arguments.
+//! Default cells supply mutable storage without a caller variable to write back.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - THIS IS A REGRESSION SUITE FOR A REAL LEAK. That cell used to be
-//!   `__rt_heap_alloc(16)` (`materialize_temporary_ref_arg_cell`) that nothing freed: one
-//!   16-byte block per call, unbounded in a loop. It is now a caller-stack cell in the same
-//!   block as the scalar-to-Mixed writeback cells, released once after the call
-//!   (`src/codegen/lower_inst/reference_arguments.rs`). Measured before the fix, three calls
-//!   leaked three blocks in every shape below; after it, each is balanced.
+//! - Default cells have managed heap ownership and a caller-side unwind lease. Closures can
+//!   retain them after the call; otherwise caller cleanup retires the cell and its payload.
 //! - The loop counts are deliberately larger than one so a per-call leak cannot hide inside
 //!   the fixed startup allocations `--gc-stats` also reports.
-//! - EVERY MATERIALIZATION PATH IS COVERED, and the routing was CHECKED rather than assumed
-//!   (an earlier version of this file claimed `$counter->bump($i)` exercised the
-//!   receiver-REGISTER lowering; it does not — a typed local receiver goes through the same
-//!   direct-call materializer a plain function does). The four stagers and the fixture that
-//!   genuinely reaches each one:
+//! - Typed local receivers use direct-call materialization. Mixed receivers and parent calls
+//!   cover the register and local-receiver stagers respectively:
 //!
 //!   | materializer | fixture |
 //!   |---|---|
 //!   | direct call | `test_omitted_by_ref_default_arg_is_balanced` (and the method/static ones) |
 //!   | static method (hidden called-class id) | `test_omitted_by_ref_default_arg_on_static_method_is_balanced` |
-//!   | receiver REGISTER (`nested_call_reg`) | `test_omitted_by_ref_default_arg_on_mixed_receiver_is_balanced` — a `mixed`-typed receiver forces the register dispatch (verified in the emitted assembly: `mov x19, x1` for the receiver, with the cell pushed before it) |
+//!   | receiver REGISTER (`nested_call_reg`) | `test_omitted_by_ref_default_arg_on_mixed_receiver_is_balanced` |
 //!   | receiver LOCAL (`parent::m()`) | `test_omitted_by_ref_default_arg_on_parent_call_is_balanced` |
 //!
 //!   A refcounted cell type (`array`) has its own fixture too, because releasing the cell's
 //!   CONTENT is a separate step from releasing the cell.
 //! - Every expected stdout value is real `php` 8.5 output for the same source.
 
-use crate::support::{compile_and_run_with_gc_stats, compile_and_run_with_heap_debug, parse_gc_stats};
+use crate::support::{compile_and_run_tagged, compile_and_run_with_gc_stats, compile_and_run_with_heap_debug, parse_gc_stats};
 
 /// Asserts a program prints `expected` and allocates exactly as many heap blocks as it frees.
 fn assert_balanced(source: &str, expected: &str) {
@@ -148,6 +139,161 @@ main();
 "#,
         "20:4",
     );
+}
+
+/// Boxed array defaults have independent owners for positional, named and instance-method calls.
+#[test]
+fn test_core_omitted_by_ref_nonempty_array_defaults_keep_independent_owners() {
+    let source = r#"<?php
+function defaultArrayOwner(int $value, array &$out = [10]): int {
+    $out[] = $value;
+    return count($out);
+}
+class DefaultArrayOwner {
+    public function update(int $value, array &$out = [20]): int {
+        $out[] = $value;
+        return count($out);
+    }
+}
+$object = new DefaultArrayOwner();
+$total = 0;
+for ($i = 0; $i < 3; $i++) {
+    $total += defaultArrayOwner($i);
+    $total += defaultArrayOwner(value: $i);
+    $total += $object->update($i);
+}
+unset($object);
+echo $total;
+"#;
+    assert_balanced(source, "18");
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "18", "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Named calls may skip a reference default before a supplied parameter on every resolved call surface.
+#[test]
+fn test_core_named_calls_skip_middle_reference_defaults() {
+    let source = r#"<?php
+echo namedDefaultMiddle(value: 1), "|";
+function namedDefaultMiddle(array &$out = [10], int $value = 0): int {
+    $out[] = $value;
+    return count($out);
+}
+class NamedDefaultMiddle {
+    public function __construct(array &$out = [20], int $value = 0) {
+        $out[] = $value;
+        echo count($out), "|";
+    }
+    public function update(array &$out = [30], int $value = 0): int {
+        $out[] = $value;
+        return count($out);
+    }
+    public static function make(array &$out = [40], int $value = 0): int {
+        $out[] = $value;
+        return count($out);
+    }
+}
+$object = new NamedDefaultMiddle(value: 2);
+echo $object->update(value: 3), "|", NamedDefaultMiddle::make(value: 4), "|";
+$callback = namedDefaultMiddle(...);
+echo $callback(value: 5), "|";
+$actual = [60];
+echo namedDefaultMiddle(value: 7, out: $actual), ":", $actual[1];
+unset($actual, $callback, $object);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "2|2|2|2|2|2:7", "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Ordinary, inherited and explicit parent constructors retire omitted array reference cells.
+#[test]
+fn test_core_non_promoting_constructors_retire_optional_reference_cells() {
+    let source = r#"<?php
+class OrdinaryConstructorLease {
+    public function __construct(array &$out = [10], int $value = 0) {
+        $out[] = $value;
+        echo implode(",", $out), "|";
+    }
+}
+class InheritedConstructorLease extends OrdinaryConstructorLease {}
+class ParentConstructorLease extends OrdinaryConstructorLease {
+    public function __construct(int $value) { parent::__construct(value: $value); }
+}
+for ($i = 0; $i < 3; $i++) {
+    $direct = new OrdinaryConstructorLease(value: 1);
+    $inherited = new InheritedConstructorLease(value: 2);
+    $parent = new ParentConstructorLease(3);
+    $actual = [70];
+    $explicit = new OrdinaryConstructorLease(value: 4, out: $actual);
+    echo $actual[1], "|";
+    unset($direct, $inherited, $parent, $explicit, $actual);
+}
+"#;
+    let expected = "10,1|10,2|10,3|70,4|4|".repeat(3);
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected, "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
+/// Dynamic ordinary constructors preserve their receiver while staging and retiring a temporary cell.
+#[test]
+fn test_core_dynamic_non_promoting_constructor_retires_reference_argument_cell() {
+    let source = r#"<?php
+final class DynamicLeaseInput { public int $value = 42; }
+class DynamicOrdinaryConstructorLease {
+    public function __construct(int &$value) { echo $value, "|"; }
+}
+function makeDynamicOrdinaryLease(string $name, DynamicLeaseInput $input): void {
+    $object = new $name($input->value);
+    echo get_class($object), "|", $input->value, "|";
+    unset($object);
+}
+for ($i = 0; $i < 3; $i++) {
+    $input = new DynamicLeaseInput();
+    makeDynamicOrdinaryLease("DynamicOrdinaryConstructorLease", $input);
+    unset($input);
+}
+"#;
+    let expected = "42|DynamicOrdinaryConstructorLease|42|".repeat(3);
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected, "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
+/// Closures retain a constructor's managed default cell independently after its object is released.
+#[test]
+fn test_core_constructor_reference_default_survives_in_an_escaping_closure() {
+    let source = r#"<?php
+class CapturedConstructorLease {
+    public $later;
+    public function __construct(array &$items = [9]) {
+        $this->later = function() use (&$items): int {
+            $items[] = 1;
+            return count($items);
+        };
+    }
+}
+for ($i = 0; $i < 3; $i++) {
+    $object = new CapturedConstructorLease();
+    $later = $object->later;
+    unset($object);
+    echo $later(), ":", $later(), "|";
+    unset($later);
+}
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "2:3|".repeat(3), "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert_eq!(compile_and_run_tagged(source), "2:3|".repeat(3));
 }
 
 /// BEHAVIOUR, not just balance: the callee really does see the declared default through the

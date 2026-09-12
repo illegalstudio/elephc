@@ -1,16 +1,16 @@
 ---
-title: "array_sum() — internals"
+title: "array_sum() - internals"
 description: "Compiler internals for array_sum(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 40
 ---
 
-## `array_sum()` — internals
+## `array_sum()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_sum.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_sum.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,10 +25,10 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (0 declared effects)`
+- **Result ownership**: `fresh`
+- **Effects**: `static (18 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_sum(array $array): int
+function array_sum(array $array): int|float
 ```
 
 ## What the type checker enforces

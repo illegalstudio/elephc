@@ -18,6 +18,10 @@ pub(super) fn lower_property_array_push(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
+        lower_php_array_property_write(ctx, object, property, None, value, span);
+        return;
+    }
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
@@ -78,6 +82,10 @@ pub(super) fn lower_property_array_assign(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
+        lower_php_array_property_write(ctx, object, property, Some(index), value, span);
+        return;
+    }
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
@@ -210,8 +218,55 @@ pub(super) fn lower_property_array_assign(
     );
 }
 
+/// Separates a declared PHP array property before mutating its packed-or-hash boxed payload.
+/// `PropGetForWrite` publishes the detached cell and returns a borrow owned by the property.
+fn lower_php_array_property_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    index: Option<&Expr>,
+    value: &Expr,
+    span: Span,
+) {
+    let data = ctx.intern_string(property);
+    let array = ctx.emit_value(
+        Op::PropGetForWrite,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::php_array(),
+        Op::PropGetForWrite.default_effects(),
+        Some(span),
+    );
+    ctx.builder.set_value_ownership(array.value, Ownership::Borrowed);
+    let value = if let Some(index) = index {
+        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![array.value, index.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, index, span);
+        value
+    } else {
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![array.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        value
+    };
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+}
+
 /// Releases a temporary assigned into an object property after `PropSet` retains or boxes it.
-pub(super) fn release_property_assignment_source_after_retaining_store(
+pub(in crate::ir_lower) fn release_property_assignment_source_after_retaining_store(
     ctx: &mut LoweringContext<'_, '_>,
     property_ty: &PhpType,
     value: LoweredValue,
@@ -269,7 +324,8 @@ pub(super) fn property_store_keeps_independent_ref(property_ty: &PhpType, value_
     {
         return true;
     }
-    if matches!(property_ty, PhpType::Str) {
+    // Callable slots retain through the descriptor ABI, outside is_refcounted().
+    if matches!(property_ty, PhpType::Str | PhpType::Callable) {
         return true;
     }
     property_ty.is_refcounted()
@@ -283,4 +339,3 @@ pub(super) fn indexed_property_array_element_type(property_ty: &PhpType) -> Opti
         _ => None,
     }
 }
-

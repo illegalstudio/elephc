@@ -553,3 +553,47 @@ fn test_error_enum_method_undefined_variable() {
         "Undefined variable: $missing",
     );
 }
+
+/// Verifies that the hidden argument collector `func_args` appends to a scope that uses
+/// `func_num_args()` does not make a zero-argument magic method look variadic.
+///
+/// The collector occupies the same AST slot as a source `...$args`, so an arity rule that
+/// only asked whether a variadic was present rejected `__destruct`/`__toString` bodies PHP
+/// accepts. Only the source-visible signature may decide the contract.
+#[test]
+fn test_magic_methods_accept_the_generated_func_args_collector() {
+    expect_no_error(
+        "<?php class Logged { public function __toString(): string { return \"n\" . func_num_args(); } public function __destruct() { echo func_num_args(); } } echo new Logged();",
+    );
+}
+
+/// Verifies the same rule under the whole-program trigger: any `debug_print_backtrace()` in the
+/// program gives EVERY frame a hidden collector, including magic methods that never mention an
+/// introspection construct themselves.
+#[test]
+fn test_magic_methods_accept_the_collector_added_to_every_frame() {
+    expect_no_error(
+        "<?php class Traced { public function __unset(string $name): void { echo $name; } public function __clone() { echo \"c\"; } } function trace(): void { debug_print_backtrace(); } trace(); $t = new Traced(); echo get_class($t);",
+    );
+}
+
+/// Verifies that a magic method declaring its OWN variadic is still rejected while the program
+/// also carries the generated collector. The fix filters exactly one reserved parameter name,
+/// so a PHP-visible `...$extra` must keep failing the contract.
+#[test]
+fn test_magic_destruct_still_rejects_a_source_variadic() {
+    expect_error(
+        "<?php class Bad { public function __destruct(...$extra) { echo count($extra); } } function trace(): void { debug_print_backtrace(); } trace(); echo get_class(new Bad());",
+        "Magic method must take 0 arguments: Bad::__destruct",
+    );
+}
+
+/// Verifies the arity half of the same rule: a source parameter beyond the contract is still
+/// counted even when the generated collector is present.
+#[test]
+fn test_magic_unset_still_rejects_an_extra_source_parameter() {
+    expect_error(
+        "<?php class Bad { public function __unset(string $name, int $extra): void { echo $name, $extra; } } function trace(): void { debug_print_backtrace(); } trace(); echo get_class(new Bad());",
+        "Magic method must take 1 argument: Bad::__unset",
+    );
+}

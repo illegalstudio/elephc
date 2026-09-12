@@ -1,11 +1,11 @@
 ---
-title: "imagejpeg() — internals"
+title: "imagejpeg() - internals"
 description: "Compiler internals for imagejpeg(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 514
 ---
 
-## `imagejpeg()` — internals
+## `imagejpeg()` - internals
 
 ## Where it lives
 

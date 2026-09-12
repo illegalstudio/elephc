@@ -12,6 +12,19 @@
 
 use crate::support::*;
 
+/// Builtin callable wrappers pass only the arity supported by the typed backend.
+#[test]
+fn test_capped_string_replace_callable_arity_matches_direct_calls() {
+    let out = compile_and_run(r#"<?php
+$replace = str_replace(...);
+$insensitive = str_ireplace(...);
+echo $replace('a', 'b', 'aAa'), '|', $insensitive('a', 'b', 'aAa'), '|';
+echo call_user_func('str_replace', 'a', 'b', 'aAa'), '|';
+echo call_user_func('str_ireplace', 'a', 'b', 'aAa');
+"#);
+    assert_eq!(out, "bAb|bbb|bAb|bbb");
+}
+
 /// Returns true when assembly contains a valid invokable object dispatch path.
 fn asm_has_invokable_object_call(user_asm: &str, class_name: &str) -> bool {
     let eir_method = elephc::names::method_symbol(class_name, "__invoke");

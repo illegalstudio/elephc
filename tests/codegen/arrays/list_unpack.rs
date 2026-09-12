@@ -10,6 +10,45 @@
 
 use crate::support::*;
 
+/// Declared arrays keep numeric-key semantics and retain the RHS while a destination replaces it.
+#[test]
+fn test_list_unpack_boxed_array_preserves_source_and_numeric_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function unpackBoxedArray(array $items): string {
+    [$items, $tail] = $items;
+    return $items . ":" . $tail;
+}
+function unpackNullableArray(?array $items): string {
+    if ($items === null) { return "null"; }
+    [$first, $second] = $items;
+    return $first . ":" . $second;
+}
+echo unpackBoxedArray([str_repeat("a", 3), str_repeat("b", 3)]), "|";
+echo unpackBoxedArray([1 => "second", 0 => "first"]), "|";
+echo unpackNullableArray([1 => "one", 0 => "zero"]), "|", unpackNullableArray(null);
+"#,
+    );
+    assert_eq!(out, "aaa:bbb|first:second|zero:one|null");
+}
+
+/// Temporary RHS containers release their owners once every destructured value is retained.
+#[test]
+fn test_list_unpack_releases_temporary_boxed_and_packed_arrays() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function makeUnpackRow(): array { return [str_repeat("a", 48), str_repeat("b", 49)]; }
+for ($i = 0; $i < 3; $i++) {
+    [$first, $second] = makeUnpackRow();
+    [$third, $fourth] = [str_repeat("c", 50), str_repeat("d", 51)];
+    echo strlen($first), ":", strlen($second), ":", strlen($third), ":", strlen($fourth), "|";
+    unset($first, $second, $third, $fourth);
+}
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "48:49:50:51|48:49:50:51|48:49:50:51|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies a null guard ending in `continue` narrows `?array` to `Array` before list unpacking.
 #[test]
 fn test_null_guard_continue_narrows_list_unpack_rhs() {

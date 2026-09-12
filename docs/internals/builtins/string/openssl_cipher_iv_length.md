@@ -1,16 +1,16 @@
 ---
-title: "openssl_cipher_iv_length() — internals"
+title: "openssl_cipher_iv_length() - internals"
 description: "Compiler internals for openssl_cipher_iv_length(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 802
+  order: 828
 ---
 
-## `openssl_cipher_iv_length()` — internals
+## `openssl_cipher_iv_length()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/openssl_cipher_iv_length.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/openssl_cipher_iv_length.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

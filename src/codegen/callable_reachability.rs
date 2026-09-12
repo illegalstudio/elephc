@@ -239,7 +239,7 @@ fn apply_local_transfer(
             set_local_state(state, *slot, CallableNameSet::Unknown);
         }
         (
-            Op::PromoteLocalRefCell | Op::AliasLocalRefCell,
+            Op::PromoteLocalRefCell | Op::AliasLocalRefCell | Op::RetainLocalRefCell | Op::BindRefCellPtr | Op::AdoptRefCellPtr,
             Some(Immediate::LocalSlotPair { first, second }),
         ) => {
             set_local_state(state, *first, CallableNameSet::Unknown);

@@ -39,6 +39,10 @@ impl DataId {
 /// Method metadata retained for standalone trait reflection.
 #[derive(Debug, Clone)]
 pub struct TraitMethodInfo {
+    /// PHP-visible source spelling retained alongside the case-insensitive map key.
+    pub name: String,
+    /// Position in the trait's declaration, independent of hash-map iteration order.
+    pub declaration_order: usize,
     pub signature: FunctionSig,
     pub visibility: Visibility,
     pub is_static: bool,
@@ -51,6 +55,8 @@ pub struct TraitMethodInfo {
 pub struct Module {
     pub target: Target,
     pub source_path: Option<String>,
+    /// Canonical PHP source paths compiled into this binary, in include order.
+    pub included_files: Vec<String>,
     /// `--probe` build key, embedded as `_elephc_probe_key` so the probe endpoint
     /// can prove the binary's identity through the HMAC handshake. `None` unless
     /// `--probe` is set.
@@ -77,6 +83,7 @@ pub struct Module {
     pub declared_trait_method_names: HashMap<String, Vec<String>>,
     pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
     pub declared_trait_property_names: HashMap<String, Vec<String>>,
+    pub declared_trait_properties: HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     pub declared_trait_constant_names: HashMap<String, Vec<String>>,
     pub declared_trait_constants: HashMap<String, HashMap<String, crate::parser::ast::Expr>>,
     pub declared_trait_constant_types:
@@ -85,6 +92,8 @@ pub struct Module {
     pub declared_trait_final_constants: HashMap<String, HashSet<String>>,
     /// Prescanned global constant values used by EIR lowering and eval metadata registration.
     pub global_constants: HashMap<String, (ExprKind, PhpType)>,
+    /// User-declared global constant names, separated from the seeded builtin inventory.
+    pub user_defined_constants: Vec<String>,
     pub class_infos: HashMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
     pub enum_infos: HashMap<String, EnumInfo>,
@@ -109,6 +118,7 @@ impl Module {
         Self {
             target,
             source_path: None,
+            included_files: Vec::new(),
             probe_key: None,
             functions: Vec::new(),
             class_methods: Vec::new(),
@@ -132,12 +142,14 @@ impl Module {
             declared_trait_method_names: HashMap::new(),
             declared_trait_methods: HashMap::new(),
             declared_trait_property_names: HashMap::new(),
+            declared_trait_properties: HashMap::new(),
             declared_trait_constant_names: HashMap::new(),
             declared_trait_constants: HashMap::new(),
             declared_trait_constant_types: HashMap::new(),
             declared_trait_constant_visibilities: HashMap::new(),
             declared_trait_final_constants: HashMap::new(),
             global_constants: HashMap::new(),
+            user_defined_constants: Vec::new(),
             class_infos: HashMap::new(),
             interface_infos: HashMap::new(),
             enum_infos: HashMap::new(),

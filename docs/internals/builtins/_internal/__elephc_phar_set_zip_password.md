@@ -1,16 +1,16 @@
 ---
-title: "__elephc_phar_set_zip_password() — internals"
+title: "__elephc_phar_set_zip_password() - internals"
 description: "Compiler internals for __elephc_phar_set_zip_password(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1050
+  order: 1075
 ---
 
-## `__elephc_phar_set_zip_password()` — internals
+## `__elephc_phar_set_zip_password()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_set_zip_password.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_set_zip_password.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,11 +1,11 @@
 ---
-title: "imagestring() — internals"
+title: "imagestring() - internals"
 description: "Compiler internals for imagestring(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 530
 ---
 
-## `imagestring()` — internals
+## `imagestring()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "cairo_rotate() — internals"
+title: "cairo_rotate() - internals"
 description: "Compiler internals for cairo_rotate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 430
 ---
 
-## `cairo_rotate()` — internals
+## `cairo_rotate()` - internals
 
 ## Where it lives
 

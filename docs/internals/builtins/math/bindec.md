@@ -1,16 +1,16 @@
 ---
-title: "bindec() — internals"
+title: "bindec() - internals"
 description: "Compiler internals for bindec(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 565
 ---
 
-## `bindec()` — internals
+## `bindec()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bindec.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bindec.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

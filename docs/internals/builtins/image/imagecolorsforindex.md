@@ -1,11 +1,11 @@
 ---
-title: "imagecolorsforindex() — internals"
+title: "imagecolorsforindex() - internals"
 description: "Compiler internals for imagecolorsforindex(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 476
 ---
 
-## `imagecolorsforindex()` — internals
+## `imagecolorsforindex()` - internals
 
 ## Where it lives
 

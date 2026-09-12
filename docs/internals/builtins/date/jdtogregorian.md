@@ -1,11 +1,11 @@
 ---
-title: "jdtogregorian() — internals"
+title: "jdtogregorian() - internals"
 description: "Compiler internals for jdtogregorian(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 230
 ---
 
-## `jdtogregorian()` — internals
+## `jdtogregorian()` - internals
 
 ## Where it lives
 

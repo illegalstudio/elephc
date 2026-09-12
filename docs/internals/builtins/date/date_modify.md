@@ -1,11 +1,11 @@
 ---
-title: "date_modify() — internals"
+title: "date_modify() - internals"
 description: "Compiler internals for date_modify(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 203
 ---
 
-## `date_modify()` — internals
+## `date_modify()` - internals
 
 ## Where it lives
 

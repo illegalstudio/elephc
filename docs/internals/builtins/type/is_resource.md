@@ -1,16 +1,16 @@
 ---
-title: "is_resource() — internals"
+title: "is_resource() - internals"
 description: "Compiler internals for is_resource(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 875
+  order: 901
 ---
 
-## `is_resource()` — internals
+## `is_resource()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_resource.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_resource.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

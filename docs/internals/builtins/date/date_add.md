@@ -1,11 +1,11 @@
 ---
-title: "date_add() — internals"
+title: "date_add() - internals"
 description: "Compiler internals for date_add(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 189
 ---
 
-## `date_add()` — internals
+## `date_add()` - internals
 
 ## Where it lives
 

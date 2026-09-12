@@ -1,11 +1,11 @@
 ---
-title: "cairo_curve_to() — internals"
+title: "cairo_curve_to() - internals"
 description: "Compiler internals for cairo_curve_to(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 402
 ---
 
-## `cairo_curve_to()` — internals
+## `cairo_curve_to()` - internals
 
 ## Where it lives
 

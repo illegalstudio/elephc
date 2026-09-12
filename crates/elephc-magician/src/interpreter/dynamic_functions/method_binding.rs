@@ -9,6 +9,144 @@
 //! - Extra positional arguments to user-defined callables are evaluated but ignored like PHP.
 
 use super::*;
+use crate::context::EvalFunctionArgsFrame;
+
+/// Bound arguments plus the activation metadata needed by PHP's `func_*` family.
+pub(in crate::interpreter) struct BoundEvalFunctionArgs {
+    pub(in crate::interpreter) params: Vec<String>,
+    pub(in crate::interpreter) parameter_is_by_ref: Vec<bool>,
+    pub(in crate::interpreter) args: Vec<BoundMethodArg>,
+    pub(in crate::interpreter) frame: EvalFunctionArgsFrame,
+}
+
+/// Binds one eval-declared callable while retaining PHP's actual-argument frame.
+pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
+    params: &[String],
+    parameter_types: &[Option<EvalParameterType>],
+    parameter_defaults: &[Option<EvalExpr>],
+    parameter_is_by_ref: &[bool],
+    parameter_is_variadic: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<BoundEvalFunctionArgs, EvalStatus> {
+    let source_variadic_index = parameter_is_variadic
+        .iter()
+        .position(|is_variadic| *is_variadic);
+    let regular_count = source_variadic_index.unwrap_or(params.len());
+    let regular_params = params[..regular_count].to_vec();
+    let (actual_count, positional_surplus_count) = eval_actual_argument_shape(
+        &regular_params,
+        source_variadic_index.is_some(),
+        &evaluated_args,
+    )?;
+
+    // Surplus arguments are activation metadata, never synthetic PHP parameters.
+    // Retain their snapshot before binding can coerce or alias the source arguments.
+    let mut surplus = Vec::with_capacity(positional_surplus_count);
+    for arg in evaluated_args.iter().filter(|arg| source_variadic_index.is_none() && arg.name.is_none()).skip(regular_count) {
+        match values.retain(arg.value) {
+            Ok(value) => surplus.push(value),
+            Err(status) => {
+                for cell in surplus { let _ = eval_release_value(context, values, cell); }
+                return Err(status);
+            }
+        }
+    }
+    let args = match bind_evaluated_method_args_with_ref_mode(
+        params,
+        parameter_types,
+        parameter_defaults,
+        parameter_is_by_ref,
+        parameter_is_variadic,
+        evaluated_args,
+        by_ref_mode,
+        context,
+        values,
+    ) {
+        Ok(args) => args,
+        Err(status) => {
+            for cell in surplus { let _ = eval_release_value(context, values, cell); }
+            return Err(status);
+        }
+    };
+    if let Some(index) = source_variadic_index {
+        let snapshot = (|| {
+            for position in 0..positional_surplus_count {
+                let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+                let value = values.array_get(args[index].value, key);
+                let released = values.release(key);
+                // Keep any successfully read owner in the cleanup list before propagating errors.
+                if let Ok(value) = value { surplus.push(value); }
+                value?;
+                released?;
+            }
+            Ok(())
+        })();
+        if let Err(status) = snapshot {
+            for cell in surplus { let _ = eval_release_value(context, values, cell); }
+            return Err(status);
+        }
+    }
+
+    Ok(BoundEvalFunctionArgs {
+        params: params.to_vec(),
+        parameter_is_by_ref: parameter_is_by_ref.to_vec(),
+        args,
+        frame: EvalFunctionArgsFrame::new(regular_params, actual_count, surplus),
+    })
+}
+
+/// Releases the detached argument snapshot after preserving the callable's return owner.
+pub(in crate::interpreter) fn release_function_args(
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let cells = context.pop_function_args();
+    let mut released = Ok(());
+    for cell in cells {
+        let cleanup = eval_release_value(context, values, cell);
+        if released.is_ok() { released = cleanup; }
+    }
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = eval_release_value(context, values, value);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
+/// Computes PHP's `func_num_args()` count and positional surplus length before binding.
+fn eval_actual_argument_shape(
+    regular_params: &[String],
+    has_source_variadic: bool,
+    evaluated_args: &[EvaluatedCallArg],
+) -> Result<(usize, usize), EvalStatus> {
+    let mut next_positional = 0usize;
+    let mut highest_regular = 0usize;
+    let mut positional_surplus = 0usize;
+    for arg in evaluated_args {
+        if let Some(name) = arg.name.as_deref() {
+            if let Some(position) = regular_params.iter().position(|param| param == name) {
+                highest_regular = highest_regular.max(position + 1);
+            } else if !has_source_variadic {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            continue;
+        }
+        if next_positional < regular_params.len() {
+            highest_regular = highest_regular.max(next_positional + 1);
+            next_positional += 1;
+        } else {
+            positional_surplus += 1;
+        }
+    }
+    Ok((highest_regular + positional_surplus, positional_surplus))
+}
 
 /// Binds evaluated method arguments using a selected by-reference target policy.
 pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
@@ -721,7 +859,7 @@ pub(in crate::interpreter) fn eval_method_parameter_default(
         return Err(EvalStatus::UnsupportedConstruct);
     }
     let mut default_scope = ElephcEvalScope::new();
-    eval_expr(default, context, &mut default_scope, values)
+    eval_owned_expr(default, context, &mut default_scope, values)
 }
 
 /// Returns whether an EvalIR expression can be safely evaluated as a method default.

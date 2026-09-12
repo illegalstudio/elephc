@@ -1,7 +1,7 @@
 //! Purpose:
 //! Regression tests for the `writes_globals` effect bit: callables that
-//! declare `global` (directly or transitively) must be flagged, known builtins
-//! must never be, and the pure-builtin list must stay free of by-ref params.
+//! declare `global` or invoke warning handlers must be flagged, warning-free
+//! builtins stay precise, and pure builtins must stay free of by-ref params.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -115,7 +115,7 @@ fn test_builtin_only_function_does_not_write_globals() {
 
     assert!(
         !function_effects.get("len").unwrap().writes_globals,
-        "known builtins never write PHP globals"
+        "warning-free strlen does not write PHP globals"
     );
 }
 
@@ -136,9 +136,9 @@ fn test_unknown_callee_conservatively_writes_globals() {
     );
 }
 
-/// A known non-pure builtin (`sort`) writes its by-ref argument, not globals.
+/// A warning-capable builtin can invoke an error handler that writes globals or throws.
 #[test]
-fn test_known_builtin_call_does_not_write_globals() {
+fn test_warning_builtin_call_can_write_globals_through_handler() {
     let expr = Expr::new(
         ExprKind::FunctionCall {
             name: Name::from("sort"),
@@ -148,9 +148,10 @@ fn test_known_builtin_call_does_not_write_globals() {
     );
 
     assert!(
-        !expr_effect(&expr).writes_globals,
-        "registry builtins cannot write PHP globals"
+        expr_effect(&expr).writes_globals,
+        "warning handlers can write PHP globals even for registry builtins"
     );
+    assert!(expr_effect(&expr).may_throw);
 }
 
 /// Every builtin with static pure/non-throwing semantics must be by-value only:

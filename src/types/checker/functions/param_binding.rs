@@ -16,6 +16,9 @@
 //! - The `declare(strict_types=1)` rejection runs *before* them instead, because the widenings
 //!   PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible`
 //!   already accepts on its own.
+//! - A tracked callable-array local or statically resolved two-element literal may bind to
+//!   `callable` only when lowering can materialize its target as a real descriptor at the same
+//!   parameter boundary.
 
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
@@ -88,6 +91,30 @@ impl Checker {
                 expected, actual, arg, context, &detail,
             )),
             ParamBinding::Rejected => {
+                // A callable array keeps ordinary array storage until this exact boundary.
+                // Accept only a tracked local or a statically resolvable two-element literal,
+                // resolve its signature without invoking it, and let EIR materialize the
+                // corresponding descriptor.
+                if *expected == PhpType::Callable {
+                    let Some(target) = self.callable_array_param_target(arg, env)? else {
+                        return self.require_compatible_arg_type(
+                            expected, actual, arg.span, context,
+                        );
+                    };
+                    let sig = self
+                        .resolve_first_class_callable_sig(&target, arg.span, env)
+                        .map_err(|err| {
+                            Self::param_binding_error(
+                                expected,
+                                actual,
+                                arg,
+                                context,
+                                err.message.as_str(),
+                            )
+                        })?;
+                    self.register_bound_callable_param_sig(owner, sig);
+                    return Ok(());
+                }
                 self.require_compatible_arg_type(expected, actual, arg.span, context)
             }
         }

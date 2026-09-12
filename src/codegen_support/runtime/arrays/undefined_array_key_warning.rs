@@ -43,12 +43,12 @@ pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) {
     // -- emit prefix --
     abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_prefix");
     emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_PREFIX_LEN)); // pass the undefined-key warning prefix length
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning prefix
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the undefined-key warning prefix
 
     // -- emit formatted key --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the missing integer key for decimal formatting
     abi::emit_call_label(emitter, "__rt_itoa");                                 // format the missing key into concat scratch
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the formatted missing-key value
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the formatted missing-key value
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the pre-warning concat cursor
     abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("str x10, [x9]");                                       // restore concat scratch state for surrounding expressions
@@ -113,14 +113,14 @@ fn emit_undefined_array_key_warning_x86_64(emitter: &mut Emitter) {
     // -- emit prefix --
     abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_prefix");
     emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_PREFIX_LEN)); // pass the undefined-key warning prefix length
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning prefix
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the undefined-key warning prefix
 
     // -- emit formatted key --
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the missing integer key for decimal formatting
     abi::emit_call_label(emitter, "__rt_itoa");                                 // format the missing key into concat scratch
     emitter.instruction("mov rdi, rax");                                        // pass the formatted missing-key pointer to the warning helper
     emitter.instruction("mov rsi, rdx");                                        // pass the formatted missing-key length to the warning helper
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the formatted missing-key value
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the formatted missing-key value
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the pre-warning concat cursor
     abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // restore concat scratch state for surrounding expressions
 
@@ -151,18 +151,18 @@ fn emit_undefined_array_key_string_warning_aarch64(emitter: &mut Emitter) {
     // -- emit prefix --
     abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_prefix");
     emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_PREFIX_LEN)); // pass the undefined-key warning prefix length
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning prefix
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the undefined-key warning prefix
 
     // -- emit quoted string key --
     abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_quote");
     emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_QUOTE_LEN)); // pass the opening quote length
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the opening quote
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the opening quote
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the missing string key pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the missing string key length
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the missing string key bytes
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the missing string key bytes
     abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_quote");
     emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_QUOTE_LEN)); // pass the closing quote length
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the closing quote
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the closing quote
 
     // -- emit suffix --
     abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_suffix");
@@ -191,18 +191,18 @@ fn emit_undefined_array_key_string_warning_x86_64(emitter: &mut Emitter) {
     // -- emit prefix --
     abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_prefix");
     emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_PREFIX_LEN)); // pass the undefined-key warning prefix length
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning prefix
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the undefined-key warning prefix
 
     // -- emit quoted string key --
     abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_quote");
     emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_QUOTE_LEN)); // pass the opening quote length
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the opening quote
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the opening quote
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the missing string key pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the missing string key length
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the missing string key bytes
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the missing string key bytes
     abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_quote");
     emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_QUOTE_LEN)); // pass the closing quote length
-    abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the closing quote
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the closing quote
 
     // -- emit suffix --
     abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_suffix");

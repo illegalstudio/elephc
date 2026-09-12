@@ -175,7 +175,8 @@ impl Checker {
     /// Returns `true` if the given error message is in the suppressible set for initial top-level errors.
     ///
     /// Suppressible messages include array-index, property-access, and callable-related diagnostics
-    /// that commonly arise when a class is referenced before its definition.
+    /// that arise before method bodies refine property and return types. A parameter mismatch
+    /// caused by provisional null metadata is discarded only when the final statement has no errors.
     fn is_suppressible_initial_top_level_error(message: &str) -> bool {
         matches!(
             message,
@@ -183,6 +184,8 @@ impl Checker {
                 | "Cannot index non-array"
                 | "Property access requires an object or typed pointer"
         ) || (message.starts_with("Cannot call $") && message.contains("not a callable"))
+            || (message.contains(" parameter $")
+                && message.ends_with(" expects Callable, got Void"))
     }
 
     /// Builds the initial `TypeEnv` with built-in globals `$argc`, `$argv`, and external globals.

@@ -1,16 +1,16 @@
 ---
-title: "is_executable() — internals"
+title: "is_executable() - internals"
 description: "Compiler internals for is_executable(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 278
 ---
 
-## `is_executable()` — internals
+## `is_executable()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/is_executable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_executable.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

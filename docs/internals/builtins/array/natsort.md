@@ -1,16 +1,16 @@
 ---
-title: "natsort() — internals"
+title: "natsort() - internals"
 description: "Compiler internals for natsort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 60
 ---
 
-## `natsort()` — internals
+## `natsort()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/natsort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/natsort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

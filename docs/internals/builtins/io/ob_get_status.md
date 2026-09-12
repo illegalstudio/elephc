@@ -1,16 +1,16 @@
 ---
-title: "ob_get_status() — internals"
+title: "ob_get_status() - internals"
 description: "Compiler internals for ob_get_status(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 349
 ---
 
-## `ob_get_status()` — internals
+## `ob_get_status()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_get_status.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_get_status.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

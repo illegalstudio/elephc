@@ -1,16 +1,16 @@
 ---
-title: "stream_isatty() — internals"
+title: "stream_isatty() - internals"
 description: "Compiler internals for stream_isatty(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 376
 ---
 
-## `stream_isatty()` — internals
+## `stream_isatty()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_isatty.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_isatty.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

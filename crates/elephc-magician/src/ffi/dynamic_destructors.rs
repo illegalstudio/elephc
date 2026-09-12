@@ -8,7 +8,7 @@
 //!
 //! Key details:
 //! - The runtime owns object storage and calls this hook while the object is still
-//!   intact but already in the final-release path.
+//!   intact, either in a pinned collector pass or in the final-release path.
 //! - Registry values are stored as integer addresses so the global mutex remains
 //!   `Sync`; every use revalidates null pointers and ABI version.
 
@@ -33,6 +33,18 @@ static DYNAMIC_DESTRUCTOR_CONTEXTS: OnceLock<Mutex<HashMap<u64, usize>>> = OnceL
 /// Returns the process-local dynamic object to eval context registry.
 fn dynamic_destructor_contexts() -> &'static Mutex<HashMap<u64, usize>> {
     DYNAMIC_DESTRUCTOR_CONTEXTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Reports whether a raw object identity belongs to a live eval-declared class.
+/// Native property helpers use this only after ordinary declared-property dispatch misses.
+#[cfg(not(test))]
+#[no_mangle]
+pub extern "C" fn __elephc_eval_dynamic_object_owns_properties(identity: u64) -> u64 {
+    let Some(context) = dynamic_object_owner_context(identity) else { return 0; };
+    // Closure identities also use this registry for metadata cleanup, but their
+    // stdClass payload does not have eval-declared property storage.
+    let Some(context) = (unsafe { context.as_ref() }) else { return 0; };
+    u64::from(context.abi_version() == ABI_VERSION && context.dynamic_object_class(identity).is_some())
 }
 
 /// Installs the eval dynamic object destructor callback into the generated runtime.
@@ -84,63 +96,99 @@ pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcE
     Some(context as *mut ElephcEvalContext)
 }
 
-/// Runs an eval dynamic object destructor from the native object free path.
+/// Drops final object metadata after receiver release, preserving it during collector destructors.
+#[cfg(not(test))]
+pub(crate) fn forget_released_object(identity: u64) {
+    let Some(context) = dynamic_object_owner_context(identity) else { return; };
+    // Context teardown unregisters its identities before freeing the context.
+    let Some(context) = (unsafe { context.as_mut() }) else { return; };
+    if context.abi_version() == ABI_VERSION {
+        context.forget_dynamic_object(identity);
+    }
+}
+
+/// Runs an eval destructor, returning zero for a miss, one for success, or two with an owned Throwable.
 ///
 /// # Safety
 /// `object` must be null or a live elephc runtime object pointer. The runtime
 /// calls this only while its object destruction guard bit is set, so boxing the
 /// borrowed object for `$this` cannot recursively free the same storage.
+/// `throwable_out` must point to a writable cell-pointer slot. Throws are transferred
+/// through that output only after Rust has returned; native unwinding must not cross Rust frames.
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_dynamic_object_destruct(
     object: *mut RuntimeCell,
+    throwable_out: *mut *mut RuntimeCell,
 ) -> u64 {
-    std::panic::catch_unwind(|| unsafe { dynamic_object_destruct_inner(object) }).unwrap_or(0)
+    match std::panic::catch_unwind(|| unsafe { dynamic_object_destruct_inner(object, throwable_out) }) {
+        Ok(Ok(status)) => status,
+        Ok(Err(_)) | Err(_) => {
+            let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
+            let _ = values.fatal("Fatal error: eval() destructor failed\n");
+            std::process::abort()
+        }
+    }
 }
 
 /// Executes the callback body after the exported ABI shim has installed a panic boundary.
 ///
 /// # Safety
 /// Mirrors `__elephc_eval_dynamic_object_destruct`; callers must pass a live raw
-/// object pointer whose refcount guard already marks destruction as active.
+/// object pointer whose refcount guard marks destruction active and a writable output slot.
 #[cfg(not(test))]
-unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
+unsafe fn dynamic_object_destruct_inner(
+    object: *mut RuntimeCell,
+    throwable_out: *mut *mut RuntimeCell,
+) -> Result<u64, EvalStatus> {
+    if throwable_out.is_null() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    unsafe { *throwable_out = std::ptr::null_mut(); }
     if object.is_null() {
-        return 0;
+        return Ok(0);
     }
     let identity = object as u64;
     let Some(context) = dynamic_object_owner_context(identity) else {
-        return 0;
+        return Ok(0);
     };
     let Some(context) = (unsafe { context.as_mut() }) else {
         unregister_dynamic_object(identity);
-        return 0;
+        return Ok(0);
     };
     if context.abi_version() != ABI_VERSION {
         unregister_dynamic_object(identity);
-        return 0;
+        return Ok(0);
     }
     if context.dynamic_object_class(identity).is_none() {
-        unregister_dynamic_object(identity);
-        return 0;
+        // Closure metadata may own a foreign eval context needed by its receiver's
+        // destructor. Its final owner callback drops metadata after child release.
+        if context.closure_object_target(identity).is_none() {
+            unregister_dynamic_object(identity);
+        }
+        return Ok(0);
     }
 
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    let object_cell = match ElephcRuntimeOps::object_from_raw(object) {
-        Ok(object_cell) => object_cell,
-        Err(_) => {
-            context.forget_dynamic_object(identity);
-            return 1;
-        }
-    };
+    let object_cell = ElephcRuntimeOps::object_from_raw(object)?;
+    let previous_throw = context.take_pending_throw();
     let destruct_result =
         eval_dynamic_destructor_for_object_cell(identity, object_cell, context, &mut values);
-    let release_result = values.release(object_cell);
-    context.forget_dynamic_object(identity);
-    match (destruct_result, release_result) {
-        (Ok(true), Ok(())) => 1,
-        (Ok(false), Ok(())) => 0,
-        (Err(EvalStatus::UnsupportedConstruct), _) => 1,
-        (Err(_), _) | (_, Err(_)) => 1,
+    let escaped = if matches!(destruct_result, Err(EvalStatus::UncaughtThrowable)) {
+        let thrown = context.take_pending_throw().ok_or(EvalStatus::RuntimeFatal)?;
+        Some(if thrown.is_borrowed() { values.retain(thrown)? } else { thrown })
+    } else {
+        None
+    };
+    if let Some(previous) = previous_throw {
+        context.set_pending_throw(previous);
     }
+    values.release(object_cell)?;
+    // The collector can still retain or resurrect the receiver. Final runtime
+    // release, not destructor execution, retires its class and property metadata.
+    if let Some(thrown) = escaped {
+        unsafe { *throwable_out = thrown.as_ptr(); }
+        return Ok(2);
+    }
+    destruct_result.map(u64::from)
 }

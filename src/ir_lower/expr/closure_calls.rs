@@ -16,27 +16,54 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     }
     let mut result_type = None;
     let mut instance_signature = None;
+    let mut tracked_instance_descriptor_spread = false;
+    let descriptor_signature = ctx.callable_param_signature(var).cloned();
     if let Some(target) = ctx.static_callable_local(var) {
         result_type = Some(static_callable_return_type(ctx, &target));
         instance_signature = instance_callable_signature(&target).cloned();
-        if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
-            return value;
+        tracked_instance_descriptor_spread = matches!(
+            target,
+            StaticCallableBinding::InstanceMethod {
+                direct_call: true,
+                ..
+            }
+        ) && instance_callable_args_need_descriptor_binder(ctx, args);
+        if !tracked_instance_descriptor_spread {
+            if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
+                return value;
+            }
         }
     }
     let callable = ctx.load_local(var, Some(expr.span));
-    let result_type = result_type.unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+    let result_type = result_type
+        .or_else(|| {
+            descriptor_signature
+                .as_ref()
+                .map(|sig| descriptor_invoker_result_type(Some(sig)))
+        })
+        .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+    if tracked_instance_descriptor_spread {
+        return lower_call_user_func_descriptor_invoke_from_value(
+            ctx,
+            callable,
+            args,
+            instance_signature.as_ref(),
+            expr,
+        );
+    }
     if instance_signature.is_none() {
-        if let Some(arg_container) =
-            lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
-        {
-            return emit_callable_descriptor_invoke(
+        let callable = root_descriptor_callback(ctx, callable, result_type, expr.span);
+        let arg_container = if descriptor_signature.is_some() {
+            lower_descriptor_invoker_arg_container_for_call_user_func(
                 ctx,
-                callable,
-                arg_container,
-                result_type,
+                args,
+                descriptor_signature.as_ref(),
                 expr.span,
-            );
-        }
+            )
+        } else {
+            lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+        };
+        return emit_callable_descriptor_invoke(ctx, callable, arg_container, expr.span);
     }
     let mut operands = vec![callable.value];
     operands.extend(lower_args_with_signature(ctx, instance_signature.as_ref(), args));
@@ -48,6 +75,24 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         Op::ClosureCall.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns whether a tracked instance callable has an unpack source the direct ABI cannot bind.
+///
+/// Indexed array sources and static associative literals already have signature-aware direct
+/// lowering. Other spread shapes need the descriptor walk to preserve runtime keys and expand
+/// Traversable values instead of passing the source itself as one method operand.
+fn instance_callable_args_need_descriptor_binder(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> bool {
+    args.iter().any(|arg| match &arg.kind {
+        ExprKind::Spread(source) => {
+            indexed_spread_source_type(ctx, source).is_none()
+                && !matches!(source.kind, ExprKind::ArrayLiteralAssoc(_))
+        }
+        _ => false,
+    })
 }
 
 /// Lowers `$object(...)` when the local object has an `__invoke` method.
@@ -119,33 +164,35 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     // (as `$f()` does) so the closure body's signature — including a by-reference return —
     // drives the call instead of the generic descriptor-invoke path, which cannot return
     // every result type.
+    //
+    // The direct call passes the closure's captured values, not its descriptor, so that
+    // descriptor is unused by the invocation, but it is what keeps a captured environment
+    // alive, and it must not be leaked either. Publish it for the duration of the call and
+    // retire it afterwards, which also covers a throw from an argument or from the callee.
+    // The binding is checked for direct callability first, so no instruction is emitted for
+    // a call that then has to fall back to the descriptor path below.
     if let Some(target) = ctx.take_pending_static_callable_result() {
-        if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
-            return value;
+        if static_callable_call_lowers_directly(ctx, &target) {
+            // Retiring the descriptor destroys the captured environment, which runs PHP
+            // destructors that can throw into a catch in this same frame. The call's own owned
+            // result is staged in a record published OUTSIDE the descriptor record, so it is
+            // retired exactly once by that unwind instead of being stranded.
+            let result_staging =
+                prepublish_static_callable_call_result(ctx, &target, expr.span);
+            let (_, descriptor_owner) = root_owned_call_operand(ctx, lowered_callee, expr.span);
+            let value = lower_static_callable_call(ctx, target, args, expr)
+                .expect("a directly callable static binding lowers its call");
+            stage_call_result(ctx, result_staging.as_ref(), value, expr.span);
+            if let Some(slot) = descriptor_owner {
+                retire_owned_call_operand(ctx, slot, expr.span);
+            }
+            return take_prepublished_call_result(ctx, result_staging, value, expr.span);
         }
     }
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
-    if let Some(arg_container) =
-        lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
-    {
-        return emit_callable_descriptor_invoke(
-            ctx,
-            lowered_callee,
-            arg_container,
-            result_type,
-            expr.span,
-        );
-    }
-    let mut operands = vec![lowered_callee.value];
-    operands.extend(lower_args(ctx, args));
-    ctx.emit_value(
-        Op::ExprCall,
-        operands,
-        callable_profile_immediate(),
-        result_type,
-        Op::ExprCall.default_effects(),
-        Some(expr.span),
-    )
+    let lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
+    let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
+    emit_callable_descriptor_invoke(ctx, lowered_callee, arg_container, expr.span)
 }
 
 /// Recognizes the parser's internal `call_user_func([$object, $method], ...)`
@@ -191,7 +238,7 @@ pub(super) fn lower_dynamic_method_expr_call(
     let method = lower_expr(ctx, method);
     let method_type = ctx.builder.value_php_type(method.value);
     let method_name = ctx.declare_hidden_temp(method_type.clone());
-    ctx.store_local(&method_name, method, method_type, Some(expr.span));
+    store_value_into_temp(ctx, &method_name, method_type, method, expr.span);
     let method_expr = Expr::new(ExprKind::Variable(method_name), expr.span);
     let object_type = ctx.builder.value_php_type(object.value).codegen_repr();
     if !matches!(object_type, PhpType::Object(_))
@@ -286,4 +333,3 @@ pub(super) fn terminate_dynamic_method_call_on_null(
     );
     ctx.builder.terminate(Terminator::Unreachable);
 }
-

@@ -212,6 +212,15 @@ fn test_error_named_arguments_reject_duplicate_assignment() {
     );
 }
 
+/// CUF forwards target names but still rejects assigning its callback parameter twice.
+#[test]
+fn test_error_named_arguments_cuf_rejects_duplicate_callback() {
+    expect_error(
+        "<?php call_user_func('strlen', callback: 'strlen', string: 'value');",
+        "Builtin 'call_user_func' parameter $callback is already assigned",
+    );
+}
+
 /// Verifies that spread arguments from associative arrays are subject to the same
 /// unknown-parameter checks as regular named arguments.
 #[test]
@@ -540,6 +549,17 @@ fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
         "<?php function bump(?int &$x) { $x = null; } $value = 1; bump($value);",
         "requires a variable with mixed/union/nullable storage when passed by reference",
     );
+}
+
+/// Array-slot widening does not authorize incompatible scalar-local reference storage.
+#[test]
+fn test_error_mixed_by_ref_scalar_local_still_requires_boxed_storage() {
+    for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
+        expect_error(
+            &format!("<?php function replaceScalar(mixed &$slot): void {{ $slot = 'changed'; }} $value = 1; {call}"),
+            "requires a variable with mixed/union/nullable storage when passed by reference",
+        );
+    }
 }
 
 // -- Include/require path expression errors --

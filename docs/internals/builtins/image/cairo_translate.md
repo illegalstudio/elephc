@@ -1,11 +1,11 @@
 ---
-title: "cairo_translate() — internals"
+title: "cairo_translate() - internals"
 description: "Compiler internals for cairo_translate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 445
 ---
 
-## `cairo_translate()` — internals
+## `cairo_translate()` - internals
 
 ## Where it lives
 

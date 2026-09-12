@@ -1097,6 +1097,34 @@ fn test_same_name_same_position_collision_is_a_compile_error() {
     );
 }
 
+/// Reference detachment decisions also reject identical unset positions in different files.
+#[test]
+fn test_reference_detach_same_name_same_position_collision_is_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n$text = 'main' . $argc;\n$read = function() use (&$text): string { return $text; };\nunset($text);\necho $read();\n"),
+            ("lib.php", "<?php\n$text = 'lib' . $argc;\n$read = function() use (&$text): string { return $text; };\necho $read();\nunset($text);\n"),
+        ],
+        "main.php",
+    ).expect("ambiguous reference detachment must not compile");
+    assert!(error.contains("Cannot re-bind $text here"), "{error}");
+    assert!(error.contains("line 5 column 7"), "{error}");
+}
+
+/// A non-detachable body cannot silently erase another file's reference detach authorization.
+#[test]
+fn test_reference_detach_collision_with_typed_binding_is_a_compile_error() {
+    let error = compile_files_error_message(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\n$text = 'main' . $argc;\n$read = function() use (&$text): string { return $text; };\nunset($text);\nprobeDetachCollision($argc);\necho $read();\n"),
+            ("lib.php", "<?php\nfunction probeDetachCollision(int $seed): void {\nstring $text = 'lib' . $seed;\n$read = function() use (&$text): string { return $text; };\nunset($text);\necho $read();\n}\n"),
+        ],
+        "main.php",
+    ).expect("removed reference detach keys must still reject ambiguous source positions");
+    assert!(error.contains("Cannot re-bind $text here"), "{error}");
+    assert!(error.contains("line 5 column 7"), "{error}");
+}
+
 /// A collision that STRIPS another body's mixed-storage decisions is caught too, not just one
 /// that leaves two live keys behind.
 ///
@@ -2454,7 +2482,7 @@ fn test_the_single_case_switch_rewrite_vetoes_itself_on_a_marked_default() {
             std::collections::HashSet::new()
         };
         let ast =
-            elephc::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
+            elephc::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
         let ast = elephc::optimize::prune_constant_control_flow(ast, spans.clone());
         elephc::optimize::normalize_control_flow(ast, spans)
     }

@@ -57,13 +57,24 @@ pub(super) fn emit_x86_64_numeric(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_strrev");
     emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_string input
-    emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed eval argument to a PHP string pair
+    emitter.instruction("sub rsp, 16");                                         // reserve the borrowed input across tag inspection
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source cell for non-string coercion
+    emitter.instruction("mov rax, rdi");                                        // pass the borrowed cell to canonical unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // inspect the tag and borrow both payload words
+    emitter.instruction("cmp rax, 1");                                          // existing string payloads remain owned by the caller lease
+    emitter.instruction("jne __elephc_eval_value_strrev_convert");              // coerce only non-string inputs through formatting storage
+    emitter.instruction("mov rax, rdi");                                        // borrow the string pointer while preserving its length in rdx
+    emitter.instruction("jmp __elephc_eval_value_strrev_reverse");              // skip the allocating string arm of mixed_cast_string
+    emitter.label("__elephc_eval_value_strrev_convert");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload non-string input for PHP scalar stringification
+    emitter.instruction("call __rt_mixed_cast_string");                         // non-string arms return borrowed formatting or fixed storage
+    emitter.label("__elephc_eval_value_strrev_reverse");
     emitter.instruction("call __rt_strrev");                                    // reverse the PHP byte string into concat storage
     emitter.instruction("mov rdi, rax");                                        // move the reversed string pointer into mixed value_lo
     emitter.instruction("mov rsi, rdx");                                        // move the reversed string length into mixed value_hi
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("call __rt_mixed_from_value");                          // persist and box the reversed string for Rust
+    emitter.instruction("add rsp, 16");                                         // retire the borrowed input spill without releasing its owner
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed reversed string to Rust
 

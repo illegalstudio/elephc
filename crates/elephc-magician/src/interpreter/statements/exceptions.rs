@@ -20,20 +20,40 @@ pub(in crate::interpreter) fn execute_try_stmt(
 ) -> Result<EvalControl, EvalStatus> {
     let control = match execute_statements(body, context, scope, values) {
         Ok(EvalControl::Throw(thrown)) => {
-            execute_matching_catch(thrown, catches, context, scope, values)?
+            execute_matching_catch(thrown, catches, context, scope, values)
         }
         Err(EvalStatus::UncaughtThrowable) => {
             let Some(thrown) = context.take_pending_throw() else {
                 return Err(EvalStatus::UncaughtThrowable);
             };
-            execute_matching_catch(thrown, catches, context, scope, values)?
+            execute_matching_catch(thrown, catches, context, scope, values)
         }
+        Ok(control) => Ok(control),
+        Err(status) => Err(status),
+    };
+    // Native calls and nested eval report throws through the context, including from a catch.
+    // Transfer that pending owner into control flow before finally runs or replaces the throw.
+    let control = match control {
         Ok(control) => control,
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalControl::Throw)
+            .ok_or(EvalStatus::UncaughtThrowable)?,
         Err(status) => return Err(status),
     };
     if finally_body.is_empty() {
         return Ok(control);
     }
+    // A storage read must survive a finally block that replaces or unsets its source binding.
+    let control = match control {
+        EvalControl::Return(value) if value.is_borrowed() => {
+            EvalControl::Return(values.retain(value)?)
+        }
+        EvalControl::Throw(value) if value.is_borrowed() => {
+            EvalControl::Throw(values.retain(value)?)
+        }
+        control => control,
+    };
     match execute_statements(finally_body, context, scope, values) {
         Ok(EvalControl::None) => Ok(control),
         Ok(finally_control) => {
@@ -80,12 +100,11 @@ pub(in crate::interpreter) fn execute_matching_catch(
         return Ok(EvalControl::Throw(thrown));
     };
     if let Some(var_name) = &catch.var_name {
-        for replaced in set_scope_cell(
+        for replaced in set_owned_scope_cell(
             context,
             scope,
             var_name.clone(),
             thrown,
-            ScopeCellOwnership::Owned,
         )? {
             values.release(replaced)?;
         }

@@ -330,7 +330,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'array_diff_key': ['array'],
     'array_fill': ['int', 'int', 'mixed'],
     'array_fill_keys': ['array', 'mixed'],
-    'array_filter': ['array', 'callable', 'int'],
+    'array_filter': ['array', '?callable', 'int'],
     'array_flip': ['array'],
     'array_intersect': ['array'],
     'array_intersect_assoc': ['array'],
@@ -339,8 +339,8 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'array_key_first': ['array'],
     'array_key_last': ['array'],
     'array_keys': ['array'],
-    'array_map': ['callable', 'array'],
-    'array_multisort': ['array', 'int'],
+    'array_map': ['?callable', 'array'],
+    'array_multisort': ['array', 'array'],
     'array_pad': ['array', 'int', 'mixed'],
     'array_pop': ['array'],
     'array_product': ['array'],
@@ -847,6 +847,10 @@ def slug(name: str) -> str:
 # `check_builtin()` arms (which sometimes narrow to the wrong type, e.g.
 # `array_shift` returns `mixed`, not the array element type).
 RETURN_TYPE_OVERRIDES: Dict[str, str] = {
+    # Numeric aggregates preserve integer overflow and floating-point values.
+    # Their neutral Mixed contract covers this union because TypeSpec has no union variant.
+    "array_sum": "int|float",
+    "array_product": "int|float",
     # getenv($name) returns the value string or `false` when the name is absent;
     # getenv() with no name returns the whole environment as an array. The
     # neutral contract records the union-covering `Mixed` because TypeSpec has

@@ -6,27 +6,17 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
-//! - EVERY BY-REFERENCE ARGUMENT NEEDS AN ADDRESS, and there are four sources for one:
-//!   the caller local's own storage, an array element's slot, a caller-side stack cell that
-//!   is WRITTEN BACK into a scalar local afterwards (a scalar local passed to a `mixed`
-//!   by-reference parameter), and — for an argument with no caller variable at all, i.e. an
-//!   OMITTED optional by-reference argument — a caller-side stack cell that is simply
-//!   discarded. The last two share one pushed cell block, planned before any argument is
-//!   staged and released once after the call.
-//! - THE DISCARDED CELL USED TO BE A HEAP ALLOCATION THAT NOTHING FREED. `f($x)` against
-//!   `f($x, int &$out = null)` leaked 16 bytes PER CALL — unbounded in a loop, and PHP's
-//!   documented `while ($info = curl_multi_info_read($mh))` loop is exactly that shape.
-//!   Moving it into the existing cell block makes the release automatic.
-//! - THE HEAP PATH IS STILL LOAD-BEARING, not a leftover. A CONSTRUCTOR that promotes a
-//!   by-reference parameter binds a property which BORROWS the argument's cell for the whole
-//!   life of the object, so every constructor call is planned as
-//!   [`RefArgCellLifetime::MayOutliveCall`] and deliberately routed to
-//!   [`materialize_temporary_ref_arg_cell`]; a caller-stack cell there is a use-after-free.
-//!   See that function's own doc comment for both kinds of caller that reach it.
+//! - Method argument coercions use the shared cleanup plan; callers retire its block before
+//!   processing reference writebacks, whose addresses include the intervening cleanup bytes.
+//! - Reference arguments borrow caller storage or element addresses. Scalar-to-Mixed
+//!   writebacks use stack cells; omitted defaults use managed cells with scoped owner records.
+//! - Closures can retain default cells beyond the call. Normal return and exception unwinding
+//!   retire only the caller's lease, leaving any captured lease intact.
+//! - Constructor-promoted borrowed properties still use the separate persistent-cell fallback.
 
 use super::*;
 
-/// Loads method call arguments for lexical `self::`/`parent::` instance calls using local `this`.
+/// Loads lexical instance-call arguments using local `this`, tracking coercion owners for cleanup.
 pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
     ctx: &mut FunctionContext<'_>,
     receiver_slot: LocalSlotId,
@@ -63,6 +53,11 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         lifetime,
     )?;
     emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
+    let cleanup_slots = plan_call_arg_temp_cleanups(
+        ctx, operands, visible_param_types, visible_ref_params, &[],
+    )?;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -79,13 +74,12 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
                 arg_temp_bytes,
                 &ref_writebacks,
                 &ref_temp_cells,
-                0,
+                cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
-            ctx.load_value_to_result(*value)?;
-            let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            let cleanup = cleanup_slots.iter().find(|cleanup| cleanup.param_index == index);
+            let push_ty = materialize_plain_call_arg(ctx, *value, param_ty, cleanup, arg_temp_bytes)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[index + 1]);
@@ -94,13 +88,13 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
-        cleanup_slots: Vec::new(),
-        cleanup_bytes: 0,
+        cleanup_slots,
+        cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
     })
 }
 
-/// Loads method call arguments with by-reference parameter support for local operands.
+/// Loads a register receiver and method arguments, tracking coercion owners and reference cells.
 pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     ctx: &mut FunctionContext<'_>,
     receiver_reg: &str,
@@ -130,12 +124,8 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
             "receiver-register method call with scalar-to-mixed by-reference writebacks",
         ));
     }
-    // `lifetime` IS NOT ALWAYS `CallOnly` HERE. `new $cls(...)` with a runtime class string
-    // reaches a CONSTRUCTOR through this materializer
-    // (`objects::dynamic_mixed_candidates::emit_dynamic_new_mixed_constructor_call`), and a
-    // constructor may promote a by-reference parameter into a property that borrows the
-    // cell for the object's whole life — so that caller passes `MayOutliveCall` and gets the
-    // heap cell, exactly like the non-dynamic `new X()` path.
+    // Dynamic constructors use the same reference lifetime selection as fixed construction.
+    // Only classes with borrowed reference properties keep the persistent fallback.
     let mut ref_temp_cells =
         plan_ref_arg_temp_cells(ctx, operands, param_types, ref_params, &ref_writebacks, lifetime)?;
     // THE RECEIVER IS ALREADY IN A REGISTER, AND THE CELL BLOCK IS ALLOWED TO DESTROY
@@ -157,6 +147,9 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     }
     let mut no_writebacks: Vec<RefArgWriteback> = Vec::new();
     emit_ref_arg_cell_block(ctx, &mut no_writebacks, &mut ref_temp_cells)?;
+    let cleanup_slots = plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -179,13 +172,12 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
                 arg_temp_bytes,
                 &ref_writebacks,
                 &ref_temp_cells,
-                0,
+                cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
-            ctx.load_value_to_result(*value)?;
-            let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            let cleanup = cleanup_slots.iter().find(|cleanup| cleanup.param_index == param_index);
+            let push_ty = materialize_plain_call_arg(ctx, *value, param_ty, cleanup, arg_temp_bytes)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
@@ -194,8 +186,8 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
-        cleanup_slots: Vec::new(),
-        cleanup_bytes: 0,
+        cleanup_slots,
+        cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
     })
 }
@@ -236,8 +228,22 @@ pub(super) fn plan_ref_arg_writebacks(
         if !ref_params[param_index] || param_types[param_index].codegen_repr() != PhpType::Mixed {
             continue;
         }
-        let source_ty = ctx.raw_value_php_type(*value)?.codegen_repr();
+        let source_ty = if let Some(array) = array_element_address_source(ctx, *value)? {
+            let PhpType::Array(element) = ctx.value_php_type(array)?.codegen_repr() else {
+                return Err(CodegenIrError::invalid_module("array element address requires an indexed receiver"));
+            };
+            element.codegen_repr()
+        } else {
+            ctx.raw_value_php_type(*value)?.codegen_repr()
+        };
         if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+            continue;
+        }
+        if array_element_address_source(ctx, *value)?.is_none()
+            && local_ref_arg_source(ctx, *value).is_err()
+        {
+            // Omitted defaults have no caller location. The temporary-cell planner owns
+            // their conversion and disposal, so there is no scalar/container writeback.
             continue;
         }
         reject_unsupported_mixed_ref_writeback_source(&source_ty)?;
@@ -264,13 +270,8 @@ pub(super) fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType)
     )))
 }
 
-/// Plans caller-side stack cells for by-reference arguments that have NO caller variable
-/// behind them — the OMITTED optional by-reference argument, above all.
-///
-/// The predicates below mirror [`materialize_ref_arg_address`]'s own order exactly: an
-/// argument that already has a writeback cell, a local slot, or an array-element address
-/// needs no cell of its own. Everything else would otherwise reach the heap fallback, whose
-/// allocation nothing frees.
+/// Plans managed default cells for reference operands without an existing caller location.
+/// Writebacks, locals and element addresses already supply storage and need no new cell.
 pub(super) fn plan_ref_arg_temp_cells(
     ctx: &FunctionContext<'_>,
     args: &[ValueId],
@@ -280,9 +281,8 @@ pub(super) fn plan_ref_arg_temp_cells(
     lifetime: RefArgCellLifetime,
 ) -> Result<Vec<RefArgTempCell>> {
     let mut cells = Vec::new();
-    // A callee that may KEEP the reference needs storage that outlives this frame, so it
-    // keeps the heap cell (see `RefArgCellLifetime`). Planning a stack cell there would hand
-    // a constructor-promoted property a pointer into a frame that is gone by its first use.
+    // Constructor-promoted properties borrow without retaining. Until their ownership
+    // model adopts managed cells, they must keep the separate persistent fallback.
     if lifetime == RefArgCellLifetime::MayOutliveCall {
         return Ok(cells);
     }
@@ -312,39 +312,76 @@ pub(super) fn plan_ref_arg_temp_cells(
     Ok(cells)
 }
 
-/// Emits the caller-side by-reference cell block: the Mixed writeback cells first, then the
-/// discarded cells, as one contiguous run of 16-byte stack slots.
-///
-/// Offsets are assigned across the WHOLE block (the last cell pushed sits at the current
-/// stack pointer), which is what lets [`materialize_ref_arg_address`] address either kind
-/// the same way and [`emit_ref_arg_writebacks`] release them in one step.
+/// Keeps the persistent fallback only when the constructed hierarchy can borrow a property cell.
+/// Ordinary constructors use managed call leases, which escaping closures can retain themselves.
+pub(super) fn constructor_ref_cell_lifetime(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> RefArgCellLifetime {
+    let mut current = Some(class_name);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(name) = current {
+        if !seen.insert(name) { return RefArgCellLifetime::MayOutliveCall; }
+        let Some(info) = ctx.module.class_infos.get(name) else {
+            return RefArgCellLifetime::MayOutliveCall;
+        };
+        if info.reference_properties.iter().any(|property| {
+            !info.owned_reference_properties.contains(property)
+        }) {
+            return RefArgCellLifetime::MayOutliveCall;
+        }
+        // Inspect ancestors as well, since private reference properties may be shadowed.
+        current = info.parent.as_deref();
+    }
+    RefArgCellLifetime::CallOnly
+}
+
+/// Reserves writeback slots and publishes a scoped managed owner for each default cell.
+/// Each managed owner has an adjacent unwind record, linked in argument order.
 pub(super) fn emit_ref_arg_cell_block(
     ctx: &mut FunctionContext<'_>,
     writebacks: &mut [RefArgWriteback],
     temp_cells: &mut [RefArgTempCell],
 ) -> Result<()> {
-    let total = writebacks.len() + temp_cells.len();
+    let writeback_bytes = writebacks.len() * 16;
+    let total_bytes = writeback_bytes + temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    abi::emit_reserve_temporary_stack(ctx.emitter, total_bytes);
     for (index, writeback) in writebacks.iter_mut().enumerate() {
         ctx.load_value_to_result(writeback.source_value)?;
         emit_box_current_value_as_mixed(ctx.emitter, &writeback.source_ty);
-        abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
-        writeback.cell_offset = (total - index - 1) * 16;
+        writeback.cell_offset = index * 16;
+        abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), writeback.cell_offset);
     }
-    let pushed = writebacks.len();
     for (index, cell) in temp_cells.iter_mut().enumerate() {
+        cell.cell_offset = writeback_bytes + index * CALL_ARG_TEMP_CLEANUP_BYTES;
         let source_ty = ctx.load_value_to_result(cell.source_value)?;
         coerce_ref_cell_store_value(ctx, &source_ty, &cell.cell_ty)?;
-        abi::emit_push_result_value(ctx.emitter, &cell.cell_ty);
-        // A push writes ONE word for every representation except `Str`/`TaggedScalar`, so
-        // the cell's second word is whatever the stack happened to hold. The heap path this
-        // replaces zeroed it, and a callee that reads the cell as a two-word value (a
-        // string, a tagged scalar) must not see garbage there.
-        if !matches!(cell.cell_ty.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
-            let scratch = abi::symbol_scratch_reg(ctx.emitter);
-            abi::emit_temporary_stack_address(ctx.emitter, scratch, 0);
-            abi::emit_store_zero_to_address(ctx.emitter, scratch, 8);
+        if source_ty.codegen_repr() == cell.cell_ty.codegen_repr() {
+            // EIR still owns the default operand. The mutable cell needs its own retain
+            // because the callee can replace it before EIR retires that original owner.
+            if cell.cell_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            } else {
+                abi::emit_incref_if_refcounted(ctx.emitter, &cell.cell_ty);
+            }
         }
-        cell.cell_offset = (total - pushed - index - 1) * 16;
+        abi::emit_push_result_value(ctx.emitter, &cell.cell_ty);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            crate::codegen_support::runtime::reference_cells::payload_tag(&cell.cell_ty),
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
+        let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_pop_reg(ctx.emitter, cell_reg);
+        store_pushed_value_to_ref_cell(ctx, cell_reg, &cell.cell_ty);
+        abi::emit_store_to_sp(ctx.emitter, cell_reg, cell.cell_offset);
+        let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
+        abi::emit_temporary_stack_address(ctx.emitter, owner_address, cell.cell_offset);
+        abi::emit_link_call_operand_owner_at_stack(
+            ctx.emitter, owner_address, false, cell.cell_offset + 16,
+        );
     }
     Ok(())
 }
@@ -384,7 +421,7 @@ pub(super) fn materialize_ref_arg_address(
         .find(|cell| cell.param_index == param_index)
     {
         let cell_offset = arg_temp_bytes + ref_cell_base_offset + cell.cell_offset;
-        abi::emit_temporary_stack_address(
+        abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
             cell_offset,
@@ -394,20 +431,10 @@ pub(super) fn materialize_ref_arg_address(
     materialize_temporary_ref_arg_cell(ctx, value, param_ty)
 }
 
-/// Allocates a heap ref-cell for a by-reference argument that is not a local variable.
-///
-/// LOAD-BEARING, NOT DEAD. Two kinds of caller reach it, and only one of them is a leftover:
-///
-/// - A call whose cells were planned as [`RefArgCellLifetime::MayOutliveCall`] — every
-///   CONSTRUCTOR call, static or dynamic. A constructor that promotes a by-reference
-///   parameter binds a property that BORROWS this cell for the whole life of the object, so
-///   it has to be heap storage that outlives the frame. Nothing frees it, which is a
-///   narrower pre-existing defect (one cell per constructed object) that only the object
-///   model can fix — but replacing this allocation with a stack cell is a use-after-free,
-///   and that is exactly what a "clean up the dead fallback" edit would do.
-/// - A call path that plans no cells at all. Those would leak one 16-byte block per call, so
-///   every path that stages by-reference arguments today plans them
-///   ([`plan_ref_arg_temp_cells`]).
+/// Allocates the persistent fallback cell required by borrowed constructor properties.
+/// Ordinary calls and non-promoting constructors use managed temporary cells instead.
+/// This legacy allocation must remain live until promoted properties retain their own cell
+/// owners; replacing it with stack storage or releasing it on return would dangle properties.
 pub(super) fn materialize_temporary_ref_arg_cell(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -464,11 +491,8 @@ pub(super) fn store_pushed_value_to_ref_cell(ctx: &mut FunctionContext<'_>, cell
     }
 }
 
-/// Writes temporary Mixed by-reference cells back into the original caller locals, releases
-/// whatever a discarded cell ended up holding, and frees the whole cell block.
-///
-/// One function for both kinds because they share one pushed block: releasing them
-/// separately would need two stack adjustments and two chances to get the order wrong.
+/// Publishes scalar writebacks, retires default-cell leases in unwind order, and frees staging.
+/// Captured cells survive because closure creation retains a separate managed lease.
 pub(super) fn emit_ref_arg_writebacks(
     ctx: &mut FunctionContext<'_>,
     call_args: &CallArgMaterialization,
@@ -486,37 +510,18 @@ pub(super) fn emit_ref_arg_writebacks(
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     }
-    for cell in &call_args.ref_temp_cells {
-        // A discarded cell has no caller variable to write back to, but a REFCOUNTED one
-        // still holds a value the caller owns — the default the caller materialized, or
-        // whatever the callee left in its place, which `store_ref_cell` retained on the way
-        // in. Releasing it is the same ownership rule the writeback loop above applies to
-        // its own cells. `emit_decref_if_refcounted` is the canonical dispatcher and is
-        // deliberately a no-op for scalars AND for `Str`, whose ownership is not refcounted
-        // in this runtime; a string left in a discarded cell therefore keeps whatever
-        // behaviour the surrounding string-return path already has.
-        let cell_ty = cell.cell_ty.codegen_repr();
-        if !matches!(
-            cell_ty,
-            PhpType::Mixed
-                | PhpType::Union(_)
-                | PhpType::Array(_)
-                | PhpType::AssocArray { .. }
-                | PhpType::Object(_)
-                | PhpType::Iterable
-                | PhpType::Callable
-        ) {
-            continue;
-        }
+    for cell in call_args.ref_temp_cells.iter().rev() {
+        abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cell.cell_offset + 16);
         abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
             cell.cell_offset,
         );
-        abi::emit_decref_if_refcounted(ctx.emitter, &cell_ty);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
     }
-    let block_cells = call_args.ref_writebacks.len() + call_args.ref_temp_cells.len();
-    abi::emit_release_temporary_stack(ctx.emitter, block_cells * 16);
+    let block_bytes = call_args.ref_writebacks.len() * 16
+        + call_args.ref_temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    abi::emit_release_temporary_stack(ctx.emitter, block_bytes);
     Ok(())
 }
 
@@ -564,17 +569,25 @@ pub(super) fn materialize_local_ref_arg_address(ctx: &mut FunctionContext<'_>, v
 
 /// Returns true when a value already holds a direct pointer to an array element slot.
 pub(super) fn value_is_array_element_address(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    Ok(array_element_address_source(ctx, value)?.is_some())
+}
+
+/// Resolves an element-slot pointer to the array whose element type describes its pointee storage.
+fn array_element_address_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<ValueId>> {
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };
     let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(false);
+        return Ok(None);
     };
     let inst_ref = ctx
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    Ok(inst_ref.op == Op::ArrayElemAddr)
+    if inst_ref.op != Op::ArrayElemAddr {
+        return Ok(None);
+    }
+    Ok(Some(expect_operand(inst_ref, 0)?))
 }
 
 /// Describes a local operand used as a by-reference call argument.

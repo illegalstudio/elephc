@@ -1,11 +1,11 @@
 ---
-title: "imageaffine() — internals"
+title: "imageaffine() - internals"
 description: "Compiler internals for imageaffine(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 455
 ---
 
-## `imageaffine()` — internals
+## `imageaffine()` - internals
 
 ## Where it lives
 

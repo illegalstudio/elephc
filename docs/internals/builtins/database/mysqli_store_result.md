@@ -1,11 +1,11 @@
 ---
-title: "mysqli_store_result() — internals"
+title: "mysqli_store_result() - internals"
 description: "Compiler internals for mysqli_store_result(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 177
 ---
 
-## `mysqli_store_result()` — internals
+## `mysqli_store_result()` - internals
 
 ## Where it lives
 

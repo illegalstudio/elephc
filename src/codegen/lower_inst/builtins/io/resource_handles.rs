@@ -123,6 +123,7 @@ pub(super) fn emit_resource_release_sentinel(emitter: &mut crate::codegen::emit:
             emitter.instruction("ldr x9, [sp], #16");                           // restore the stashed resource Mixed box pointer
             emitter.instruction("mov x11, x0");                                 // preserve the native handle the caller still has to close
             abi::emit_call_label(emitter, "__rt_resource_id_of");               // resolve the id this handle keeps for the rest of the request
+            abi::emit_call_label(emitter, "__rt_resource_inventory_close");     // retain the closed incarnation for get_resources("Unknown")
             emitter.instruction("neg x10, x0");                                 // a negative payload encodes "closed, PHP id = -payload"
             emitter.instruction("str x10, [x9, #8]");                           // overwrite the low payload word so scope cleanup skips it
             emitter.instruction("mov x0, x11");                                 // restore the native handle for the caller's close dispatch
@@ -132,6 +133,7 @@ pub(super) fn emit_resource_release_sentinel(emitter: &mut crate::codegen::emit:
             emitter.instruction("add rsp, 16");                                 // release the stash slot
             emitter.instruction("mov r10, rax");                                // preserve the native handle the caller still has to close
             abi::emit_call_label(emitter, "__rt_resource_id_of");               // resolve the id this handle keeps for the rest of the request
+            abi::emit_call_label(emitter, "__rt_resource_inventory_close");     // retain the closed incarnation for get_resources("Unknown")
             emitter.instruction("neg rax");                                     // a negative payload encodes "closed, PHP id = -payload"
             emitter.instruction("mov QWORD PTR [r11 + 8], rax");                // overwrite the low payload word so scope cleanup skips it
             emitter.instruction("mov rax, r10");                                // restore the native handle for the caller's close dispatch

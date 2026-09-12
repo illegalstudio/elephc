@@ -56,6 +56,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_is_callable(
         .target
         .extern_symbol("__elephc_eval_is_callable");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_metadata_operand_boxes(ctx, &[(callback, EVAL_TEMP_CELL_OFFSET)])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
@@ -89,6 +90,9 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_member_exists(
         .target
         .extern_symbol("__elephc_eval_member_exists");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_metadata_operand_boxes(ctx, &[
+        (target, EVAL_TEMP_CELL_OFFSET), (member, EVAL_CODE_PTR_OFFSET),
+    ])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
@@ -120,6 +124,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_relation(
         .target
         .extern_symbol("__elephc_eval_class_relation");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_metadata_operand_boxes(ctx, &[(target, EVAL_TEMP_CELL_OFFSET)])?;
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -127,7 +132,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_relation(
     store_if_result(ctx, inst)
 }
 
-/// Lowers object class-name introspection through the eval bridge.
+/// Transfers boxed class-name results or detaches native strings before retiring their bridge cell.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -157,20 +162,42 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
         .target
         .extern_symbol("__elephc_eval_object_class_name");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_eval_unboxed_string_result(ctx);
+    let boxed_result = inst.result_php_type.codegen_repr() == PhpType::Mixed;
+    if !boxed_result {
+        emit_owned_eval_class_name_string(ctx);
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&non_object_label);
+    retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
     emit_eval_string_result(ctx, b"");
+    if boxed_result {
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    }
 
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
+}
+
+/// Copies a bridge string payload and releases its owned cell without invalidating the copy.
+fn emit_owned_eval_class_name_string(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_eval_unboxed_string_result(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        EVAL_RESULT_VALUE_CELL_OFFSET + 16,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
 }
 
 /// Lowers object/class relation predicates through the eval bridge.
@@ -215,6 +242,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
 
     ctx.emitter.label(&done_label);
+    retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
 }
@@ -271,10 +299,16 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a_dynamic(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&invalid_label);
+    retire_eval_metadata_operand_boxes(ctx, &[
+        (object, EVAL_TEMP_CELL_OFFSET), (target, EVAL_CODE_PTR_OFFSET),
+    ])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     abi::emit_call_label(ctx.emitter, "__rt_instanceof_invalid_target");
 
     ctx.emitter.label(&done_label);
+    retire_eval_metadata_operand_boxes(ctx, &[
+        (object, EVAL_TEMP_CELL_OFFSET), (target, EVAL_CODE_PTR_OFFSET),
+    ])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
 }

@@ -29,6 +29,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         return Err(EvalStatus::RuntimeFatal);
     }
     let class = expand_eval_class_traits(class, context)?.with_readonly_properties();
+    let class = resolve_eval_inherited_property_hooks(class, context, values)?;
     let class = &class;
     validate_eval_class_modifiers(class, context, values)?;
     let native_parent = validate_eval_class_parent(class, context, values)?;
@@ -65,6 +66,38 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Preserves inherited hooks and backing storage when a child redeclares a property.
+fn resolve_eval_inherited_property_hooks(
+    class: EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalClass, EvalStatus> {
+    let Some(parent) = class.parent() else { return Ok(class); };
+    let mut properties = class.properties().to_vec();
+    for property in &mut properties {
+        if property.is_static() { continue; }
+        if let Some((_, inherited)) = context.class_property(parent, property.name()) {
+            if inherited.is_static() || inherited.visibility() == EvalVisibility::Private {
+                continue;
+            }
+            *property = property.clone()
+                .with_hooks(property.has_get_hook() || inherited.has_get_hook(),
+                    property.has_set_hook() || inherited.has_set_hook())
+                .with_virtual(property.is_virtual() && inherited.is_virtual());
+        } else {
+            let native_parent = context.class_native_parent_name(parent)
+                .unwrap_or_else(|| parent.to_string());
+            if values.reflection_property_flags(&native_parent, property.name())?
+                .is_some_and(|flags| flags & (EVAL_REFLECTION_MEMBER_FLAG_STATIC
+                    | EVAL_REFLECTION_MEMBER_FLAG_PRIVATE | EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL) == 0)
+            {
+                *property = property.clone().with_virtual(false);
+            }
+        }
+    }
+    Ok(class.with_properties(properties))
 }
 
 /// Validates an eval class parent and returns an AOT parent name when the parent is runtime-backed.

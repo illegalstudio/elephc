@@ -43,7 +43,8 @@ pub(crate) fn has_named_args(args: &[Expr]) -> bool {
 
 /// Expands each `...$array` spread in `args` that refers to a static associative
 /// array literal into separate `NamedArg` or positional expressions; returns the
-/// flattened list. Non-static spreads are left as-is.
+/// flattened list. Indexed and non-static spreads are left as-is so runtime
+/// arity guards and named-unpack tail planning still see their source nodes.
 pub(crate) fn expand_static_assoc_spread_args(args: &[Expr]) -> Vec<Expr> {
     expand_static_assoc_spread_args_with_origins(args).args
 }
@@ -74,6 +75,69 @@ pub(crate) fn expand_static_assoc_spread_args_with_origins(
         args: expanded_args,
         origins,
     }
+}
+
+/// Projects a planned positional call into values for builtin signature checking.
+/// Only fully static indexed unpacks are flattened; callers must validate source
+/// ordering first. General planning retains spread nodes for runtime arity guards.
+pub(crate) fn expand_planned_positional_spreads(args: &[Expr]) -> Option<Vec<Expr>> {
+    if has_named_args(args) || !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+        return None;
+    }
+    let mut expanded = Vec::new();
+    for arg in args {
+        if let ExprKind::Spread(inner) = &arg.kind {
+            let ExprKind::ArrayLiteral(items) = &inner.kind else {
+                return None;
+            };
+            if items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) {
+                return None;
+            }
+            expanded.extend(items.iter().cloned());
+        } else {
+            expanded.push(arg.clone());
+        }
+    }
+    Some(expanded)
+}
+
+/// Combines a planned by-value indexed-unpack tail without changing named-key semantics.
+/// Callers supply storage knowledge and must validate source ordering before projection.
+/// Literal elements are flattened, but dynamic sources remain evaluated exactly once.
+pub(crate) fn coalesce_planned_indexed_spreads(
+    args: &[Expr],
+    mut is_indexed: impl FnMut(&Expr) -> bool,
+) -> Option<Vec<Expr>> {
+    if has_named_args(args) {
+        return None;
+    }
+    let first = args.iter().position(|arg| matches!(arg.kind, ExprKind::Spread(_)))?;
+    if args.len() - first < 2 {
+        return None;
+    }
+    let mut items = Vec::new();
+    for arg in &args[first..] {
+        let ExprKind::Spread(inner) = &arg.kind else { return None };
+        if !is_indexed(inner) {
+            return None;
+        }
+        if let ExprKind::ArrayLiteral(elements) = &inner.kind {
+            items.extend(elements.iter().cloned());
+        } else {
+            items.push(arg.clone());
+        }
+    }
+    let span = args[first].span;
+    let tail = if items.len() == 1 && matches!(items[0].kind, ExprKind::Spread(_)) {
+        items.pop().unwrap()
+    } else {
+        Expr::new(ExprKind::Spread(Box::new(
+            Expr::new(ExprKind::ArrayLiteral(items), span),
+        )), span)
+    };
+    let mut projected = args[..first].to_vec();
+    projected.push(tail);
+    Some(projected)
 }
 
 /// Returns `true` if `expr` is an `ArrayLiteralAssoc` and any of its keys
@@ -163,5 +227,97 @@ fn static_assoc_spread_key(key: &Expr) -> Option<StaticAssocSpreadKey> {
         }
         ExprKind::StringLiteral(value) => Some(StaticAssocSpreadKey::Named(value.clone())),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds an indexed literal unpack without hiding its source spread node.
+    fn indexed_spread(items: Vec<Expr>) -> Expr {
+        Expr::new(
+            ExprKind::Spread(Box::new(Expr::new(
+                ExprKind::ArrayLiteral(items),
+                Span::dummy(),
+            ))),
+            Span::dummy(),
+        )
+    }
+
+    /// Literal unpacks remain visible to the runtime required-argument guard.
+    #[test]
+    fn indexed_spread_preserves_runtime_arity_shape() {
+        let arg = indexed_spread(vec![Expr::int_lit(10)]);
+        let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()]);
+        assert_eq!(expanded.args, vec![arg]);
+        assert!(expanded.origins == vec![ExpandedArgOrigin::Source]);
+    }
+
+    /// Empty static unpacks disappear without evaluating or cloning a dynamic source twice.
+    #[test]
+    fn coalesced_indexed_spreads_preserve_dynamic_source() {
+        let dynamic = Expr::new(ExprKind::Spread(Box::new(Expr::var("names"))), Span::dummy());
+        let args = [indexed_spread(Vec::new()), dynamic.clone(), indexed_spread(Vec::new())];
+        assert_eq!(coalesce_planned_indexed_spreads(&args, |_| true), Some(vec![dynamic]));
+        assert_eq!(args.len(), 3, "the source planner input is unchanged");
+    }
+
+    /// Named-key sources and positional-after-unpack shapes are not merged as indexed arrays.
+    #[test]
+    fn coalesced_indexed_spreads_reject_nonindexed_or_invalid_tails() {
+        let dynamic = Expr::new(ExprKind::Spread(Box::new(Expr::var("names"))), Span::dummy());
+        assert!(coalesce_planned_indexed_spreads(
+            &[indexed_spread(Vec::new()), dynamic.clone()], |_| false,
+        ).is_none());
+        assert!(coalesce_planned_indexed_spreads(&[dynamic, Expr::int_lit(1)], |_| true).is_none());
+    }
+
+    /// Builtin signature projection counts unpacked values instead of containers.
+    #[test]
+    fn planned_positional_spreads_count_values_not_containers() {
+        let expanded = expand_planned_positional_spreads(&[
+            indexed_spread(Vec::new()),
+            indexed_spread(vec![Expr::int_lit(10)]),
+            indexed_spread(vec![Expr::int_lit(20)]),
+        ]).expect("all indexed unpacks are static");
+        assert_eq!(
+            expanded,
+            vec![Expr::int_lit(10), Expr::int_lit(20)],
+        );
+    }
+
+    /// A dynamic unpack leaves the entire argument list for runtime materialization.
+    #[test]
+    fn planned_positional_spreads_do_not_partially_expand_dynamic_calls() {
+        let dynamic = Expr::new(
+            ExprKind::Spread(Box::new(Expr::var("remaining"))),
+            Span::dummy(),
+        );
+        assert!(expand_planned_positional_spreads(&[
+            indexed_spread(vec![Expr::int_lit(10)]),
+            dynamic,
+        ]).is_none());
+    }
+
+    /// A positional unpack after named unpacking must reach the planner's tail path.
+    #[test]
+    fn indexed_spread_after_named_unpack_preserves_tail_origin() {
+        let named = Expr::new(
+            ExprKind::Spread(Box::new(Expr::new(
+                ExprKind::ArrayLiteralAssoc(vec![(Expr::string_lit("a"), Expr::int_lit(10))]),
+                Span::dummy(),
+            ))),
+            Span::dummy(),
+        );
+        let tail = indexed_spread(vec![Expr::int_lit(20)]);
+        let expanded = expand_static_assoc_spread_args_with_origins(&[named, tail.clone()]);
+        assert!(matches!(expanded.args[0].kind, ExprKind::NamedArg { .. }));
+        assert_eq!(expanded.args[1], tail);
+        assert!(expanded.origins == vec![
+            ExpandedArgOrigin::StaticAssocNamed,
+            ExpandedArgOrigin::Source,
+        ]);
+        assert!(expand_planned_positional_spreads(&expanded.args).is_none());
     }
 }

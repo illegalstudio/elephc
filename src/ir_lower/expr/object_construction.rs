@@ -373,8 +373,7 @@ fn lower_new_dynamic_generic(
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
     if uses_runtime_arg_container {
-        let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
-            .expect("dynamic constructor arguments always have a runtime container form");
+        let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
         operands.push(arg_container.value);
     } else {
         operands.extend(lower_args(ctx, args));

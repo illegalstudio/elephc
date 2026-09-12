@@ -1,16 +1,16 @@
 ---
-title: "ptr_write32() — internals"
+title: "ptr_write32() - internals"
 description: "Compiler internals for ptr_write32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 711
+  order: 737
 ---
 
-## `ptr_write32()` — internals
+## `ptr_write32()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_write32.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_write32.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

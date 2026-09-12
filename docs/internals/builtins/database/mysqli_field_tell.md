@@ -1,11 +1,11 @@
 ---
-title: "mysqli_field_tell() — internals"
+title: "mysqli_field_tell() - internals"
 description: "Compiler internals for mysqli_field_tell(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 126
 ---
 
-## `mysqli_field_tell()` — internals
+## `mysqli_field_tell()` - internals
 
 ## Where it lives
 

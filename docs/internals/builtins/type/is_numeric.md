@@ -1,16 +1,16 @@
 ---
-title: "is_numeric() — internals"
+title: "is_numeric() - internals"
 description: "Compiler internals for is_numeric(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 872
+  order: 898
 ---
 
-## `is_numeric()` — internals
+## `is_numeric()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_numeric.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_numeric.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

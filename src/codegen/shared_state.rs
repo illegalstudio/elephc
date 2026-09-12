@@ -8,6 +8,9 @@
 //!
 //! Key details:
 //! - Cached labels are global assembly entries emitted at their first call site.
+//! - Descriptor invoker cache identity is the signature, the capture list and the
+//!   string-result owner contract. Every invoker binds the same container layout, so two
+//!   wrappers agreeing on those three can safely share one emitted body.
 //! - Receiver-bearing descriptors cache only immutable templates; each call still captures its object.
 //! - Owns the module-wide assembly label counter. It must not be per function: the readable part
 //!   of a label is a lossy fragment of the PHP function/block name, so only a module-unique
@@ -19,6 +22,8 @@ use crate::types::{FunctionSig, PhpType};
 /// Module-wide artifacts emitted once and reused by every function lowering context.
 #[derive(Default)]
 pub(crate) struct SharedCodegenState {
+    /// Descriptor argument adapters need the shared boxed-callable normalizer.
+    pub(super) callable_argument_normalizer: bool,
     runtime_string_descriptor_cases:
         Vec<(Option<PhpType>, Option<Vec<String>>, bool, Vec<RuntimeCallableCase>)>,
     runtime_static_method_descriptor_cases:
@@ -75,6 +80,11 @@ struct RuntimeInstanceMethodDescriptorCacheEntry {
 struct RuntimeCallableInvokerCacheEntry {
     signature: FunctionSig,
     captures: Vec<(String, PhpType, bool)>,
+    owns_string_return: bool,
+    /// The RESOLVED defaults the body materializes. Two signatures can be identical as ABI and
+    /// still fold `self::`/`parent::` defaults differently in different class scopes, so the
+    /// resolved values are part of the key rather than the declaring class name.
+    defaults: crate::codegen::runtime_callable_invoker::InvokerDefaults,
     label: String,
 }
 
@@ -260,10 +270,17 @@ impl SharedCodegenState {
         &self,
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
+        owns_string_return: bool,
+        defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
     ) -> Option<String> {
         self.runtime_callable_invokers
             .iter()
-            .find(|entry| entry.signature == *signature && entry.captures == captures)
+            .find(|entry| {
+                entry.signature == *signature
+                    && entry.captures == captures
+                    && entry.owns_string_return == owns_string_return
+                    && entry.defaults == defaults
+            })
             .map(|entry| entry.label.clone())
     }
 
@@ -272,12 +289,16 @@ impl SharedCodegenState {
         &mut self,
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
+        owns_string_return: bool,
+        defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
         label: &str,
     ) {
         self.runtime_callable_invokers
             .push(RuntimeCallableInvokerCacheEntry {
                 signature: signature.clone(),
                 captures: captures.to_vec(),
+                owns_string_return,
+                defaults: defaults.to_vec(),
                 label: label.to_string(),
             });
     }

@@ -9,6 +9,54 @@
 
 use super::*;
 
+/// Allocates an object-owned ref cell before a physical initializer writes its default.
+pub(super) fn initialize_owned_property_reference(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    base_reg: &str,
+) -> bool {
+    let owns_cell = slot.is_reference && ctx.module.class_infos.get(&slot.class_name)
+        .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
+    if owns_cell {
+        emit_owned_reference_property_cell(ctx, base_reg, slot.offset, &slot.php_type);
+    }
+    owns_cell
+}
+
+/// Resolves a physical initializer slot without applying name-based shadow selection.
+pub(super) fn resolve_initializer_property_slot(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    class_id: u32,
+    index: u32,
+    inst: &Instruction,
+) -> Result<PropertySlot> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Err(CodegenIrError::invalid_module("property initializer needs a concrete object"));
+    };
+    let info = ctx.module.class_infos.get(class_name.trim_start_matches('\\'))
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown initializer class {class_name}")))?;
+    if info.class_id != u64::from(class_id)
+        || !ctx.function.flags.is_synthetic
+        || ctx.function.name != format!("_class_propinit_{class_id}")
+    {
+        return Err(CodegenIrError::invalid_module("physical property reference outside its initializer"));
+    }
+    let index = index as usize;
+    let (property, php_type) = info.properties.get(index)
+        .ok_or_else(|| CodegenIrError::invalid_module("property initializer index is outside the class layout"))?;
+    ensure_property_type_supported(php_type, inst)?;
+    Ok(PropertySlot {
+        class_name,
+        property: property.clone(),
+        php_type: php_type.clone(),
+        offset: 8 + index * 16,
+        is_declared: info.property_slot_is_declared(index, property),
+        is_packed: false,
+        is_reference: info.property_slot_is_reference(index, property),
+    })
+}
+
 /// Resolves the property slot for a concrete object receiver and declared property name.
 pub(super) fn resolve_property_slot(
     ctx: &FunctionContext<'_>,

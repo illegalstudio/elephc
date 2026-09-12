@@ -6,6 +6,10 @@
 //!
 //! Key details:
 //! - Parameter metadata, bridge support, required arity, and return type travel with the invoker.
+//! - Only PHP-VISIBLE parameters are registered for a free function: eval reaches one through a
+//!   descriptor invoker that synthesizes the compiler-internal `func_args` slots itself. The
+//!   registered `NativeCallableShape` is still what states the required arity, because a default
+//!   that the eval default ABI cannot represent registers no default at all.
 
 use super::*;
 
@@ -22,6 +26,7 @@ pub struct NativeFunction {
     pub(super) variadic_index: Option<usize>,
     pub(super) return_type: Option<EvalParameterType>,
     pub(super) bridge_supported: bool,
+    pub(super) shape: Option<NativeCallableShape>,
 }
 
 impl NativeFunction {
@@ -42,6 +47,7 @@ impl NativeFunction {
             variadic_index: None,
             return_type: None,
             bridge_supported: true,
+            shape: None,
         }
     }
 
@@ -157,14 +163,38 @@ impl NativeFunction {
         self.bridge_supported
     }
 
-    /// Returns the minimum number of required parameters implied by defaults.
+    /// Records the explicit PHP signature shape emitted by the generated registration.
+    pub fn set_shape(&mut self, shape: NativeCallableShape) {
+        self.shape = Some(shape);
+    }
+
+    /// Returns the resolved PHP-visible / compiler-internal partition of the registered slots.
+    pub fn frame_shape(&self) -> NativeCallableFrameShape {
+        NativeCallableFrameShape::new(self.param_count, self.variadic_index, self.shape)
+    }
+
+    /// Returns how many registered slots are PHP-visible NON-variadic parameters.
+    pub fn visible_regular_param_count(&self) -> usize {
+        self.frame_shape().visible_regular_param_count()
+    }
+
+    /// Returns the variadic slot the PHP source itself declared, if the source declared one.
+    pub fn source_variadic_index(&self) -> Option<usize> {
+        self.frame_shape().source_variadic_index()
+    }
+
+    /// Returns the minimum number of arguments this callback requires.
+    ///
+    /// The registered shape is authoritative, because a declared default whose VALUE the eval
+    /// default ABI cannot represent (an enum case, a deeply nested constant expression) registers
+    /// no default at all and would otherwise make an optional parameter look required. Only a
+    /// registration that emitted no shape falls back to reading the registered defaults.
     pub fn required_param_count(&self) -> usize {
-        if let Some(index) = self.variadic_index {
-            return (0..index)
-                .rfind(|position| self.param_default(*position).is_none())
-                .map_or(0, |position| position + 1);
+        let shape = self.frame_shape();
+        if let Some(required) = shape.declared_required_param_count() {
+            return required;
         }
-        (0..self.param_count)
+        (0..shape.visible_regular_param_count())
             .rfind(|index| self.param_default(*index).is_none())
             .map_or(0, |index| index + 1)
     }

@@ -1,16 +1,16 @@
 ---
-title: "chgrp() — internals"
+title: "chgrp() - internals"
 description: "Compiler internals for chgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 255
 ---
 
-## `chgrp()` — internals
+## `chgrp()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/chgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chgrp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

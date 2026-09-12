@@ -34,25 +34,12 @@ pub(super) fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
 /// Lowers a return statement using the current function return contract.
 pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, span: Span) {
     // A by-reference-returning function hands the caller the ref-cell pointer of the
-    // returned property (`function &f() { return $obj->prop; }`), so `$x = &f()` aliases
-    // it. The cell pointer is materialized as the declared return type so the ABI return
-    // convention matches the caller's expectation for pointer-sized property types.
-    if ctx.by_ref_return {
-        if let Some(Expr { kind: ExprKind::PropertyAccess { object, property }, .. }) = value_expr {
-            let object = lower_expr(ctx, object);
-            let data = ctx.intern_string(property);
-            let result_ty = ctx.return_php_type.clone();
-            let cell_ptr = ctx.emit_value(
-                Op::LoadPropRefCell,
-                vec![object.value],
-                Some(Immediate::Data(data)),
-                result_ty,
-                Op::LoadPropRefCell.default_effects(),
-                Some(span),
-            );
-            terminate_return(ctx, Some(cell_ptr.value));
-            return;
-        }
+    // returned place (`function &f() { return $obj->prop; }`), so `$x = &f()` aliases
+    // it. Metadata retains the place's declared type for caller dereferencing;
+    // the reference-return ABI always transports the raw cell in the integer result register.
+    if ctx.by_ref_return && ctx.return_type != IrType::Void {
+        lower_reference_return(ctx, value_expr, span);
+        return;
     }
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
@@ -71,6 +58,275 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
+}
+
+/// Lowers the value of a by-reference `return`, which must transport a managed cell.
+///
+/// The reference-return ABI always places a raw cell pointer in the integer result register, so
+/// every accepted source has to hand the caller either a MANAGED cell whose ownership transfers
+/// with the pointer, or an EXACT bounded active borrow whose consumer copies the pointee before
+/// any cleanup can run. Two shapes qualify for the managed transfer: a reference-bound local
+/// whose cell this frame can address, and an object property whose slot already holds a promoted
+/// cell. An ordinary addressable local is promoted in place first, which preserves its identity
+/// (later writes through the variable are seen through the caller's alias).
+///
+/// The cell the caller receives is dereferenced with the representation of this function's
+/// DECLARED result, so an accepted source must also store a payload that can be read that way.
+/// A local that is only being promoted here is widened first; a property slot and a
+/// by-reference parameter are storage other aliases already share, so a disagreement there is
+/// refused (statically) or raised as a catchable `Error` (when the receiver's class is only
+/// known at run time), never relabelled.
+///
+/// Everything else is refused with a compile diagnostic rather than lowered as a value, because
+/// a value-shaped return would put a payload word where the caller expects an address. These are
+/// SUBSET limits, not PHP semantics: PHP happily returns a reference to an array element or to
+/// the result of another reference-returning call, and this compiler simply has no way yet to
+/// transfer an owning cell for those places.
+///
+/// The refusals here are early diagnostics for provenance this frame can see. Provenance it
+/// cannot see, such as an alias relayed in through a by-reference parameter, is caught by
+/// the owner-zero guard in `codegen::lower_inst::local_stores::lower_acquire_ref_cell`, which
+/// raises a catchable `Error` instead of publishing an interior address. Its one exception is
+/// an EXACT active `array_walk()` element borrow, whose ULTIMATE consumer is the descriptor
+/// invoker (or the walk itself) and copies the pointee before any cleanup runs. A nested relay
+/// of that borrow, one by-reference function handing it to the next, stays valid for the same
+/// reason: the borrow is still inside the one active walk lifetime that bounds it. What the
+/// guard refuses is an owner-zero address with no such bound, which would escape arbitrarily.
+fn lower_reference_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value_expr: Option<&Expr>,
+    span: Span,
+) {
+    match value_expr.map(|expr| &expr.kind) {
+        Some(ExprKind::Variable(name)) => {
+            if ctx.is_borrowed_element_ref_local(name) {
+                refuse_reference_return(
+                    ctx,
+                    span,
+                    "Unsupported by-reference return: this compiler cannot transfer an alias \
+                     of an array element out of its frame, because that address lies inside the \
+                     array's payload and owns no reference cell of its own. PHP supports the \
+                     return; this lowering has no cell to hand the caller",
+                );
+                return;
+            }
+            if !ctx.is_ref_bound_local(name) {
+                if !ctx.local_is_promotable_to_ref_cell(name) {
+                    refuse_reference_return(
+                        ctx,
+                        span,
+                        "Unsupported by-reference return: this compiler can transfer only a \
+                         local it can promote to a managed reference cell in place, which a \
+                         global, a static local, an extern global and an eval-scope name are \
+                         not",
+                    );
+                    return;
+                }
+                promote_local_to_reference_return_payload(ctx, name, span);
+            }
+            if !reference_return_payload_matches(ctx, name) {
+                refuse_reference_return(
+                    ctx,
+                    span,
+                    "Unsupported by-reference return: this variable's reference cell stores a \
+                     different payload representation than the declared by-reference result, so \
+                     the caller would read the aliased storage with the wrong shape",
+                );
+                return;
+            }
+            let value = ctx.load_local(name, Some(span));
+            if ctx.builder.value_defining_op(value.value) != Some(Op::LoadRefCell) {
+                refuse_reference_return(
+                    ctx,
+                    span,
+                    "Unsupported by-reference return: this variable is not backed by a managed \
+                     reference cell on every path reaching the return",
+                );
+                return;
+            }
+            acquire_and_return_reference_cell(ctx, value, span);
+        }
+        Some(ExprKind::PropertyAccess { object, property }) => {
+            let statically_incompatible = !property_reference_return_payload_matches(ctx, object, property);
+            let object = lower_expr(ctx, object);
+            if statically_incompatible {
+                refuse_reference_return(
+                    ctx,
+                    span,
+                    "Unsupported by-reference return: this property's slot stores a different \
+                     payload representation than the declared by-reference result, so the caller \
+                     would read the shared storage with the wrong shape. The property is aliased \
+                     by every other holder of the object, so this lowering cannot widen it",
+                );
+                return;
+            }
+            let data = ctx.intern_string(property);
+            let result_ty = ctx.return_php_type.clone();
+            // The payload guard and the lease acquisition can both throw, and a same-frame catch
+            // has to find an owning receiver temporary through the operand-owner chain rather
+            // than only in SSA. A borrowed receiver is not rooted at all, so a caller's object is
+            // never released here.
+            let (object, receiver_owner) =
+                crate::ir_lower::expr::root_owned_call_operand(ctx, object, span);
+            let cell_ptr = ctx.emit_value(
+                Op::LoadPropRefCellChecked,
+                vec![object.value],
+                Some(Immediate::Data(data)),
+                result_ty,
+                Op::LoadPropRefCellChecked.default_effects(),
+                Some(span),
+            );
+            let captured = acquire_reference_return_owner(ctx, cell_ptr, span);
+            if let Some(slot) = receiver_owner {
+                crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+            }
+            terminate_return(ctx, Some(captured.value));
+        }
+        Some(_) => {
+            if let Some(value_expr) = value_expr {
+                // Keep the source expression's side effects even though its value cannot be
+                // returned; the program is refused, so only the diagnostic is observable.
+                lower_expr(ctx, value_expr);
+            }
+            refuse_reference_return(
+                ctx,
+                span,
+                "Unsupported by-reference return: this compiler transfers a reference only \
+                 from a variable or a property. PHP also allows other places here, such as an \
+                 array element or another reference-returning call, but this lowering cannot \
+                 transfer an owning cell for them yet",
+            );
+        }
+        None => refuse_reference_return(
+            ctx,
+            span,
+            "Unsupported by-reference return: a by-reference function with a declared result \
+             must return a reference",
+        ),
+    }
+}
+
+/// Records an unsupported by-reference return and terminates the block without a value.
+///
+/// `Terminator::Unreachable` keeps the lowered function well formed without inventing a cell
+/// pointer; the recorded refusal makes `lower_program` fail before the module reaches codegen.
+fn refuse_reference_return(ctx: &mut LoweringContext<'_, '_>, span: Span, message: &str) {
+    crate::ir_lower::diagnostics::refuse(span, message);
+    ctx.builder.terminate(Terminator::Unreachable);
+}
+
+/// Promotes an ordinary local to a cell whose payload matches the declared by-reference result.
+///
+/// The caller dereferences the transferred cell with the representation of the callee's DECLARED
+/// result, so a local whose inferred storage is narrower than that (a concretely typed array
+/// local inside a `: array` function, whose declared payload representation is `Mixed`) has to be
+/// widened BEFORE the cell is created. Widening afterwards would rewrite the local's storage
+/// without the caller's alias following it, and returning the narrow cell would make the caller
+/// read the aliased storage with the wrong shape.
+fn promote_local_to_reference_return_payload(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: Span,
+) {
+    if ctx.return_php_type.codegen_repr() == PhpType::Mixed
+        && ctx.local_type(name).codegen_repr() != PhpType::Mixed
+    {
+        ctx.promote_local_mixed_ref_cell(name, Some(span));
+        return;
+    }
+    ctx.promote_local_ref_cell(name, Some(span));
+}
+
+/// Returns whether a local's cell payload agrees with the declared by-reference result shape.
+///
+/// A by-reference parameter aliases storage this frame does not own, so it cannot be widened:
+/// when its payload representation disagrees with the declared result, the only sound outcome is
+/// a refusal. Alias writes through the returned reference keep their meaning precisely because
+/// both sides now agree on one representation.
+fn reference_return_payload_matches(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    ctx.local_type(name).reference_payload_compatible(&ctx.return_php_type)
+}
+
+/// Returns whether a returned property's slot can be read with the declared by-reference result.
+///
+/// Answers TRUE whenever the receiver's class is not statically known, because a `Mixed` or
+/// union receiver reaches several candidate classes and only some of them may disagree. Refusing
+/// the whole function there would reject the compatible classes too, so that case is decided per
+/// candidate at run time by the backend's `LoadPropRefCellChecked` guard instead. This early
+/// diagnostic covers only the fully decided shape, where the disagreement is a property of the
+/// source rather than of the value that happens to arrive.
+fn property_reference_return_payload_matches(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    if !receiver_class_is_statically_decided(ctx, object) {
+        return true;
+    }
+    let Some(property_ty) = crate::ir_lower::expr::property_access_expr_type_for_ir(ctx, object, property)
+    else {
+        return true;
+    };
+    property_ty.reference_payload_compatible(&ctx.return_php_type)
+}
+
+/// Returns whether the receiver's CLASS is settled by this frame's own storage.
+///
+/// `$this` is the case that needs asking. Inside a `Closure::bind` closure the receiver arrives
+/// as a boxed `Mixed` capture, and the enclosing lexical class (which the syntactic type lookup
+/// still reports) is not the class the body will run against. Deciding the payload from that
+/// lexical class would refuse a perfectly compatible bound receiver, so the decision is left to
+/// the per-candidate backend guard whenever the `this` slot is not a concrete object.
+fn receiver_class_is_statically_decided(ctx: &LoweringContext<'_, '_>, object: &Expr) -> bool {
+    if !matches!(object.kind, ExprKind::This) {
+        return true;
+    }
+    ctx.has_local_slot("this")
+        && matches!(ctx.local_type("this").codegen_repr(), PhpType::Object(_))
+}
+
+/// Retains the returned cell in the frame's lease slot and yields the address it captured.
+///
+/// `AcquireRefCell` materializes the cell address ONCE and publishes it as a typed `Pointer`
+/// SSA result, which the return terminator transports. Reading that snapshot, instead of
+/// rematerializing the returned variable's CURRENT cell, is what keeps the acquisition and the
+/// returned reference identical when a fallthrough `finally` rebinds that variable in between
+/// (PHP snapshots the same way, with `MAKE_REF` before the finally).
+///
+/// The `ReturnRefCell` slot it also writes is only the optional managed LEASE: it holds the
+/// retained owner so cleanup can retire it, and a superseded lease left by an earlier return is
+/// retired after the replacement is published, because that retirement can run a throwing
+/// destructor. An accepted address that owns no managed cell, which is the active
+/// `array_walk()` element borrow the descriptor invoker copies out immediately, publishes a
+/// zero lease and is still returned through the snapshot.
+fn acquire_reference_return_owner(
+    ctx: &mut LoweringContext<'_, '_>,
+    cell_ptr: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let owner = ctx.declare_local_with_kind(
+        "__eir_reference_return_owner",
+        PhpType::Pointer(None),
+        crate::ir::LocalKind::ReturnRefCell,
+    );
+    ctx.emit_value(
+        Op::AcquireRefCell,
+        vec![cell_ptr.value],
+        Some(Immediate::LocalSlot(owner)),
+        PhpType::Pointer(None),
+        Op::AcquireRefCell.default_effects(),
+        Some(span),
+    )
+}
+
+/// Acquires the reference-return lease and terminates with the address it captured.
+fn acquire_and_return_reference_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    cell_ptr: LoweredValue,
+    span: Span,
+) {
+    let captured = acquire_reference_return_owner(ctx, cell_ptr, span);
+    terminate_return(ctx, Some(captured.value));
 }
 
 /// Lowers a return expression with contextual array-literal element storage when available.
@@ -104,12 +360,15 @@ pub(super) fn acquire_returned_this(
 }
 
 /// Copies scratch-backed string results before they cross a function boundary.
+/// Already-owned results transfer directly instead of leaking an unnecessary duplicate.
 pub(super) fn persist_scratch_return_string(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if value.ir_type != IrType::Str {
+    if value.ir_type != IrType::Str
+        || ctx.builder.value_ownership(value.value) == Ownership::Owned
+    {
         return value;
     }
     let Some(op) = ctx.builder.value_defining_op(value.value) else {
@@ -146,6 +405,17 @@ pub(super) fn acquire_borrowed_return_value(
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }
+    if !ctx.by_ref_return && ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell) {
+        // A by-value return cannot transfer the caller's mutable reference owner.
+        // Detach Mixed cells so native reference writeback cannot invalidate the result.
+        if php_type.codegen_repr() == PhpType::Mixed {
+            return ctx.emit_owned_value(
+                Op::MixedClone, vec![value.value], None, php_type,
+                Op::MixedClone.default_effects(), Some(span),
+            );
+        }
+        return crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    }
     if !matches!(
         ctx.builder.value_defining_op(value.value),
         Some(
@@ -165,10 +435,16 @@ pub(super) fn acquire_borrowed_return_value(
 
 /// Terminates with a return after running active finally bodies from inner to outer.
 pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
+    let saved_finally_stack = ctx.finally_stack.clone();
+    let saved_handler_loop_depths = ctx.handler_loop_depths.clone();
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_return(ctx, value);
         }
+        // Finalizer frames are consumed only on the emitted control-flow path.
+        // Restore the lexical lowering state for sibling and fallthrough blocks.
+        ctx.finally_stack = saved_finally_stack;
+        ctx.handler_loop_depths = saved_handler_loop_depths;
         return;
     }
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
@@ -178,10 +454,14 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
 
 /// Terminates with a branch after running active finally bodies from inner to outer.
 pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
+    let saved_finally_stack = ctx.finally_stack.clone();
+    let saved_handler_loop_depths = ctx.handler_loop_depths.clone();
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_branch(ctx, target, loop_cleanup_count);
         }
+        ctx.finally_stack = saved_finally_stack;
+        ctx.handler_loop_depths = saved_handler_loop_depths;
         return;
     }
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
@@ -193,13 +473,19 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
 
 /// Terminates with a throw after running finally bodies that apply to uncaught throws.
 pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
+    let saved_finally_stack = ctx.finally_stack.clone();
+    let saved_handler_loop_depths = ctx.handler_loop_depths.clone();
     if run_innermost_finally(ctx, true) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_throw(ctx, value);
         }
+        ctx.finally_stack = saved_finally_stack;
+        ctx.handler_loop_depths = saved_handler_loop_depths;
         return;
     }
-    emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
+    let handler_loop_depth = ctx.handler_loop_depths.last().copied().unwrap_or(0);
+    let crossed_loops = ctx.loop_stack.len().saturating_sub(handler_loop_depth);
+    emit_innermost_loop_cleanups(ctx, crossed_loops);
     ctx.builder.terminate(Terminator::Throw { value });
 }
 
@@ -288,6 +574,14 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
         .copied()
         .collect::<Vec<_>>();
     for frame in frames {
+        // Retire the getIterator Mixed owner first so a destructor on that
+        // iterator still observes the loop's aggregate retain.
+        if let Some((slot, span)) = frame.iterator_owner {
+            ctx.retire_iter_start_owner(slot, span);
+        }
+        if let Some((slot, span)) = frame.source_owner {
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+        }
         if let Some(cleanup) = frame.cleanup {
             crate::ir_lower::ownership::release_if_owned(ctx, cleanup.value, Some(cleanup.span));
         }
@@ -314,6 +608,7 @@ pub(super) fn run_innermost_finally(ctx: &mut LoweringContext<'_, '_>, is_throw:
         .expect("finally frame disappeared after last() check");
     if let Some((handler_token, span)) = frame.handler_cleanup {
         emit_try_pop_handler(ctx, handler_token, span);
+        ctx.handler_loop_depths.pop();
     }
     lower_block(ctx, &frame.body);
     true

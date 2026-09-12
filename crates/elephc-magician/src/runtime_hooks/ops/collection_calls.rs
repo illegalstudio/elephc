@@ -141,6 +141,31 @@ macro_rules! impl_collection_call_ops {
         }
     }
 
+    /// Uninitializes a native typed slot without assigning a coerced PHP null value.
+    fn unset_native_typed_property(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<bool, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let mut throwable = std::ptr::null_mut();
+        let unset = unsafe {
+            __elephc_eval_value_typed_property_unset(
+                object.as_ptr(), property.as_ptr(), property.len() as u64, scope_ptr, scope_len,
+                &mut throwable,
+            )
+        };
+        if throwable.is_null() {
+            return Ok(unset != 0);
+        }
+        let throwable = RuntimeCellHandle::from_raw(throwable);
+        if let Err(status) = self.schedule_pending_throw(throwable) {
+            self.release(throwable)?;
+            return Err(status);
+        }
+        Err(EvalStatus::UncaughtThrowable)
+    }
+
     /// Reads an AOT static property through the generated user helper.
     fn static_property_get(
         &mut self,
@@ -264,7 +289,7 @@ macro_rules! impl_collection_call_ops {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        let arg_array = Self::arg_array(args)?;
+        let arg_array = self.arg_array(args)?;
         let result = unsafe {
             __elephc_eval_value_method_call(
                 object.as_ptr(),
@@ -276,10 +301,7 @@ macro_rules! impl_collection_call_ops {
                 self.context.cast(),
             )
         };
-        unsafe {
-            __elephc_eval_value_release(arg_array.as_ptr());
-        }
-        self.handle_native_call_result(result)
+        self.finish_native_call(result, arg_array)
     }
 
     /// Calls an AOT static method through the generated user helper.
@@ -290,7 +312,7 @@ macro_rules! impl_collection_call_ops {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        let arg_array = Self::arg_array(args)?;
+        let arg_array = self.arg_array(args)?;
         let result = unsafe {
             __elephc_eval_value_static_method_call(
                 class_name.as_ptr(),
@@ -303,10 +325,7 @@ macro_rules! impl_collection_call_ops {
                 self.context.cast(),
             )
         };
-        unsafe {
-            __elephc_eval_value_release(arg_array.as_ptr());
-        }
-        self.handle_native_call_result(result)
+        self.finish_native_call(result, arg_array)
     }
 
     /// Converts a native free-function result into eval status, preserving pending throwables.

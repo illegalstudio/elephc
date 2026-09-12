@@ -1,11 +1,11 @@
 ---
-title: "mysqli_use_result() — internals"
+title: "mysqli_use_result() - internals"
 description: "Compiler internals for mysqli_use_result(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 180
 ---
 
-## `mysqli_use_result()` — internals
+## `mysqli_use_result()` - internals
 
 ## Where it lives
 

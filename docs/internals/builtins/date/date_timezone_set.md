@@ -1,11 +1,11 @@
 ---
-title: "date_timezone_set() — internals"
+title: "date_timezone_set() - internals"
 description: "Compiler internals for date_timezone_set(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 215
 ---
 
-## `date_timezone_set()` — internals
+## `date_timezone_set()` - internals
 
 ## Where it lives
 

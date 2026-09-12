@@ -1,11 +1,11 @@
 ---
-title: "mysqli_fetch_object() — internals"
+title: "mysqli_fetch_object() - internals"
 description: "Compiler internals for mysqli_fetch_object(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 122
 ---
 
-## `mysqli_fetch_object()` — internals
+## `mysqli_fetch_object()` - internals
 
 ## Where it lives
 

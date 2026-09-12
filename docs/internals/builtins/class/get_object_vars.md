@@ -1,16 +1,16 @@
 ---
-title: "get_object_vars() — internals"
+title: "get_object_vars() - internals"
 description: "Compiler internals for get_object_vars(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 90
 ---
 
-## `get_object_vars()` — internals
+## `get_object_vars()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/get_object_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_object_vars.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,11 +1,11 @@
 ---
-title: "frenchtojd() — internals"
+title: "frenchtojd() - internals"
 description: "Compiler internals for frenchtojd(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 218
 ---
 
-## `frenchtojd()` — internals
+## `frenchtojd()` - internals
 
 ## Where it lives
 

@@ -1,16 +1,16 @@
 ---
-title: "xml_error_string() — internals"
+title: "xml_error_string() - internals"
 description: "Compiler internals for xml_error_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 911
+  order: 936
 ---
 
-## `xml_error_string()` — internals
+## `xml_error_string()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1540](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1540) (`xml_error_string`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`:1513](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1513) (`xml_error_string`)
 - **Function symbol**: `xml_error_string()`
 
 

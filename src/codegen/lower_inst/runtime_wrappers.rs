@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Descriptor invokers bind raw user arguments; the hidden argc/count prefixes are
+//!   synthesized inside the invoker body, never passed by the caller.
 
 use super::*;
 
@@ -15,7 +17,41 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
-    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
+    emit_runtime_callable_invoker_with_string_owner(ctx, sig, captures, false)
+}
+
+/// Emits an invoker whose result-copy policy follows the concrete callee's string ownership.
+pub(super) fn emit_runtime_callable_invoker_with_string_owner(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    owns_string_return: bool,
+) -> String {
+    emit_runtime_callable_invoker_in_class(ctx, sig, captures, owns_string_return, None)
+}
+
+/// Emits a descriptor invoker whose defaults resolve in the DECLARING class's constant scope.
+///
+/// `self::`, `static::` and `parent::` in a parameter default answer to the class that declares
+/// the callee, so a method invoker must name it. A free function passes `None`.
+pub(super) fn emit_runtime_callable_invoker_in_class(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    owns_string_return: bool,
+    current_class: Option<&str>,
+) -> String {
+    ctx.shared.callable_argument_normalizer |=
+        crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
+    let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
+        ctx.module,
+        current_class,
+        sig,
+    );
+    if let Some(label) =
+        ctx.shared
+            .runtime_callable_invoker(sig, captures, owns_string_return, &defaults)
+    {
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
@@ -24,6 +60,8 @@ pub(super) fn emit_runtime_callable_invoker_inline(
         label: &label,
         sig,
         captures,
+        owns_string_return,
+        defaults: &defaults,
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
     // enclosing function back before continuing it, or its tail lands in there.
@@ -33,7 +71,7 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, &label);
+        .cache_runtime_callable_invoker(sig, captures, owns_string_return, &defaults, &label);
     label
 }
 
@@ -103,6 +141,19 @@ fn emit_runtime_call_wrapper_inline(
     };
     let label = ctx.next_global_label(label_prefix);
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
+    // Reserve the label before lowering the synthetic body. A callable-taking builtin
+    // can itself require the open runtime callable table while its wrapper is being
+    // emitted. Publishing the reservation here makes that recursion reuse this entry
+    // instead of recursively cloning and lowering the same wrapper forever.
+    match kind {
+        RuntimeCallWrapperKind::Builtin { strict_php } => {
+            ctx.shared
+                .cache_runtime_builtin_wrapper(name, sig, strict_php, &label)
+        }
+        RuntimeCallWrapperKind::Extern => {
+            ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
+        }
+    }
     let mut wrapper_module = ctx.module.clone();
     let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
     let enclosing = ctx.emitter.current_text_section();
@@ -118,15 +169,6 @@ fn emit_runtime_call_wrapper_inline(
     )?;
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
-    match kind {
-        RuntimeCallWrapperKind::Builtin { strict_php } => {
-            ctx.shared
-                .cache_runtime_builtin_wrapper(name, sig, strict_php, &label)
-        }
-        RuntimeCallWrapperKind::Extern => {
-            ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
-        }
-    }
     Ok(label)
 }
 
@@ -138,6 +180,34 @@ fn build_runtime_call_wrapper_function(
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
+    if let RuntimeCallWrapperKind::Builtin { strict_php } = kind {
+        let packed_merge = crate::builtins::registry::lookup(name).is_some_and(|def| {
+            def.spec.semantics.runtime_functions
+                == crate::builtins::semantics::BuiltinRuntimeFunctions::One(crate::ir::RuntimeFnId::ArrayMerge)
+        }) && sig.variadic.is_some();
+        if packed_merge {
+            // Keep the public variadic signature, but validate and unpack it before
+            // crossing the two-operand backend boundary. Full body lowering owns the pack.
+            let function = crate::ir_lower::lower_array_merge_callable(module, label, sig, strict_php);
+            crate::ir::validate_function(&function).map_err(|error| {
+                CodegenIrError::invalid_module(format!("array merge callable wrapper: {error:?}"))
+            })?;
+            return Ok(function);
+        }
+        let boxed_user_sort = crate::builtins::registry::lookup(name).is_some_and(|def| {
+            def.spec.semantics.runtime_functions
+                == crate::builtins::semantics::BuiltinRuntimeFunctions::One(crate::ir::RuntimeFnId::Usort)
+        }) && sig.params.first().is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed);
+        if boxed_user_sort {
+            // The graph owns reference capture and normal/exceptional publication. A raw
+            // RuntimeCall would bypass that graph and treat a Mixed cell as an array header.
+            let function = crate::ir_lower::lower_boxed_usort_callable(module, label, sig, strict_php);
+            crate::ir::validate_function(&function).map_err(|error| {
+                CodegenIrError::invalid_module(format!("boxed sort callable wrapper: {error:?}"))
+            })?;
+            return Ok(function);
+        }
+    }
     let return_php_type = wrapper_return_php_type(&sig.return_type);
     let mut function = Function::new(
         label.to_string(),
@@ -172,6 +242,7 @@ fn build_runtime_call_wrapper_function(
             })?;
             let mut lowering = WrapperBuiltinLoweringContext {
                 builder: &mut builder,
+                data: &mut module.data,
                 strict_php,
             };
             Some(crate::builtins::semantics::lower_registry_call(
@@ -205,6 +276,7 @@ fn build_runtime_call_wrapper_function(
 /// EIR construction adapter used by synthetic builtin callable wrappers.
 struct WrapperBuiltinLoweringContext<'a, 'f> {
     builder: &'a mut Builder<'f>,
+    data: &'a mut crate::ir::DataPool,
     strict_php: bool,
 }
 
@@ -214,6 +286,16 @@ impl crate::builtins::semantics::BuiltinLoweringContext
     /// Returns PHP metadata attached to one synthetic-wrapper operand.
     fn value_php_type(&self, value: ValueId) -> PhpType {
         self.builder.value_php_type(value)
+    }
+
+    /// Rejects class-name interning because synthetic wrappers do not own the module data pool.
+    fn intern_class_name(&mut self, _value: &str) -> crate::ir::DataId {
+        panic!("static-only builtin lowering cannot intern class names in a callable wrapper")
+    }
+
+    /// Interns an ordinary string into the synthetic wrapper module's data pool.
+    fn intern_string(&mut self, value: &str) -> crate::ir::DataId {
+        self.data.intern_string(value)
     }
 
     /// Emits one backend-neutral operation into the synthetic wrapper body.
@@ -226,6 +308,13 @@ impl crate::builtins::semantics::BuiltinLoweringContext
         effects: crate::ir::Effects,
         span: Option<crate::span::Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        // Synthetic wrappers bypass AST lowering's final ownership analysis.
+        // Allocation primitives still transfer their fresh owner to their consumer.
+        let ownership = if matches!(op, Op::MixedBox | Op::ArrayNew | Op::HashNew) {
+            Ownership::Owned
+        } else {
+            Ownership::for_php_type(&php_type)
+        };
         let value = self
             .builder
             .emit_with_effects(
@@ -234,12 +323,33 @@ impl crate::builtins::semantics::BuiltinLoweringContext
                 immediate,
                 wrapper_value_ir_type(&php_type),
                 php_type.clone(),
-                Ownership::for_php_type(&php_type),
+                ownership,
                 effects,
                 span,
             )
             .expect("builtin wrapper operation produces a value");
         crate::builtins::semantics::LoweredBuiltinValue { value }
+    }
+
+    /// Emits one void operation into the synthetic wrapper body.
+    fn emit_void(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        effects: crate::ir::Effects,
+        span: Option<crate::span::Span>,
+    ) {
+        self.builder.emit_with_effects(
+            op,
+            operands,
+            immediate,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            effects,
+            span,
+        );
     }
 
     /// Emits one typed runtime operation into the synthetic wrapper body.
@@ -356,5 +466,69 @@ pub(super) fn wrapper_value_ir_type(php_type: &PhpType) -> IrType {
     match php_type.codegen_repr() {
         PhpType::Void | PhpType::Never => IrType::I64,
         other => IrType::from_php(&other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The callable signature and wrapper keep `debug_backtrace()` as a raw PHP array.
+    #[test]
+    fn debug_backtrace_callable_wrapper_preserves_array_storage() {
+        let expected = PhpType::Array(Box::new(PhpType::Mixed));
+        let sig = crate::builtins::registry::first_class_callable_sig("debug_backtrace").unwrap();
+        assert_eq!(sig.return_type, expected);
+
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let wrapper = build_runtime_call_wrapper_function(
+                &mut module,
+                "debug_backtrace_array_probe",
+                "debug_backtrace",
+                &sig,
+                RuntimeCallWrapperKind::Builtin { strict_php: false },
+            ).unwrap();
+            assert_eq!(wrapper.return_php_type, expected, "{target}");
+            assert_eq!(
+                wrapper.return_type,
+                IrType::Heap(crate::ir::IrHeapKind::Array),
+                "{target}",
+            );
+
+            let result = wrapper.instructions.iter()
+                .find(|inst| inst.op == Op::CoreBuiltin)
+                .and_then(|inst| inst.result)
+                .expect("debug_backtrace wrapper must emit one Core builtin result");
+            let value = wrapper.value(result).expect("Core builtin result value");
+            assert_eq!(value.php_type, expected, "{target}");
+            assert_eq!(
+                value.ir_type,
+                IrType::Heap(crate::ir::IrHeapKind::Array),
+                "{target}",
+            );
+        }
+    }
+
+    /// GC wrappers transfer all fresh cells instead of retaining them again at each hash insert.
+    #[test]
+    fn gc_status_callable_wrapper_marks_all_allocations_owned() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+            let sig = crate::builtins::registry::first_class_callable_sig("gc_status").unwrap();
+            let wrapper = build_runtime_call_wrapper_function(
+                &mut module, "gc_status_owner_probe", "gc_status", &sig,
+                RuntimeCallWrapperKind::Builtin { strict_php: false },
+            ).unwrap();
+            let allocations: Vec<_> = wrapper.instructions.iter()
+                .filter(|inst| matches!(inst.op, Op::HashNew | Op::MixedBox))
+                .collect();
+            assert_eq!(allocations.len(), 14, "{target}");
+            for allocation in allocations {
+                assert_eq!(allocation.result_ownership, Ownership::Owned, "{target}: {:?}", allocation.op);
+                assert_eq!(wrapper.value(allocation.result.unwrap()).unwrap().ownership, Ownership::Owned);
+            }
+            assert!(wrapper.instructions.iter().any(|inst| inst.op == Op::Release), "{target}");
+        }
     }
 }

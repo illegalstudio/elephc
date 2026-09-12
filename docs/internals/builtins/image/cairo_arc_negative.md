@@ -1,11 +1,11 @@
 ---
-title: "cairo_arc_negative() — internals"
+title: "cairo_arc_negative() - internals"
 description: "Compiler internals for cairo_arc_negative(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 399
 ---
 
-## `cairo_arc_negative()` — internals
+## `cairo_arc_negative()` - internals
 
 ## Where it lives
 

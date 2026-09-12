@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_easy_set_share() — internals"
+title: "__elephc_curl_easy_set_share() - internals"
 description: "Compiler internals for __elephc_curl_easy_set_share(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 990
+  order: 1015
 ---
 
-## `__elephc_curl_easy_set_share()` — internals
+## `__elephc_curl_easy_set_share()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_set_share.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_set_share.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

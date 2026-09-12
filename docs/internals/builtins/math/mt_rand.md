@@ -1,16 +1,16 @@
 ---
-title: "mt_rand() — internals"
+title: "mt_rand() - internals"
 description: "Compiler internals for mt_rand(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 589
 ---
 
-## `mt_rand()` — internals
+## `mt_rand()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/mt_rand.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/mt_rand.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

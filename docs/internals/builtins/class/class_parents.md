@@ -1,16 +1,16 @@
 ---
-title: "class_parents() — internals"
+title: "class_parents() - internals"
 description: "Compiler internals for class_parents(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 79
 ---
 
-## `class_parents()` — internals
+## `class_parents()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/class_parents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/class_parents.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

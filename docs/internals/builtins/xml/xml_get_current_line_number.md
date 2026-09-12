@@ -1,16 +1,16 @@
 ---
-title: "xml_get_current_line_number() — internals"
+title: "xml_get_current_line_number() - internals"
 description: "Compiler internals for xml_get_current_line_number(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 914
+  order: 939
 ---
 
-## `xml_get_current_line_number()` — internals
+## `xml_get_current_line_number()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1551](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1551) (`xml_get_current_line_number`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`:1524](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1524) (`xml_get_current_line_number`)
 - **Function symbol**: `xml_get_current_line_number()`
 
 

@@ -186,6 +186,26 @@ fn register_native_methods_record_signature_metadata() {
             1,
         )
     };
+    let method_compiled_default_registered = unsafe {
+        __elephc_eval_register_native_method_param_default_scalar(
+            &mut ctx,
+            method.as_ptr(),
+            method.len() as u64,
+            0,
+            NATIVE_DEFAULT_COMPILED,
+            0x1234,
+        )
+    };
+    let constructor_compiled_default_registered = unsafe {
+        __elephc_eval_register_native_constructor_param_default_scalar(
+            &mut ctx,
+            class.as_ptr(),
+            class.len() as u64,
+            0,
+            NATIVE_DEFAULT_COMPILED,
+            0x5678,
+        )
+    };
 
     assert_eq!(method_registered, 1);
     assert_eq!(method_param_registered, 1);
@@ -205,6 +225,8 @@ fn register_native_methods_record_signature_metadata() {
     assert_eq!(static_default_registered, 1);
     assert_eq!(static_empty_array_default_registered, 1);
     assert_eq!(constructor_default_registered, 1);
+    assert_eq!(method_compiled_default_registered, 1);
+    assert_eq!(constructor_compiled_default_registered, 1);
     assert_eq!(
         ctx.native_method_signature("knownclass", "JOIN")
             .expect("method metadata")
@@ -293,4 +315,6 @@ fn register_native_methods_record_signature_metadata() {
             .param_default(0),
         Some(&NativeCallableDefault::Bool(true))
     );
+    assert_eq!(method_signature.compiled_param_default(0), Some(0x1234));
+    assert_eq!(constructor_signature.compiled_param_default(0), Some(0x5678));
 }

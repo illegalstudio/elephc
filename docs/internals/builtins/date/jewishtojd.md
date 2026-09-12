@@ -1,11 +1,11 @@
 ---
-title: "jewishtojd() — internals"
+title: "jewishtojd() - internals"
 description: "Compiler internals for jewishtojd(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 234
 ---
 
-## `jewishtojd()` — internals
+## `jewishtojd()` - internals
 
 ## Where it lives
 

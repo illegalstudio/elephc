@@ -1,16 +1,16 @@
 ---
-title: "ptr_read32() — internals"
+title: "ptr_read32() - internals"
 description: "Compiler internals for ptr_read32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 705
+  order: 731
 ---
 
-## `ptr_read32()` — internals
+## `ptr_read32()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_read32.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_read32.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

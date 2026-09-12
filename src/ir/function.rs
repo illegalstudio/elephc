@@ -190,6 +190,8 @@ pub enum LocalKind {
     GlobalAlias,
     StaticLocal,
     RefCell,
+    /// A reference-return lease transferred on normal exit and retired if frame cleanup throws.
+    ReturnRefCell,
     HiddenTemp,
     /// Non-owning slot introduced by an EIR transform, excluded from epilogue cleanup.
     BorrowedTemp,

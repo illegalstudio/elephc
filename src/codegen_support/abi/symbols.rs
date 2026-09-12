@@ -12,8 +12,8 @@ use crate::codegen_support::NULL_SENTINEL;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 
-use super::calls::emit_call_label;
-use super::frame::{emit_load_from_address, emit_store_to_address};
+use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
+use super::frame::{emit_load_from_address, emit_reg_move, emit_store_to_address};
 #[cfg(test)]
 use super::frame::{load_at_offset_scratch, store_at_offset_scratch};
 #[cfg(test)]
@@ -268,11 +268,12 @@ pub fn emit_store_reg_to_symbol(
     }
     match emitter.target.arch {
         Arch::AArch64 => {
-            emit_symbol_address(emitter, "x9", symbol);
+            let scratch = if reg == "x9" { "x10" } else { "x9" };
+            emit_symbol_address(emitter, scratch, symbol);
             if byte_offset == 0 {
-                emitter.instruction(&format!("str {}, [x9]", reg));             // store the register payload directly into the symbol base slot
+                emitter.instruction(&format!("str {}, [{}]", reg, scratch));    // store the register payload directly into the symbol base slot
             } else {
-                emitter.instruction(&format!("str {}, [x9, #{}]", reg, byte_offset)); // store the register payload into the requested symbol byte offset
+                emitter.instruction(&format!("str {}, [{}, #{}]", reg, scratch, byte_offset)); // store the register payload into the requested symbol byte offset
             }
         }
         Arch::X86_64 => {
@@ -470,6 +471,11 @@ pub fn emit_load_symbol_to_result(emitter: &mut Emitter, symbol: &str, ty: &PhpT
 /// `emit_decref_if_refcounted`.  Incoming results are preserved on the stack
 /// during the release call. Handles Float, Str (pointer + length pair),
 /// TaggedScalar (payload + tag pair), Void (null sentinel), and scalar/pointer types.
+///
+/// `Callable` storage is delegated to `emit_store_callable_result_to_symbol`, which performs a
+/// publish-before-retire descriptor transfer instead of the retire-before-publish discipline used
+/// by strings and refcounted heap values, because releasing a callable descriptor can run
+/// captured-object destructors that throw or reenter the same slot.
 pub fn emit_store_result_to_symbol(
     emitter: &mut Emitter,
     symbol: &str,
@@ -477,6 +483,10 @@ pub fn emit_store_result_to_symbol(
     release_previous: bool,
 ) {
     let ty = ty.codegen_repr();
+    if matches!(ty, PhpType::Callable) {
+        emit_store_callable_result_to_symbol(emitter, symbol, release_previous);
+        return;
+    }
     if release_previous {
         if matches!(ty, PhpType::Str) {
             let (ptr_reg, len_reg) = string_result_regs(emitter);
@@ -551,4 +561,35 @@ pub fn emit_store_result_to_symbol(
             // store the scalar or pointer-like result into symbol storage
         }
     }
+}
+
+/// Overwrites a symbol-backed callable descriptor slot with the current result descriptor.
+///
+/// Callable descriptors are refcounted through `__rt_callable_descriptor_release`, but that
+/// release can run captured-object destructors that throw or reenter the same static slot. A
+/// plain retire-before-publish transfer (as `is_refcounted` storage uses) would therefore hand a
+/// reentrant destructor a slot that still points at the descriptor being freed, and would clobber
+/// any replacement the destructor stored once cleanup returned. This path instead publishes the
+/// new descriptor into the slot *before* retiring the previous one, so:
+/// - the slot always owns a live descriptor when a destructor observes it, and
+/// - a reentrant store during cleanup is never overwritten after the release helper returns.
+///
+/// The new descriptor already carries the owner destined for the slot (the EIR lowering moves an
+/// owning temporary or acquires a borrowed source), so no extra retain is emitted here. The
+/// incoming descriptor is preserved in the integer result register across the release call, and
+/// the single 16-byte push keeps the nested call 16-byte aligned on every supported target.
+fn emit_store_callable_result_to_symbol(emitter: &mut Emitter, symbol: &str, release_previous: bool) {
+    let result_reg = int_result_reg(emitter);
+    if !release_previous {
+        emit_store_reg_to_symbol(emitter, result_reg, symbol, 0); // publish the callable descriptor result into symbol storage
+        return;
+    }
+    let previous_reg = secondary_scratch_reg(emitter);
+    // -- publish-before-retire callable descriptor overwrite --
+    emit_load_symbol_to_reg(emitter, previous_reg, symbol, 0); // capture the previous descriptor before the slot is overwritten
+    emit_store_reg_to_symbol(emitter, result_reg, symbol, 0); // publish the replacement descriptor so the slot owns it before any release runs
+    emit_push_reg(emitter, result_reg); // preserve the published descriptor result across the aligned release call
+    emit_reg_move(emitter, result_reg, previous_reg); // move the previous descriptor into the release-helper argument register
+    emit_call_label(emitter, "__rt_callable_descriptor_release"); // retire the previous descriptor after its replacement is already published
+    emit_pop_reg(emitter, result_reg); // restore the published descriptor result after the release call
 }

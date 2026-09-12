@@ -1,16 +1,16 @@
 ---
-title: "sys_get_temp_dir() — internals"
+title: "sys_get_temp_dir() - internals"
 description: "Compiler internals for sys_get_temp_dir(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 302
 ---
 
-## `sys_get_temp_dir()` — internals
+## `sys_get_temp_dir()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/sys_get_temp_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/sys_get_temp_dir.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

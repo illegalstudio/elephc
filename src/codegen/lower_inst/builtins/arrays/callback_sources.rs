@@ -66,6 +66,7 @@ pub(super) fn static_callback_source_instruction<'a>(
     value: ValueId,
     owner: &str,
 ) -> Result<&'a Instruction> {
+    let value = strip_static_callback_acquire(ctx, value)?;
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };
@@ -94,6 +95,7 @@ pub(super) fn descriptor_callback_local_without_same_block_store(
     ctx: &FunctionContext<'_>,
     value: ValueId,
 ) -> Result<bool> {
+    let value = strip_static_callback_acquire(ctx, value)?;
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };

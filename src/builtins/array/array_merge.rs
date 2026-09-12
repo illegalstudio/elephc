@@ -9,10 +9,9 @@
 //!   arm requires exactly 2 arguments. `min_args: 2, max_args: 2` reproduce that
 //!   enforcement in `check_arity` only; `function_sig` and the parity gate keep the
 //!   variadic shape from the golden.
-//! - `check` validates that the first argument is an indexed or associative array and
-//!   returns the merged result type. The return type logic mirrors the legacy checker:
-//!   when the first operand is an empty array (element type `Void`), the result adopts
-//!   the second operand's element type if it is a scalar-merge type.
+//! - Both operands must be arrays. A PHP array declaration keeps a boxed result that
+//!   accepts packed and associative source layouts without specializing to one caller.
+//! - Concrete operands retain their existing result inference and indexed fast path.
 //! - Arity is pre-validated by `check_arity`; the hook can assume exactly 2 args.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -27,7 +26,7 @@ builtin! {
     ),
 }
 
-/// Validates the first argument is an array and returns the merged result type.
+/// Validates both array operands and keeps the boxed result contract when either layout is dynamic.
 ///
 /// Arity (exactly 2 args) is pre-validated by `check_arity`. The hook re-infers both
 /// argument types to derive the precise result type: when the left operand is an empty
@@ -36,11 +35,20 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    if !ty1.is_php_array() && !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(
             cx.span,
             "array_merge() first argument must be array",
         ));
+    }
+    if !ty2.is_php_array() && !matches!(ty2, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return Err(CompileError::new(
+            cx.span,
+            "array_merge() second argument must be array",
+        ));
+    }
+    if ty1.is_php_array() || ty2.is_php_array() {
+        return Ok(PhpType::php_array());
     }
     Ok(array_merge_return_type(ty1, ty2))
 }

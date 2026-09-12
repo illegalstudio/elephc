@@ -96,8 +96,7 @@ pub(in crate::interpreter) fn execute_do_while_stmt(
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
-        let condition = eval_expr(condition, context, scope, values)?;
-        if !values.truthy(condition)? {
+        if !eval_condition(condition, context, scope, values)? {
             break;
         }
     }
@@ -123,8 +122,7 @@ pub(in crate::interpreter) fn execute_for_stmt(
     }
     loop {
         if let Some(condition) = condition {
-            let condition = eval_expr(condition, context, scope, values)?;
-            if !values.truthy(condition)? {
+            if !eval_condition(condition, context, scope, values)? {
                 break;
             }
         }
@@ -332,22 +330,43 @@ pub(in crate::interpreter) fn eval_array_append_key(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
     let mut next_key = None;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        if values.type_tag(key)? != EVAL_TAG_INT {
-            continue;
+    let mut operands = Vec::new();
+    let result = (|| {
+        for position in 0..len {
+            let key = values.array_iter_key(array, position)?;
+            operands.push(key);
+            if values.type_tag(key)? != EVAL_TAG_INT {
+                continue;
+            }
+            let one = values.int(1)?;
+            operands.push(one);
+            let candidate = values.add(key, one)?;
+            operands.push(candidate);
+            let replace = if let Some(current) = next_key {
+                let is_greater = values.compare(EvalBinOp::Gt, candidate, current)?;
+                operands.push(is_greater);
+                values.truthy(is_greater)?
+            } else {
+                true
+            };
+            if replace {
+                next_key = Some(candidate);
+            }
         }
-        let one = values.int(1)?;
-        let candidate = values.add(key, one)?;
-        let replace = if let Some(current) = next_key {
-            let is_greater = values.compare(EvalBinOp::Gt, candidate, current)?;
-            values.truthy(is_greater)?
-        } else {
-            true
-        };
-        if replace {
-            next_key = Some(candidate);
-        }
+        next_key.map_or_else(|| values.int(0), Ok)
+    })();
+    let mut released = Ok(());
+    for operand in operands {
+        if result.as_ref().is_ok_and(|result| *result == operand) { continue; }
+        let cleanup = values.release(operand);
+        if released.is_ok() { released = cleanup; }
     }
-    next_key.map_or_else(|| values.int(0), Ok)
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = values.release(value);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }

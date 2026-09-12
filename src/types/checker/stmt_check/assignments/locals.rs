@@ -381,6 +381,14 @@ pub(super) fn update_callable_assignment_metadata(
     ty: &PhpType,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    if let ExprKind::StringLiteral(callback) = &callable_source.kind {
+        if let Some(function_name) = checker.canonical_function_name_folded(callback) {
+            // Lowering tracks a statically known function-name string as a descriptor target.
+            // Promote its variadic storage at the same point so a later dynamic
+            // `call_user_func_array($name, $args)` can preserve unknown string keys in the tail.
+            checker.promote_descriptor_variadic_container(&function_name)?;
+        }
+    }
     update_callable_array_assignment_metadata(checker, name, callable_source, env)?;
 
     if *ty == PhpType::Callable {
@@ -625,7 +633,21 @@ fn update_callable_array_assignment_metadata(
     callable_source: &Expr,
     env: &TypeEnv,
 ) -> Result<(), CompileError> {
+    let copied_target_version = match &callable_source.kind {
+        ExprKind::Variable(source_name) => checker
+            .callable_array_target_versions
+            .get(source_name)
+            .copied(),
+        _ => None,
+    };
+    checker.mark_callable_array_target_write(name);
     if let Some(target) = resolve_callable_array_target(checker, callable_source, env)? {
+        // Recording the target is the MATERIALIZATION of a callable descriptor: from here the
+        // pair can be invoked with named arguments, and it can also leave this frame through a
+        // `callable` parameter and be invoked where no target record survives. So the callee's
+        // variadic collector moves onto the descriptor container now, not at the call, which is
+        // the only point that is guaranteed to be reached.
+        checker.promote_descriptor_variadic_container_for_callable_target(&target, env)?;
         checker
             .callable_array_targets
             .insert(name.to_string(), target);
@@ -634,6 +656,11 @@ fn update_callable_array_assignment_metadata(
             checker
                 .callable_array_targets
                 .insert(name.to_string(), target);
+            if let Some(version) = copied_target_version {
+                checker
+                    .callable_array_target_versions
+                    .insert(name.to_string(), version);
+            }
         } else {
             checker.callable_array_targets.remove(name);
         }
@@ -997,9 +1024,9 @@ pub(super) fn check_const_decl(
 
 /// Type-checks a list unpacking assignment (`[$a, $b, ...] = $arr`).
 ///
-/// Infers the right-hand side and accepts homogeneous indexed arrays or associative arrays.
-/// Indexed arrays propagate their element type, while associative values bind adaptively as
-/// `Mixed`. Returns an error for non-array types, including unresolved nullable unions.
+/// Infers the right-hand side and accepts concrete arrays or boxed PHP array values.
+/// Indexed arrays propagate their element type; keyed and dynamically boxed values bind as
+/// `Mixed`. Statically non-array types and unresolved nullable unions remain errors.
 pub(super) fn check_list_unpack(
     checker: &mut Checker,
     vars: &[String],
@@ -1007,7 +1034,7 @@ pub(super) fn check_list_unpack(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = match checker.infer_type(value, env) {
+    let arr_ty = match checker.infer_type_with_assignment_effects(value, env) {
         Ok(arr_ty) => arr_ty,
         Err(error) => {
             for var in vars {
@@ -1017,10 +1044,11 @@ pub(super) fn check_list_unpack(
         }
     };
     let unpack_ty = match &arr_ty {
+        ty if ty.is_php_array() => PhpType::Mixed,
         PhpType::Array(elem_ty) => *elem_ty.clone(),
         // Associative arrays can contain integer keys used by positional destructuring. Their
         // element type stays adaptive because hash values may be heterogeneous or absent.
-        PhpType::AssocArray { .. } => PhpType::Mixed,
+        PhpType::AssocArray { .. } | PhpType::Mixed => PhpType::Mixed,
         _ => {
             for var in vars {
                 poison_unbound_local(env, var);
@@ -1069,6 +1097,8 @@ fn update_list_unpack_callable_metadata(
 /// variable name so later element reads can be treated as callable variables with
 /// a known signature. This helper mirrors that metadata onto a list-unpack target.
 fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
+    let copied_target_version = checker.callable_array_target_versions.get(src).copied();
+    checker.mark_callable_array_target_write(dest);
     if let Some(return_ty) = checker.closure_return_types.get(src).cloned() {
         checker
             .closure_return_types
@@ -1090,6 +1120,11 @@ fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
         checker
             .callable_array_targets
             .insert(dest.to_string(), target);
+        if let Some(version) = copied_target_version {
+            checker
+                .callable_array_target_versions
+                .insert(dest.to_string(), version);
+        }
     } else {
         checker.callable_array_targets.remove(dest);
     }
@@ -1104,6 +1139,7 @@ fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
 
 /// Clears all callable metadata for a list-unpack destination.
 fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
+    checker.mark_callable_array_target_write(dest);
     checker.closure_return_types.remove(dest);
     checker.callable_sigs.remove(dest);
     checker.callable_captures.remove(dest);

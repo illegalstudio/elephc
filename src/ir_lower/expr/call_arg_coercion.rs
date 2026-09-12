@@ -11,7 +11,17 @@ use super::*;
 
 /// Lowers positional/named/spread call arguments in source order.
 pub(super) fn lower_args(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) -> Vec<crate::ir::ValueId> {
-    args.iter().map(|arg| lower_expr(ctx, arg).value).collect()
+    args.iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            let value = lower_expr(ctx, arg);
+            if index + 1 < args.len() {
+                root_evaluated_call_argument(ctx, value, arg.span).value
+            } else {
+                value.value
+            }
+        })
+        .collect()
 }
 
 /// Lowers one argument while applying by-reference storage normalization from a signature.
@@ -27,8 +37,101 @@ pub(super) fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
+    promote_reference_return_local_argument(ctx, sig, index, arg);
+    if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, arg) {
+        return lowered.value;
+    }
     let lowered = lower_expr(ctx, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Materializes a proven callable array as the descriptor required by a Callable slot.
+///
+/// A tracked PHP local remains an ordinary array, and its instance receiver was already captured
+/// into a hidden local at assignment. A literal crossing this boundary is consumed directly, so
+/// its receiver is evaluated exactly once while constructing the descriptor.
+pub(super) fn lower_tracked_callable_array_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> Option<LoweredValue> {
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        || sig.params.get(index)?.1.codegen_repr() != PhpType::Callable
+    {
+        return None;
+    }
+    let target = match static_callable_binding_for_expr(ctx, arg)? {
+        StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
+            CallableTarget::StaticMethod { receiver, method }
+        }
+        StaticCallableBinding::InstanceMethod {
+            object,
+            method,
+            direct_call: true,
+            ..
+        } => {
+            CallableTarget::Method { object, method }
+        }
+        StaticCallableBinding::UserFunction(_)
+        | StaticCallableBinding::ExternFunction(_)
+        | StaticCallableBinding::Builtin(_)
+        | StaticCallableBinding::Closure { .. }
+        | StaticCallableBinding::StaticMethod { .. }
+        | StaticCallableBinding::InstanceMethod {
+            direct_call: false,
+            ..
+        } => return None,
+    };
+    Some(lower_first_class_callable(ctx, &target, arg))
+}
+
+/// Gives an escaping by-reference return a managed owner for a caller local.
+///
+/// A reference-returning callee can hand a by-reference parameter's address back to the caller.
+/// A raw caller frame address has no `__rt_reference_cell_owner`, so promote the local before the
+/// call and pass a fresh `LoadRefCell` marker that resolves to the managed cell pointer. Array
+/// normalization runs first so the cell stores the final parameter-compatible representation.
+fn promote_reference_return_local_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) {
+    if !sig.by_ref_return || !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return;
+    }
+    let ExprKind::Variable(name) = &arg.kind else {
+        return;
+    };
+    ctx.promote_local_ref_cell(name, Some(arg.span));
+}
+
+/// Protects an incidental value view of an earlier reference place without replacing the place.
+///
+/// A local whose final frame storage widens to `Mixed` can make its narrower `LoadLocal<Str>`
+/// allocate an owned detached string during codegen. The call still needs that exact load as its
+/// by-reference place marker, so retain it as the operand and let the evaluation ledger treat the
+/// protected value view as an intermediate owner. An exception from a later argument then retires
+/// the detached view, while successful call materialization still recovers the original local slot.
+fn root_prior_argument_preserving_reference_place(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+    value: crate::ir::ValueId,
+) -> crate::ir::ValueId {
+    let lowered = lowered_value_from_id(ctx, value);
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        if matches!(arg.kind, ExprKind::Variable(_))
+            && sig.params.get(index).is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Str)
+            && ctx.builder.value_php_type(value).codegen_repr() == PhpType::Str
+        {
+            let _protected_view = root_evaluated_call_argument(ctx, lowered, arg.span);
+        }
+        return value;
+    }
+    root_evaluated_call_argument(ctx, lowered, arg.span).value
 }
 
 /// Coerces a positional argument to storage owned explicitly by EIR when required.
@@ -57,6 +160,12 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         return coerce_to_float(ctx, value, arg);
     }
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if param_ty == PhpType::Callable
+        && !sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        return unbox_callable_param_storage(ctx, value, Some(arg.span));
+    }
     if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return coerce_to_string(ctx, value, arg);
     }
@@ -66,6 +175,25 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         }
     }
     value
+}
+
+/// Extracts a statically checked callable whose merge storage became a Mixed cell.
+/// The backend retains the descriptor, so the extracted EIR value must own that lease.
+fn unbox_callable_param_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let result = ctx.emit_owned_value(
+        Op::MixedUnbox,
+        vec![value.value],
+        None,
+        PhpType::Callable,
+        Op::mixed_unbox_effects(&PhpType::Callable),
+        span,
+    );
+    release_coerced_source_if_owned(ctx, value, span);
+    result
 }
 
 /// Applies a declared-parameter scalar binding to an already-lowered argument value.
@@ -100,6 +228,22 @@ pub(super) fn coerce_operands_to_params(
 ) -> Vec<crate::ir::ValueId> {
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let limit = operands.len().min(regular_param_count);
+    let needs_coercion = (0..limit)
+        .map(|index| operand_needs_param_coercion(ctx, sig, &operands, index))
+        .collect::<Vec<_>>();
+    if needs_coercion.iter().any(|needs_coercion| *needs_coercion) {
+        // Source evaluation has completed, but any parameter conversion below can throw.
+        // Publish the one last source value that did not need protection during source
+        // evaluation, plus synthesized owned operands, before the first conversion runs.
+        for index in 0..limit {
+            if sig.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let lowered = lowered_value_from_id(ctx, operands[index]);
+            operands[index] =
+                root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
+        }
+    }
     for index in 0..limit {
         if sig.ref_params.get(index).copied().unwrap_or(false) {
             continue;
@@ -115,7 +259,9 @@ pub(super) fn coerce_operands_to_params(
                 value,
                 ir_type: IrType::I64,
             };
-            operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
+            let coerced = coerce_to_float_at_span(ctx, lowered, None);
+            operands[index] =
+                root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
         } else if param_ty == PhpType::Str
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
         {
@@ -123,7 +269,16 @@ pub(super) fn coerce_operands_to_params(
                 value,
                 ir_type: ctx.builder.value_type(value),
             };
-            operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
+            let coerced = coerce_to_string_at_span(ctx, lowered, None);
+            operands[index] =
+                root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
+        } else if param_ty == PhpType::Callable
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let lowered = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
+            let coerced = unbox_callable_param_storage(ctx, lowered, None);
+            operands[index] =
+                root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
         } else if sig.declared_params.get(index).copied().unwrap_or(false) {
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order
@@ -135,14 +290,40 @@ pub(super) fn coerce_operands_to_params(
                     value,
                     ir_type: ctx.builder.value_type(value),
                 };
-                operands[index] = apply_scalar_param_cast(ctx, cast, lowered, None).value;
+                let coerced = apply_scalar_param_cast(ctx, cast, lowered, None);
+                operands[index] =
+                    root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
             }
         }
     }
     operands
 }
 
-/// Widens local indexed-array storage before passing it to an `array<mixed>` ref parameter.
+/// Returns whether parameter-order normalization will emit a conversion for one operand.
+fn operand_needs_param_coercion(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    operands: &[crate::ir::ValueId],
+    index: usize,
+) -> bool {
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        return false;
+    }
+    let Some((_, param_ty)) = sig.params.get(index) else {
+        return false;
+    };
+    let operand_ty = ctx.builder.value_php_type(operands[index]).codegen_repr();
+    let param_ty = param_ty.codegen_repr();
+    (param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool))
+        || (param_ty == PhpType::Str
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
+        || (param_ty == PhpType::Callable
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
+        || (sig.declared_params.get(index).copied().unwrap_or(false)
+            && crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty).is_some())
+}
+
+/// Normalizes concrete local arrays to the storage required by their by-reference parameter.
 pub(super) fn lower_by_ref_array_arg_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -156,6 +337,15 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
     let ExprKind::Variable(name) = &arg.kind else {
         return None;
     };
+    if param_ty.is_php_array()
+        && matches!(ctx.local_type(name).codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+    {
+        let local = ctx.load_local(name, Some(arg.span));
+        let boxed = ctx.box_value_as_mixed(local, param_ty.clone(), Some(arg.span));
+        ctx.store_call_argument_local(name, boxed, param_ty.clone(), Some(arg.span));
+        promote_reference_return_local_argument(ctx, sig, index, arg);
+        return Some(ctx.load_local(name, Some(arg.span)).value);
+    }
     if !by_ref_array_arg_needs_mixed_storage(ctx, name, param_ty) {
         return None;
     }
@@ -170,6 +360,7 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
         Some(arg.span),
     );
     ctx.store_call_normalized_local(name, converted, array_ty, Some(arg.span));
+    promote_reference_return_local_argument(ctx, sig, index, arg);
     Some(ctx.load_local(name, Some(arg.span)).value)
 }
 
@@ -193,10 +384,25 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
         return None;
     };
     let (_, param_ty) = sig.params.get(index)?;
-    let element_ty = match normalize_value_php_type(*elem_ty) {
-        PhpType::Void => normalize_value_php_type(param_ty.codegen_repr()),
-        other => other,
-    };
+    if param_ty.codegen_repr() == PhpType::Mixed && elem_ty.codegen_repr() != PhpType::Mixed {
+        // The callee replaces a Mixed pointer through this element's actual slot, not a
+        // detached temporary. Widen the outer array's slots before exposing that address.
+        // Retaining the borrowed source lets the consuming conversion separate COW aliases.
+        let parent = ctx.load_local(array_name, Some(array.span));
+        let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, parent, Some(arg.span));
+        let boxed_parent_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let converted = ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![owned.value],
+            None,
+            boxed_parent_ty.clone(),
+            Op::ArrayToMixed.default_effects(),
+            Some(arg.span),
+        );
+        ctx.store_call_argument_local(
+            array_name, converted, boxed_parent_ty, Some(arg.span),
+        );
+    }
     let array_value = ctx.load_local(array_name, Some(array.span));
     let element_index = lower_expr(ctx, element_index);
     let element_index = coerce_to_int_at_span(ctx, element_index, Some(arg.span));
@@ -207,7 +413,7 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
             vec![array_value.value, element_index.value],
             None,
             IrType::I64,
-            element_ty,
+            PhpType::Pointer(None),
             Ownership::NonHeap,
             Op::ArrayElemAddr.default_effects(),
             Some(arg.span),
@@ -272,8 +478,8 @@ fn lower_args_with_signature_options(
         };
         return coerce_operands_to_params(ctx, sig, operands);
     }
-    if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args) {
-        return coerce_operands_to_params(ctx, sig, operands);
+    if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args, None) {
+        return operands;
     }
     let static_spread_args = if has_static_call_spread_args(args) {
         Some(expand_static_call_spread_args(args))
@@ -297,21 +503,39 @@ fn lower_args_with_signature_options(
         let operands = args
             .iter()
             .enumerate()
-            .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
+            .map(|(index, arg)| {
+                let value = lower_arg_with_signature(ctx, sig, index, arg);
+                if index + 1 < args.len() {
+                    root_prior_argument_preserving_reference_place(
+                        ctx, sig, index, arg, value,
+                    )
+                } else {
+                    value
+                }
+            })
             .collect();
         return coerce_operands_to_params(ctx, sig, operands);
     }
     let mut operands: Vec<crate::ir::ValueId> = args[..fixed_arg_count]
         .iter()
         .enumerate()
-        .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
+        .map(|(index, arg)| {
+            let value = lower_arg_with_signature(ctx, sig, index, arg);
+            if index + 1 < args.len() {
+                root_prior_argument_preserving_reference_place(
+                    ctx, sig, index, arg, value,
+                )
+            } else {
+                value
+            }
+        })
         .collect();
     if !trim_trailing_defaults {
         for idx in fixed_arg_count..regular_param_count {
             let Some(Some(default)) = sig.defaults.get(idx) else {
                 break;
             };
-            operands.push(lower_expr(ctx, default).value);
+            operands.push(lower_arg_with_signature(ctx, sig, idx, default));
         }
     }
     if sig.variadic.is_some() {
@@ -320,7 +544,10 @@ fn lower_args_with_signature_options(
         } else {
             &[]
         };
-        operands.push(lower_variadic_tail_array(ctx, sig, tail).value);
+        if crate::func_args::sig_has_hidden_argc_param(sig) {
+            operands.push(emit_i64_at_span(ctx, args.len() as i64, crate::span::Span::dummy()).value);
+        }
+        operands.push(lower_variadic_tail_array(ctx, sig, tail, args.len()).value);
     }
     coerce_operands_to_params(ctx, sig, operands)
 }

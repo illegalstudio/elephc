@@ -37,6 +37,17 @@ echo "Sum: " . sum($numbers) . "\n";
 echo "array_sum: " . array_sum($numbers) . "\n";
 echo "array_product([2,3,4]): " . array_product([2, 3, 4]) . "\n";
 
+// Turn aggregate conversion warnings into exceptions while retaining source ownership.
+set_error_handler(function(int $level, string $message): bool {
+    throw new RuntimeException($message);
+});
+try {
+    array_sum([str_repeat("invalid", 3)]);
+} catch (RuntimeException $error) {
+    echo "Rejected non-numeric total\n";
+}
+restore_error_handler();
+
 $numbers[2] += 8;
 $numbers[3] >>= 1;
 echo "Adjusted slots: " . $numbers[2] . ", " . $numbers[3] . "\n";
@@ -173,6 +184,39 @@ foreach ($names as $name) {
     echo $name . " ";
 }
 echo "\n";
+
+// Key sorting updates a row inside a declared array property without changing its aliases.
+class ScoreReport {
+    public array $rows = ["scores" => ["Linus" => 12, "Ada" => 10]];
+}
+$report = new ScoreReport();
+$unsorted = $report->rows;
+ksort($report->rows["scores"]);
+echo "Sorted names: " . implode(", ", array_keys($report->rows["scores"])) . "\n";
+echo "Original order: " . implode(", ", array_keys($unsorted["scores"])) . "\n";
+$selectedScore = array_find(
+    $report->rows["scores"],
+    static fn(int $score, string $name): bool => $score >= 12 && $name === "Linus",
+);
+echo "Selected score: " . $selectedScore . "\n";
+
+// Filtering keeps names as keys, and the callback can be omitted to remove empty values.
+$highScores = array_filter($report->rows["scores"], static fn(int $score): bool => $score >= 12);
+echo "High scorers: " . implode(", ", array_keys($highScores)) . "\n";
+$details = array_filter(["name" => "Ada", "nickname" => "", "language" => "PHP"]);
+echo "Available details: " . implode(", ", array_keys($details)) . "\n";
+
+// Elephc currently supports the two-array form of comparator set operations.
+// Both functions cast the callback result to int and preserve keys from the first array.
+function compare_languages(string $left, string $right): int {
+    return strcmp(strtolower($left), strtolower($right));
+}
+$available = ["primary" => "PHP", 7 => "Rust", "target" => "ARM64"];
+$used = ["php", "arm64"];
+$unused = array_udiff($available, $used, "compare_languages");
+$matched = array_uintersect($available, $used, compare_languages(...));
+echo "Unused language keys: " . implode(", ", array_keys($unused)) . "\n";
+echo "Matched language keys: " . implode(", ", array_keys($matched)) . "\n";
 
 // String array
 $langs = ["PHP", "Rust", "ARM64"];

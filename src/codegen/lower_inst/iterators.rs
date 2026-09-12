@@ -7,6 +7,12 @@
 //!
 //! Key details:
 //! - `IterStart` values reserve a fixed stack state for source, cursor, and current hash payload.
+//! - A successful `IteratorAggregate::getIterator()` result is transferred into the
+//!   optional Mixed owner slot before the raw iterator pointer is published. The
+//!   source word then borrows that payload; the aggregate word is overwritten
+//!   without being released. `IterEnd` remains a no-op. The optional owner in the
+//!   `IterStart` immediate is the lowering decision for whether the aggregate probe is
+//!   reachable; backend value types may have widened after that decision.
 //! - Current values are boxed into `Mixed` unless EIR preserves a concrete indexed-array element type.
 //! - A source that is not iterable does NOT abort. Every dispatch that misses the
 //!   indexed/hash/object cases — the static `NonIterable` kind, the `__rt_mixed_unbox` tag
@@ -19,14 +25,20 @@
 //!   `IteratorIterator` sites, where the shape really is unsupported.
 
 use crate::codegen::platform::Arch;
-use crate::codegen::{abi, emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed};
+use crate::codegen::{
+    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    emit_box_runtime_payload_as_mixed,
+};
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
-use crate::names::{method_symbol, php_symbol_key};
+use crate::names::php_symbol_key;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{direct_call_stack_pad_bytes, expect_local_slot, expect_operand, store_if_result};
+use super::{
+    direct_call_stack_pad_bytes, emit_direct_resolved_method_call, expect_local_slot,
+    expect_operand, resolve_method_call_target, store_if_result,
+};
 use crate::codegen::{CodegenIrError, Result};
 
 const ITER_SOURCE_OFFSET_DELTA: usize = 0;
@@ -38,6 +50,7 @@ const ITER_VALUE_HI_OFFSET_DELTA: usize = 40;
 const ITER_VALUE_TAG_OFFSET_DELTA: usize = 48;
 const ITER_VALUE_ADDR_OFFSET_DELTA: usize = 56;
 const ITER_SNAPSHOT_LEN_OFFSET_DELTA: usize = 64;
+const MIXED_CELL_PAYLOAD_LOW_OFFSET: usize = 8;
 
 /// The runtime value tag `__rt_warn_foreach_non_iterable` reads as "null".
 ///
@@ -79,6 +92,7 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let source = expect_operand(inst, 0)?;
     let source_kind = iterator_source_kind_from_type(ctx, &ctx.value_php_type(source)?, inst)?;
     let by_ref = iter_start_is_by_ref(inst);
+    let owner = iter_start_owner_slot(inst);
     let result = inst.result.ok_or_else(|| {
         CodegenIrError::invalid_module("iter_start missing result value".to_string())
     })?;
@@ -92,7 +106,7 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(source, result_reg)?;
     if matches!(source_kind, IteratorSourceKind::DynamicMixed) {
-        initialize_dynamic_mixed_iterator(ctx, offset, by_ref)?;
+        initialize_dynamic_mixed_iterator(ctx, offset, by_ref, owner)?;
         return Ok(());
     }
     if by_ref {
@@ -115,7 +129,7 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     if matches!(source_kind, IteratorSourceKind::DynamicIterable) {
-        initialize_dynamic_iterable_iterator(ctx, offset, by_ref, source)?;
+        initialize_dynamic_iterable_iterator(ctx, offset, by_ref, source, owner)?;
         return Ok(());
     }
     // -- the loop's reference on an object source is taken by EIR lowering, not here --
@@ -143,8 +157,20 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
             aggregate_class_name: Some(aggregate_class_name),
             ..
         } => {
-            emit_object_iterator_method_call(ctx, offset, aggregate_class_name, "getIterator")?;
-            abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+            let return_ty =
+                emit_object_iterator_method_call(ctx, offset, aggregate_class_name, "getIterator")?;
+            adopt_get_iterator_result(ctx, offset, owner, &return_ty)?;
+        }
+        IteratorSourceKind::Interface { interface_name, .. }
+            if interface_needs_get_iterator(ctx, interface_name) =>
+        {
+            let return_ty = emit_interface_iterator_method_call(
+                ctx,
+                offset,
+                interface_name,
+                "getIterator",
+            )?;
+            adopt_get_iterator_result(ctx, offset, owner, &return_ty)?;
         }
         _ => {}
     }
@@ -158,7 +184,12 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
             emit_object_iterator_method_call(ctx, offset, &class_name, "rewind")?;
         }
         IteratorSourceKind::Interface { interface_name, .. } => {
-            emit_interface_iterator_method_call(ctx, offset, &interface_name, "rewind")?;
+            let rewind_interface = if interface_needs_get_iterator(ctx, &interface_name) {
+                "Iterator"
+            } else {
+                interface_name.as_str()
+            };
+            emit_interface_iterator_method_call(ctx, offset, rewind_interface, "rewind")?;
         }
         _ => {}
     }
@@ -358,6 +389,7 @@ fn initialize_dynamic_iterable_iterator(
     offset: usize,
     by_ref: bool,
     source: ValueId,
+    owner: Option<LocalSlotId>,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_start_dyn_indexed");
     let hash_case = ctx.next_label("iter_start_dyn_hash");
@@ -393,7 +425,7 @@ fn initialize_dynamic_iterable_iterator(
 
     ctx.emitter.label(&object_case);
     store_iterator_cursor(ctx, offset, 0);
-    resolve_dynamic_object_iterator_source(ctx, offset)?;
+    resolve_dynamic_object_iterator_source(ctx, offset, owner)?;
     emit_interface_iterator_method_call(ctx, offset, "Iterator", "rewind")?;
     ctx.emitter.label(&done);
     Ok(())
@@ -404,6 +436,7 @@ fn initialize_dynamic_mixed_iterator(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
     by_ref: bool,
+    owner: Option<LocalSlotId>,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_start_mixed_indexed");
     let hash_case = ctx.next_label("iter_start_mixed_hash");
@@ -446,7 +479,7 @@ fn initialize_dynamic_mixed_iterator(
     ctx.emitter.label(&object_case);
     store_mixed_payload_low_as_iterator_source(ctx, offset);
     store_iterator_cursor(ctx, offset, 0);
-    resolve_dynamic_object_iterator_source(ctx, offset)?;
+    resolve_dynamic_object_iterator_source(ctx, offset, owner)?;
     emit_interface_iterator_method_call(ctx, offset, "Iterator", "rewind")?;
     ctx.emitter.label(&done);
     if by_ref {
@@ -522,7 +555,18 @@ fn emit_empty_iterator_state(ctx: &mut FunctionContext<'_>, offset: usize) {
 
 /// Returns true when an `iter_start` instruction is preparing a by-reference foreach.
 fn iter_start_is_by_ref(inst: &Instruction) -> bool {
-    matches!(inst.immediate, Some(Immediate::Bool(true)))
+    match inst.immediate.as_ref() {
+        Some(Immediate::IterStart { by_ref, .. }) => *by_ref,
+        _ => false,
+    }
+}
+
+/// Returns the optional Mixed owner slot named by an `iter_start` immediate.
+fn iter_start_owner_slot(inst: &Instruction) -> Option<LocalSlotId> {
+    match inst.immediate.as_ref() {
+        Some(Immediate::IterStart { owner, .. }) => *owner,
+        _ => None,
+    }
 }
 
 /// Splits statically typed array/hash sources before by-reference iteration.
@@ -901,32 +945,85 @@ fn lower_dynamic_iter_current_value(
 }
 
 /// Replaces a dynamic object iterator source with `IteratorAggregate::getIterator()` when available.
+///
+/// The owner recorded in `IterStart` is authoritative. Its absence means lowering proved
+/// this source cannot produce an aggregate result, even if later type widening makes the
+/// backend operand look dynamic.
 fn resolve_dynamic_object_iterator_source(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
+    owner: Option<LocalSlotId>,
 ) -> Result<()> {
-    if !ctx.module.interface_infos.contains_key("IteratorAggregate") {
+    if owner.is_none() || !ctx.module.interface_infos.contains_key("IteratorAggregate") {
         return Ok(());
     }
-    let keep_original = ctx.next_label("iter_dynamic_keep_original_object");
-    emit_interface_iterator_method_call(ctx, offset, "IteratorAggregate", "getIterator")?;
+    let return_ty =
+        emit_interface_iterator_method_call(ctx, offset, "IteratorAggregate", "getIterator")?;
+    adopt_get_iterator_result(ctx, offset, owner, &return_ty)
+}
+
+/// Owns a nonzero `getIterator()` result in the Mixed owner slot, then publishes a borrow.
+///
+/// `emit_box_current_owned_value_as_mixed` is the transfer: `__rt_mixed_from_value`
+/// retains the payload into a fresh Mixed cell, then the helper releases the
+/// original method-return owner. There is no user callback between those two
+/// steps, so the Mixed cell is the sole owner afterward. The iterator source
+/// word is then loaded from that cell's payload. The previous aggregate pointer
+/// is overwritten without a matching release; the loop's source retain still
+/// owns the aggregate.
+fn adopt_get_iterator_result(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    owner: Option<LocalSlotId>,
+    return_ty: &PhpType,
+) -> Result<()> {
+    let slot = require_get_iterator_owner(owner)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let keep_original = ctx.next_label("iter_keep_original_source");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // keep the original source when getIterator() returned null
                 &format!("cbz {}, {}", result_reg, keep_original)
-            );                                                                  // keep direct Iterator objects when IteratorAggregate dispatch misses
+            );
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // keep the original source when getIterator() returned null
                 &format!("test {}, {}", result_reg, result_reg)
-            );                                                                  // keep direct Iterator objects when IteratorAggregate dispatch misses
-            ctx.emitter.instruction(&format!("je {}", keep_original));          // skip source replacement when getIterator() was not resolved
+            );
+            ctx.emitter.instruction(&format!("je {}", keep_original));          // skip replacement when getIterator() was not resolved
         }
     }
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+    let local_offset = ctx.local_offset(slot)?;
+    abi::store_at_offset(ctx.emitter, result_reg, local_offset);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        result_reg,
+        result_reg,
+        MIXED_CELL_PAYLOAD_LOW_OFFSET,
+    );
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     ctx.emitter.label(&keep_original);
     Ok(())
+}
+
+/// Rejects an aggregate adoption path that has no place to retain the returned iterator.
+fn require_get_iterator_owner(owner: Option<LocalSlotId>) -> Result<LocalSlotId> {
+    owner.ok_or_else(|| {
+        CodegenIrError::invalid_module(
+            "iterator aggregate result has no owning Mixed slot".to_string(),
+        )
+    })
+}
+
+/// Returns true when an interface-typed source must call `getIterator()` before rewind.
+fn interface_needs_get_iterator(ctx: &FunctionContext<'_>, interface_name: &str) -> bool {
+    let name = interface_name.trim_start_matches('\\');
+    if name == "Iterator" || interface_extends_interface(ctx, name, "Iterator") {
+        return false;
+    }
+    name == "IteratorAggregate"
+        || interface_extends_interface(ctx, name, "IteratorAggregate")
 }
 
 /// Branches on the heap kind of the raw iterable source stored in iterator state.
@@ -1101,9 +1198,9 @@ fn lower_object_iter_next(
             ctx.emitter.instruction(&format!("b.eq {}", first_label));          // skip next() before the first valid() probe
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // check whether this object iterator has already yielded once
                 &format!("test {}, {}", started_reg, started_reg)
-            );                                                                  // check whether this object iterator has already yielded once
+            );
             ctx.emitter.instruction(&format!("je {}", first_label));            // skip next() before the first valid() probe
         }
     }
@@ -1133,9 +1230,9 @@ fn lower_interface_iter_next(
             ctx.emitter.instruction(&format!("b.eq {}", first_label));          // skip next() before the first valid() probe
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // check whether this interface iterator has already yielded once
                 &format!("test {}, {}", started_reg, started_reg)
-            );                                                                  // check whether this interface iterator has already yielded once
+            );
             ctx.emitter.instruction(&format!("je {}", first_label));            // skip next() before the first valid() probe
         }
     }
@@ -1161,7 +1258,7 @@ fn emit_object_iterator_method_call(
         emit_generator_iterator_runtime_call(ctx, offset, helper);
         return Ok(generator_iterator_return_type(&method_key));
     }
-    let target = object_iterator_method_target(ctx, class_name, &method_key)?;
+    let target = resolve_method_call_target(ctx, class_name, &method_key, 1)?;
     let assignments = abi::build_outgoing_arg_assignments_for_target(
         ctx.emitter.target,
         &[PhpType::Object(class_name.to_string())],
@@ -1173,14 +1270,16 @@ fn emit_object_iterator_method_call(
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(helper) = target.runtime_helper {
+    if let Some(helper) = IntrinsicCall::instance_method(&target.impl_class, &method_key)
+        .and_then(|intrinsic| intrinsic.runtime_helper())
+    {
         abi::emit_call_label(ctx.emitter, helper);
     } else {
-        abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &method_key));
+        emit_direct_resolved_method_call(ctx, &target)?;
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
-    Ok(target.return_type)
+    Ok(target.return_ty)
 }
 
 /// Emits a zero-argument Iterator method call through runtime interface metadata.
@@ -1286,9 +1385,9 @@ pub(super) fn emit_interface_dispatch_call(
             if slot == 0 {
                 ctx.emitter.instruction("ldr x11, [x11]");                      // load first interface method implementation pointer
             } else {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // load selected interface method implementation pointer
                     &format!("ldr x11, [x11, #{}]", slot * 8)
-                );                                                              // load selected interface method implementation pointer
+                );
             }
             ctx.emitter.instruction("blr x11");                                 // call resolved interface method implementation
             ctx.emitter.instruction(&format!("b {}", local_done));              // skip defensive missing-interface fallback
@@ -1316,9 +1415,9 @@ pub(super) fn emit_interface_dispatch_call(
             if slot == 0 {
                 ctx.emitter.instruction("mov r11, QWORD PTR [r11]");            // load first interface method implementation pointer
             } else {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // load selected interface method implementation pointer
                     &format!("mov r11, QWORD PTR [r11 + {}]", slot * 8)
-                );                                                              // load selected interface method implementation pointer
+                );
             }
             ctx.emitter.instruction("call r11");                                // call resolved interface method implementation
             ctx.emitter.instruction(&format!("jmp {}", local_done));            // skip defensive missing-interface fallback
@@ -1365,70 +1464,6 @@ fn emit_generator_iterator_runtime_call(
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::load_at_offset(ctx.emitter, receiver_arg, offset - ITER_SOURCE_OFFSET_DELTA);
     abi::emit_call_label(ctx.emitter, helper);
-}
-
-/// Resolves the concrete implementation class for an object iterator method.
-fn object_iterator_method_target(
-    ctx: &FunctionContext<'_>,
-    class_name: &str,
-    method_key: &str,
-) -> Result<ObjectIteratorMethodTarget> {
-    let normalized = class_name.trim_start_matches('\\');
-    let class_info = ctx
-        .module
-        .class_infos
-        .get(normalized)
-        .ok_or_else(|| CodegenIrError::unsupported(format!("iterator object class {}", normalized)))?;
-    let callee_sig = class_info
-        .methods
-        .get(method_key)
-        .ok_or_else(|| CodegenIrError::unsupported(format!("iterator method {}::{}", normalized, method_key)))?;
-    if !callee_sig.params.is_empty() {
-        return Err(CodegenIrError::unsupported(format!(
-            "iterator method {}::{} with {} params",
-            normalized,
-            method_key,
-            callee_sig.params.len()
-        )));
-    }
-    let impl_class = class_info
-        .method_impl_classes
-        .get(method_key)
-        .cloned()
-        .unwrap_or_else(|| normalized.to_string());
-    let runtime_helper =
-        IntrinsicCall::instance_method(&impl_class, method_key).and_then(|intrinsic| intrinsic.runtime_helper());
-    if runtime_helper.is_none() && !class_method_body_exists(ctx, &impl_class, method_key) {
-        return Err(CodegenIrError::unsupported(format!(
-            "iterator method {}::{} without an emitted EIR method body",
-            impl_class, method_key
-        )));
-    }
-    Ok(ObjectIteratorMethodTarget {
-        impl_class,
-        runtime_helper,
-        return_type: callee_sig.return_type.clone(),
-    })
-}
-
-/// Resolved method implementation for an object iterator method call.
-struct ObjectIteratorMethodTarget {
-    impl_class: String,
-    runtime_helper: Option<&'static str>,
-    return_type: PhpType,
-}
-
-/// Returns true when the EIR module contains the concrete instance-method body.
-fn class_method_body_exists(ctx: &FunctionContext<'_>, class_name: &str, method_key: &str) -> bool {
-    ctx.module.class_methods.iter().any(|function| {
-        !function.flags.is_static
-            && function
-                .name
-                .rsplit_once("::")
-                .is_some_and(|(candidate_class, candidate_method)| {
-                    candidate_class == class_name && php_symbol_key(candidate_method) == method_key
-                })
-    })
 }
 
 /// Lowers iterator cleanup; Phase 04 array iterator state is stack-resident.
@@ -1746,42 +1781,42 @@ fn load_current_array_value_aarch64(
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
                 &format!("add {}, {}, #24", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected pointer-sized indexed-array element
                 &format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, index_reg)
-            );                                                                  // load the selected pointer-sized indexed-array element
+            );
         }
         PhpType::Float => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach float payloads
                 &format!("add {}, {}, #24", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach float payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected indexed-array float element
                 &format!("ldr d0, [{}, {}, lsl #3]", array_reg, index_reg)
-            );                                                                  // load the selected indexed-array float element
+            );
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // scale the string-array offset by pointer-plus-length slot size
                 &format!("lsl {}, {}, #4", index_reg, index_reg)
-            );                                                                  // scale the string-array offset by pointer-plus-length slot size
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // move to the selected string slot within the indexed array
                 &format!("add {}, {}, {}", array_reg, array_reg, index_reg)
-            );                                                                  // move to the selected string slot within the indexed array
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // skip the indexed-array header before loading the string slot
                 &format!("add {}, {}, #24", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header before loading the string slot
+            );
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach refcounted payloads
                 &format!("add {}, {}, #24", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach refcounted payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected refcounted indexed-array element
                 &format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, index_reg)
-            );                                                                  // load the selected refcounted indexed-array element
+            );
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -1809,38 +1844,38 @@ fn load_current_array_value_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected pointer-sized indexed-array element
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, index_reg)
-            );                                                                  // load the selected pointer-sized indexed-array element
+            );
         }
         PhpType::Float => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach float payloads
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach float payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected indexed-array float element
                 &format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
-            );                                                                  // load the selected indexed-array float element
+            );
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             ctx.emitter.instruction(&format!("shl {}, 4", index_reg));          // scale the string-array offset by pointer-plus-length slot size
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // move to the selected string slot within the indexed array
                 &format!("add {}, {}", array_reg, index_reg)
-            );                                                                  // move to the selected string slot within the indexed array
+            );
             ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the string slot
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach refcounted payloads
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach refcounted payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected refcounted indexed-array element
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, index_reg)
-            );                                                                  // load the selected refcounted indexed-array element
+            );
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -1984,10 +2019,16 @@ fn object_iterator_source(
     class_name: &str,
 ) -> IteratorSourceKind {
     if ctx.module.interface_infos.contains_key(class_name) {
-        return IteratorSourceKind::Interface {
-            interface_name: class_name.to_string(),
-            aggregate_class_name: None,
-        };
+        if class_name == "Iterator" || interface_extends_interface(ctx, class_name, "Iterator") {
+            return IteratorSourceKind::Interface {
+                interface_name: class_name.to_string(),
+                aggregate_class_name: None,
+            };
+        }
+        // A Traversable-typed value can be either an Iterator or an
+        // IteratorAggregate at runtime. The dynamic iterable path distinguishes
+        // those cases before invoking any protocol method.
+        return IteratorSourceKind::DynamicIterable;
     }
     if class_implements_interface(ctx, class_name, "Iterator") {
         return IteratorSourceKind::Object {
@@ -2089,4 +2130,26 @@ fn interface_extends_interface(
 /// Returns a class-like name without PHP's optional leading namespace separator.
 fn normalized_type_name(name: &str) -> &str {
     name.trim_start_matches('\\')
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit coverage for iterator lowering contracts that reject malformed EIR.
+    //!
+    //! Called from:
+    //! - `cargo test` through the Rust test harness.
+    //!
+    //! Key details:
+    //! - IteratorAggregate results must never be published without an owner.
+
+    use super::*;
+
+    /// Missing owner metadata is a codegen error before a result can be adopted.
+    #[test]
+    fn aggregate_adoption_requires_an_owner_slot() {
+        assert!(require_get_iterator_owner(None).is_err());
+        let slot = LocalSlotId::from_raw(7);
+        assert_eq!(require_get_iterator_owner(Some(slot)).unwrap(), slot);
+    }
 }

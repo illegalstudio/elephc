@@ -1,16 +1,16 @@
 ---
-title: "date_default_timezone_get() — internals"
+title: "date_default_timezone_get() - internals"
 description: "Compiler internals for date_default_timezone_get(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 195
 ---
 
-## `date_default_timezone_get()` — internals
+## `date_default_timezone_get()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/date_default_timezone_get.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/date_default_timezone_get.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

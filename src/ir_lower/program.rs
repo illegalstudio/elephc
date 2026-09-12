@@ -76,10 +76,18 @@ pub(crate) fn lower(
     source_path: Option<&Path>,
     web: bool,
 ) -> Result<Module, LoweringError> {
+    super::diagnostics::begin_collection();
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;
     let constants = crate::codegen::collect_constants(program, target);
+    let builtin_constants = crate::codegen::collect_constants(&Vec::new(), target);
+    module.user_defined_constants = constants
+        .keys()
+        .filter(|name| !builtin_constants.contains_key(*name))
+        .cloned()
+        .collect();
+    module.user_defined_constants.sort();
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);
     populate_metadata(&mut module, program, check_result);
@@ -105,6 +113,12 @@ pub(crate) fn lower(
         &constants,
         &fiber_return_sigs,
     );
+    function::lower_eval_native_default_helpers(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    );
     lower_literal_eval_aot_functions(&mut module, check_result, &constants, &fiber_return_sigs);
     lower_dynamic_constructor_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
     include_lowered_runtime_features(&mut module);
@@ -123,6 +137,12 @@ pub(crate) fn lower(
     );
     include_lowered_runtime_features(&mut module);
     super::effect_refinement::refine_module(&mut module);
+    reserve_eval_subclass_property_storage(&mut module);
+    // A refused shape is reported before validation: the placeholder EIR those sites emit
+    // keeps the module well formed, but the program must not reach codegen regardless.
+    if let Some(error) = super::diagnostics::take_first() {
+        return Err(LoweringError::Unsupported(error));
+    }
     validate_module(&module)?;
     Ok(module)
 }

@@ -1,11 +1,11 @@
 ---
-title: "imagefilledpolygon() — internals"
+title: "imagefilledpolygon() - internals"
 description: "Compiler internals for imagefilledpolygon(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 502
 ---
 
-## `imagefilledpolygon()` — internals
+## `imagefilledpolygon()` - internals
 
 ## Where it lives
 

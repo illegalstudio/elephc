@@ -72,6 +72,9 @@ impl FakeOps {
     /// Reports one fake AOT class for eval `class_exists` unit tests.
     pub(in crate::interpreter::tests::support) fn runtime_class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
         Ok(name.eq_ignore_ascii_case("KnownClass")
+            || name.eq_ignore_ascii_case("KnownClonePrivate")
+            || name.eq_ignore_ascii_case("KnownCloneProtected")
+            || name.eq_ignore_ascii_case("KnownClonePublic")
             || name.eq_ignore_ascii_case("KnownFailingConstructor"))
     }
     /// Reports fake generated AOT ReflectionClass flags for eval metadata unit tests.
@@ -92,6 +95,14 @@ impl FakeOps {
         class_name: &str,
         method_name: &str,
     ) -> Result<Option<u64>, EvalStatus> {
+        if method_name.eq_ignore_ascii_case("__clone") {
+            return match class_name.to_ascii_lowercase().as_str() {
+                "knowncloneprivate" => Ok(Some(EVAL_REFLECTION_MEMBER_FLAG_PRIVATE)),
+                "knowncloneprotected" => Ok(Some(EVAL_REFLECTION_MEMBER_FLAG_PROTECTED)),
+                "knownclonepublic" => Ok(Some(EVAL_REFLECTION_MEMBER_FLAG_PUBLIC)),
+                _ => Ok(None),
+            };
+        }
         if !class_name.eq_ignore_ascii_case("KnownClass") {
             return Ok(None);
         }
@@ -114,6 +125,17 @@ impl FakeOps {
         class_name: &str,
         method_name: &str,
     ) -> Result<Option<String>, EvalStatus> {
+        if method_name.eq_ignore_ascii_case("__clone")
+            && [
+                "KnownClonePrivate",
+                "KnownCloneProtected",
+                "KnownClonePublic",
+            ]
+            .iter()
+            .any(|known| class_name.eq_ignore_ascii_case(known))
+        {
+            return Ok(Some(class_name.to_string()));
+        }
         if !class_name.eq_ignore_ascii_case("KnownClass") {
             return Ok(None);
         }

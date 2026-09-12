@@ -1,11 +1,11 @@
 ---
-title: "mysqli_close() — internals"
+title: "mysqli_close() - internals"
 description: "Compiler internals for mysqli_close(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 102
 ---
 
-## `mysqli_close()` — internals
+## `mysqli_close()` - internals
 
 ## Where it lives
 

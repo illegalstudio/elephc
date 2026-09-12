@@ -25,12 +25,18 @@ fn generate_project_asm(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
     source_path: &Path,
+    included_files: &[std::path::PathBuf],
     heap_size: usize,
     gc_stats: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
 ) -> (String, String, elephc::codegen::RuntimeFeatures) {
-    let ir_module = lower_and_validate_ir_for_codegen_fixture(program, check_result, source_path);
+    let mut ir_module = lower_and_validate_ir_for_codegen_fixture(program, check_result, source_path);
+    ir_module.included_files = std::iter::once(source_path)
+        .chain(included_files.iter().map(std::path::PathBuf::as_path))
+        .map(|path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+        .map(|path| path.display().to_string())
+        .collect();
     let exported_functions = HashMap::new();
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
     let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
@@ -346,7 +352,8 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
     let define_set = HashSet::new();
     let ast = elephc::conditional::apply(ast, &define_set);
-    let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
+    let (resolved, included_files) =
+        elephc::resolver::resolve_collecting_includes(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
@@ -356,7 +363,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),
@@ -377,6 +384,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
         &optimized,
         &check_result,
         &php_path,
+        &included_files,
         8_388_608,
         false,
         false,
@@ -431,7 +439,12 @@ pub(crate) fn compile_and_run_files_with_defines(
     let ast = elephc::conditional::apply(ast, &define_set);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(base_dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
-    let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
+    let (resolved, included_files) = elephc::resolver::resolve_collecting_includes_with_defines(
+        ast,
+        base_dir,
+        &define_set,
+    )
+    .expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
@@ -443,7 +456,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),
@@ -464,6 +477,7 @@ pub(crate) fn compile_and_run_files_with_defines(
         &optimized,
         &check_result,
         &php_path,
+        &included_files,
         8_388_608,
         false,
         false,
@@ -653,7 +667,8 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
-    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let (resolved, included_files) =
+        elephc::resolver::resolve_collecting_includes(ast, &dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
@@ -663,7 +678,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),
@@ -684,6 +699,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         &optimized,
         &check_result,
         &synthetic_main,
+        &included_files,
         8_388_608,
         false,
         false,

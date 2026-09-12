@@ -59,3 +59,15 @@ try {
 } catch (AppException $e) {
     echo $e->getMessage() . " <- " . $e->getPrevious()?->getMessage() . PHP_EOL;
 }
+
+class RequestException extends AppException {
+    public string $category = "request";
+}
+
+class RetryableRequestException extends RequestException {}
+
+try {
+    throw new RetryableRequestException("retry failed", 12, new Exception("service offline"));
+} catch (RequestException $e) {
+    echo $e->category . ": " . $e->getMessage() . " <- " . $e->getPrevious()?->getMessage() . PHP_EOL;
+}

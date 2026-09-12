@@ -782,6 +782,15 @@ fn render(value: &Expr) -> (String, u8) {
             let rendered: Vec<String> = items.iter().map(expression).collect();
             (format!("[{}]", rendered.join(", ")), ATOM)
         }
+        ExprKind::Match { subject, arms, default } => {
+            let mut rendered = arms.iter().map(|(labels, value)| {
+                format!("{} => {}", argument_list(labels), expression(value))
+            }).collect::<Vec<_>>();
+            if let Some(default) = default {
+                rendered.push(format!("default => {}", expression(default)));
+            }
+            (format!("match ({}) {{ {} }}", expression(subject), rendered.join(", ")), ATOM)
+        }
         ExprKind::ArrayLiteralAssoc(entries) => {
             let rendered: Vec<String> = entries
                 .iter()
@@ -1064,5 +1073,20 @@ mod tests {
             );
         }
         round_trip("web wrapper", &vec![crate::web_prelude::web_wrap_stmt()]);
+    }
+
+    /// Round-trips nested matches, grouped labels, missing defaults and the empty form.
+    #[test]
+    fn printing_round_trips_match_expressions() {
+        use crate::synthetic_class::{e_call, e_index, e_int, e_match, e_str, s_return};
+        let nested = e_match(e_call("select", vec![]), vec![], None);
+        for default in [None, Some(nested)] {
+            let value = e_match(
+                e_call("subject", vec![]),
+                vec![(vec![e_int(1), e_int(2)], e_str("first"))],
+                default,
+            );
+            round_trip("match expression", &vec![s_return(e_index(value, e_int(0)))]);
+        }
     }
 }

@@ -1,16 +1,16 @@
 ---
-title: "pcntl_getcpu() — internals"
+title: "pcntl_getcpu() - internals"
 description: "Compiler internals for pcntl_getcpu(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 627
+  order: 647
 ---
 
-## `pcntl_getcpu()` — internals
+## `pcntl_getcpu()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_getcpu.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_getcpu.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -96,9 +96,16 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
-    let array_value = ctx.load_local(array, Some(span));
-    let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
+    let array_value = load_array_local_for_write(ctx, array, span);
     let op = array_set_op(array_value.ir_type);
+    if op == Op::RuntimeCall && matches!(
+        array_value.ir_type,
+        IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
+    ) {
+        lower_boxed_array_local_set(ctx, array_value, index, value, span);
+        return;
+    }
+    let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
     // A literal string index always means a hash key, so promote the destination
     // to associative storage like PHP. A boxed Mixed/Union index may hold either
     // an integer or a string key (foreach loop keys are always Mixed in EIR via
@@ -161,6 +168,42 @@ pub(super) fn lower_array_assign(
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+}
+
+/// Roots and retires operands borrowed by the boxed writer, including on same-frame catches.
+/// The backend copies strings and retains other payloads in a separate consumed box.
+fn lower_boxed_array_local_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: LoweredValue,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) {
+    let mut roots = Vec::new();
+    let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
+        let value = lower_expr(ctx, expr);
+        let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);
+        if let Some(root) = root { roots.push(root); }
+        value
+    };
+    // Preserve the existing PHP ordering for bare variable keys versus computed keys.
+    let (index, value) = if matches!(index.kind, ExprKind::Variable(_)) {
+        let value = lower_operand(ctx, value);
+        (lower_operand(ctx, index), value)
+    } else {
+        let index = lower_operand(ctx, index);
+        (index, lower_operand(ctx, value))
+    };
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![array.value, index.value, value.value],
+        None,
+        Op::RuntimeCall.default_effects(),
+        Some(span),
+    );
+    for root in roots.into_iter().rev() {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
+    }
 }
 
 /// Coerces a buffer element write value into the scalar storage accepted by `BufferSet`.
@@ -265,4 +308,3 @@ pub(super) fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) 
         value: Box::new(assoc_value_ty),
     }
 }
-

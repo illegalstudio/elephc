@@ -33,6 +33,29 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Marks the canonical cell and native inventory closed after Magician released its handle.
+    fn resource_closed(&mut self, resource: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        unsafe { __elephc_eval_resource_state(resource.as_ptr(), -1); }
+        Ok(())
+    }
+
+    /// Keeps trigger_error's precise level and avoids redispatching default formatted text.
+    fn warning_unhandled(&mut self, message: &str) -> Result<(), EvalStatus> {
+        unsafe { __elephc_eval_warning_raw(message.as_ptr(), message.len() as u64); }
+        Ok(())
+    }
+
+    /// Reads suspended AOT frame metadata through the shared activation reader ABI.
+    fn runtime_backtrace_entry(&mut self, index: usize, options: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let cell = unsafe { __elephc_eval_backtrace_entry(index as u64, options) };
+        Ok((!cell.is_null()).then(|| RuntimeCellHandle::from_raw(cell)))
+    }
+
+    /// Uses the same filtered and ownership-safe inventory as native get_resources().
+    fn runtime_resource_inventory(&mut self, selector: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_resource_inventory(selector) }).map(Some)
+    }
+
     /// Dispatches a shareable builtin through the versioned generated-runtime C ABI.
     fn runtime_builtin_call(
         &mut self,
@@ -58,6 +81,111 @@ impl RuntimeValueOps for ElephcRuntimeOps {
             Some(RuntimeBuiltinStatus::Unsupported) => Ok(None),
             Some(RuntimeBuiltinStatus::PendingThrowable) => Err(EvalStatus::UncaughtThrowable),
             Some(RuntimeBuiltinStatus::RuntimeFatal) | None => Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
+    /// Gets or replaces the process-wide PHP error-reporting mask.
+    fn runtime_error_reporting(
+        &mut self,
+        replacement: Option<i64>,
+    ) -> Result<i64, EvalStatus> {
+        Ok(unsafe {
+            __elephc_eval_error_reporting(
+                replacement.unwrap_or_default(),
+                u64::from(replacement.is_some()),
+            )
+        })
+    }
+
+    /// Installs an eval-owned callback in the native user-error dispatcher.
+    fn runtime_error_handler_set(
+        &mut self,
+        callback: Option<RuntimeCellHandle>,
+        levels: i64,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let mut previous = std::ptr::null_mut();
+        let status = unsafe {
+            __elephc_eval_error_handler_set(
+                self.context.cast(),
+                callback.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr),
+                levels,
+                &mut previous,
+            )
+        };
+        if status != EvalStatus::Ok.code() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        Ok((!previous.is_null()).then(|| RuntimeCellHandle::from_raw(previous)))
+    }
+
+    /// Restores the prior native user error handler and releases eval-owned state.
+    fn runtime_error_handler_restore(&mut self) -> Result<(), EvalStatus> {
+        let status = unsafe { __elephc_eval_error_handler_restore() };
+        if status == EvalStatus::Ok.code() {
+            Ok(())
+        } else {
+            Err(EvalStatus::RuntimeFatal)
+        }
+    }
+
+    /// Invokes the native user error handler through its uniform descriptor ABI.
+    fn runtime_error_handler_dispatch(
+        &mut self,
+        level: i64,
+        args: &[RuntimeCellHandle],
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let mut arg_array = self.array_new(args.len())?;
+        for (index, value) in args.iter().copied().enumerate() {
+            let key = self.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            let retained = self.retain(value)?;
+            arg_array = self.array_set(arg_array, key, retained)?;
+        }
+        let mut result = std::ptr::null_mut();
+        let mut invoked = 0u64;
+        let status = unsafe {
+            __elephc_eval_error_handler_dispatch(
+                level,
+                arg_array.as_ptr(),
+                &mut result,
+                &mut invoked,
+            )
+        };
+        self.release(arg_array)?;
+        if status != EvalStatus::Ok.code() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if invoked == 0 {
+            return Ok(None);
+        }
+        Self::handle(result).map(Some)
+    }
+
+    /// Installs an eval-owned callback in the native terminal exception dispatcher.
+    fn runtime_exception_handler_set(
+        &mut self,
+        callback: Option<RuntimeCellHandle>,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let mut previous = std::ptr::null_mut();
+        let status = unsafe {
+            __elephc_eval_exception_handler_set(
+                self.context.cast(),
+                callback.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr),
+                &mut previous,
+            )
+        };
+        if status != EvalStatus::Ok.code() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        Ok((!previous.is_null()).then(|| RuntimeCellHandle::from_raw(previous)))
+    }
+
+    /// Restores the prior native exception handler and releases eval-owned state.
+    fn runtime_exception_handler_restore(&mut self) -> Result<(), EvalStatus> {
+        let status = unsafe { __elephc_eval_exception_handler_restore() };
+        if status == EvalStatus::Ok.code() {
+            Ok(())
+        } else {
+            Err(EvalStatus::RuntimeFatal)
         }
     }
 

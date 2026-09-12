@@ -1,11 +1,11 @@
 ---
-title: "iptcparse() — internals"
+title: "iptcparse() - internals"
 description: "Compiler internals for iptcparse(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 538
 ---
 
-## `iptcparse()` — internals
+## `iptcparse()` - internals
 
 ## Where it lives
 

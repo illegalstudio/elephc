@@ -1,11 +1,11 @@
 ---
-title: "imagecolortransparent() — internals"
+title: "imagecolortransparent() - internals"
 description: "Compiler internals for imagecolortransparent(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 478
 ---
 
-## `imagecolortransparent()` — internals
+## `imagecolortransparent()` - internals
 
 ## Where it lives
 

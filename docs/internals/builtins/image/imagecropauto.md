@@ -1,11 +1,11 @@
 ---
-title: "imagecropauto() — internals"
+title: "imagecropauto() - internals"
 description: "Compiler internals for imagecropauto(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 495
 ---
 
-## `imagecropauto()` — internals
+## `imagecropauto()` - internals
 
 ## Where it lives
 

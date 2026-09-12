@@ -1,11 +1,11 @@
 ---
-title: "imagearc() — internals"
+title: "imagearc() - internals"
 description: "Compiler internals for imagearc(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 459
 ---
 
-## `imagearc()` — internals
+## `imagearc()` - internals
 
 ## Where it lives
 

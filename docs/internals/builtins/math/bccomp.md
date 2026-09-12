@@ -1,16 +1,16 @@
 ---
-title: "bccomp() — internals"
+title: "bccomp() - internals"
 description: "Compiler internals for bccomp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 553
 ---
 
-## `bccomp()` — internals
+## `bccomp()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bccomp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bccomp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

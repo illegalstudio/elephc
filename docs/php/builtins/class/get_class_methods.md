@@ -1,6 +1,6 @@
 ---
 title: "get_class_methods()"
-description: "Returns method names visible on an object or class."
+description: "Returns visible PHP method names, excluding generated property-hook accessors. AOT supports direct calls, literal call_user_func calls, first-class callables, and argument unpacking, with an object, a class-name string, or a boxed value whose runtime tag is an object or a string; any other tag throws TypeError. Runtime-selected callable targets are unsupported."
 sidebar:
   order: 85
 ---
@@ -8,22 +8,22 @@ sidebar:
 ## get_class_methods()
 
 ```php
-function get_class_methods(mixed $object_or_class): mixed
+function get_class_methods(mixed $object_or_class): array
 ```
 
-Returns method names visible on an object or class.
+Returns visible PHP method names, excluding generated property-hook accessors. AOT supports direct calls, literal call_user_func calls, first-class callables, and argument unpacking, with an object, a class-name string, or a boxed value whose runtime tag is an object or a string; any other tag throws TypeError. Runtime-selected callable targets are unsupported.
 
 **Parameters**:
 - `$object_or_class` (`mixed`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 
-- **Compiled (AOT)**: not available — compiled programs cannot call this builtin (`eval-only-reflection`).
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_class_methods.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_class_methods.rs)).
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_class_methods.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_class_methods.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

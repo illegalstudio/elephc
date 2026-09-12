@@ -391,6 +391,12 @@ fn plan_slot_specialization(
             Op::LoadLocal => {
                 accept_slot_reader(function, inst, inst_id, uses, terminator_uses, &mut plan)?
             }
+            Op::ReleaseLocalSlot if retirement_precedes_overwrite(function, inst_id, slot) => {
+                // The complete slot proof excludes objects, aliases, and boxed readers.
+                // Its numeric owner cannot run a destructor, and the next store makes
+                // clearing the old slot unobservable once storage becomes a raw int.
+                plan.neutralize.insert(inst_id);
+            }
             // `unset`, ref-cell promotion, by-ref exposure, and every future slot-naming
             // opcode can observe the boxed representation, so the slot keeps it.
             _ => return None,
@@ -399,11 +405,28 @@ fn plan_slot_specialization(
     (!plan.producers.is_empty()).then_some(plan)
 }
 
+/// Requires an immediate same-block overwrite before a retired slot can be observed again.
+fn retirement_precedes_overwrite(function: &Function, retirement: InstId, slot: LocalSlotId) -> bool {
+    function.blocks.iter().any(|block| {
+        let Some(position) = block.instructions.iter().position(|id| *id == retirement) else {
+            return false;
+        };
+        block.instructions[position + 1..].iter()
+            .filter_map(|id| function.instruction(*id))
+            .find(|inst| inst.op != Op::Nop)
+            .is_some_and(|inst| {
+                inst.op == Op::StoreLocal
+                    && inst.immediate == Some(Immediate::LocalSlot(slot))
+            })
+    })
+}
+
 /// Returns true when an instruction names `slot` through either slot-carrying immediate.
 fn instruction_mentions_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
-    match inst.immediate {
-        Some(Immediate::LocalSlot(named)) => named == slot,
-        Some(Immediate::LocalSlotPair { first, second }) => first == slot || second == slot,
+    match inst.immediate.as_ref() {
+        Some(Immediate::LocalSlot(named)) => *named == slot,
+        Some(Immediate::LocalSlotPair { first, second }) => *first == slot || *second == slot,
+        Some(Immediate::IterStart { owner: Some(named), .. }) => *named == slot,
         _ => false,
     }
 }

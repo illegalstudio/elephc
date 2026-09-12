@@ -11,7 +11,7 @@
 //! - A container payload that is null or the in-band null-container sentinel
 //!   (`NULL_SENTINEL`, materialized by a missed read forwarded through a ternary merge)
 //!   is autovivified as a real PHP array before the keyed write (issues #585/#592).
-//! - A string key on an indexed payload promotes the payload to hash storage
+//! - String, negative, and non-contiguous numeric keys promote indexed payloads to hash storage
 //!   via `__rt_mixed_cell_promote_to_hash` (PHP array-key semantics) instead
 //!   of dropping the write.
 //! - Canonical null and legacy null-container payloads autovivify through the
@@ -49,7 +49,7 @@ pub fn emit_mixed_array_set(emitter: &mut Emitter) {
 /// Behavior:
 /// - If `x0` is null, the value is released via `__rt_decref_mixed` and the helper returns.
 /// - Canonical or legacy container-shaped null payloads autovivify as indexed arrays in place.
-/// - Indexed arrays mutate slots directly; string and negative keys first promote to hash
+/// - Packed overwrites and appends mutate slots directly; all other keys first promote to hash
 ///   storage, while existing associative arrays call `__rt_hash_set`.
 /// - Array capacity is grown via `__rt_array_grow` if the target index exceeds current capacity.
 /// - Overwriting an existing slot releases the previous `Mixed` cell.
@@ -89,6 +89,9 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("cmp x9, #0");                                          // reject negative indexes before touching storage
     emitter.instruction("b.lt __rt_mixed_array_set_promote");                   // negative integer keys require associative PHP-array storage
+    emitter.instruction("ldr x12, [x10]");                                      // inspect the packed array's current logical length
+    emitter.instruction("cmp x9, x12");                                         // only overwrites and contiguous appends stay packed
+    emitter.instruction("b.hi __rt_mixed_array_set_promote");                   // preserve absent positive keys by promoting sparse writes
     emitter.instruction("ldr x12, [x10, #-8]");                                 // load the packed indexed-array metadata
     emitter.instruction("ubfx x1, x12, #8, #7");                                // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov x0, x10");                                         // pass the indexed array to the Mixed conversion helper
@@ -338,6 +341,8 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
     emitter.instruction("cmp r9, 0");                                           // reject negative indexes before touching storage
     emitter.instruction("jl __rt_mixed_array_set_promote");                     // negative integer keys require associative PHP-array storage
+    emitter.instruction("cmp r9, QWORD PTR [r10]");                             // compare the requested key with the packed logical length
+    emitter.instruction("ja __rt_mixed_array_set_promote");                     // sparse writes require hashes so gaps remain absent
     emitter.instruction("mov r8, QWORD PTR [r10 - 8]");                         // load the packed indexed-array metadata
     emitter.instruction("shr r8, 8");                                           // move the value_type tag into the low byte
     emitter.instruction("and r8, 0x7f");                                        // isolate the runtime value_type tag

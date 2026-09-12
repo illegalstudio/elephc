@@ -44,6 +44,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
     strings::emit_str_to_number(emitter);
+    strings::emit_str_numeric_value(emitter);
     strings::emit_str_looks_like_int_for_coercion(emitter);
     strings::emit_str_to_int(emitter);
     strings::emit_str_to_int_base(emitter);
@@ -145,6 +146,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     callables::emit_is_callable_runtime(emitter);
     callables::emit_function_exists_lookup(emitter);
     callables::emit_callable_descriptor_release(emitter);
+    callables::emit_callable_invoke_owned_args(emitter);
+    callables::emit_throw_named_parameter_overwrite(emitter);
+    callables::emit_throw_unknown_named_parameter(emitter);
+    callables::emit_throw_positional_after_named(emitter);
     callables::emit_closure_bind(emitter);
 
     // System runtime functions
@@ -212,6 +217,15 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
+    exceptions::emit_throwable_previous(emitter);
+    exceptions::emit_throwable_initialize(emitter);
+    exceptions::emit_exception_chain(emitter);
+    exceptions::emit_cleanup_invoke(emitter);
+    exceptions::emit_cleanup_preserve_exception(emitter);
+    exceptions::emit_cleanup_call_operand_owner(emitter);
+    exceptions::emit_local_ref_cell_release(emitter);
+    exceptions::emit_throwable_boxed_owners(emitter);
+    exceptions::emit_destructor_throw(emitter);
 
     // Generator runtime helpers for Iterator methods, send/throw, and return-value retrieval.
     generators::emit_generator_runtime(emitter);

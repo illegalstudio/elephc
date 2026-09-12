@@ -1,11 +1,11 @@
 ---
-title: "imageline() — internals"
+title: "imageline() - internals"
 description: "Compiler internals for imageline(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 516
 ---
 
-## `imageline()` — internals
+## `imageline()` - internals
 
 ## Where it lives
 

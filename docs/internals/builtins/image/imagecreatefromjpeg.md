@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefromjpeg() — internals"
+title: "imagecreatefromjpeg() - internals"
 description: "Compiler internals for imagecreatefromjpeg(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 488
 ---
 
-## `imagecreatefromjpeg()` — internals
+## `imagecreatefromjpeg()` - internals
 
 ## Where it lives
 

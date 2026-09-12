@@ -122,6 +122,7 @@ impl EvalStreamResources {
         mode: &str,
     ) -> i64 {
         let id = self.take_next_id();
+        self.resource_types.insert(id, "stream");
         self.user_wrapper_streams.insert(
             id,
             EvalUserWrapperStream {
@@ -142,6 +143,7 @@ impl EvalStreamResources {
         class_name: &str,
     ) -> i64 {
         let id = self.take_next_id();
+        self.resource_types.insert(id, "stream");
         self.user_wrapper_directories.insert(
             id,
             EvalUserWrapperDirectory {

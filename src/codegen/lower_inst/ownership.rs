@@ -18,6 +18,35 @@ use super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
+/// Publishes a temporary owner's frame slot above the current PHP catch boundary.
+///
+/// The record's cleanup discipline follows the SLOT, not its PHP type. A reference-cell owner
+/// slot carries its cell's PAYLOAD type, so a cell whose payload is a callable would otherwise
+/// select the descriptor release and hand a cell address to `__rt_callable_descriptor_release`.
+/// Every owned cell is heap kind 7, which the generic `__rt_decref_any` dispatcher already
+/// routes to `__rt_reference_cell_release`, so a cell slot always uses the generic entry.
+pub(super) fn lower_push_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = super::expect_local_slot(inst)?;
+    let offset = ctx.local_offset(slot)?;
+    let holds_reference_cell = matches!(
+        ctx.local_kind(slot)?,
+        crate::ir::LocalKind::RefCell | crate::ir::LocalKind::ReturnRefCell
+    );
+    let callable = !holds_reference_cell
+        && ctx.local_php_type(slot)?.codegen_repr() == PhpType::Callable;
+    let address = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_frame_slot_address(ctx.emitter, address, offset);
+    abi::emit_push_call_operand_owner(ctx.emitter, address, callable);
+    Ok(())
+}
+
+/// Removes the innermost operand scope before the owning slot is retired normally.
+pub(super) fn lower_pop_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::expect_local_slot(inst)?;
+    abi::emit_pop_call_operand_owner(ctx.emitter);
+    Ok(())
+}
+
 /// Lowers an ownership acquire by making the operand safe to store as a new owner.
 pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
@@ -166,22 +195,19 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     if inst.op == Op::RuntimeCall {
-        let result_is_fresh = match inst.immediate {
+        let result_is_releasable = match inst.immediate {
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
             )) => false,
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::Function(target),
-            )) => matches!(
-                target.result_ownership(),
-                crate::builtins::semantics::BuiltinResultOwnership::Fresh
-            ),
+            )) |
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
             )) => matches!(
                 target.result_ownership(),
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh
-            ),
+            ) || matches!(target, crate::ir::RuntimeFnId::GetClass | crate::ir::RuntimeFnId::GetParentClass),
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::UnaryString(_),
             )) => true,
@@ -193,15 +219,18 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             ),
             _ => false,
         };
-        return Ok(!result_is_fresh);
+        // Class-name lookups return static metadata or an owned eval string, never
+        // concat scratch. Validated release ignores metadata and retires detached copies.
+        return Ok(!result_is_releasable);
     }
+    // MixedCastString detaches an owned buffer for string-tagged inputs. Its
+    // other tags return scratch or literals, both ignored by validated release.
     Ok(matches!(
         inst.op,
         Op::IToStr
             | Op::FToStr
             | Op::BoolToStr
             | Op::ResourceToStr
-            | Op::MixedCastString
             | Op::StrConcat
             | Op::StrCharAt
             | Op::StrInterpolate

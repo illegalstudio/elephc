@@ -41,7 +41,6 @@ mod key_sort;
 use super::{
     call_signature, is_spread_arg, lower_expr, lower_function_call,
     lower_non_local_assignment_write, normalize_value_php_type, source_prefers_extension_builtin,
-    static_property_result_type,
 };
 
 /// One by-reference argument rewritten into a hidden temporary.
@@ -177,7 +176,7 @@ fn is_array_place(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
         return false;
     }
     static_place_type(ctx, arg).is_some_and(|php_type| {
-        matches!(
+        php_type.is_php_array() || matches!(
             php_type.codegen_repr(),
             PhpType::Array(_) | PhpType::AssocArray { .. }
         )
@@ -199,7 +198,7 @@ fn is_candidate_place_shape(arg: &Expr) -> bool {
 /// Only the shapes this module can read and write back are resolved — locals, `$this`,
 /// declared instance properties, declared static properties, and elements of those. Anything
 /// else returns `None`, which keeps the call on its pre-existing lowering path.
-fn static_place_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
+pub(super) fn static_place_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
     match &expr.kind {
         ExprKind::Variable(name) => {
             if ctx.has_local_slot(name) {
@@ -221,9 +220,14 @@ fn static_place_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpTy
             let (_, (_, property_ty)) = class_info.visible_property(property)?;
             Some(normalize_value_php_type(property_ty.clone()))
         }
-        ExprKind::StaticPropertyAccess { receiver, property } => Some(
-            static_property_result_type(ctx, receiver, property, expr),
-        ),
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            // Class metadata retains the declared PHP array shape; the ordinary
+            // value-result query has already collapsed that shape to Mixed.
+            let class_name = super::static_receiver_class_name(ctx, receiver)?;
+            ctx.classes.get(class_name.as_str())?.static_properties.iter()
+                .find(|(name, _)| name == property)
+                .map(|(_, ty)| ty.clone())
+        }
         ExprKind::ArrayAccess { array, .. } => {
             match static_place_type(ctx, array)?.codegen_repr() {
                 PhpType::Array(elem_ty) => Some(normalize_value_php_type(*elem_ty)),

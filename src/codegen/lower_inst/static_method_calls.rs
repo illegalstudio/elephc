@@ -123,14 +123,21 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     if let Some(slot) = dynamic_static_slot {
-        emit_dynamic_static_method_call(ctx, slot);
+        emit_dynamic_static_method_call_with_abi(
+            ctx,
+            slot,
+            !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(
+                callee_sig,
+            ),
+        );
     } else {
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &callee_sig.return_type)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // User callees return an owner independent of the caller's materialized Mixed arguments.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)?;
     if let Some(done_label) = eval_done_label {
         ctx.emitter.label(&done_label);
@@ -169,12 +176,9 @@ pub(super) fn lower_lexical_instance_static_method_call(
     let mut ref_params = Vec::with_capacity(target.ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend(target.ref_params.iter().copied());
-    // `parent::__construct(...)` reaches this lowering, and a parent constructor may PROMOTE
-    // a by-reference parameter into a property that borrows the argument's cell for the whole
-    // life of the object — so a constructor target keeps its heap cell while every other
-    // method takes the caller-stack one (see `RefArgCellLifetime`).
+    // Parent constructors share the same managed default-cell policy as fixed construction.
     let ref_cell_lifetime = if method_name.eq_ignore_ascii_case("__construct") {
-        RefArgCellLifetime::MayOutliveCall
+        constructor_ref_cell_lifetime(ctx, receiver)
     } else {
         RefArgCellLifetime::CallOnly
     };
@@ -189,18 +193,26 @@ pub(super) fn lower_lexical_instance_static_method_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(
-        ctx.emitter,
-        &method_symbol(&target.impl_class, &target.method_key),
-    );
+    emit_direct_resolved_method_call(ctx, &target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
+    // The callee's parameter shadows keep any returned Mixed value independently owned.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
 /// Emits an indirect static-vtable call for a late-bound `static::method()` receiver.
 pub(super) fn emit_dynamic_static_method_call(ctx: &mut FunctionContext<'_>, slot: usize) {
+    emit_dynamic_static_method_call_with_abi(ctx, slot, false);
+}
+
+/// Emits late-static dispatch through either the physical or source-ABI table.
+pub(super) fn emit_dynamic_static_method_call_with_abi(
+    ctx: &mut FunctionContext<'_>,
+    slot: usize,
+    source_abi: bool,
+) {
     let hidden_called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let class_id_scratch = abi::temp_int_reg(ctx.emitter.target);
     let dispatch_scratch = abi::symbol_scratch_reg(ctx.emitter);
@@ -212,7 +224,12 @@ pub(super) fn emit_dynamic_static_method_call(ctx: &mut FunctionContext<'_>, slo
             ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
         }
     }
-    abi::emit_symbol_address(ctx.emitter, dispatch_scratch, "_class_static_vtable_ptrs");
+    let table = if source_abi {
+        "_class_source_static_vtable_ptrs"
+    } else {
+        "_class_static_vtable_ptrs"
+    };
+    abi::emit_symbol_address(ctx.emitter, dispatch_scratch, table);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
@@ -273,7 +290,7 @@ pub(super) fn resolve_static_called_class_arg(
 ) -> Result<CalledClassIdArg> {
     let receiver_label = receiver_label.trim_start_matches('\\');
     if matches!(receiver_label, "self" | "parent" | "static") {
-        if let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) {
+        if let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) {
             return Ok(CalledClassIdArg::Local(slot));
         }
         if let Some(slot) = ctx.local_slot_by_name("this") {

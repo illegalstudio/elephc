@@ -1,11 +1,11 @@
 ---
-title: "curl_init() — internals"
+title: "curl_init() - internals"
 description: "Compiler internals for curl_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 671
+  order: 697
 ---
 
-## `curl_init()` — internals
+## `curl_init()` - internals
 
 ## Where it lives
 

@@ -2,7 +2,7 @@
 title: "opcache_get_configuration()"
 description: "Implemented by the compiler-injected OPcache prelude."
 sidebar:
-  order: 613
+  order: 633
 ---
 
 ## opcache_get_configuration()
@@ -22,7 +22,7 @@ Implemented by the compiler-injected OPcache prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

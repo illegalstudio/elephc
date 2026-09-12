@@ -1,11 +1,11 @@
 ---
-title: "hash_update() — internals"
+title: "hash_update() - internals"
 description: "Compiler internals for hash_update(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 775
+  order: 801
 ---
 
-## `hash_update()` — internals
+## `hash_update()` - internals
 
 ## Where it lives
 

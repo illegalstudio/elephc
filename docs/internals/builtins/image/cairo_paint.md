@@ -1,11 +1,11 @@
 ---
-title: "cairo_paint() — internals"
+title: "cairo_paint() - internals"
 description: "Compiler internals for cairo_paint(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 421
 ---
 
-## `cairo_paint()` — internals
+## `cairo_paint()` - internals
 
 ## Where it lives
 

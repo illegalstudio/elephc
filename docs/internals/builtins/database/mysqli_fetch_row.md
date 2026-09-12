@@ -1,11 +1,11 @@
 ---
-title: "mysqli_fetch_row() — internals"
+title: "mysqli_fetch_row() - internals"
 description: "Compiler internals for mysqli_fetch_row(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 123
 ---
 
-## `mysqli_fetch_row()` — internals
+## `mysqli_fetch_row()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "curl_multi_remove_handle() — internals"
+title: "curl_multi_remove_handle() - internals"
 description: "Compiler internals for curl_multi_remove_handle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 680
+  order: 706
 ---
 
-## `curl_multi_remove_handle()` — internals
+## `curl_multi_remove_handle()` - internals
 
 ## Where it lives
 

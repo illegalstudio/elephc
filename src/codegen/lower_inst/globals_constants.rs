@@ -36,7 +36,9 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
     } else {
         let source_ty = ty.codegen_repr();
         if source_ty != PhpType::Mixed {
-            if ctx.value_can_transfer_ownership_to_consumer(value)? {
+            if ctx.value_can_transfer_ownership_to_consumer(value)?
+                || global_store_owns_persisted_string(ctx, value, &source_ty)
+            {
                 emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
             } else {
                 emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
@@ -48,6 +50,18 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
         .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(8));
     abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
     Ok(())
+}
+
+/// Recognizes an acquired string whose sole payload owner must move into the global box.
+fn global_store_owns_persisted_string(ctx: &FunctionContext<'_>, value: ValueId, ty: &PhpType) -> bool {
+    if ty != &PhpType::Str { return false; }
+    let Some(value_ref) = ctx.function.value(value) else { return false; };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else { return false; };
+    let Some(producer) = ctx.function.instruction(inst) else { return false; };
+    matches!(producer.op, Op::Acquire | Op::StrPersist)
+        && !ctx.function.instructions.iter().any(|inst| {
+            inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+        })
 }
 
 /// Lowers a C extern global load into the EIR result slot.

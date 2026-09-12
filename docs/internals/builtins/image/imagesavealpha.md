@@ -1,11 +1,11 @@
 ---
-title: "imagesavealpha() — internals"
+title: "imagesavealpha() - internals"
 description: "Compiler internals for imagesavealpha(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 525
 ---
 
-## `imagesavealpha()` — internals
+## `imagesavealpha()` - internals
 
 ## Where it lives
 

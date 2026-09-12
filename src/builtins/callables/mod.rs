@@ -46,6 +46,9 @@ pub mod call_user_func_array;
 // Singletons
 pub mod class_alias;
 pub mod function_exists;
+pub mod get_called_class;
+pub mod get_class_methods;
+pub mod get_class_vars;
 pub mod get_object_vars;
 pub mod method_exists;
 pub mod preg_replace_callback;

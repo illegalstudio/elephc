@@ -490,7 +490,19 @@ pub fn e_ternary(condition: Expr, then_value: Expr, else_value: Expr) -> Expr {
     )
 }
 
-/// `(int) value`, `(string) value`, … — a scalar cast.
+/// Builds a strict match expression, preserving grouped labels and an optional default.
+pub fn e_match(subject: Expr, arms: Vec<(Vec<Expr>, Expr)>, default: Option<Expr>) -> Expr {
+    Expr::new(
+        ExprKind::Match {
+            subject: Box::new(subject),
+            arms,
+            default: default.map(Box::new),
+        },
+        Span::dummy(),
+    )
+}
+
+/// `(int) value`, `(string) value`: a scalar cast.
 pub fn e_cast(target: CastType, value: Expr) -> Expr {
     Expr::new(
         ExprKind::Cast {
@@ -1294,6 +1306,18 @@ fn walk_expr(expr: &Expr, out: &mut Vec<String>) {
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
         | ExprKind::Negate(inner) => walk_expr(inner, out),
+        ExprKind::Match { subject, arms, default } => {
+            walk_expr(subject, out);
+            for (labels, value) in arms {
+                for label in labels {
+                    walk_expr(label, out);
+                }
+                walk_expr(value, out);
+            }
+            if let Some(default) = default {
+                walk_expr(default, out);
+            }
+        }
         ExprKind::InstanceOf { value, .. } => walk_expr(value, out),
         // `new $class(...$args)`: the spread argument READS `$args`, so a parameter that
         // only ever reaches a constructor this way counts as used.
@@ -2088,6 +2112,18 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
         | ExprKind::Negate(inner) => audit_expr(inner, out),
+        ExprKind::Match { subject, arms, default } => {
+            audit_expr(subject, out);
+            for (labels, value) in arms {
+                for label in labels {
+                    audit_expr(label, out);
+                }
+                audit_expr(value, out);
+            }
+            if let Some(default) = default {
+                audit_expr(default, out);
+            }
+        }
         ExprKind::InstanceOf { value, .. } => audit_expr(value, out),
         // A closure body is ordinary code and can call anything, so it has to be walked — a
         // leaf arm here would exempt every call written inside one from this whole audit.
@@ -3160,6 +3196,28 @@ function ignore_mode(int $mode = 0): bool {
             panic!("expected a function declaration");
         };
         assert_eq!(body.len(), 1, "a read parameter needs no consumption");
+    }
+
+    /// Match subjects, labels, results and defaults all contribute reads and audited calls.
+    #[test]
+    fn match_operands_are_visible_to_prelude_scans() {
+        let names = ["subject", "first", "second", "result", "fallback"];
+        let operand = |name: &str| e_call(name, vec![e_var(name)]);
+        let mut declaration = function("choose");
+        for name in names {
+            declaration = declaration.param(name, t_mixed());
+        }
+        let built = declaration.returning(e_match(
+            operand("subject"),
+            vec![(vec![operand("first"), operand("second")], operand("result"))],
+            Some(operand("fallback")),
+        )).build();
+        let StmtKind::FunctionDecl { body, .. } = &built.kind else {
+            panic!("expected a function declaration");
+        };
+        assert_eq!(body.len(), 1, "match-only reads must not gain unused-parameter statements");
+        assert_eq!(reads_of(body), names);
+        assert_eq!(called_function_names(&vec![built]), names);
     }
 
     /// Declarations are built under the internal source mode, which exempts them from the

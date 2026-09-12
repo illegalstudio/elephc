@@ -9,6 +9,91 @@
 
 use super::*;
 
+/// An unsupported fourth replacement argument stays rejected through callable syntax.
+#[test]
+fn test_error_capped_string_replace_callable_rejects_fourth_argument() {
+    for name in ["str_replace", "str_ireplace"] {
+        expect_error(
+            &format!("<?php {name}('a', 'b', 'aAa', 0);"),
+            "3 arguments",
+        );
+        expect_error(
+            &format!("<?php $callback = {name}(...); $callback('a', 'b', 'aAa', 0);"),
+            "3 arguments",
+        );
+    }
+}
+
+/// Final-pass callable argument errors remain fatal even beside calls whose metadata stabilized.
+#[test]
+fn test_error_callable_property_metadata_does_not_hide_invalid_arguments() {
+    for source in [
+        r#"<?php
+class CallableParameterGuard {
+    public $callback;
+    public function install(): void { $this->callback = static fn(): int => 1; }
+    public function accept(callable $callback): void {}
+}
+$guard = new CallableParameterGuard();
+$guard->install();
+$guard->accept($guard->callback);
+$guard->accept(null);
+"#,
+        r#"<?php
+class CallableParameterGuard {
+    public $callback;
+    public function accept(callable $callback): void {}
+}
+$guard = new CallableParameterGuard();
+$guard->accept($guard->callback);
+"#,
+    ] {
+        expect_error(source, "parameter $callback expects Callable, got Void");
+    }
+}
+
+/// Declaration defaults do not permit explicit literal arguments to bind by reference.
+#[test]
+fn test_error_named_reference_defaults_still_reject_supplied_literals() {
+    for source in [
+        "<?php function f(int &$out = 7, int $value = 0): void {} f(value: 1, out: 7);",
+        "<?php function f(array &$out = [10], int $value = 0): void {} f(value: 1, out: [10]);",
+        "<?php function f(array &$out = [10], int $value = 0): void {} $f = f(...); $f(value: 1, out: [10]);",
+        "<?php class C { public function f(array &$out = [10], int $value = 0): void {} } $c = new C(); $c->f(value: 1, out: [10]);",
+        "<?php class C { public static function f(array &$out = [10], int $value = 0): void {} } C::f(value: 1, out: [10]);",
+        "<?php class C { public function __construct(array &$out = [10], int $value = 0) {} } new C(value: 1, out: [10]);",
+    ] {
+        expect_error(source, "parameter $out must be passed a variable");
+    }
+}
+
+/// Runtime unpack support does not relax the arity of concrete introspection calls.
+#[test]
+fn test_error_core_introspection_concrete_arity() {
+    for name in ["get_class_vars", "get_class_methods"] {
+        expect_error(
+            &format!("<?php {name}();"),
+            &format!("{name}() takes exactly 1 argument"),
+        );
+        expect_error(
+            &format!("<?php {name}('stdClass', 'stdClass');"),
+            &format!("{name}() takes exactly 1 argument"),
+        );
+    }
+}
+
+/// Shared introspection validators still reject concrete invalid positional and named values.
+#[test]
+fn test_error_core_introspection_concrete_argument_types() {
+    for (name, parameter, expected) in [
+        ("get_class_vars", "class", "get_class_vars() argument must be a string in AOT mode"),
+        ("get_class_methods", "object_or_class", "get_class_methods() argument must be an object or string in AOT mode"),
+    ] {
+        expect_error(&format!("<?php {name}(false);"), expected);
+        expect_error(&format!("<?php {name}({parameter}: false);"), expected);
+    }
+}
+
 /// Verifies that error call user func wrong args.
 #[test]
 fn test_error_call_user_func_wrong_args() {
@@ -214,6 +299,17 @@ fn test_error_call_non_callable_variable() {
     // Verifies invoking a non-callable variable (integer) produces a "not a callable"
     // diagnostic at runtime.
     expect_error(r#"<?php $x = 5; $x(1);"#, "not a callable");
+}
+
+/// Boxed runtime dispatch still rejects unpacking after an explicit named argument.
+#[test]
+fn test_error_boxed_direct_callable_spread_after_named_argument() {
+    for call in ["$callback(value: 1, ...[2]);", "$callbacks[0](value: 1, ...[2]);"] {
+        expect_error(
+            &format!("<?php function targets(): array {{ return [fn(int $value): int => $value]; }} $callbacks = targets(); $callback = $callbacks[0]; {call}"),
+            "cannot use argument unpacking after named arguments",
+        );
+    }
 }
 
 /// Verifies that error call user func ref param requires variable.
@@ -455,28 +551,6 @@ fn test_error_func_num_args_outside_function() {
     );
 }
 
-/// Verifies that a function with an optional parameter is rejected: elephc collects the
-/// surplus arguments through a hidden variadic and cannot tell a passed argument from a
-/// defaulted one, so it refuses instead of reporting a wrong count.
-#[test]
-fn test_error_func_num_args_with_optional_parameter() {
-    expect_error(
-        "<?php function f($a, $b = 5) { return func_num_args(); } echo f(1);",
-        "parameter $b has a default value",
-    );
-}
-
-/// Verifies that a function which already declares a variadic parameter is rejected,
-/// because the body may reassign that parameter and PHP would still report the arguments
-/// actually passed.
-#[test]
-fn test_error_func_get_args_in_variadic_function() {
-    expect_error(
-        "<?php function f(...$r) { return func_get_args(); } var_dump(f(1));",
-        "it declares the variadic parameter $r",
-    );
-}
-
 /// Verifies php-src's rule that these constructs cannot be called dynamically, here through
 /// first-class callable syntax.
 #[test]
@@ -538,6 +612,26 @@ fn test_error_callable_parameter_rejects_unknown_name_string() {
     );
 }
 
+/// An eval barrier permits only the runtime function-table form of a literal CUF callback.
+#[test]
+fn test_eval_barrier_allows_a_runtime_declared_call_user_func_name() {
+    for source in [
+        "<?php eval('function dyn_eval_cuf($value) { return $value + 1; }'); echo call_user_func('dyn_eval_cuf', 4);",
+        r#"<?php eval('namespace EvalInnerNs; function dyn_eval_inner_ns() { return 7; }'); echo call_user_func("EvalInnerNs\\dyn_eval_inner_ns");"#,
+    ] {
+        expect_no_error(source);
+    }
+}
+
+/// Without an eval barrier, an unknown literal CUF callback remains a compile-time error.
+#[test]
+fn test_error_call_user_func_rejects_an_unknown_literal_without_eval() {
+    expect_error(
+        "<?php echo call_user_func('never_declared', 1);",
+        "Undefined function for first-class callable: never_declared",
+    );
+}
+
 /// Verifies a callable string that is only known at run time is rejected with a named
 /// diagnostic instead of being bound to storage the callee could not invoke.
 #[test]
@@ -545,5 +639,200 @@ fn test_error_callable_parameter_rejects_runtime_string() {
     expect_error(
         "<?php function apply(callable $f, string $s) { return $f($s); } $n = $argc > 0 ? \"strtoupper\" : \"strtolower\"; echo apply($n, \"a\");",
         "a callable string must be a compile-time constant here",
+    );
+}
+
+/// Verifies that a callable ARRAY local satisfies a declared `callable` parameter.
+///
+/// `[$object, "method"]` keeps ordinary two-element array storage, so its inferred type is not
+/// `Callable`; the only record that it names a method is the target metadata captured at the
+/// assignment. Requiring a `Callable` storage type here rejected a PHP-valid program the callee
+/// then invokes through exactly that metadata.
+#[test]
+fn test_callable_parameter_accepts_a_callable_array_local() {
+    expect_no_error(
+        "<?php class Joiner { public function join(string $left, string $right): string { return $left . $right; } } function apply(callable $f, string $a, string $b): string { return $f($a, $b); } $callback = [new Joiner(), \"join\"]; echo apply($callback, \"x\", \"y\");",
+    );
+}
+
+/// Verifies the narrowness of that acceptance: an ordinary array with no callable-target
+/// metadata is still rejected, so array storage did not become universally callable.
+#[test]
+fn test_error_callable_parameter_rejects_a_plain_array() {
+    expect_error(
+        "<?php function apply(callable $f): mixed { return $f(); } $values = [1, 2]; echo apply($values);",
+        "expects Callable",
+    );
+}
+
+/// Verifies that a two-element array whose first entry is not an object stays rejected: the
+/// shape alone must not stand in for a resolved target.
+#[test]
+fn test_error_callable_parameter_rejects_an_unresolved_pair() {
+    expect_error(
+        "<?php function apply(callable $f): mixed { return $f(); } $pair = [1, \"join\"]; echo apply($pair);",
+        "expects Callable",
+    );
+}
+
+/// Callable-array facts from different reachable branches must not leak past the join.
+#[test]
+fn test_error_callable_array_target_is_cleared_when_branches_disagree() {
+    expect_error(
+        "<?php class BranchCallable { public static function left(): int { return 1; } public static function right(): int { return 2; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { if ($value > 0) { $callback = [BranchCallable::class, 'left']; } else { $callback = [BranchCallable::class, 'right']; } return consume($callback); } echo choose($argc);",
+        "expects Callable",
+    );
+}
+
+/// An elseif path starts from the prior condition's false-path facts, not its true body.
+#[test]
+fn test_error_elseif_does_not_inherit_callable_target_from_prior_body() {
+    expect_error(
+        "<?php class ElseifCallable { public static function base(): int { return 0; } public static function changed(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $callback = [ElseifCallable::class, 'base']; if ($value === 1) { $callback = [ElseifCallable::class, 'changed']; } elseif ($value === 2) { $marker = 2; } else { $marker = 3; } return consume($callback); } echo choose($argc);",
+        "expects Callable",
+    );
+}
+
+/// Identical static callable targets remain proven across every reachable branch.
+#[test]
+fn test_callable_array_target_is_retained_when_branches_agree() {
+    expect_no_error(
+        "<?php class BranchCallable { public static function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { if ($value > 0) { $callback = [BranchCallable::class, 'hit']; } else { $callback = [BranchCallable::class, 'hit']; } return consume($callback); } echo choose($argc);",
+    );
+}
+
+/// An instance target captured before a split remains valid when neither arm rewrites it.
+#[test]
+fn test_preexisting_instance_callable_array_survives_an_untouched_join() {
+    expect_no_error(
+        "<?php class BranchInstanceCallable { public function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $callback = [new BranchInstanceCallable(), 'hit']; if ($value > 0) { $marker = 1; } else { $marker = 2; } return consume($callback) + $marker; } echo choose($argc);",
+    );
+}
+
+/// Both arms may copy the same pre-captured receiver without creating separate captures.
+#[test]
+fn test_branch_copies_of_one_instance_callable_array_can_join() {
+    expect_no_error(
+        "<?php class BranchInstanceCallable { public function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $source = [new BranchInstanceCallable(), 'hit']; if ($value > 0) { $callback = $source; } else { $callback = $source; } return consume($callback); } echo choose($argc);",
+    );
+}
+
+/// Equal instance-target syntax in separate arms does not identify one captured receiver.
+#[test]
+fn test_error_branch_local_instance_callable_arrays_do_not_merge_by_syntax() {
+    expect_error(
+        "<?php class BranchInstanceCallable { public function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $receiver = new BranchInstanceCallable(); if ($value > 0) { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } else { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } return consume($callback); } echo choose($argc);",
+        "expects Callable",
+    );
+}
+
+/// Dynamic unpacking cannot turn nested PHP callable arrays into descriptor values.
+#[test]
+fn test_error_callable_parameter_spread_rejects_callable_array_elements() {
+    expect_error(
+        "<?php class SpreadCallable { public static function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } $callbacks = [[SpreadCallable::class, 'hit']]; echo consume(...$callbacks);",
+        "must contain Callable descriptors",
+    );
+}
+
+/// Dynamic unpacking keeps working when the source already stores descriptor values.
+#[test]
+fn test_callable_parameter_spread_accepts_descriptor_elements() {
+    expect_no_error(
+        "<?php class SpreadCallable { public static function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } $callbacks = [SpreadCallable::hit(...)]; echo consume(...$callbacks);",
+    );
+}
+
+/// A direct Mixed argument is not a descriptor projection and stays outside Callable unboxing.
+#[test]
+fn test_error_direct_mixed_argument_does_not_gain_descriptor_unboxing() {
+    for source in [
+        "<?php function consume(callable $callback): int { return $callback(); } function forward(mixed $value): int { return consume($value); } echo forward(null);",
+        "<?php function consume(callable $callback): int { return $callback(); } function forward(callable $dispatch, mixed $value): int { return $dispatch($value); } echo forward(consume(...), null);",
+    ] {
+        expect_error(source, "parameter $callback expects Callable, got Mixed");
+    }
+}
+
+/// A spread cannot synthesize the lvalue identity required by a by-reference Callable parameter.
+#[test]
+fn test_error_callable_parameter_by_ref_spread_stays_rejected() {
+    expect_error(
+        "<?php class ByRefSpreadTarget { public static function hit(): int { return 1; } } function consume(callable &$callback, int $count): int { return $callback() + $count; } function forward(array $callbacks): int { return consume(...$callbacks, count: 1); } echo forward([ByRefSpreadTarget::hit(...)]);",
+        "cannot be invoked with spread arguments when it has pass-by-reference parameters",
+    );
+}
+
+/// Descriptor calls may walk Traversable spreads for untyped string and callable-array targets.
+#[test]
+fn test_untyped_call_user_func_targets_accept_traversable_spreads() {
+    expect_no_error(
+        "<?php class DescriptorValues implements IteratorAggregate { public function getIterator(): Traversable { yield 5; } } function descriptorFunction($value): int { return $value; } class DescriptorMethods { public function instanceValue($value): int { return $value; } public static function staticValue($value): int { return $value; } } $values = new DescriptorValues(); $methods = new DescriptorMethods(); echo call_user_func('descriptorFunction', ...$values); echo call_user_func([$methods, 'instanceValue'], ...$values); echo call_user_func([DescriptorMethods::class, 'staticValue'], ...$values);",
+    );
+}
+
+/// Traversable unpack remains limited to descriptor invokers until direct-call lowering owns
+/// the same runtime iterator walk. Scalar sources remain invalid on the descriptor surface.
+#[test]
+fn test_descriptor_traversable_spread_does_not_weaken_other_unpack_surfaces() {
+    expect_error(
+        "<?php class DescriptorValues implements IteratorAggregate { public function getIterator(): Traversable { yield 5; } } function direct($value): int { return $value; } $values = new DescriptorValues(); echo direct(...$values);",
+        "Spread operator requires an array",
+    );
+    expect_error(
+        "<?php function descriptorFunction($value): int { return $value; } echo call_user_func('descriptorFunction', ...1);",
+        "Spread operator requires an array",
+    );
+}
+
+/// Verifies that implementing a BUILTIN interface stays valid when the program's `eval()` gives
+/// every frame the hidden argument collector.
+///
+/// A compiler-injected interface signature is synthesized after the `func_args` pass, so it can
+/// never carry the collector. Comparing its absence against the implementing method reported a
+/// widening the source never wrote, and refused a PHP-valid class.
+#[test]
+fn test_builtin_interface_implementation_accepts_the_generated_collector() {
+    expect_no_error(
+        "<?php class Counter implements Iterator { private int $i = 0; public function current(): mixed { return $this->i; } public function key(): mixed { return $this->i; } public function next(): void { $this->i++; } public function rewind(): void { $this->i = 0; } public function valid(): bool { return $this->i < 2; } } eval('return null;'); foreach (new Counter() as $value) { echo $value; }",
+    );
+}
+
+/// Verifies that overriding a BUILTIN class method stays valid under the same whole-program
+/// capture, for the inheritance half of the rule.
+#[test]
+fn test_builtin_class_override_accepts_the_generated_collector() {
+    expect_no_error(
+        "<?php class AppDate extends DateTime { public function format(string $format): string { return $format; } } eval('return null;'); echo AppDate::class;",
+    );
+}
+
+/// Verifies that the origin follows the inherited method, not merely the immediate source parent.
+/// `MiddleDate` does not redeclare `format()`, so the contract still originates in the injected
+/// `DateTime` schema and has no generated collector to compare with the child method.
+#[test]
+fn test_transitive_builtin_class_override_accepts_the_generated_collector() {
+    expect_no_error(
+        "<?php class MiddleDate extends DateTime {} class AppDate extends MiddleDate { public function format(string $format): string { return $format; } } eval('return null;'); echo AppDate::class;",
+    );
+}
+
+/// Verifies the same per-method origin rule through a source interface that only inherits its
+/// method contracts from the compiler-injected `Iterator` interface.
+#[test]
+fn test_transitive_builtin_interface_contract_accepts_the_generated_collector() {
+    expect_no_error(
+        "<?php interface AppIterator extends Iterator {} class Counter implements AppIterator { private int $i = 0; public function current(): mixed { return $this->i; } public function key(): mixed { return $this->i; } public function next(): void { $this->i++; } public function rewind(): void { $this->i = 0; } public function valid(): bool { return $this->i < 2; } } eval('return null;'); foreach (new Counter() as $value) { echo $value; }",
+    );
+}
+
+/// Hidden actual-count storage is a real ABI difference between source declarations. A source
+/// variadic that uses `func_num_args()` receives that extra slot, so an override whose parent does
+/// not capture the count must remain rejected.
+#[test]
+fn test_source_variadic_override_rejects_hidden_argc_abi_mismatch() {
+    expect_error(
+        "<?php class Base { public function countIt(int $first = 0, ...$rest): int { return count($rest); } } class Child extends Base { public function countIt(int $first = 0, ...$rest): int { return func_num_args(); } } echo (new Child())->countIt();",
+        "the inherited signature cannot be widened to collect surplus arguments",
     );
 }

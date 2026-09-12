@@ -1,11 +1,11 @@
 ---
-title: "imagerotate() — internals"
+title: "imagerotate() - internals"
 description: "Compiler internals for imagerotate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 524
 ---
 
-## `imagerotate()` — internals
+## `imagerotate()` - internals
 
 ## Where it lives
 

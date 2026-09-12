@@ -1,6 +1,6 @@
 ---
 title: "array_multisort()"
-description: "Sorts multiple arrays or multi-dimensional arrays."
+description: "Sorts exactly two equal-length indexed arrays in ascending tuple order. AOT accepts either two concrete integer arrays or two boxed scalar arrays, not a mixed pair. Concrete string/float arrays, sort flags, associative arrays, and eval are unsupported."
 sidebar:
   order: 26
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## array_multisort()
 
 ```php
-function array_multisort(array $array1, int $array2): bool
+function array_multisort(array $array1, array $array2): bool
 ```
 
-Sorts multiple arrays or multi-dimensional arrays.
+Sorts exactly two equal-length indexed arrays in ascending tuple order. AOT accepts either two concrete integer arrays or two boxed scalar arrays, not a mixed pair. Concrete string/float arrays, sort flags, associative arrays, and eval are unsupported.
 
 **Parameters**:
 - `$array1` (`array`), passed by reference
-- `$array2` (`int`), passed by reference
+- `$array2` (`array`), passed by reference
 
 **Returns**: `bool`
 
@@ -24,7 +24,7 @@ Sorts multiple arrays or multi-dimensional arrays.
 - **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

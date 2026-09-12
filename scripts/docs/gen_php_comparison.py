@@ -416,6 +416,13 @@ def render(
         "(registry builtin, injected prelude, name-resolver rewrite); symbols that exist only "
         "inside `eval()` are listed separately below. `—` marks a kind the module does not have.",
         "",
+        "The 59/59 Core inventory claim refers to elephc's own contract inventory, returned "
+        "by `get_extension_funcs(\"core\")` and enumerated by `CORE_FUNCTION_NAMES`. All 59 "
+        "names occur in the PHP 8.5 Core baseline; the inventory omits `clone`, "
+        "`get_error_handler()`, and `get_exception_handler()`. The comparison numerator is 57 "
+        "because it reports `die` and `exit` separately as language constructs, so the row "
+        "remains 57/62.",
+        "",
         "| PHP module | Functions | Classes | Constants |",
         "|---|---|---|---|",
     ]

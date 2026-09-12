@@ -1,11 +1,11 @@
 ---
-title: "cairo_image_surface_get_width() — internals"
+title: "cairo_image_surface_get_width() - internals"
 description: "Compiler internals for cairo_image_surface_get_width(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 410
 ---
 
-## `cairo_image_surface_get_width()` — internals
+## `cairo_image_surface_get_width()` - internals
 
 ## Where it lives
 

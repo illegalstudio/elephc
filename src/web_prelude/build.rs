@@ -1823,9 +1823,9 @@ fn decl_fn_error_log() -> Stmt {
         .build()
 }
 
-/// `trigger_error` — transcribed from the PHP form.
-fn decl_fn_trigger_error() -> Stmt {
-    function("trigger_error")
+/// Formats internal Web diagnostics without exposing non-user levels to `trigger_error`.
+fn decl_fn_elephc_web_trigger_error() -> Stmt {
+    function("__elephc_web_trigger_error")
         .param("message", TypeExpr::Str)
         .param_default("error_level", TypeExpr::Int, e_const("E_USER_NOTICE"))
         .returns(TypeExpr::Bool)
@@ -1833,20 +1833,62 @@ fn decl_fn_trigger_error() -> Stmt {
             s_assign("__elephc_te_prefix", e_str("Notice")),
             s_if(
                 e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_USER_ERROR")),
+                vec![s_assign("__elephc_te_prefix", e_str("Fatal error"))],
                 vec![
-                    s_assign("__elephc_te_prefix", e_str("Fatal error")),
+                    (
+                        e_binop(
+                            e_binop(
+                                e_var("error_level"),
+                                BinOp::StrictEq,
+                                e_const("E_USER_WARNING"),
+                            ),
+                            BinOp::Or,
+                            e_binop(
+                                e_var("error_level"),
+                                BinOp::StrictEq,
+                                e_const("E_WARNING"),
+                            ),
+                        ),
+                        vec![s_assign("__elephc_te_prefix", e_str("Warning"))],
+                    ),
+                    (
+                        e_binop(
+                            e_binop(
+                                e_var("error_level"),
+                                BinOp::StrictEq,
+                                e_const("E_USER_DEPRECATED"),
+                            ),
+                            BinOp::Or,
+                            e_binop(
+                                e_var("error_level"),
+                                BinOp::StrictEq,
+                                e_const("E_DEPRECATED"),
+                            ),
+                        ),
+                        vec![s_assign("__elephc_te_prefix", e_str("Deprecated"))],
+                    ),
                 ],
-                vec![
-                (e_binop(e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_USER_WARNING")), BinOp::Or, e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_WARNING"))), vec![
-                    s_assign("__elephc_te_prefix", e_str("Warning")),
-                ]),
-                (e_binop(e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_USER_DEPRECATED")), BinOp::Or, e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_DEPRECATED"))), vec![
-                    s_assign("__elephc_te_prefix", e_str("Deprecated")),
-                ]),
-            ],
                 None,
             ),
-            s_expr(e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_binop(e_var("__elephc_te_prefix"), BinOp::Concat, e_str(": ")), BinOp::Concat, e_var("message")), BinOp::Concat, e_str("\n"))])),
+            s_expr(e_call(
+                "fwrite",
+                vec![
+                    e_const("STDERR"),
+                    e_binop(
+                        e_binop(
+                            e_binop(
+                                e_var("__elephc_te_prefix"),
+                                BinOp::Concat,
+                                e_str(": "),
+                            ),
+                            BinOp::Concat,
+                            e_var("message"),
+                        ),
+                        BinOp::Concat,
+                        e_str("\n"),
+                    ),
+                ],
+            )),
             s_return(e_bool(true)),
         ])
         .build()
@@ -1899,7 +1941,7 @@ fn decl_fn_session_start() -> Stmt {
             s_if(
                 e_binop(e_var("status"), BinOp::StrictEq, e_const("PHP_SESSION_ACTIVE")),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_start(): Ignoring session_start() because a session is already active"), e_const("E_NOTICE")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Ignoring session_start() because a session is already active"), e_const("E_NOTICE")])),
                     s_return(e_bool(true)),
                 ],
                 vec![],
@@ -1959,7 +2001,7 @@ fn decl_fn_session_start() -> Stmt {
                 s_if(
                     e_not(e_call("__elephc_session_start_option_known", vec![e_var("__elephc_ok")])),
                     vec![
-                        s_expr(e_call("trigger_error", vec![e_binop(e_binop(e_str("session_start(): Setting option \""), BinOp::Concat, e_var("__elephc_ok")), BinOp::Concat, e_str("\" failed")), e_const("E_WARNING")])),
+                        s_expr(e_call("__elephc_web_trigger_error", vec![e_binop(e_binop(e_str("session_start(): Setting option \""), BinOp::Concat, e_var("__elephc_ok")), BinOp::Concat, e_str("\" failed")), e_const("E_WARNING")])),
                         s_continue(1),
                     ],
                     vec![],
@@ -2192,7 +2234,7 @@ fn decl_fn_session_start() -> Stmt {
                         ],
                         vec![],
                         Some(vec![
-                        s_expr(e_call("trigger_error", vec![e_str("session_start(): Setting option \"name\" failed"), e_const("E_WARNING")])),
+                        s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Setting option \"name\" failed"), e_const("E_WARNING")])),
                     ]),
                     ),
                 ],
@@ -2233,7 +2275,7 @@ fn decl_fn_session_start() -> Stmt {
                         ],
                         vec![],
                         Some(vec![
-                        s_expr(e_call("trigger_error", vec![e_str("session_start(): Setting option \"cookie_lifetime\" failed"), e_const("E_WARNING")])),
+                        s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Setting option \"cookie_lifetime\" failed"), e_const("E_WARNING")])),
                     ]),
                     ),
                 ],
@@ -2287,7 +2329,7 @@ fn decl_fn_session_start() -> Stmt {
                 ],
                 vec![
                 (e_binop(e_var("__elephc_opt_css"), BinOp::StrictNotEq, e_null()), vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_start(): Setting option \"cookie_samesite\" failed"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Setting option \"cookie_samesite\" failed"), e_const("E_WARNING")])),
                 ]),
             ],
                 None,
@@ -2327,7 +2369,7 @@ fn decl_fn_session_start() -> Stmt {
                         ],
                         vec![],
                         Some(vec![
-                        s_expr(e_call("trigger_error", vec![e_str("session_start(): Setting option \"serialize_handler\" failed"), e_const("E_WARNING")])),
+                        s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Setting option \"serialize_handler\" failed"), e_const("E_WARNING")])),
                     ]),
                     ),
                 ],
@@ -2340,8 +2382,8 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_cast(CastType::Int, e_var("__elephc_opt_gcprob")), BinOp::Lt, e_int(0))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): session.gc_probability must be greater than or equal to 0"), e_const("E_WARNING")])),
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): Setting option \"gc_probability\" failed"), e_const("E_WARNING")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): session.gc_probability must be greater than or equal to 0"), e_const("E_WARNING")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Setting option \"gc_probability\" failed"), e_const("E_WARNING")])),
                         ],
                         vec![],
                         Some(vec![
@@ -2358,8 +2400,8 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_cast(CastType::Int, e_var("__elephc_opt_gcdiv")), BinOp::LtEq, e_int(0))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): session.gc_divisor must be greater than 0"), e_const("E_WARNING")])),
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): Setting option \"gc_divisor\" failed"), e_const("E_WARNING")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): session.gc_divisor must be greater than 0"), e_const("E_WARNING")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Setting option \"gc_divisor\" failed"), e_const("E_WARNING")])),
                         ],
                         vec![],
                         Some(vec![
@@ -2384,7 +2426,7 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_cast(CastType::Int, e_var("__elephc_opt_sidlen")), BinOp::StrictNotEq, e_int(32))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): session.sid_length INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): session.sid_length INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -2392,7 +2434,7 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_call("elephc_web_session_set_sid_length", vec![e_cast(CastType::Int, e_var("__elephc_opt_sidlen"))]), BinOp::StrictNotEq, e_int(1)),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): Setting option \"sid_length\" failed"), e_const("E_WARNING")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Setting option \"sid_length\" failed"), e_const("E_WARNING")])),
                         ],
                         vec![],
                         None,
@@ -2407,7 +2449,7 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_cast(CastType::Int, e_var("__elephc_opt_sidbits")), BinOp::StrictNotEq, e_int(4))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): session.sid_bits_per_character INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): session.sid_bits_per_character INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -2415,7 +2457,7 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_call("elephc_web_session_set_sid_bits_per_character", vec![e_cast(CastType::Int, e_var("__elephc_opt_sidbits"))]), BinOp::StrictNotEq, e_int(1)),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): Setting option \"sid_bits_per_character\" failed"), e_const("E_WARNING")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Setting option \"sid_bits_per_character\" failed"), e_const("E_WARNING")])),
                         ],
                         vec![],
                         None,
@@ -2430,7 +2472,7 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_cast(CastType::String, e_var("__elephc_opt_referer")), BinOp::StrictNotEq, e_str(""))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): Usage of session.referer_check INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Usage of session.referer_check INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -2454,7 +2496,7 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_call("__elephc_session_ini_bool", vec![e_var("__elephc_opt_useonly")]), BinOp::StrictEq, e_int(0))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): Disabling session.use_only_cookies INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Disabling session.use_only_cookies INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -2478,7 +2520,7 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_call("__elephc_session_ini_bool", vec![e_var("__elephc_opt_transsid")]), BinOp::StrictEq, e_int(1))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): Enabling session.use_trans_sid INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Enabling session.use_trans_sid INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -2494,7 +2536,7 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_cast(CastType::String, e_var("__elephc_opt_transtags")), BinOp::StrictNotEq, e_str("a=href,area=href,frame=src,form="))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): Usage of session.trans_sid_tags INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Usage of session.trans_sid_tags INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -2510,7 +2552,7 @@ fn decl_fn_session_start() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_cast(CastType::String, e_var("__elephc_opt_transhosts")), BinOp::StrictNotEq, e_str(""))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("session_start(): Usage of session.trans_sid_hosts INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Usage of session.trans_sid_hosts INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -2535,7 +2577,7 @@ fn decl_fn_elephc_session_start_core() -> Stmt {
             s_if(
                 e_binop(e_var("status"), BinOp::StrictEq, e_const("PHP_SESSION_ACTIVE")),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_start(): Ignoring session_start() because a session is already active"), e_const("E_NOTICE")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Ignoring session_start() because a session is already active"), e_const("E_NOTICE")])),
                     s_return(e_bool(true)),
                 ],
                 vec![],
@@ -2917,7 +2959,7 @@ fn decl_fn_session_destroy() -> Stmt {
             s_if(
                 e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictNotEq, e_const("PHP_SESSION_ACTIVE")),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_destroy(): Trying to destroy uninitialized session"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_destroy(): Trying to destroy uninitialized session"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -2954,7 +2996,7 @@ fn decl_fn_session_id() -> Stmt {
             s_if(
                 e_binop(e_binop(e_var("id"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictEq, e_const("PHP_SESSION_ACTIVE"))),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_id(): Session ID cannot be changed when a session is active"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_id(): Session ID cannot be changed when a session is active"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -2983,7 +3025,7 @@ fn decl_fn_session_name() -> Stmt {
             s_if(
                 e_binop(e_binop(e_var("name"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictEq, e_const("PHP_SESSION_ACTIVE"))),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_name(): Session name cannot be changed when a session is active"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_name(): Session name cannot be changed when a session is active"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -2996,7 +3038,7 @@ fn decl_fn_session_name() -> Stmt {
                     s_if(
                         e_not(e_call("__elephc_session_name_valid", vec![e_cast(CastType::String, e_var("name"))])),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_binop(e_binop(e_str("session_name(): session.name \""), BinOp::Concat, e_cast(CastType::String, e_var("name"))), BinOp::Concat, e_str("\" must not be numeric, empty, contain null bytes or any of the following characters \"=,;.[ \\t\\r\\n\\013\\014\"")), e_const("E_WARNING")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_binop(e_binop(e_str("session_name(): session.name \""), BinOp::Concat, e_cast(CastType::String, e_var("name"))), BinOp::Concat, e_str("\" must not be numeric, empty, contain null bytes or any of the following characters \"=,;.[ \\t\\r\\n\\013\\014\"")), e_const("E_WARNING")])),
                             s_return(e_var("old")),
                         ],
                         vec![],
@@ -3088,7 +3130,7 @@ fn decl_fn_session_save_path() -> Stmt {
             s_if(
                 e_binop(e_binop(e_var("path"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictEq, e_const("PHP_SESSION_ACTIVE"))),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_save_path(): Session save path cannot be changed when a session is active"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_save_path(): Session save path cannot be changed when a session is active"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -3117,7 +3159,7 @@ fn decl_fn_session_regenerate_id() -> Stmt {
             s_if(
                 e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictNotEq, e_const("PHP_SESSION_ACTIVE")),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_regenerate_id(): Session ID cannot be regenerated when there is no active session"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_regenerate_id(): Session ID cannot be regenerated when there is no active session"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -3324,7 +3366,7 @@ fn decl_fn_session_create_id() -> Stmt {
                 vec![
                     s_if(
                         e_binop(e_var("prefix"), BinOp::StrictNotEq, e_str("")),
-                        vec![s_expr(e_call("trigger_error", vec![e_str("session_create_id(): Prefix cannot contain special characters. Only the A-Z, a-z, 0-9, \"-\", and \",\" characters are allowed"), e_const("E_WARNING")]))],
+                        vec![s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_create_id(): Prefix cannot contain special characters. Only the A-Z, a-z, 0-9, \"-\", and \",\" characters are allowed"), e_const("E_WARNING")]))],
                         vec![],
                         None,
                     ),
@@ -3346,7 +3388,7 @@ fn decl_fn_session_gc() -> Stmt {
             s_if(
                 e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictNotEq, e_const("PHP_SESSION_ACTIVE")),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_gc(): Session cannot be garbage collected when there is no active session"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_gc(): Session cannot be garbage collected when there is no active session"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -3531,7 +3573,7 @@ fn decl_fn_session_set_cookie_params() -> Stmt {
             s_if(
                 e_binop(e_call("elephc_web_session_get_use_cookies", vec![]), BinOp::StrictEq, e_int(0)),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_set_cookie_params(): Session cookies cannot be used when session.use_cookies is disabled"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_set_cookie_params(): Session cookies cannot be used when session.use_cookies is disabled"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -3540,7 +3582,7 @@ fn decl_fn_session_set_cookie_params() -> Stmt {
             s_if(
                 e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictEq, e_const("PHP_SESSION_ACTIVE")),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_set_cookie_params(): Session cookie parameters cannot be changed when a session is active"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_set_cookie_params(): Session cookie parameters cannot be changed when a session is active"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -3562,7 +3604,7 @@ fn decl_fn_session_set_cookie_params() -> Stmt {
                         s_if(
                             e_call("is_int", vec![e_var("__elephc_scp_key")]),
                             vec![
-                                s_expr(e_call("trigger_error", vec![e_str("session_set_cookie_params(): Argument #1 ($lifetime_or_options) cannot contain numeric keys"), e_const("E_WARNING")])),
+                                s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_set_cookie_params(): Argument #1 ($lifetime_or_options) cannot contain numeric keys"), e_const("E_WARNING")])),
                                 s_continue(1),
                             ],
                             vec![],
@@ -3602,7 +3644,7 @@ fn decl_fn_session_set_cookie_params() -> Stmt {
                             ]),
                         ],
                             Some(vec![
-                            s_expr(e_call("trigger_error", vec![e_binop(e_binop(e_str("session_set_cookie_params(): Argument #1 ($lifetime_or_options) contains an unrecognized key \""), BinOp::Concat, e_cast(CastType::String, e_var("__elephc_scp_key"))), BinOp::Concat, e_str("\"")), e_const("E_WARNING")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_binop(e_binop(e_str("session_set_cookie_params(): Argument #1 ($lifetime_or_options) contains an unrecognized key \""), BinOp::Concat, e_cast(CastType::String, e_var("__elephc_scp_key"))), BinOp::Concat, e_str("\"")), e_const("E_WARNING")])),
                         ]),
                         ),
                     ]),
@@ -3782,7 +3824,7 @@ fn decl_fn_session_set_save_handler() -> Stmt {
             s_if(
                 e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated"), e_const("E_DEPRECATED")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_set_save_handler(): Providing individual callbacks instead of an object implementing SessionHandlerInterface is deprecated"), e_const("E_DEPRECATED")])),
                 ],
                 vec![],
                 None,
@@ -3838,7 +3880,7 @@ fn decl_fn_elephc_session_encode() -> Stmt {
                         s_if(
                             e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80500)),
                             vec![
-                                s_expr(e_call("trigger_error", vec![e_binop(e_binop(e_str("session_encode(): Failed to write session data. Data contains invalid key \""), BinOp::Concat, e_var("ks")), BinOp::Concat, e_str("\"")), e_const("E_WARNING")])),
+                                s_expr(e_call("__elephc_web_trigger_error", vec![e_binop(e_binop(e_str("session_encode(): Failed to write session data. Data contains invalid key \""), BinOp::Concat, e_var("ks")), BinOp::Concat, e_str("\"")), e_const("E_WARNING")])),
                             ],
                             vec![],
                             None,
@@ -3929,7 +3971,7 @@ fn decl_fn_elephc_session_send_cookie() -> Stmt {
             s_if(
                 e_binop(e_var("partitioned"), BinOp::And, e_not(e_var("secure"))),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("session_start(): Partitioned session cookie cannot be used without also configuring it as secure"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("session_start(): Partitioned session cookie cannot be used without also configuring it as secure"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -4530,7 +4572,7 @@ fn decl_fn_ini_set() -> Stmt {
             s_if(
                 e_binop(e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_var("option"), BinOp::StrictEq, e_str("session.gc_probability"))), BinOp::And, e_binop(e_cast(CastType::Int, e_var("value")), BinOp::Lt, e_int(0))),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("ini_set(): session.gc_probability must be greater than or equal to 0"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): session.gc_probability must be greater than or equal to 0"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -4539,7 +4581,7 @@ fn decl_fn_ini_set() -> Stmt {
             s_if(
                 e_binop(e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80400)), BinOp::And, e_binop(e_var("option"), BinOp::StrictEq, e_str("session.gc_divisor"))), BinOp::And, e_binop(e_cast(CastType::Int, e_var("value")), BinOp::LtEq, e_int(0))),
                 vec![
-                    s_expr(e_call("trigger_error", vec![e_str("ini_set(): session.gc_divisor must be greater than 0"), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): session.gc_divisor must be greater than 0"), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -4552,7 +4594,7 @@ fn decl_fn_ini_set() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.sid_length")), BinOp::And, e_binop(e_cast(CastType::Int, e_var("value")), BinOp::StrictNotEq, e_int(32))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("ini_set(): session.sid_length INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): session.sid_length INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -4560,7 +4602,7 @@ fn decl_fn_ini_set() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.sid_bits_per_character")), BinOp::And, e_binop(e_cast(CastType::Int, e_var("value")), BinOp::StrictNotEq, e_int(4))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("ini_set(): session.sid_bits_per_character INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): session.sid_bits_per_character INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -4568,7 +4610,7 @@ fn decl_fn_ini_set() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.use_only_cookies")), BinOp::And, e_binop(e_call("__elephc_session_ini_bool", vec![e_var("value")]), BinOp::StrictEq, e_int(0))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("ini_set(): Disabling session.use_only_cookies INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): Disabling session.use_only_cookies INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -4576,7 +4618,7 @@ fn decl_fn_ini_set() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.use_trans_sid")), BinOp::And, e_binop(e_call("__elephc_session_ini_bool", vec![e_var("value")]), BinOp::StrictEq, e_int(1))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("ini_set(): Enabling session.use_trans_sid INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): Enabling session.use_trans_sid INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -4584,7 +4626,7 @@ fn decl_fn_ini_set() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.referer_check")), BinOp::And, e_binop(e_cast(CastType::String, e_var("value")), BinOp::StrictNotEq, e_str(""))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("ini_set(): Usage of session.referer_check INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): Usage of session.referer_check INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -4592,7 +4634,7 @@ fn decl_fn_ini_set() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.trans_sid_tags")), BinOp::And, e_binop(e_cast(CastType::String, e_var("value")), BinOp::StrictNotEq, e_str("a=href,area=href,frame=src,form="))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("ini_set(): Usage of session.trans_sid_tags INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): Usage of session.trans_sid_tags INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -4600,7 +4642,7 @@ fn decl_fn_ini_set() -> Stmt {
                     s_if(
                         e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.trans_sid_hosts")), BinOp::And, e_binop(e_cast(CastType::String, e_var("value")), BinOp::StrictNotEq, e_str(""))),
                         vec![
-                            s_expr(e_call("trigger_error", vec![e_str("ini_set(): Usage of session.trans_sid_hosts INI setting is deprecated"), e_const("E_DEPRECATED")])),
+                            s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): Usage of session.trans_sid_hosts INI setting is deprecated"), e_const("E_DEPRECATED")])),
                         ],
                         vec![],
                         None,
@@ -5041,7 +5083,7 @@ fn decl_fn_ini_get_all() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_expr(e_call("trigger_error", vec![e_binop(e_binop(e_str("ini_get_all(): Extension \""), BinOp::Concat, e_var("extension")), BinOp::Concat, e_str("\" cannot be found")), e_const("E_WARNING")])),
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_binop(e_binop(e_str("ini_get_all(): Extension \""), BinOp::Concat, e_var("extension")), BinOp::Concat, e_str("\" cannot be found")), e_const("E_WARNING")])),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -5264,7 +5306,7 @@ pub(crate) fn web_declarations(
             decl_class_elephcsessionstate(),
             decl_class_elephccallablesessionhandler(),
             decl_fn_error_log(),
-            decl_fn_trigger_error(),
+            decl_fn_elephc_web_trigger_error(),
             decl_fn_elephc_session_start_option_known(),
             decl_fn_session_start(),
             decl_fn_elephc_session_start_core(),

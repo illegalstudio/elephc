@@ -9,6 +9,14 @@
 
 use super::*;
 
+/// Builds the non-null PHP array contract without assuming indexed or associative storage.
+fn declared_array_contract() -> PhpType {
+    PhpType::Union(vec![
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
+    ])
+}
+
 /// Verifies that `??=` with no right-hand side expression produces an "Unexpected token" error.
 /// Input: `$x ??=;` — the semicolon terminates the expression with no RHS.
 #[test]
@@ -54,6 +62,38 @@ fn test_error_by_reference_foreach_rejects_iterable_type() {
         "<?php function f(iterable $items) { foreach ($items as &$value) {} }",
         "by-reference foreach over Iterator/IteratorAggregate objects",
     );
+}
+
+/// Builtin iterator-interface parameters are valid foreach sources in every canonical spelling.
+#[test]
+fn test_foreach_accepts_builtin_iterator_interface_parameter_types() {
+    let sources = [
+        "<?php function walk(Traversable $items): void { foreach ($items as $value) {} }",
+        "<?php function walk(Iterator $items): void { foreach ($items as $value) {} }",
+        "<?php function walk(IteratorAggregate $items): void { foreach ($items as $value) {} }",
+        r"<?php function walk(\tRaVeRsAbLe $items): void { foreach ($items as $value) {} }",
+        r"<?php namespace Domain; function walk(\TrAvErSaBlE $items): void { foreach ($items as $value) {} }",
+    ];
+    for source in sources {
+        assert!(
+            check_source(source).is_ok(),
+            "builtin iterator interface should be foreach-compatible: {source}",
+        );
+    }
+}
+
+/// Nominal objects and namespaced lookalikes do not inherit builtin Traversable behavior.
+#[test]
+fn test_foreach_rejects_non_iterable_objects_and_namespaced_traversable_lookalikes() {
+    for source in [
+        "<?php class Plain {} function walk(Plain $items): void { foreach ($items as $value) {} }",
+        r"<?php namespace Domain; interface Traversable {} function walk(Traversable $items): void { foreach ($items as $value) {} }",
+    ] {
+        expect_error(
+            source,
+            "to implement Iterator or IteratorAggregate",
+        );
+    }
 }
 
 /// Verifies that by-reference foreach over a parameter typed `Iterator` is rejected.
@@ -130,7 +170,7 @@ fn test_error_mixed_rejected_at_object_parameter_boundary() {
 fn test_error_mixed_rejected_at_array_return_boundary() {
     expect_error(
         "<?php function relay(mixed $value): array { return $value; }",
-        "Function 'relay' return type expects Array(Mixed), got Mixed",
+        "Function 'relay' return type expects Union([Array(Mixed), AssocArray { key: Mixed, value: Mixed }]), got Mixed",
     );
 }
 
@@ -497,9 +537,9 @@ fn test_null_coalesce_merges_mismatched_arms_to_mixed_in_checker() {
 
 }
 
-/// Verifies generic array return hint keeps specific method and property types.
+/// Declared array method returns and inferred properties retain the boxed PHP array contract.
 #[test]
-fn test_generic_array_return_hint_keeps_specific_method_and_property_types() {
+fn test_declared_array_return_hint_preserves_method_and_property_contracts() {
     let result = check_source_full(
         r#"<?php
 class Entry {
@@ -537,24 +577,18 @@ class Wad {
         .find(|(name, _)| name == "entries")
         .map(|(_, ty)| ty.clone())
         .expect("missing entries property");
-    assert_eq!(
-        entries_ty,
-        PhpType::Array(Box::new(PhpType::Object("Entry".to_string())))
-    );
+    assert_eq!(entries_ty, declared_array_contract());
 
     let load_entries = wad
         .methods
         .get(&elephc::names::php_symbol_key("loadEntries"))
         .expect("missing loadEntries");
-    assert_eq!(
-        load_entries.return_type,
-        PhpType::Array(Box::new(PhpType::Object("Entry".to_string())))
-    );
+    assert_eq!(load_entries.return_type, declared_array_contract());
 }
 
-/// Verifies generic array param and return hints keep specific string array types.
+/// Array declarations do not specialize their ABI to the layout of one string-array call site.
 #[test]
-fn test_generic_array_param_and_return_hints_keep_specific_string_array_types() {
+fn test_declared_array_param_and_return_hints_preserve_layout_independent_contracts() {
     let result = check_source_full(
         r#"<?php
 function paint(string $name): string {
@@ -570,6 +604,7 @@ function loadNames(): array {
 }
 
 echo pickSecond(loadNames());
+echo pickSecond(["first" => "foo", 1 => "bar"]);
 "#,
     )
     .expect("expected source to type-check");
@@ -578,16 +613,13 @@ echo pickSecond(loadNames());
         .functions
         .get("pickSecond")
         .expect("missing pickSecond signature");
-    assert_eq!(
-        pick_second.params[0].1,
-        PhpType::Array(Box::new(PhpType::Str))
-    );
+    assert_eq!(pick_second.params[0].1, declared_array_contract());
 
     let load_names = result
         .functions
         .get("loadNames")
         .expect("missing loadNames signature");
-    assert_eq!(load_names.return_type, PhpType::Array(Box::new(PhpType::Str)));
+    assert_eq!(load_names.return_type, declared_array_contract());
 }
 
 // --- Include/Require errors ---
@@ -1037,15 +1069,15 @@ fn test_heterogeneous_match_assoc_merge_stays_array() {
     );
 }
 
-/// Guards issue #587's fix against over-widening: a merge of non-array scalar arms
-/// (`1` vs `"a"`) must still type as `mixed`, so an array-only use like `array_sum()`
-/// stays rejected.
+/// Scalar match arms remain Mixed, and aggregate use validates their actual tag at runtime.
 #[test]
-fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
-    expect_error(
+fn test_scalar_match_merge_stays_mixed_with_checked_array_use() {
+    let tokens = tokenize(
         "<?php $r = match($argc) { 1 => 1, default => \"a\" }; echo array_sum($r);",
-        "array_sum() argument must be array",
-    );
+    ).expect("tokenize failed");
+    let ast = parse(&tokens).expect("parse failed");
+    let result = types::check(&ast).expect("Mixed aggregates are validated at runtime");
+    assert_eq!(result.global_env.get("r"), Some(&PhpType::Mixed));
 }
 
 /// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe
@@ -1263,6 +1295,55 @@ fn test_error_strict_types_rejects_closure_argument() {
 fn test_error_strict_types_rejects_variadic_element() {
     expect_error(
         "<?php declare(strict_types=1); function f(int ...$xs) { return count($xs); } echo f(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
+/// Handing the same function out as a callable must not relax its declared element type.
+///
+/// A descriptor-reachable collector is STORED as `array<mixed>` so the invoker may hand it a
+/// named tail as a hash, and re-deriving the element contract from that storage would turn
+/// `int ...$xs` into an untyped tail. The declaration's element syntax survives the storage move,
+/// and this is the direct call that proves validation still resolves it. `f(...)` appears BEFORE
+/// the bad call so the promotion has already happened when it is checked.
+#[test]
+fn test_error_strict_types_rejects_variadic_element_after_callable_promotion() {
+    expect_error(
+        "<?php declare(strict_types=1); function f(int ...$xs) { return count($xs); } $g = f(...); echo f(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
+/// The same rule on a METHOD collector, whose signature lives in the class table.
+#[test]
+fn test_error_strict_types_rejects_method_variadic_element_after_callable_promotion() {
+    expect_error(
+        "<?php declare(strict_types=1); class Adder { public function add(int ...$xs): int { return array_sum($xs); } } \
+         $adder = new Adder(); $call = $adder->add(...); echo $adder->add(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
+/// The same rule on a STATIC method collector, reached through a callable array rather than syntax.
+#[test]
+fn test_error_strict_types_rejects_static_variadic_element_after_callable_array_promotion() {
+    expect_error(
+        "<?php declare(strict_types=1); class Joiner { public static function join(int ...$xs): int { return array_sum($xs); } } \
+         $call = [Joiner::class, 'join']; echo Joiner::join(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
+/// A CLOSURE's declared variadic element type is a contract too, and used to be dropped entirely.
+///
+/// A closure value is always a descriptor, so its collector always takes the descriptor
+/// container; the declared `int` is kept beside that storage rather than instead of it. The
+/// signature builder used to push a bare `None`/`false` pair for a closure collector, which
+/// silently accepted anything here.
+#[test]
+fn test_error_strict_types_rejects_closure_variadic_element() {
+    expect_error(
+        "<?php declare(strict_types=1); $f = function (int ...$xs) { return count($xs); }; echo $f(true);",
         "variadic parameter $xs expects Int, got Bool",
     );
 }

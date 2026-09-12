@@ -1,11 +1,11 @@
 ---
-title: "image_type_to_mime_type() — internals"
+title: "image_type_to_mime_type() - internals"
 description: "Compiler internals for image_type_to_mime_type(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 454
 ---
 
-## `image_type_to_mime_type()` — internals
+## `image_type_to_mime_type()` - internals
 
 ## Where it lives
 

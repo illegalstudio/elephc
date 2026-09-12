@@ -1,16 +1,16 @@
 ---
-title: "class_alias() — internals"
+title: "class_alias() - internals"
 description: "Compiler internals for class_alias(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 73
 ---
 
-## `class_alias()` — internals
+## `class_alias()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/class_alias.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/class_alias.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

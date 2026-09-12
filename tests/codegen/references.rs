@@ -11,10 +11,10 @@
 //! - A reference property's slot holds a pointer to a 16-byte ref-cell; reads and writes
 //!   on either the local alias or the property dereference the shared cell, so a write
 //!   through one side is observed through the other.
-//! - By-reference returns hand the caller the cell pointer, which `$x = &call()` binds
-//!   non-owning. The cell pointer is one machine word for every element type — including
-//!   `string` (a `{ptr,len}` cell) and `float` (a `d`-register cell) — so it travels in the
-//!   integer result register, never split across the string/float result registers.
+//! - Resolved by-reference returns transfer a managed cell owner to `$x = &call()`;
+//!   borrowed cells remain non-owning. Ordinary value calls copy the referenced value.
+//! - Every raw cell pointer travels in the integer result register, including cells
+//!   containing a string pair or a float, without using string/float result registers.
 
 use crate::support::*;
 

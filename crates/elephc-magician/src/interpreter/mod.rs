@@ -21,6 +21,7 @@ mod control;
 mod dynamic_functions;
 mod expressions;
 mod include_exec;
+mod operands;
 mod libc_shims;
 mod reflection;
 mod return_type_compat;
@@ -66,6 +67,7 @@ use control::{
 use dynamic_functions::*;
 use expressions::*;
 use include_exec::*;
+use operands::*;
 use libc_shims::*;
 use reflection::*;
 use return_type_compat::*;
@@ -123,8 +125,14 @@ pub fn execute_program_outcome_with_context(
 ) -> Result<EvalOutcome, EvalStatus> {
     match execute_statements(program.statements(), context, scope, values) {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
-        Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
-        Ok(EvalControl::Throw(result)) => Ok(EvalOutcome::Throwable(result)),
+        Ok(EvalControl::Return(result)) => {
+            let result = if result.is_borrowed() { values.retain(result)? } else { result };
+            Ok(EvalOutcome::Value(result))
+        }
+        Ok(EvalControl::Throw(result)) => {
+            let result = if result.is_borrowed() { values.retain(result)? } else { result };
+            Ok(EvalOutcome::Throwable(result))
+        }
         Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
@@ -207,8 +215,10 @@ pub fn execute_context_function_call_array_outcome(
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let evaluated_args = eval_array_call_arg_values(arg_array, context, values)?;
-    match eval_callable_with_call_array_args(name, evaluated_args, context, values) {
+    let result = with_eval_array_call_arguments(arg_array, context, values, |arguments, context, values| {
+        eval_callable_with_call_array_args(name, arguments, context, values)
+    });
+    match result {
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()

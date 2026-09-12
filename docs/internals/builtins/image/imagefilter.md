@@ -1,11 +1,11 @@
 ---
-title: "imagefilter() — internals"
+title: "imagefilter() - internals"
 description: "Compiler internals for imagefilter(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 505
 ---
 
-## `imagefilter()` — internals
+## `imagefilter()` - internals
 
 ## Where it lives
 

@@ -915,7 +915,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
 /// - `call_user_func`/`call_user_func_array` whose callback is not a statically resolved
 ///   form (closure / first-class callable / array literal);
 /// - `iterator_apply` whose callback is not a statically resolved form;
-/// - `preg_replace_callback` whose callback is a runtime (non-literal) string candidate;
+/// - `preg_replace_callback`, whose raw match array always crosses a descriptor adapter;
 /// - `new Fiber($cb)` whose callback is not a statically resolved form.
 fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
     match &expr.kind {
@@ -966,9 +966,12 @@ fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
 /// take it second (after the source array, pattern, or iterator).
 fn function_call_needs_descriptor_invoker(name: &str, args: &[Expr]) -> bool {
     let callback = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        // Literal function names also need argument adaptation: a declared PHP `array`
+        // parameter is boxed and cannot receive the regex runtime's raw match array.
+        "preg_replace_callback" => return true,
         "call_user_func" | "call_user_func_array" | "array_map" => args.first(),
         "array_filter" | "array_walk" | "array_walk_recursive" | "array_reduce" | "usort"
-        | "uasort" | "uksort" | "iterator_apply" | "preg_replace_callback" | "array_find"
+        | "uasort" | "uksort" | "iterator_apply" | "array_find"
         | "array_any" | "array_all" => args.get(1),
         "array_udiff" | "array_uintersect" => args.get(2),
         _ => return false,
@@ -1243,6 +1246,14 @@ mod tests {
             features_for("<?php $cb = \"cb\"; echo preg_replace_callback(\"/a/\", $cb, \"a\");")
                 .descriptor_invoker
         );
+    }
+
+    /// Literal regex callbacks still need the dispatcher that adapts their declared array parameter.
+    #[test]
+    fn test_runtime_features_include_descriptor_invoker_for_preg_replace_callback_literal() {
+        assert!(features_for(
+            "<?php function replace_match(array $matches): string { return 'x'; } echo preg_replace_callback('/a/', 'replace_match', 'a');"
+        ).descriptor_invoker);
     }
 
     /// Verifies every static reference form for the custom session-handler API keeps

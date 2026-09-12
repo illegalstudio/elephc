@@ -80,9 +80,10 @@ pub(super) fn lower_property_assign(
         Op::PropSet.default_effects(),
         Some(span),
     );
-    if let Some(property_ty) = object_property_type(ctx, object.value, property) {
-        release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
-    }
+    // Undeclared dynamic properties store boxed Mixed values. Boxing retains a
+    // concrete temporary payload just like a declared property store does.
+    let property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
+    release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
 }
 
 /// Narrows a boxed Mixed value assigned to a packed `int` field into its raw `I64` payload.
@@ -246,6 +247,20 @@ pub(super) fn contextualize_property_array_assignment(
     value_expr: &Expr,
     span: Span,
 ) -> LoweredValue {
+    let Some(contextual_ty) = object_property_type(ctx, object, property) else {
+        return lowered;
+    };
+    contextualize_property_array_value(ctx, lowered, value_expr, &contextual_ty, span)
+}
+
+/// Consumes a fresh indexed literal when the physical property requires associative storage.
+pub(in crate::ir_lower) fn contextualize_property_array_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    lowered: LoweredValue,
+    value_expr: &Expr,
+    contextual_ty: &PhpType,
+    span: Span,
+) -> LoweredValue {
     let php_type = ctx.builder.value_php_type(lowered.value);
     if !matches!(value_expr.kind, ExprKind::ArrayLiteral(_)) {
         return lowered;
@@ -253,9 +268,6 @@ pub(super) fn contextualize_property_array_assignment(
     if !matches!(php_type.codegen_repr(), PhpType::Array(_)) {
         return lowered;
     }
-    let Some(contextual_ty) = object_property_type(ctx, object, property) else {
-        return lowered;
-    };
     let contextual_ty = contextual_ty.codegen_repr();
     if !matches!(contextual_ty, PhpType::AssocArray { .. }) {
         return lowered;

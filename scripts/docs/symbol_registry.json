@@ -16379,6 +16379,42 @@
       },
       "extension": false,
       "internal": false,
+      "module": "core",
+      "name": "DEBUG_BACKTRACE_IGNORE_ARGS",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "core",
+      "name": "DEBUG_BACKTRACE_PROVIDE_OBJECT",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "standard",
       "name": "DIRECTORY_SEPARATOR",
       "route": "predefined",
@@ -16583,7 +16619,9 @@
       "name": "E_ALL",
       "route": "predefined",
       "since": null,
-      "value": 32767
+      "value": {
+        "target_dependent": "int"
+      }
     },
     {
       "aot": {
@@ -20756,6 +20794,24 @@
       "route": "predefined",
       "since": null,
       "value": -9223372036854775808
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "core",
+      "name": "PHP_INT_SIZE",
+      "route": "predefined",
+      "since": null,
+      "value": 8
     },
     {
       "aot": {

@@ -1,11 +1,11 @@
 ---
-title: "imagefill() — internals"
+title: "imagefill() - internals"
 description: "Compiler internals for imagefill(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 499
 ---
 
-## `imagefill()` — internals
+## `imagefill()` - internals
 
 ## Where it lives
 

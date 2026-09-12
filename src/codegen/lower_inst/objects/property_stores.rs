@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Promoted by-reference parameters retain their original ref-cell aliasing.
+//! - Promoted properties cannot publish an active boxed-walk entry borrow.
 
 use super::*;
 
@@ -103,7 +104,7 @@ pub(super) fn emit_property_store(
 /// after the call. The property therefore retains the final array/hash pointer, releases its old
 /// physical container through heap-kind dispatch, and stores the replacement without consulting
 /// the declared packed representation. Reference properties perform the same transfer through
-/// their object-owned ref-cell.
+/// their object-owned ref-cell. Boxed PHP arrays retain the Mixed cell representation on both sides.
 pub(super) fn store_mutated_container_property(
     ctx: &mut FunctionContext<'_>,
     object: crate::ir::ValueId,
@@ -111,9 +112,11 @@ pub(super) fn store_mutated_container_property(
     value: crate::ir::ValueId,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
-    if !matches!(&value_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-        || !matches!(slot.php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
-    {
+    let target_ty = slot.php_type.codegen_repr();
+    let raw_pair = matches!(&value_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        && matches!(&target_ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+    let boxed_pair = value_ty == PhpType::Mixed && target_ty == PhpType::Mixed;
+    if !raw_pair && !boxed_pair {
         return Err(CodegenIrError::unsupported(format!(
             "mutated container store for {}::${} from PHP type {:?} to {:?}",
             slot.class_name, slot.property, value_ty, slot.php_type
@@ -147,9 +150,21 @@ pub(super) fn emit_reference_property_bind(
     base_reg: &str,
 ) -> Result<()> {
     super::super::materialize_local_ref_arg_address(ctx, value)?;
+    let pointer_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, base_reg);
+    abi::emit_push_reg(ctx.emitter, pointer_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
+    let safe = ctx.next_label("reference_property_bind_safe");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &safe);
+    abi::emit_pop_reg(ctx.emitter, pointer_reg);
+    abi::emit_pop_reg(ctx.emitter, base_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_unmanaged_reference_escape_error");
+    ctx.emitter.label(&safe);
+    abi::emit_pop_reg(ctx.emitter, pointer_reg);
+    abi::emit_pop_reg(ctx.emitter, base_reg);
     abi::emit_store_to_address(
         ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
+        pointer_reg,
         base_reg,
         slot.offset,
     );

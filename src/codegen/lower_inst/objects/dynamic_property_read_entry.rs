@@ -122,18 +122,18 @@ pub(super) fn emit_dynamic_property_on_null_warning(
     ctx: &mut FunctionContext<'_>,
     property_value: ValueId,
 ) -> Result<()> {
-    emit_property_warning_fragment(ctx, b"Warning: Attempt to read property \"");
+    emit_property_warning_fragment(ctx, b"Warning: Attempt to read property \"", false);
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.load_string_value_to_regs(property_value, "x1", "x2")?,
         Arch::X86_64 => ctx.load_string_value_to_regs(property_value, "rdi", "rsi")?,
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
-    emit_property_warning_fragment(ctx, b"\" on null\n");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    emit_property_warning_fragment(ctx, b"\" on null\n", true);
     Ok(())
 }
 
 /// Writes one static fragment through the suppressible PHP warning channel.
-pub(super) fn emit_property_warning_fragment(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
+pub(super) fn emit_property_warning_fragment(ctx: &mut FunctionContext<'_>, bytes: &[u8], complete: bool) {
     let (label, len) = ctx.data.add_string(bytes);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -145,7 +145,7 @@ pub(super) fn emit_property_warning_fragment(ctx: &mut FunctionContext<'_>, byte
             abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" });
 }
 
 /// Lowers a dynamic property read when the property expression is a literal string.

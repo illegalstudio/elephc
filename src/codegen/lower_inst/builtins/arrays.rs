@@ -19,7 +19,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::codegen_support::runtime::HashMapResultKind;
 use crate::codegen_support::DeferredCallbackWrapper;
 use crate::ir::{BlockId, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
-use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method_symbol};
+use crate::names::{function_symbol, php_symbol_key};
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 use super::super::super::context::FunctionContext;
@@ -36,12 +36,24 @@ mod shift;
 mod unshift;
 pub(in crate::codegen::lower_inst::builtins) mod values;
 mod basic;
+mod boxed_map_callback;
+mod boxed_merge;
+mod boxed_membership;
+mod boxed_aggregate;
+mod boxed_reduce;
+mod boxed_predicates;
+mod boxed_set_comparator;
+mod boxed_walk;
+mod boxed_reverse;
+mod boxed_mutation;
+mod boxed_unshift;
 mod filter;
 mod map_dispatch;
 mod map_results;
 mod reduce_sets;
 mod misc_dispatch;
 mod callback_builtins;
+mod multisort;
 mod sort_dispatch;
 mod type_validation;
 mod callback_binding;
@@ -89,10 +101,13 @@ pub(crate) use map_dispatch::{
     lower_array_map,
 };
 pub(crate) use reduce_sets::{
-    lower_array_reduce, lower_array_walk, lower_array_merge, lower_array_diff,
+    lower_array_walk, lower_array_merge, lower_array_diff,
     lower_array_intersect, lower_array_diff_key, lower_array_intersect_key, lower_array_slice,
     lower_array_splice,
 };
+pub(crate) use boxed_reduce::lower_array_reduce;
+pub(crate) use boxed_predicates::{lower_array_find, lower_array_any, lower_array_all};
+pub(crate) use boxed_set_comparator::{lower_array_udiff, lower_array_uintersect};
 pub(crate) use misc_dispatch::{
     lower_array_values, lower_array_keys, lower_array_rand, lower_range,
     lower_array_pop, lower_array_shift, lower_array_unshift, lower_sort,
@@ -103,10 +118,11 @@ pub(crate) use misc_dispatch::{
     lower_array_replace_recursive, lower_array_diff_assoc, lower_array_intersect_assoc, lower_array_merge_recursive,
 };
 pub(crate) use callback_builtins::{
-    lower_array_find, lower_array_any, lower_array_all, lower_array_walk_recursive,
-    lower_array_udiff, lower_array_uintersect, lower_array_multisort, lower_array_search,
+    lower_array_walk_recursive,
+    lower_array_search,
     lower_in_array,
 };
+pub(crate) use multisort::lower_array_multisort;
 pub(super) use in_array_cases::InArrayMode;
 
 /// How `array_splice()`'s optional `$replacement` argument is handed to the insert helper.
@@ -165,38 +181,6 @@ fn array_count_values_element_tag(source_ty: &PhpType) -> Result<u8> {
             "array_count_values for PHP type {:?}",
             other
         ))),
-    }
-}
-
-/// Returns the indexed-array element type accepted by the `array_reduce()` runtimes.
-///
-/// String elements are allowed because `__rt_array_reduce_str` reads the 16-byte
-/// `[ptr][len]` payload slots and hands the callback a pointer/length pair; every
-/// other accepted element kind is a single 8-byte payload consumed by
-/// `__rt_array_reduce`. The accumulator is validated separately and must still fit
-/// in one integer register, so no intermediate string ever needs persisting.
-fn array_reduce_callback_array_element_type(ty: PhpType) -> Result<PhpType> {
-    match ty.codegen_repr() {
-        PhpType::Array(elem) => {
-            let elem = elem.codegen_repr();
-            if elem == PhpType::Str {
-                return Ok(elem);
-            }
-            eight_byte_callback_value_type(elem, "array_reduce")
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "array_reduce for PHP type {:?}",
-            other
-        ))),
-    }
-}
-
-/// Returns the `array_reduce()` runtime helper matching the source element width.
-fn array_reduce_runtime_label(elem_ty: &PhpType) -> &'static str {
-    if elem_ty.codegen_repr() == PhpType::Str {
-        "__rt_array_reduce_str"
-    } else {
-        "__rt_array_reduce"
     }
 }
 
@@ -614,7 +598,8 @@ fn hash_sort_source_is_attached_mixed_cell(
 /// `-1` — is a real length, so the runtime helpers cannot recognise "no length" from the length value
 /// itself. The flag is therefore materialized separately: an omitted or statically `Void` argument is
 /// the immediate `0`, a statically typed integer is the immediate `1`, and a boxed `Mixed` argument is
-/// unboxed at runtime so a `null` payload (runtime tag 8) also reports `0`.
+/// unboxed at runtime so a `null` payload (runtime tag 8) also reports `0`. Tagged nullable
+/// integers use their separate tag word, never their possibly sentinel-colliding payload.
 fn resolve_slice_length_present_to_result(
     ctx: &mut FunctionContext<'_>,
     length: Option<ValueId>,
@@ -625,15 +610,21 @@ fn resolve_slice_length_present_to_result(
         return Ok(());
     }
     let length = length.expect("length present");
-    if !matches!(
-        ctx.value_php_type(length)?.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
-        abi::emit_load_int_immediate(ctx.emitter, reg, 1);
-        return Ok(());
+    match ctx.value_php_type(length)?.codegen_repr() {
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(length)?;
+            let tag = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_reg_move(ctx.emitter, reg, tag);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(length)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        }
+        _ => {
+            abi::emit_load_int_immediate(ctx.emitter, reg, 1);
+            return Ok(());
+        }
     }
-    ctx.load_value_to_result(length)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 marks a boxed PHP null length argument

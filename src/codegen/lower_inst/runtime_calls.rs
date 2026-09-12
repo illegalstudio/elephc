@@ -24,6 +24,7 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ArrayFetchForWrite => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
@@ -32,6 +33,7 @@ pub(super) fn lower(
             lower_mixed_cell_promote_to_hash(ctx, inst, sort)
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
+        RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)
@@ -41,6 +43,44 @@ pub(super) fn lower(
             super::runtime_functions::lower(ctx, inst, target)
         }
     }
+}
+
+/// Promotes an independent cell copy and transfers one hash owner to a literal unpack operation.
+fn lower_array_unpack_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let source = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(source)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
+    // The promotion lends its payload. Acquire a result owner before retiring the clone,
+    // including the invalid-value path where the returned null pointer needs no retain.
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    let valid = ctx.next_label("array_unpack_hash_valid");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
+    super::exceptions::emit_error(ctx, "Only arrays and Traversables can be unpacked");
+    ctx.emitter.label(&valid);
+    store_if_result(ctx, inst)
+}
+
+/// Materializes normalized constructor parameters through the shared target-aware call ABI.
+fn lower_throwable_initialize(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 4 {
+        return Err(CodegenIrError::invalid_module("Throwable initialization requires four operands"));
+    }
+    let types = [PhpType::Object("Throwable".into()), PhpType::Str, PhpType::Int, PhpType::Mixed];
+    let overflow = super::materialize_direct_call_args(ctx, &inst.operands, &types)?;
+    let padding = super::direct_call_stack_pad_bytes(ctx, overflow);
+    abi::emit_reserve_temporary_stack(ctx.emitter, padding);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_initialize");
+    abi::emit_release_temporary_stack(ctx.emitter, padding + overflow);
+    Ok(())
 }
 
 /// Clones a stored Mixed cell before a nested mutation publishes a new payload.

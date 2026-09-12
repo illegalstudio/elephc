@@ -169,6 +169,7 @@ fn immediate_slots(immediate: Option<&Immediate>) -> Vec<LocalSlotId> {
     match immediate {
         Some(Immediate::LocalSlot(slot)) => vec![*slot],
         Some(Immediate::LocalSlotPair { first, second }) => vec![*first, *second],
+        Some(Immediate::IterStart { owner: Some(slot), .. }) => vec![*slot],
         _ => Vec::new(),
     }
 }

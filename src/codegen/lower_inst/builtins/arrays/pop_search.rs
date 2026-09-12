@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves callback ABI, target parity, array storage, and ownership contracts.
+//! - A removed live slot transfers its owner into the result after COW separation.
 
 use super::*;
 
@@ -110,7 +111,7 @@ pub(super) fn lower_array_pop_aarch64(
     ctx.emitter.instruction("sub x9, x9, #1");                                  // convert the old length into the removed last-element index
     ctx.emitter.instruction("str x9, [x0]");                                    // persist the shortened indexed-array length in the header
     emit_array_pop_value_aarch64(ctx, elem_ty)?;
-    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, elem_ty);
+    crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, elem_ty);
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array boxed-null path after loading the removed value
     ctx.emitter.label(&empty_label);
     emit_array_pop_null(ctx);
@@ -133,7 +134,7 @@ pub(super) fn lower_array_pop_x86_64(
     ctx.emitter.instruction("sub r10, 1");                                      // convert the old length into the removed last-element index
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // persist the shortened indexed-array length in the header
     emit_array_pop_value_x86_64(ctx, elem_ty)?;
-    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, elem_ty);
+    crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, elem_ty);
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array boxed-null path after loading the removed value
     ctx.emitter.label(&empty_label);
     emit_array_pop_null(ctx);
@@ -421,4 +422,3 @@ pub(super) fn box_array_search_miss(ctx: &mut FunctionContext<'_>) {
         }
     }
 }
-

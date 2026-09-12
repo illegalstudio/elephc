@@ -11,11 +11,15 @@
 
 mod block_emit;
 pub(crate) mod callable_reachability;
+mod const_default_values;
 pub(crate) mod context;
 mod enum_singletons;
 mod eval_callable_helpers;
 mod eval_class_constant_helpers;
+mod eval_argument_helpers;
 mod eval_constructor_helpers;
+mod eval_error_handler_helpers;
+mod eval_handler_helpers;
 mod eval_method_helpers;
 mod eval_property_helpers;
 mod eval_ref_arg_helpers;
@@ -30,6 +34,8 @@ mod local_analysis;
 pub(crate) mod lower_inst;
 mod lower_term;
 mod runtime_callable_invoker;
+#[cfg(test)]
+pub(crate) use runtime_callable_invoker::function_returns_owned_string;
 mod runtime_metadata;
 mod shared_count_guard;
 mod shared_helper;
@@ -294,7 +300,7 @@ pub fn generate_user_asm_from_ir_with_options(
         emitter.emit_text_prelude();
     }
     let mut data = DataSection::new();
-    block_emit::emit_module(
+    let shared = block_emit::emit_module(
         module,
         &mut emitter,
         &mut data,
@@ -309,14 +315,15 @@ pub fn generate_user_asm_from_ir_with_options(
         web,
         web_isolation,
     )?;
-    Ok(finalize_user_asm(
+    finalize_user_asm(
         module,
         emitter,
         data,
         emit,
         exported_functions,
         heap_debug,
-    ))
+        shared,
+    )
 }
 
 /// Appends literal data and the minimal user-runtime metadata needed by linked helpers.
@@ -327,7 +334,8 @@ fn finalize_user_asm(
     emit: Emit,
     exported_functions: &HashMap<String, ExportedFunction>,
     heap_debug: bool,
-) -> String {
+    mut shared: shared_state::SharedCodegenState,
+) -> Result<String> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
@@ -353,6 +361,16 @@ fn finalize_user_asm(
         eval_callable_support_needed,
     );
     if eval_bridge {
+        eval_error_handler_helpers::emit_eval_error_handler_helpers(
+            module,
+            &mut emitter,
+            &eval_callable_support,
+        );
+        eval_handler_helpers::emit_eval_exception_handler_helpers(
+            module,
+            &mut emitter,
+            &eval_callable_support,
+        );
         eval_constructor_helpers::emit_eval_constructor_helpers(
             module,
             &mut emitter,
@@ -368,6 +386,9 @@ fn finalize_user_asm(
         eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
         eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
     }
+    if shared.callable_argument_normalizer || eval_callable_support.argument_normalizer_needed {
+        lower_inst::emit_callable_argument_normalizer(module, &mut emitter, &mut data, &mut shared)?;
+    }
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
     let user_functions = runtime_user_function_sigs(module);
@@ -381,12 +402,19 @@ fn finalize_user_asm(
     }
     let runtime_interfaces = runtime_referenced_interfaces(module, &allowed_class_names);
     let runtime_classes = runtime_class_infos(module);
+    crate::codegen_support::source_method_adapters::emit_source_method_adapters(
+        &mut emitter,
+        &runtime_classes,
+        Some(&allowed_class_names),
+    )
+    .map_err(CodegenIrError::invalid_module)?;
     crate::codegen::interface_wrappers::emit_interface_return_wrappers(
         &mut emitter,
         &runtime_interfaces,
         &runtime_classes,
         Some(&allowed_class_names),
-    );
+    )
+    .map_err(CodegenIrError::invalid_module)?;
     emit_intrinsic_method_wrappers(module, &mut emitter);
     if emit.is_library() {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
@@ -399,6 +427,10 @@ fn finalize_user_asm(
             heap_debug,
         );
     }
+    let property_initializer_ids = module.functions.iter()
+        .filter(|function| function.flags.is_synthetic)
+        .filter_map(|function| function.name.strip_prefix("_class_propinit_")?.parse::<u64>().ok())
+        .collect();
     let user_data = runtime::emit_runtime_data_user(
         &empty_globals,
         &empty_static_vars,
@@ -411,6 +443,7 @@ fn finalize_user_asm(
         &module.declared_trait_source_lines,
         &runtime_classes,
         &module.enum_infos,
+        &property_initializer_ids,
         Some(&allowed_class_names),
         emit_eval_reflection_metadata,
         // The source path now feeds `Throwable::getFile()` and the ` in <file>:<line>`
@@ -421,7 +454,8 @@ fn finalize_user_asm(
         // prints it in every fatal error.
         module.source_path.as_deref(),
         module.target,
-    );
+    )
+    .map_err(CodegenIrError::invalid_module)?;
 
     let data_output = data.emit(module.target);
     let mut user_asm = emitter.output();
@@ -465,12 +499,12 @@ fn finalize_user_asm(
     } else {
         &[]
     };
-    crate::codegen::visibility::append_hidden_directives_with_extras(
+    Ok(crate::codegen::visibility::append_hidden_directives_with_extras(
         &user_asm,
         &exported,
         module.target.platform,
         additional_internal,
-    )
+    ))
 }
 
 #[cfg(test)]

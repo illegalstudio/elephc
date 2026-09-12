@@ -11,14 +11,15 @@
 
 mod closure_execution;
 mod function_binding;
+mod function_staging;
 mod method_binding;
 mod native_execution;
 
 use super::*;
-use std::ffi::c_void;
 
 pub(in crate::interpreter) use closure_execution::*;
 pub(in crate::interpreter) use function_binding::*;
+use function_staging::stage_native_function_invoker_args;
 pub(in crate::interpreter) use method_binding::*;
 pub(in crate::interpreter) use native_execution::*;
 
@@ -30,24 +31,13 @@ pub(in crate::interpreter) fn eval_dynamic_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, caller_scope, values)?;
-    eval_dynamic_function_with_evaluated_args(function, evaluated_args, context, values)
+    with_eval_call_arguments(args, context, caller_scope, values, |arguments, context, _, values| {
+        eval_dynamic_function_with_evaluated_args(function, arguments, context, values)
+    })
 }
 
-/// Evaluates and binds native AOT function arguments, filling registered defaults.
-pub(in crate::interpreter) fn eval_native_function_call_args(
-    function: &NativeFunction,
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    caller_scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<BoundNativeFunctionArgs, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, caller_scope, values)?;
-    bind_evaluated_native_function_args(function, evaluated_args, context, values)
-}
-
-/// Evaluates source-order call arguments while preserving named-argument metadata.
-pub(in crate::interpreter) fn eval_call_arg_values(
+/// Acquires each argument before later argument side effects can replace its source storage.
+pub(in crate::interpreter) fn eval_owned_call_arg_values(
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
@@ -56,48 +46,69 @@ pub(in crate::interpreter) fn eval_call_arg_values(
     let mut evaluated_args = Vec::with_capacity(args.len());
     let mut saw_named = false;
 
-    for arg in args {
-        if arg.is_spread() {
+    let evaluated = (|| {
+        for arg in args {
+            if arg.is_spread() {
+                if saw_named {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                let spread = eval_expr(arg.value(), context, caller_scope, values)?;
+                let unpacked = (|| {
+                    if !values.is_array_like(spread)? {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                    let first_unpacked = evaluated_args.len();
+                    append_unpacked_call_arg_values(
+                        spread, &mut evaluated_args, &mut saw_named, context, values,
+                    )?;
+                    for argument in &mut evaluated_args[first_unpacked..] {
+                        if argument.value.is_borrowed() {
+                            argument.value = values.retain(argument.value)?;
+                        }
+                    }
+                    Ok(())
+                })();
+                let released = release_expr_result(spread, context, values);
+                unpacked.and(released)?;
+                continue;
+            }
+
+            if let Some(name) = arg.name() {
+                saw_named = true;
+                let (value, ref_target) =
+                    eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+                let value = if value.is_borrowed() {
+                    values.retain(value)?
+                } else { value };
+                evaluated_args.push(EvaluatedCallArg {
+                    name: Some(name.to_string()),
+                    value,
+                    ref_target,
+                });
+                continue;
+            }
+
             if saw_named {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let spread = eval_expr(arg.value(), context, caller_scope, values)?;
-            if !values.is_array_like(spread)? {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            append_unpacked_call_arg_values(
-                spread,
-                &mut evaluated_args,
-                &mut saw_named,
-                context,
-                values,
-            )?;
-            continue;
-        }
-
-        if let Some(name) = arg.name() {
-            saw_named = true;
-            let (value, ref_target) =
-                eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+            let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+            let value = if value.is_borrowed() {
+                values.retain(value)?
+            } else { value };
             evaluated_args.push(EvaluatedCallArg {
-                name: Some(name.to_string()),
+                name: None,
                 value,
                 ref_target,
             });
-            continue;
         }
-
-        if saw_named {
-            return Err(EvalStatus::RuntimeFatal);
+        Ok(())
+    })();
+    if let Err(status) = evaluated {
+        for argument in evaluated_args {
+            let _ = release_expr_result(argument.value, context, values);
         }
-        let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
-        evaluated_args.push(EvaluatedCallArg {
-            name: None,
-            value,
-            ref_target,
-        });
+        return Err(status);
     }
-
     Ok(evaluated_args)
 }
 
@@ -278,13 +289,19 @@ pub(in crate::interpreter) fn eval_array_call_arg_values(
     let len = values.array_len(arg_array)?;
     let mut evaluated_args = Vec::with_capacity(len);
     let mut saw_named = false;
-    append_unpacked_call_arg_values(
+    let unpacked = append_unpacked_call_arg_values(
         arg_array,
         &mut evaluated_args,
         &mut saw_named,
         context,
         values,
-    )?;
+    );
+    if let Err(status) = unpacked {
+        for argument in evaluated_args {
+            let _ = release_expr_result(argument.value, context, values);
+        }
+        return Err(status);
+    }
     Ok(evaluated_args)
 }
 
@@ -369,36 +386,9 @@ fn eval_invoker_ref_arg_value_and_target(
     }
     let slot = values.raw_value_word(value)? as usize;
     let source_tag = values.raw_value_high_word(value)?;
-    let value = eval_invoker_ref_slot_value(slot, source_tag, values)?;
+    let value = eval_invoker_slot_ref_target_value(slot, source_tag, values)?;
     Ok((
         value,
         ref_target.or(Some(EvalReferenceTarget::InvokerSlot { slot, source_tag })),
     ))
-}
-
-/// Reads the current PHP value from a native descriptor-invoker by-reference slot.
-fn eval_invoker_ref_slot_value(
-    slot: usize,
-    source_tag: u64,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    match source_tag {
-        EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
-            let word = unsafe { *(slot as *const u64) };
-            values.raw_word_value(source_tag, word)
-        }
-        EVAL_TAG_STRING => {
-            let words = unsafe { *(slot as *const [u64; 2]) };
-            values.raw_string_value(words[0], words[1])
-        }
-        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
-            let word = unsafe { *(slot as *const u64) };
-            values.raw_word_value(source_tag, word)
-        }
-        EVAL_TAG_MIXED => {
-            let value = unsafe { *(slot as *const RuntimeCellHandle) };
-            values.retain(value)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
 }

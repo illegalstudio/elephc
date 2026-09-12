@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_easy_perform() — internals"
+title: "__elephc_curl_easy_perform() - internals"
 description: "Compiler internals for __elephc_curl_easy_perform(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 987
+  order: 1012
 ---
 
-## `__elephc_curl_easy_perform()` — internals
+## `__elephc_curl_easy_perform()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_perform.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_perform.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

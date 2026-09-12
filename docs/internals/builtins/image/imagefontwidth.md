@@ -1,11 +1,11 @@
 ---
-title: "imagefontwidth() — internals"
+title: "imagefontwidth() - internals"
 description: "Compiler internals for imagefontwidth(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 508
 ---
 
-## `imagefontwidth()` — internals
+## `imagefontwidth()` - internals
 
 ## Where it lives
 

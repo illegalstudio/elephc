@@ -377,11 +377,11 @@ pub(super) fn emit_undefined_property_warning_for_loaded_object(
         }
     }
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    emit_property_warning_fragment(ctx, b"Warning: Undefined property: ");
+    emit_property_warning_fragment(ctx, b"Warning: Undefined property: ", false);
     match ctx.emitter.target.arch {
         Arch::AArch64 => abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2"),
         Arch::X86_64 => abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi"),
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
-    emit_property_warning_fragment(ctx, format!("::${}\n", property).as_bytes());
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    emit_property_warning_fragment(ctx, format!("::${}\n", property).as_bytes(), true);
 }

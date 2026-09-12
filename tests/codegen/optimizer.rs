@@ -11,6 +11,11 @@
 
 use crate::support::*;
 
+#[path = "optimizer/boxed_array_snapshots.rs"]
+mod boxed_array_snapshots;
+mod implode_effects;
+mod spread_effects;
+
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;
 #[path = "optimizer/call_result_alias.rs"]
@@ -55,3 +60,5 @@ mod release_local_slot;
 mod inline;
 #[path = "optimizer/memory_model_propagation.rs"]
 mod memory_model_propagation;
+#[path = "optimizer/warning_globals.rs"]
+mod warning_globals;

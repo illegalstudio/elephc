@@ -41,7 +41,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
         (
             class_info.class_id,
             class_info.properties.len(),
-            class_info.allow_dynamic_properties,
+            class_info.has_property_hash_storage(),
             retained_offsets,
             owned_reference_property_offsets,
         )
@@ -58,14 +58,15 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
         property_count,
         allow_dynamic_properties,
         &[],
-        &owned_reference_property_offsets,
+        &[],
     )?;
     ctx.store_result_value(result)?;
     let source_reg = abi::secondary_scratch_reg(ctx.emitter);
     let dest_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, source_reg);
     ctx.load_value_to_reg(result, dest_reg)?;
-    emit_clone_declared_property_slots(ctx, source_reg, dest_reg, property_count, &retained_offsets);
+    emit_clone_declared_property_slots(ctx, source_reg, dest_reg, property_count,
+        &retained_offsets, &owned_reference_property_offsets);
     if allow_dynamic_properties {
         emit_clone_dynamic_property_hash(
             ctx,
@@ -218,7 +219,7 @@ pub(super) fn lower_callback_filter_iterator_new(
             ctx.module.class_infos.get(class_name).ok_or_else(|| {
                 CodegenIrError::unsupported(format!("unknown class {}", class_name))
             })?;
-        if class_info.allow_dynamic_properties {
+        if class_info.has_property_hash_storage() {
             return Err(CodegenIrError::unsupported(format!(
                 "object allocation requiring dynamic properties for {}",
                 class_name

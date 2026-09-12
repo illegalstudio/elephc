@@ -28,11 +28,15 @@ pub(in crate::interpreter) fn eval_reflection_method_invoke_result(
     else {
         return Ok(None);
     };
-    let (object, method_args) = if is_invoke {
-        eval_reflection_method_invoke_args(evaluated_args)?
-    } else {
-        eval_reflection_method_invoke_args_array(evaluated_args, context, values)?
-    };
+    if is_invoke_args {
+        let (object, array) = eval_reflection_method_invoke_args_array(evaluated_args)?;
+        return with_eval_array_call_arguments(array, context, values, |arguments, context, values| {
+            eval_reflection_method_invoke_dispatch(
+                &declaring_class, &reflected_method, object, arguments, context, values,
+            )
+        }).map(Some);
+    }
+    let (object, method_args) = eval_reflection_method_invoke_args(evaluated_args)?;
     eval_reflection_method_invoke_dispatch(
         &declaring_class,
         &reflected_method,
@@ -63,14 +67,16 @@ pub(in crate::interpreter) fn eval_reflection_function_invoke_result(
     else {
         return Ok(None);
     };
-    let function_args = if is_invoke {
-        evaluated_args
-            .into_iter()
-            .map(eval_reflection_method_forwarded_value_arg)
-            .collect()
-    } else {
-        eval_reflection_function_invoke_args_array(evaluated_args, context, values)?
-    };
+    if is_invoke_args {
+        let array = eval_reflection_function_invoke_args_array(evaluated_args)?;
+        return with_eval_array_call_arguments(array, context, values, |arguments, context, values| {
+            eval_reflection_function_invoke_dispatch(&function_name, arguments, context, values)
+        }).map(Some);
+    }
+    let function_args = evaluated_args
+        .into_iter()
+        .map(eval_reflection_method_forwarded_value_arg)
+        .collect();
     eval_reflection_function_invoke_dispatch(&function_name, function_args, context, values)
         .map(Some)
 }

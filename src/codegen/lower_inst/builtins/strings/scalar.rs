@@ -370,16 +370,16 @@ fn restore_float_result_bits(ctx: &mut FunctionContext<'_>) {
 
 /// Emits PHP's shortest-round-trip precision-loss deprecation for the saved float.
 fn emit_float_precision_deprecation(ctx: &mut FunctionContext<'_>) {
-    emit_static_int_coercion_diagnostic(ctx, "Deprecated: Implicit conversion from float ");
+    emit_static_int_coercion_diagnostic(ctx, "Deprecated: Implicit conversion from float ", false);
     emit_saved_float_diagnostic_value(ctx);
-    emit_static_int_coercion_diagnostic(ctx, " to int loses precision\n");
+    emit_static_int_coercion_diagnostic(ctx, " to int loses precision\n", true);
 }
 
 /// Emits PHP's warning for an explicit float value outside the integer range.
 fn emit_float_not_representable_warning(ctx: &mut FunctionContext<'_>) {
-    emit_static_int_coercion_diagnostic(ctx, "Warning: The float ");
+    emit_static_int_coercion_diagnostic(ctx, "Warning: The float ", false);
     emit_saved_float_diagnostic_value(ctx);
-    emit_static_int_coercion_diagnostic(ctx, " is not representable as an int, cast occurred\n");
+    emit_static_int_coercion_diagnostic(ctx, " is not representable as an int, cast occurred\n", true);
 }
 
 /// Formats the saved float with `__rt_ftoa_repr` and emits it as a diagnostic fragment.
@@ -390,7 +390,7 @@ fn emit_saved_float_diagnostic_value(ctx: &mut FunctionContext<'_>) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the formatted float pointer to the diagnostic helper
         ctx.emitter.instruction("mov rsi, rdx");                                // pass the formatted float length to the diagnostic helper
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
 }
 
 /// Builds the exact weak builtin argument TypeError from the shared builtin contract.
@@ -474,7 +474,7 @@ fn emit_mixed_weak_int(
 }
 
 /// Emits one suppressible static fragment of an implicit integer-coercion diagnostic.
-fn emit_static_int_coercion_diagnostic(ctx: &mut FunctionContext<'_>, message: &str) {
+fn emit_static_int_coercion_diagnostic(ctx: &mut FunctionContext<'_>, message: &str, complete: bool) {
     let (label, len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -486,7 +486,7 @@ fn emit_static_int_coercion_diagnostic(ctx: &mut FunctionContext<'_>, message: &
             abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" });
 }
 
 /// Loads a concrete scalar value as an integer runtime argument.

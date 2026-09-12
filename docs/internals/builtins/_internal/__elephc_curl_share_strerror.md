@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_share_strerror() — internals"
+title: "__elephc_curl_share_strerror() - internals"
 description: "Compiler internals for __elephc_curl_share_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1017
+  order: 1042
 ---
 
-## `__elephc_curl_share_strerror()` — internals
+## `__elephc_curl_share_strerror()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_share_strerror.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_share_strerror.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

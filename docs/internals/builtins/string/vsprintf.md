@@ -1,16 +1,16 @@
 ---
-title: "vsprintf() — internals"
+title: "vsprintf() - internals"
 description: "Compiler internals for vsprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 850
+  order: 876
 ---
 
-## `vsprintf()` — internals
+## `vsprintf()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/vsprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/vsprintf.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

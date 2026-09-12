@@ -102,6 +102,15 @@ impl PhpVersion {
         }
     }
 
+    /// Returns PHP's `E_ALL` value and default error-reporting mask for this profile.
+    pub const fn error_reporting_mask(self) -> i64 {
+        if self.version_id() >= 80_500 {
+            30_719
+        } else {
+            32_767
+        }
+    }
+
     /// Returns the profile's `PHP_VERSION` and `phpversion()` value.
     pub const fn version_string(self) -> &'static str {
         match self {
@@ -207,5 +216,12 @@ mod tests {
     #[test]
     fn versions_have_semantic_order() {
         assert!(PhpVersion::Php84 < PhpVersion::Php85);
+    }
+
+    /// Verifies PHP 8.5 removes the deprecated `E_STRICT` bit from `E_ALL`.
+    #[test]
+    fn error_reporting_mask_tracks_php_profile() {
+        assert_eq!(PhpVersion::Php84.error_reporting_mask(), 32_767);
+        assert_eq!(PhpVersion::Php85.error_reporting_mask(), 30_719);
     }
 }

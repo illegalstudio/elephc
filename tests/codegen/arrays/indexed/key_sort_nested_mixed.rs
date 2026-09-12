@@ -10,6 +10,74 @@
 //! - Scalar and missing child cells must raise builtin-specific PHP `TypeError` diagnostics.
 
 use super::*;
+use crate::support::{compile_and_run_tagged, compile_and_run_with_heap_debug};
+
+/// Declared array parents retain COW, named-call evaluation and temporary ownership across key sorts.
+#[test]
+fn test_key_sorts_declared_array_children_preserve_aliases_and_retire_temporaries() {
+    let source = r#"<?php
+class DeclaredNestedSortOwner {
+    public array $rows = [["b" => 2, "a" => 1], "keep"];
+    public static array $shared = ["row" => [8, 9], "keep" => 7];
+}
+function nestedSortIndex(int &$calls): int { $calls++; return 0; }
+function reverseDeclaredNestedCopy(array $rows): void {
+    krsort($rows["row"]);
+    echo implode(",", array_keys($rows["row"])), "|";
+}
+for ($i = 0; $i < 3; $i++) {
+    $owner = new DeclaredNestedSortOwner();
+    $before = $owner->rows;
+    $calls = 0;
+    echo \KsOrT(array: $owner->rows[nestedSortIndex($calls)]) ? "yes|" : "no|";
+    echo implode(",", array_keys($owner->rows[0])), "|";
+    echo implode(",", array_keys($before[0])), "|", $calls, "|";
+    $staticBefore = DeclaredNestedSortOwner::$shared;
+    krsort(DeclaredNestedSortOwner::$shared["row"]);
+    echo implode(",", array_keys(DeclaredNestedSortOwner::$shared["row"])), "|";
+    echo implode(",", array_keys($staticBefore["row"])), "|";
+    ksort(DeclaredNestedSortOwner::$shared["row"]);
+    reverseDeclaredNestedCopy(DeclaredNestedSortOwner::$shared);
+    echo implode(",", array_keys(DeclaredNestedSortOwner::$shared["row"])), "|";
+    echo $owner->rows[1], "|", DeclaredNestedSortOwner::$shared["keep"], "|";
+    unset($owner, $before, $staticBefore);
+}
+"#;
+    let expected = "yes|a,b|b,a|1|1,0|0,1|1,0|0,1|keep|7|".repeat(3);
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected, "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
+/// Invalid declared-array child values throw before parent write-back and leave their siblings intact.
+#[test]
+fn test_key_sorts_declared_array_scalar_child_throws_without_mutating_parent() {
+    let source = r#"<?php
+class InvalidDeclaredNestedSortOwner {
+    public array $rows = ["bad" => 7, "keep" => ["b" => 2, "a" => 1]];
+}
+function invalidDeclaredNestedSort(array &$rows, string $key): void { krsort($rows[$key]); }
+for ($i = 0; $i < 3; $i++) {
+    $owner = new InvalidDeclaredNestedSortOwner();
+    try { ksort($owner->rows["bad"]); }
+    catch (TypeError $error) { echo "ascending|"; unset($error); }
+    $rows = $owner->rows;
+    try { invalidDeclaredNestedSort($rows, "bad"); }
+    catch (TypeError $error) { echo "descending|"; unset($error); }
+    echo $owner->rows["bad"], "|", $rows["bad"], "|";
+    echo implode(",", array_keys($rows["keep"])), "|";
+    unset($owner, $rows);
+}
+"#;
+    let expected = "ascending|descending|7|7|b,a|".repeat(3);
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected, "{}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
+}
 
 /// Verifies `ksort()` accepts a nested hash stored in a Mixed packed-parent cell.
 #[test]

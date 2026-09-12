@@ -67,6 +67,7 @@ fn emit_time_linux_arm64(emitter: &mut Emitter) {
     // -- call gettimeofday syscall --
     emitter.instruction("add x0, sp, #0");                                      // x0 = pointer to timeval struct on stack
     emitter.instruction("mov x1, #0");                                          // x1 = NULL (timezone not needed)
+    emitter.instruction("mov x2, #0");                                          // x2 = NULL (never expose a stale optional output pointer)
     emitter.syscall(116);
 
     // -- extract tv_sec from timeval struct --

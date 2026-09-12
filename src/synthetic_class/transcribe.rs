@@ -929,6 +929,16 @@ fn expr(value: &Expr, depth: usize) -> String {
             format!("e_index({}, {})", expr(array, depth), expr(index, depth))
         }
         ExprKind::ArrayLiteral(items) => format!("e_array({})", expr_vec(items, depth)),
+        ExprKind::Match { subject, arms, default } => {
+            let rendered = arms.iter().map(|(labels, value)| {
+                format!("({}, {})", expr_vec(labels, depth), expr(value, depth))
+            }).collect::<Vec<_>>();
+            let default = default.as_ref().map_or_else(
+                || "None".to_string(),
+                |value| format!("Some({})", expr(value, depth)),
+            );
+            format!("e_match({}, vec![{}], {})", expr(subject, depth), rendered.join(", "), default)
+        }
         ExprKind::ArrayLiteralAssoc(entries) => {
             let rendered: Vec<String> = entries
                 .iter()
@@ -1360,6 +1370,9 @@ class Demo implements Iterator {
 function demo_make(int $h) {
     return new Demo($h);
 }
+function demo_match($value) {
+    return match ($value) { 1, 2 => "one", default => match ($value) {} };
+}
 "#;
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         let parsed = crate::parser::parse_internal(&tokens).expect("fixture must parse");
@@ -1378,6 +1391,7 @@ function demo_make(int $h) {
             "s_for(",
             "s_foreach(",
             "e_ternary(",
+            "e_match(e_var(\"value\"), vec![(vec![e_int(1), e_int(2)], e_str(\"one\"))], Some(e_match(e_var(\"value\"), vec![], None)))",
             "t_union(vec![TypeExpr::Str, TypeExpr::Bool])",
             "t_nullable(TypeExpr::Str)",
             ".param_untyped_default(\"flag\"",

@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
+use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
     method_symbol, php_symbol_key, static_method_symbol, static_property_symbol,
@@ -36,6 +37,7 @@ const EVAL_REFLECTION_PROPERTY_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_PROPERTY_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED: u64 = 512;
+const EVAL_REFLECTION_PROPERTY_FLAG_VIRTUAL: u64 = 1024;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET: u64 = 4096;
 const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
@@ -44,6 +46,7 @@ const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
 const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK: u64 = 32768;
 const EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
 const EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT: u64 = 16;
 const EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT: u64 = 40;
@@ -62,11 +65,12 @@ pub(crate) fn emit_runtime_data_user(
     declared_trait_source_lines: &HashMap<String, u32>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
+    property_initializer_ids: &HashSet<u64>,
     allowed_class_names: Option<&HashSet<String>>,
     emit_eval_reflection_metadata: bool,
     source_path: Option<&str>,
     target: Target,
-) -> String {
+) -> Result<String, String> {
     let mut out = String::new();
 
     let mut sorted_globals: Vec<&String> = global_var_names.iter().collect();
@@ -156,6 +160,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
     emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
+    super::throwable_previous::emit_previous_slots(&mut out, max_class_id, &class_info_by_id);
     emit_name_lookup_data(
         &mut out,
         "_interface_names_count",
@@ -440,6 +445,17 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    out.push_str(".globl _class_source_vtable_ptrs\n_class_source_vtable_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_source_vtable_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_vtable_missing\n");
+            }
+        }
+    }
+
     // Per-class destructor symbol table — consulted by __rt_call_object_destructor
     // (invoked at the top of __rt_object_free_deep) to run a class's PHP
     // __destruct before its storage is freed. Each entry resolves through the
@@ -455,11 +471,14 @@ pub(crate) fn emit_runtime_data_user(
     if let Some(max_class_id) = max_class_id {
         let destruct_key = php_symbol_key("__destruct");
         for class_id in 0..=max_class_id {
-            let entry = class_info_by_id
-                .get(&class_id)
-                .and_then(|class_info| class_info.method_impl_classes.get(&destruct_key))
-                .map(|impl_class| method_symbol(impl_class, &destruct_key))
-                .unwrap_or_else(|| "0".to_string());
+            let entry = match class_info_by_id.get(&class_id) {
+                Some(class_info) => source_instance_method_entry(
+                    class_info,
+                    &destruct_key,
+                    classes,
+                )?,
+                None => "0".to_string(),
+            };
             out.push_str(&format!("    .quad {}\n", entry));
         }
     }
@@ -476,11 +495,14 @@ pub(crate) fn emit_runtime_data_user(
     if let Some(max_class_id) = max_class_id {
         let tostring_key = php_symbol_key("__toString");
         for class_id in 0..=max_class_id {
-            let entry = class_info_by_id
-                .get(&class_id)
-                .and_then(|class_info| class_info.method_impl_classes.get(&tostring_key))
-                .map(|impl_class| method_symbol(impl_class, &tostring_key))
-                .unwrap_or_else(|| "0".to_string());
+            let entry = match class_info_by_id.get(&class_id) {
+                Some(class_info) => source_instance_method_entry(
+                    class_info,
+                    &tostring_key,
+                    classes,
+                )?,
+                None => "0".to_string(),
+            };
             out.push_str(&format!("    .quad {}\n", entry));
         }
     }
@@ -527,8 +549,8 @@ pub(crate) fn emit_runtime_data_user(
                                 .get(&method_key)
                                 .is_some_and(|sig| sig.return_type.codegen_repr() == returns)
                     })
-                    .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
-                    .map(|impl_class| method_symbol(impl_class, &method_key))
+                    .map(|class_info| source_instance_method_entry(class_info, &method_key, classes))
+                    .transpose()?
                     .unwrap_or_else(|| "0".to_string());
                 out.push_str(&format!("    .quad {}\n", entry));
             }
@@ -553,24 +575,33 @@ pub(crate) fn emit_runtime_data_user(
             for class_id in 0..=max_class_id {
                 let entry = class_info_by_id
                     .get(&class_id)
-                    .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
-                    .map(|impl_class| method_symbol(impl_class, &method_key))
+                    .map(|class_info| source_instance_method_entry(class_info, &method_key, classes))
+                    .transpose()?
                     .unwrap_or_else(|| "0".to_string());
                 out.push_str(&format!("    .quad {}\n", entry));
             }
         }
     }
 
-    // _class_propinit_ptrs: dense class_id-indexed table of property-default
-    // init thunks. Entry = _class_propinit_<id> when the class has any property
-    // default, else 0 (null = nothing to init). __rt_new_by_name indexes this
-    // by class_id and calls the thunk (when non-zero) after zeroing the object.
-    // The has-default predicate MUST match EIR property-init thunk generation.
+    // Hydration hooks receive a parsed hash, while PHP array/Mixed parameters use boxed cells.
+    out.push_str(".globl _class_unserialize_data_boxed\n_class_unserialize_data_boxed:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let boxed = class_info_by_id.get(&class_id)
+                .and_then(|class_info| class_info.methods.get("__unserialize"))
+                .and_then(|signature| signature.params.first())
+                .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed);
+            out.push_str(&format!("    .quad {}\n", u8::from(boxed)));
+        }
+    }
+
+    // Only emitted EIR initializers have entries. A class with no defaults can
+    // still need a thunk to mark typed slots uninitialized after zeroing.
     out.push_str(".globl _class_propinit_ptrs\n_class_propinit_ptrs:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
             match class_info_by_id.get(&class_id) {
-                Some(class_info) if class_info.defaults.iter().any(|d| d.is_some()) => {
+                Some(_) if property_initializer_ids.contains(&class_id) => {
                     out.push_str(&format!("    .quad _class_propinit_{}\n", class_id));
                 }
                 _ => out.push_str("    .quad 0\n"),
@@ -613,6 +644,20 @@ pub(crate) fn emit_runtime_data_user(
         for class_id in 0..=max_class_id {
             if class_info_by_id.contains_key(&class_id) {
                 out.push_str(&format!("    .quad _class_static_vtable_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_static_vtable_missing\n");
+            }
+        }
+    }
+
+    out.push_str(".globl _class_source_static_vtable_ptrs\n_class_source_static_vtable_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!(
+                    "    .quad _class_source_static_vtable_{}\n",
+                    class_id
+                ));
             } else {
                 out.push_str("    .quad _class_static_vtable_missing\n");
             }
@@ -933,7 +978,7 @@ pub(crate) fn emit_runtime_data_user(
                         method_name,
                         impl_class,
                         classes,
-                    );
+                    )?;
                     out.push_str(&format!("    .quad {}\n", symbol));
                 } else {
                     out.push_str("    .quad 0\n");
@@ -979,14 +1024,10 @@ pub(crate) fn emit_runtime_data_user(
         out.push_str(&format!("    .quad {}\n", flags));
         if implements_jsonserializable {
             let key = php_symbol_key("jsonSerialize");
-            if let Some(impl_class) = class_info.method_impl_classes.get(&key) {
-                out.push_str(&format!(
-                    "    .quad {}\n",
-                    method_symbol(impl_class, &key),
-                ));
-            } else {
-                out.push_str("    .quad 0\n");
-            }
+            out.push_str(&format!(
+                "    .quad {}\n",
+                source_instance_method_entry(class_info, &key, classes)?,
+            ));
         } else {
             out.push_str("    .quad 0\n");
         }
@@ -1037,7 +1078,7 @@ pub(crate) fn emit_runtime_data_user(
                 }
                 let prop_name = &class_info.properties[i].0;
                 let tag = if class_info.property_slot_is_reference(i, prop_name) {
-                    0
+                    if class_info.owned_reference_properties.contains(prop_name) { 11 } else { 0 }
                 } else {
                     match prop_ty {
                         PhpType::Int => 0,
@@ -1229,6 +1270,22 @@ pub(crate) fn emit_runtime_data_user(
         }
 
         out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_source_vtable_{0}\n_class_source_vtable_{0}:\n",
+            class_info.class_id
+        ));
+        if class_info.vtable_methods.is_empty() {
+            out.push_str("    .quad 0\n");
+        } else {
+            for method_name in &class_info.vtable_methods {
+                out.push_str(&format!(
+                    "    .quad {}\n",
+                    source_instance_vtable_entry(class_info, method_name, classes)?,
+                ));
+            }
+        }
+
+        out.push_str("    .p2align 3\n");
         out.push_str(&format!(".globl _class_static_vtable_{}\n_class_static_vtable_{}:\n", class_info.class_id, class_info.class_id));
         if class_info.static_vtable_methods.is_empty() {
             out.push_str("    .quad 0\n");
@@ -1242,9 +1299,25 @@ pub(crate) fn emit_runtime_data_user(
             }
         }
 
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_source_static_vtable_{0}\n_class_source_static_vtable_{0}:\n",
+            class_info.class_id
+        ));
+        if class_info.static_vtable_methods.is_empty() {
+            out.push_str("    .quad 0\n");
+        } else {
+            for method_name in &class_info.static_vtable_methods {
+                out.push_str(&format!(
+                    "    .quad {}\n",
+                    source_static_vtable_entry(class_info, method_name, classes)?,
+                ));
+            }
+        }
+
         emit_class_callable_methods(&mut out, class_info);
-        emit_user_wrapper_vtable(&mut out, class_info);
-        emit_user_filter_vtable(&mut out, class_info);
+        emit_user_wrapper_vtable(&mut out, class_info, classes)?;
+        emit_user_filter_vtable(&mut out, class_info, classes)?;
     }
 
     let stdclass_id = classes
@@ -1255,7 +1328,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".globl _stdclass_class_id\n_stdclass_class_id:\n");
     out.push_str(&format!("    .quad {}\n", stdclass_id));
 
-    out
+    Ok(out)
 }
 
 /// Emits a dense class-id to class-name lookup table for runtime `get_class()`.
@@ -1381,8 +1454,11 @@ fn emit_eval_reflection_method_lookup_data(
                 method_name,
             );
             let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
+            let hook_flag = if declaring_info.is_property_hook_method(method_name) {
+                EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK
+            } else { 0 };
             let flags = eval_reflection_method_flags_with_source_lines(
-                eval_reflection_instance_method_flags(class_info, method_name),
+                eval_reflection_instance_method_flags(class_info, method_name) | hook_flag,
                 declaring_info,
                 method_name,
                 false,
@@ -2173,6 +2249,9 @@ fn eval_reflection_instance_property_flags(
     if class_info.promoted_properties.contains(property_name) {
         flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED;
     }
+    if class_info.property_is_virtual(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_VIRTUAL;
+    }
     match class_info.property_set_visibilities.get(property_name) {
         Some(Visibility::Protected) => flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET,
         Some(Visibility::Private) => flags |= EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET,
@@ -2306,7 +2385,7 @@ fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize 
 
 /// Returns whether this class layout stores a dynamic-property hash tail.
 fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) -> bool {
-    class_name == "stdClass" || class_info.allow_dynamic_properties
+    class_name == "stdClass" || class_info.has_property_hash_storage()
 }
 
 /// The number of fixed-slot stream-wrapper methods recorded per class in
@@ -2475,9 +2554,13 @@ fn class_has_user_filter_method(class_info: &ClassInfo) -> bool {
 }
 
 /// Emits runtime metadata for user filter vtable.
-fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
+fn emit_user_filter_vtable(
+    out: &mut String,
+    class_info: &ClassInfo,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<(), String> {
     if !class_has_user_filter_method(class_info) {
-        return;
+        return Ok(());
     }
     out.push_str("    .p2align 3\n");
     out.push_str(&format!(
@@ -2489,11 +2572,10 @@ fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
             .method_visibilities
             .get(*method_name)
             .is_some_and(|visibility| matches!(visibility, Visibility::Public));
-        let impl_class = class_info.method_impl_classes.get(*method_name);
-        if is_public && impl_class.is_some() {
+        if is_public && class_info.method_impl_classes.contains_key(*method_name) {
             out.push_str(&format!(
                 "    .quad {}\n",
-                method_symbol(impl_class.unwrap(), method_name)
+                source_instance_method_entry(class_info, method_name, classes)?
             ));
         } else {
             out.push_str("    .quad 0\n");
@@ -2506,6 +2588,8 @@ fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
     let brigade_arity = class_info
         .methods
         .get("filter")
+        .map(source_method_adapters::source_visible_signature)
+        .transpose()?
         .map(|sig| sig.params.len() == 4)
         .unwrap_or(false);
     out.push_str(&format!("    .quad {}\n", if brigade_arity { 1 } else { 0 }));
@@ -2515,12 +2599,17 @@ fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
         .copied()
         .unwrap_or(0);
     out.push_str(&format!("    .quad {}\n", params_offset));
+    Ok(())
 }
 
 /// Emits runtime metadata for user wrapper vtable.
-fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
+fn emit_user_wrapper_vtable(
+    out: &mut String,
+    class_info: &ClassInfo,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<(), String> {
     if !class_has_user_wrapper_method(class_info) {
-        return;
+        return Ok(());
     }
     out.push_str("    .p2align 3\n");
     out.push_str(&format!(
@@ -2532,11 +2621,10 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
             .method_visibilities
             .get(*method_name)
             .is_some_and(|visibility| matches!(visibility, Visibility::Public));
-        let impl_class = class_info.method_impl_classes.get(*method_name);
-        if is_public && impl_class.is_some() {
+        if is_public && class_info.method_impl_classes.contains_key(*method_name) {
             out.push_str(&format!(
                 "    .quad {}\n",
-                method_symbol(impl_class.unwrap(), method_name)
+                source_instance_method_entry(class_info, method_name, classes)?
             ));
         } else {
             out.push_str("    .quad 0\n");
@@ -2547,6 +2635,7 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
         "    .quad {}\n",
         user_wrapper_boxed_result_mask(class_info)
     ));
+    Ok(())
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.
@@ -2653,16 +2742,161 @@ fn interface_method_table_symbol(
     method_name: &str,
     impl_class: &str,
     classes: &HashMap<String, ClassInfo>,
-) -> String {
-    if interface_method_needs_return_wrapper(interface_info, method_name, impl_class, classes) {
-        interface_method_wrapper_symbol(
+) -> Result<String, String> {
+    let interface_sig = interface_info
+        .methods
+        .get(method_name)
+        .ok_or_else(|| format!("missing interface signature for {method_name}"))?;
+    let actual_sig = classes
+        .get(impl_class)
+        .and_then(|class_info| class_info.methods.get(method_name))
+        .ok_or_else(|| format!("missing implementation signature for {impl_class}::{method_name}"))?;
+    let abi_plan = source_method_adapters::plan_method_abi(interface_sig, actual_sig)?;
+    if interface_method_needs_return_wrapper(interface_info, method_name, impl_class, classes)
+        || abi_plan != MethodAbiPlan::Direct
+    {
+        Ok(interface_method_wrapper_symbol(
             class_info.class_id,
             interface_info.interface_id,
             method_name,
-        )
+        ))
     } else {
-        method_symbol(impl_class, method_name)
+        Ok(method_symbol(impl_class, method_name))
     }
+}
+
+/// Resolves one source-ABI instance entry through its physical implementing class.
+fn source_instance_method_entry(
+    class_info: &ClassInfo,
+    method_name: &str,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<String, String> {
+    let Some(impl_class) = class_info.method_impl_classes.get(method_name) else {
+        return Ok("0".to_string());
+    };
+    let Some(physical) = physical_instance_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+    )? else {
+        return Ok(method_symbol(impl_class, method_name));
+    };
+    source_method_adapters::source_method_entry_symbol(
+        impl_class,
+        method_name,
+        physical,
+        MethodKind::Instance,
+    )
+}
+
+/// Selects the source vtable entry without adapting a physical source-variadic slot.
+///
+/// A plain source variadic already has the same entry ABI. If it also carries hidden argc,
+/// physical call sites use the original vtable, while injected fixed overrides are rejected.
+fn source_instance_vtable_entry(
+    class_info: &ClassInfo,
+    method_name: &str,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<String, String> {
+    let Some(impl_class) = class_info.method_impl_classes.get(method_name) else {
+        return Ok("0".to_string());
+    };
+    let Some(physical) = physical_instance_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+    )? else {
+        return Ok(method_symbol(impl_class, method_name));
+    };
+    source_method_adapters::source_vtable_entry_symbol(
+        impl_class,
+        method_name,
+        physical,
+        MethodKind::Instance,
+    )
+}
+
+/// Static counterpart of `source_instance_vtable_entry`.
+fn source_static_vtable_entry(
+    class_info: &ClassInfo,
+    method_name: &str,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<String, String> {
+    let Some(impl_class) = class_info.static_method_impl_classes.get(method_name) else {
+        return Ok("0".to_string());
+    };
+    let Some(physical) = physical_static_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+    )? else {
+        return Ok(static_method_symbol(impl_class, method_name));
+    };
+    source_method_adapters::source_vtable_entry_symbol(
+        impl_class,
+        method_name,
+        physical,
+        MethodKind::Static,
+    )
+}
+
+/// Finds the physical instance signature on the class that emits the method body.
+fn physical_instance_method_signature<'a>(
+    class_info: &'a ClassInfo,
+    impl_class: &str,
+    method_name: &str,
+    classes: &'a HashMap<String, ClassInfo>,
+) -> Result<Option<&'a FunctionSig>, String> {
+    physical_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+        |info| &info.methods,
+        "method",
+    )
+}
+
+/// Finds the physical static signature on the class that emits the method body.
+fn physical_static_method_signature<'a>(
+    class_info: &'a ClassInfo,
+    impl_class: &str,
+    method_name: &str,
+    classes: &'a HashMap<String, ClassInfo>,
+) -> Result<Option<&'a FunctionSig>, String> {
+    physical_method_signature(
+        class_info,
+        impl_class,
+        method_name,
+        classes,
+        |info| &info.static_methods,
+        "static method",
+    )
+}
+
+/// Resolves inherited physical signatures without requiring filtered runtime-native classes.
+fn physical_method_signature<'a>(
+    class_info: &'a ClassInfo,
+    impl_class: &str,
+    method_name: &str,
+    classes: &'a HashMap<String, ClassInfo>,
+    methods: impl Fn(&'a ClassInfo) -> &'a HashMap<String, FunctionSig>,
+    kind: &str,
+) -> Result<Option<&'a FunctionSig>, String> {
+    if let Some(impl_info) = classes.get(impl_class) {
+        if let Some(signature) = methods(impl_info).get(method_name) {
+            return Ok(Some(signature));
+        }
+        if impl_info.declaration_span != crate::span::Span::dummy() {
+            return Err(format!(
+                "missing physical {kind} signature for {impl_class}::{method_name}"
+            ));
+        }
+    }
+    Ok(methods(class_info).get(method_name))
 }
 
 /// Returns true when an interface method requires a return-type wrapper at call sites.
@@ -2686,6 +2920,7 @@ fn interface_method_needs_return_wrapper(
     };
 
     matches!(interface_sig.return_type.codegen_repr(), PhpType::Mixed)
+        && !actual_sig.by_ref_return
         && !matches!(actual_sig.return_type.codegen_repr(), PhpType::Mixed)
 }
 
@@ -3161,9 +3396,138 @@ mod tests {
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
     use crate::parser::ast::Visibility;
-    use crate::types::{ClassInfo, PhpType};
+    use crate::types::{ClassInfo, FunctionSig, PhpType};
 
-    use super::emit_runtime_data_user;
+    use super::{
+        emit_runtime_data_user, source_instance_method_entry, source_instance_vtable_entry,
+        source_static_vtable_entry,
+    };
+
+    /// Builds a direct physical method signature for source-entry lookup tests.
+    fn direct_method_signature() -> FunctionSig {
+        FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
+    /// Inherited source entries read the signature from the class that owns the body.
+    #[test]
+    fn inherited_source_entries_use_the_implementing_class_signature() {
+        let mut parent = empty_class_info(1, "run");
+        parent
+            .method_impl_classes
+            .insert("run".to_string(), "Parent".to_string());
+        parent
+            .methods
+            .insert("run".to_string(), direct_method_signature());
+        parent
+            .static_method_impl_classes
+            .insert("build".to_string(), "Parent".to_string());
+        parent
+            .static_methods
+            .insert("build".to_string(), direct_method_signature());
+
+        let mut child = empty_class_info(2, "run");
+        child
+            .method_impl_classes
+            .insert("run".to_string(), "Parent".to_string());
+        child
+            .static_method_impl_classes
+            .insert("build".to_string(), "Parent".to_string());
+        let classes = HashMap::from([
+            ("Parent".to_string(), parent),
+            ("Child".to_string(), child.clone()),
+        ]);
+
+        assert_eq!(
+            source_instance_method_entry(&child, "run", &classes).unwrap(),
+            "_method_Parent_run"
+        );
+        assert_eq!(
+            source_instance_vtable_entry(&child, "run", &classes).unwrap(),
+            "_method_Parent_run"
+        );
+        assert_eq!(
+            source_static_vtable_entry(&child, "build", &classes).unwrap(),
+            "_static_Parent_build"
+        );
+    }
+
+    /// All supported targets retain hook lookup rows while marking only virtual storage and real accessors.
+    #[test]
+    fn test_eval_hook_metadata_flags_on_every_supported_target() {
+        let mut info = empty_class_info(1, "__propget_virtual");
+        let signature = crate::types::FunctionSig {
+            params: Vec::new(), param_type_exprs: Vec::new(), param_attributes: Vec::new(),
+            defaults: Vec::new(), return_type: PhpType::Int, declared_return: true,
+            by_ref_return: false, ref_params: Vec::new(), declared_params: Vec::new(),
+            variadic: None, deprecation: None,
+        };
+        for (index, (name, hooked, backed)) in [
+            ("virtual", true, false), ("backed", true, true), ("plain", false, true),
+        ].into_iter().enumerate() {
+            info.properties.push((name.to_string(), PhpType::Int));
+            info.property_offsets.insert(name.to_string(), 16 + index * 8);
+            info.defaults.push(None);
+            let mut hooks = crate::parser::ast::PropertyHooks::none();
+            hooks.get = hooked;
+            hooks.uses_backing_slot = backed;
+            info.property_hooks.insert(name.to_string(), hooks);
+            let method = format!("__propget_{name}");
+            info.methods.insert(method.clone(), signature.clone());
+            info.method_declaring_classes.insert(method.clone(), "HookMetadata".to_string());
+            info.method_impl_classes.insert(method, "HookMetadata".to_string());
+        }
+        let classes = HashMap::from([("HookMetadata".to_string(), info)]);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = emit_runtime_data_user(
+                &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
+                &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
+                &classes, &HashMap::new(), &HashSet::new(), None, true, None, target,
+            )
+            .unwrap();
+            let properties = asm.split("_eval_reflection_properties:\n").nth(1).unwrap();
+            let flags = properties.lines().take(21).collect::<Vec<_>>();
+            assert_eq!(flags[4].trim(), ".quad 1026", "{name}: virtual property");
+            assert_eq!(flags[11].trim(), ".quad 2", "{name}: backed hook");
+            assert_eq!(flags[18].trim(), ".quad 2", "{name}: ordinary property");
+            let methods = asm.split("_eval_reflection_methods:\n").nth(1).unwrap();
+            let flags = methods.lines().take(21).collect::<Vec<_>>();
+            assert_eq!(flags[4].trim(), ".quad 32770", "{name}: backed getter row");
+            assert_eq!(flags[11].trim(), ".quad 2", "{name}: prefix-like user method");
+            assert_eq!(flags[18].trim(), ".quad 32770", "{name}: virtual getter row");
+        }
+    }
+
+    /// The initializer pointer table follows emitted EIR symbols even for default-less typed slots.
+    #[test]
+    fn property_initializer_table_uses_emitted_symbols_on_all_targets() {
+        let classes = HashMap::from([("TypedOnly".to_string(), empty_class_info(1, "run"))]);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for emitted in [HashSet::new(), HashSet::from([1])] {
+                let asm = emit_runtime_data_user(
+                    &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
+                    &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
+                    &classes, &HashMap::new(), &emitted, None, false, None, Target::parse(name).unwrap(),
+                )
+                .unwrap();
+                let expected = if emitted.is_empty() { ".quad 0" } else { ".quad _class_propinit_1" };
+                let table = asm.split("_class_propinit_ptrs:\n").nth(1).unwrap();
+                assert_eq!(table.lines().nth(1).unwrap().trim(), expected, "{name}");
+            }
+        }
+    }
 
     /// Provides the Empty class info helper used by the user module.
     pub(super) fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
@@ -3181,6 +3545,7 @@ mod tests {
             is_final: false,
             is_readonly_class: false,
             allow_dynamic_properties: false,
+            eval_property_storage: false,
             constants: HashMap::new(),
     constant_deprecations: HashMap::new(),
     constant_types: HashMap::new(),
@@ -3212,6 +3577,7 @@ mod tests {
             property_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
+            property_hooks: HashMap::new(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
             static_property_declaring_classes: HashMap::new(),
@@ -3270,11 +3636,13 @@ mod tests {
             &HashMap::new(),
             &classes,
             &HashMap::new(),
+            &HashSet::new(),
             Some(&allowed_class_names),
             false,
             None,
             Target::new(Platform::MacOS, Arch::AArch64),
-        );
+        )
+        .unwrap();
 
         assert!(asm.contains("_class_vtable_1"));
         assert!(asm.contains("_method_Exception_run"));
@@ -3308,11 +3676,13 @@ mod tests {
             &HashMap::new(),
             &classes,
             &HashMap::new(),
+            &HashSet::new(),
             None,
             false,
             None,
             Target::new(Platform::MacOS, Arch::AArch64),
-        );
+        )
+        .unwrap();
 
         assert!(asm.contains("_class_gc_desc_count:\n    .quad 4\n"));
         assert!(asm.contains("_class_parent_ids:\n    .quad -2\n    .quad -1\n    .quad -1\n    .quad -1\n"));
@@ -3347,11 +3717,13 @@ mod tests {
             &HashMap::new(),
             &classes,
             &HashMap::new(),
+            &HashSet::new(),
             None,
             false,
             None,
             Target::new(Platform::MacOS, Arch::AArch64),
-        );
+        )
+        .unwrap();
 
         assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));
     }

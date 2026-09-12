@@ -102,8 +102,13 @@ fn escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
             inst.op,
             Op::PromoteLocalRefCell
                 | Op::AliasLocalRefCell
+                | Op::RetainLocalRefCell
+                | Op::BindRefCellPtr
+                | Op::AdoptRefCellPtr
+                | Op::AcquireRefCell
                 | Op::ReleaseLocalRefCell
                 | Op::ReleaseLocalSlot
+                | Op::PushCallOperandOwner
                 | Op::InvokerRefArg
         ) {
             for slot in slots_of(inst) {
@@ -239,9 +244,10 @@ fn slot_of(inst: &Instruction) -> Option<LocalSlotId> {
 /// Returns every local slot named by an instruction's immediate (one for a
 /// `LocalSlot`, two for a `LocalSlotPair`), used for barrier invalidation.
 fn slots_of(inst: &Instruction) -> Vec<LocalSlotId> {
-    match inst.immediate {
-        Some(Immediate::LocalSlot(slot)) => vec![slot],
-        Some(Immediate::LocalSlotPair { first, second }) => vec![first, second],
+    match inst.immediate.as_ref() {
+        Some(Immediate::LocalSlot(slot)) => vec![*slot],
+        Some(Immediate::LocalSlotPair { first, second }) => vec![*first, *second],
+        Some(Immediate::IterStart { owner: Some(slot), .. }) => vec![*slot],
         _ => Vec::new(),
     }
 }

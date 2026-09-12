@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_mime_add_part() — internals"
+title: "__elephc_curl_mime_add_part() - internals"
 description: "Compiler internals for __elephc_curl_mime_add_part(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 997
+  order: 1022
 ---
 
-## `__elephc_curl_mime_add_part()` — internals
+## `__elephc_curl_mime_add_part()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_mime_add_part.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_mime_add_part.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

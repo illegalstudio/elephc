@@ -1,11 +1,11 @@
 ---
-title: "mysqli_set_opt() — internals"
+title: "mysqli_set_opt() - internals"
 description: "Compiler internals for mysqli_set_opt(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 156
 ---
 
-## `mysqli_set_opt()` — internals
+## `mysqli_set_opt()` - internals
 
 ## Where it lives
 

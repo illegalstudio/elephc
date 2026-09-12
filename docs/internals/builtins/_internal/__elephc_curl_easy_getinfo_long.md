@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_easy_getinfo_long() — internals"
+title: "__elephc_curl_easy_getinfo_long() - internals"
 description: "Compiler internals for __elephc_curl_easy_getinfo_long(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 983
+  order: 1008
 ---
 
-## `__elephc_curl_easy_getinfo_long()` — internals
+## `__elephc_curl_easy_getinfo_long()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_getinfo_long.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_getinfo_long.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

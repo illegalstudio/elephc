@@ -20,7 +20,7 @@ sidebar:
 | [`array_diff_key()`](./array/array_diff_key.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_fill()`](./array/array_fill.md) | `(int $start_index, int $count, mixed $value): array` | `array` | ✓ | ✓ |
 | [`array_fill_keys()`](./array/array_fill_keys.md) | `(array $keys, mixed $value): array` | `array` | ✓ | ✓ |
-| [`array_filter()`](./array/array_filter.md) | `(array $array, callable $callback = null, int $mode = 0): array` | `array` | ✓ | ✓ |
+| [`array_filter()`](./array/array_filter.md) | `(array $array, ?callable $callback = null, int $mode = 0): array` | `array` | ✓ | ✓ |
 | [`array_find()`](./array/array_find.md) | `(mixed $array, mixed $callback): mixed` | `mixed` | ✓ | — |
 | [`array_flip()`](./array/array_flip.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_intersect()`](./array/array_intersect.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
@@ -31,16 +31,16 @@ sidebar:
 | [`array_key_first()`](./array/array_key_first.md) | `(array $array): mixed` | `mixed` | ✓ | — |
 | [`array_key_last()`](./array/array_key_last.md) | `(array $array): mixed` | `mixed` | ✓ | — |
 | [`array_keys()`](./array/array_keys.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_map()`](./array/array_map.md) | `(callable $callback, array $array, ...$arrays): array` | `array` | ✓ | ✓ |
+| [`array_map()`](./array/array_map.md) | `(?callable $callback, array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_merge()`](./array/array_merge.md) | `(...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_merge_recursive()`](./array/array_merge_recursive.md) | `(...$arrays): array` | `array` | ✓ | — |
-| [`array_multisort()`](./array/array_multisort.md) | `(array $array1, int $array2): bool` | `bool` | ✓ | — |
+| [`array_multisort()`](./array/array_multisort.md) | `(array $array1, array $array2): bool` | `bool` | ✓ | — |
 | [`array_pad()`](./array/array_pad.md) | `(array $array, int $length, mixed $value): array` | `array` | ✓ | ✓ |
 | [`array_pop()`](./array/array_pop.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
-| [`array_product()`](./array/array_product.md) | `(array $array): int` | `int` | ✓ | ✓ |
+| [`array_product()`](./array/array_product.md) | `(array $array): int|float` | `int|float` | ✓ | ✓ |
 | [`array_push()`](./array/array_push.md) | `(array $array, ...$values): void` | `void` | ✓ | ✓ |
 | [`array_rand()`](./array/array_rand.md) | `(array $array): int` | `int` | ✓ | ✓ |
-| [`array_reduce()`](./array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): int` | `int` | ✓ | ✓ |
+| [`array_reduce()`](./array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): mixed` | `mixed` | ✓ | ✓ |
 | [`array_replace()`](./array/array_replace.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | — |
 | [`array_replace_recursive()`](./array/array_replace_recursive.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | — |
 | [`array_reverse()`](./array/array_reverse.md) | `(array $array, bool $preserve_keys = false): array` | `array` | ✓ | ✓ |
@@ -48,7 +48,7 @@ sidebar:
 | [`array_shift()`](./array/array_shift.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`array_slice()`](./array/array_slice.md) | `(array $array, int $offset, int $length = null, bool $preserve_keys = false): array` | `array` | ✓ | ✓ |
 | [`array_splice()`](./array/array_splice.md) | `(array $array, int $offset, int $length = null, array $replacement = []): array` | `array` | ✓ | ✓ |
-| [`array_sum()`](./array/array_sum.md) | `(array $array): int` | `int` | ✓ | ✓ |
+| [`array_sum()`](./array/array_sum.md) | `(array $array): int|float` | `int|float` | ✓ | ✓ |
 | [`array_udiff()`](./array/array_udiff.md) | `(array $array1, array $array2, callable $callback): array` | `array` | ✓ | — |
 | [`array_uintersect()`](./array/array_uintersect.md) | `(array $array1, array $array2, callable $callback): array` | `array` | ✓ | — |
 | [`array_unique()`](./array/array_unique.md) | `(array $array): array` | `array` | ✓ | ✓ |

@@ -3,7 +3,7 @@
 //! Centralizes the small set of method calls that must bypass normal PHP method bodies.
 //!
 //! Called from:
-//! - `crate::codegen::expr::objects::dispatch`
+//! - EIR intrinsic call lowering and `crate::codegen::eval_method_helpers`.
 //!
 //! Key details:
 //! - Intrinsics preserve PHP-facing class/method signatures while routing codegen directly to runtime helpers.
@@ -479,6 +479,20 @@ impl IntrinsicCall {
     /// or None if the intrinsic has no separate helper (shouldn't happen in practice).
     pub fn runtime_helper(self) -> Option<&'static str> {
         INTRINSICS[self.spec_index].runtime_helper
+    }
+
+    /// Lists visible boxed argument positions whose owners the SPL helper consumes.
+    /// Offset readers release their index cells, while writers also consume stored values.
+    pub fn consumed_mixed_parameters(self) -> &'static [usize] {
+        use IntrinsicCallKind::*;
+        match self.kind {
+            SplDllPush | SplDllUnshift | SplQueueEnqueue
+            | SplDllOffsetExists | SplDllOffsetGet | SplDllOffsetUnset
+            | SplFixedOffsetExists | SplFixedOffsetGet | SplFixedOffsetUnset => &[0],
+            SplDllAdd => &[1],
+            SplDllOffsetSet | SplFixedOffsetSet => &[0, 1],
+            _ => &[],
+        }
     }
 }
 

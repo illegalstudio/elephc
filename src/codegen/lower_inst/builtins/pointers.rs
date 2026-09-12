@@ -465,7 +465,7 @@ fn pointer_target_size(ctx: &FunctionContext<'_>, type_name: &str) -> Option<usi
             .class_infos
             .get(class_name)
             .map(|info| {
-                let dynamic_slot = if info.allow_dynamic_properties { 8 } else { 0 };
+                let dynamic_slot = if info.has_property_hash_storage() { 8 } else { 0 };
                 8 + info.properties.len() * 16 + dynamic_slot
             })
             .or_else(|| {

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Aggregate helpers and callback-aware sorting.
+//! Array set-operation helpers and callback-aware sorting.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::arrays`.
@@ -9,39 +9,6 @@
 
 use super::*;
 use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
-
-/// Loads an indexed array argument and calls the selected runtime aggregate helper.
-pub(super) fn lower_indexed_array_aggregate(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    scalar_helper: &str,
-    mixed_helper: Option<&str>,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
-    let array = expect_operand(inst, 0)?;
-    let array_ty = ctx.value_php_type(array)?;
-    let helper = match array_ty.codegen_repr() {
-        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => mixed_helper
-            .ok_or_else(|| {
-                CodegenIrError::unsupported(format!(
-                    "{} for PHP type {:?}",
-                    name,
-                    array_ty.codegen_repr()
-                ))
-            })?,
-        _ => {
-            require_supported_indexed_array(array_ty, name)?;
-            scalar_helper
-        }
-    };
-    ctx.load_value_to_result(array)?;
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the runtime helper argument
-    }
-    abi::emit_call_label(ctx.emitter, helper);
-    store_if_result(ctx, inst)
-}
 
 /// Calls a value set-operation helper after validating compatible indexed-array layouts.
 pub(super) fn lower_indexed_array_set_op(
@@ -221,6 +188,11 @@ pub(super) fn lower_indexed_array_sort(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
+    if matches!(name, "sort" | "rsort")
+        && ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed
+    {
+        return super::boxed_mutation::lower_boxed_array_sort(ctx, inst, array, name);
+    }
     let elem_ty =
         indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
@@ -523,6 +495,9 @@ pub(super) fn lower_array_key_sort(
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
     match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::Mixed => {
+            super::boxed_mutation::lower_boxed_array_key_sort(ctx, inst, array, name, order)
+        }
         PhpType::AssocArray { .. } => {
             let helper = match order {
                 KeySortOrder::Ascending => "__rt_hash_ksort",
@@ -561,7 +536,7 @@ pub(super) fn lower_array_key_sort(
 /// capture environment is passed and `__rt_usort` keeps its two-argument path.
 /// A runtime guard first rejects container, object, resource, and callable tags,
 /// whose PHP ordering is not implemented by the shared comparator.
-fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
+pub(super) fn emit_mixed_slot_sort(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
     let comparator = match name {
         "sort" => "__rt_php_compare_slots",
         "rsort" => "__rt_php_compare_slots_desc",
@@ -625,9 +600,6 @@ pub(super) fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: 
 /// handles and boxed `Mixed` cells (each a single 8-byte payload) are sortable;
 /// the comparator decides the ordering and receives each element through an ABI
 /// adapter when the runtime slot type differs from its declared parameters.
-/// String elements are rejected here exactly as before — their multi-word
-/// descriptors are not permuted by the 8-byte slot sorter — so they keep
-/// producing a clear unsupported-feature error rather than a corrupt sort.
 /// String elements are 16-byte `[ptr][len]` descriptors, so they are routed to
 /// the dedicated `__rt_usort_str` slot permuter instead; only `usort` accepts
 /// them because it is the sort that renumbers keys, which an indexed array

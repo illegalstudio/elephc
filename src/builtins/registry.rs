@@ -215,7 +215,7 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// |------------------------|------------------------------------------------|
 /// | `params`               | `BuiltinDef.params` (typed via `TypeSpec`)    |
 /// | `defaults`             | `BuiltinDef.defaults` (via `DefaultSpec`)     |
-/// | `return_type`          | `BuiltinDef.return_type` (via `TypeSpec`)     |
+/// | `return_type`          | Shared checker/EIR result resolver, otherwise `TypeSpec` |
 /// | `declared_return`      | `false` for a direct builtin signature          |
 /// | `by_ref_return`        | `BuiltinDef.by_ref_return` (from spec)        |
 /// | `ref_params`           | `BuiltinDef.ref_params` (from spec)           |
@@ -226,12 +226,31 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// Returns `None` if the builtin is not registered.
 pub fn function_sig(name: &str) -> Option<FunctionSig> {
     let def = lookup(name)?;
+    // A neutral PHP array declaration does not distinguish indexed arrays from
+    // hashes. When checker and EIR share result typing, callable signatures must
+    // consume that same resolver instead of inventing an indexed payload shape.
+    // Checker-hook builtins retain their existing checker-facing signature here.
+    let return_type = match (def.spec.semantics.validation, def.spec.semantics.result_type) {
+        (
+            crate::builtins::semantics::BuiltinValidation::Shared(_),
+            crate::builtins::semantics::BuiltinResultType::Shared(resolve),
+        ) => {
+            let arg_types = def.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>();
+            resolve(&crate::builtins::semantics::BuiltinSemanticInput {
+                name: def.name,
+                args: &[],
+                arg_types: &arg_types,
+                span: crate::span::Span::dummy(),
+            })
+        }
+        _ => def.return_type.clone(),
+    };
     Some(FunctionSig {
         params: def.params.clone(),
         param_type_exprs: vec![None; def.params.len()],
         param_attributes: vec![Vec::new(); def.params.len()],
         defaults: def.defaults.clone(),
-        return_type: def.return_type.clone(),
+        return_type,
         declared_return: false,
         by_ref_return: def.by_ref_return,
         ref_params: def.ref_params.clone(),
@@ -278,8 +297,15 @@ fn php_type_may_be_callable(ty: &PhpType) -> bool {
 /// Returns `None` if the builtin is not registered.
 pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     let def = lookup(name)?;
+    if matches!(
+        def.spec.semantics.callable,
+        crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(_)
+    ) {
+        return None;
+    }
     let sig = function_sig(def.name)?;
     let mut fcc_sig = callable_wrapper_sig(&sig);
+    truncate_callable_sig_to_enforced_arity(def, &mut fcc_sig);
     refine_first_class_callable_sig(def, &mut fcc_sig);
     fcc_sig.declared_return = true;
     // Mark params declared for reflection hasType, but keep by-ref params
@@ -290,6 +316,44 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
         .map(|index| !fcc_sig.ref_params.get(index).copied().unwrap_or(false))
         .collect();
     Some(fcc_sig)
+}
+
+/// Drops declared parameters the builtin's enforced arity contract refuses to accept.
+///
+/// A contract may declare PHP's full parameter list while capping `max_args` below it; how
+/// `str_replace()`/`str_ireplace()` document `$count` without supporting it. A direct call is
+/// rejected by that cap, but a callable wrapper materializes one operand per signature
+/// parameter, so the uncapped signature hands the typed backend an operand it has no lowering
+/// for (`str_replace expected 3 args, got 4`). Keeping the callable ABI at the accepted prefix
+/// makes the descriptor signature, the wrapper body and the direct call describe one arity.
+///
+/// Variadic builtins are left alone: their cap counts ARGUMENTS, not parameters, and truncating
+/// would delete the variadic tail the wrapper collects (`array_map`, `array_diff`, …).
+fn truncate_callable_sig_to_enforced_arity(def: &BuiltinDef, sig: &mut FunctionSig) {
+    if sig.variadic.is_some() {
+        return;
+    }
+    let Some(max) = enforced_arity_bounds_for_def(def).1 else {
+        return;
+    };
+    if sig.params.len() <= max {
+        return;
+    }
+    sig.params.truncate(max);
+    sig.param_type_exprs.truncate(max);
+    sig.param_attributes.truncate(max);
+    sig.defaults.truncate(max);
+    sig.ref_params.truncate(max);
+    sig.declared_params.truncate(max);
+}
+
+/// Returns PHP's diagnostic for a builtin that forbids first-class invocation.
+pub fn first_class_callable_rejection(name: &str) -> Option<&'static str> {
+    let definition = lookup(name)?;
+    match definition.spec.semantics.callable {
+        crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(reason) => Some(reason),
+        _ => None,
+    }
 }
 
 /// Applies first-class-callable refinements that are broader in the direct builtin spec.
@@ -604,6 +668,7 @@ mod tests {
         assert!(independent("htmlentities"));
         assert!(independent("implode"));
         assert!(independent("rawurldecode"));
+        assert!(independent("gettype"));
         assert!(!independent("__registry_probe_opt"));
         assert!(!independent("__not_a_real_builtin_xyz"));
     }
@@ -754,6 +819,22 @@ mod tests {
         assert_eq!(sig.return_type, PhpType::Bool);
     }
 
+    /// Direct and first-class signatures preserve their concrete introspection array layouts.
+    #[test]
+    fn introspection_signatures_preserve_array_shapes() {
+        for (name, expected) in [
+            ("debug_backtrace", PhpType::Array(Box::new(PhpType::Mixed))),
+            ("get_class_vars", PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }),
+            ("get_class_methods", PhpType::Array(Box::new(PhpType::Str))),
+        ] {
+            assert_eq!(function_sig(name).unwrap().return_type, expected, "{name}");
+            assert_eq!(first_class_callable_sig(name).unwrap().return_type, expected, "{name}");
+        }
+    }
+
     /// Verifies `first_class_callable_sig` applies the variadic-upgrade for variadic builtins.
     #[test]
     fn first_class_callable_sig_upgrades_variadic() {
@@ -770,6 +851,54 @@ mod tests {
     #[test]
     fn function_sig_returns_none_for_unknown() {
         assert!(function_sig("__nonexistent_builtin_xyz").is_none());
+    }
+
+    /// Callable wrappers expose only the accepted prefix of a capped builtin declaration.
+    #[test]
+    fn first_class_callable_sig_stops_at_the_enforced_arity_cap() {
+        for name in ["str_replace", "str_ireplace"] {
+            assert_eq!(function_sig(name).unwrap().params.len(), 4, "{name} declaration");
+            assert_eq!(enforced_arity_bounds(name), Some((3, Some(3))), "{name} cap");
+            let sig = first_class_callable_sig(name).expect("callable signature");
+            assert_eq!(sig.params.len(), 3, "{name} callable arity");
+            assert!(sig.variadic.is_none());
+            for field in [
+                sig.defaults.len(), sig.ref_params.len(), sig.declared_params.len(),
+                sig.param_type_exprs.len(), sig.param_attributes.len(),
+            ] {
+                assert_eq!(field, 3, "{name} parameter metadata stays aligned");
+            }
+            assert!(sig.defaults.iter().all(Option::is_none), "{name} prefix is required");
+        }
+    }
+
+    /// A variadic builtin keeps its collector, even when its contract caps argument count.
+    #[test]
+    fn first_class_callable_sig_keeps_capped_variadic_tails() {
+        for name in ["array_map", "array_diff", "array_merge"] {
+            let sig = first_class_callable_sig(name).expect("callable signature");
+            let variadic = sig.variadic.as_deref().expect("variadic collector preserved");
+            assert!(sig.params.iter().any(|(name, _)| name == variadic));
+        }
+    }
+
+    /// Backend-specific callable prefixes keep declaration annotations aligned too.
+    #[test]
+    fn runtime_callable_prefix_keeps_all_parameter_metadata_aligned() {
+        for (name, target, count) in [
+            ("count", crate::ir::RuntimeFnId::Count, 1),
+            ("array_reverse", crate::ir::RuntimeFnId::ArrayReverse, 1),
+            ("array_chunk", crate::ir::RuntimeFnId::ArrayChunk, 2),
+        ] {
+            let mut sig = first_class_callable_sig(name).expect("callable signature");
+            target.refine_runtime_callable_wrapper_sig(&mut sig);
+            for length in [
+                sig.params.len(), sig.defaults.len(), sig.ref_params.len(),
+                sig.declared_params.len(), sig.param_type_exprs.len(), sig.param_attributes.len(),
+            ] {
+                assert_eq!(length, count, "{name} runtime parameter metadata");
+            }
+        }
     }
 
     /// Verifies `arity_bounds` returns None for an unknown builtin.
@@ -902,9 +1031,15 @@ mod tests {
         crate::ir::RuntimeFnId::Count.refine_runtime_callable_wrapper_sig(&mut count);
         assert_eq!(count.params.len(), 1);
 
-        let mut sum = callable_wrapper_sig(&function_sig("array_sum").expect("array_sum signature"));
-        crate::ir::RuntimeFnId::ArraySum.refine_runtime_callable_wrapper_sig(&mut sum);
-        assert_eq!(sum.params[0].1, PhpType::Array(Box::new(PhpType::Int)));
+        for (name, target) in [
+            ("array_sum", crate::ir::RuntimeFnId::ArraySum),
+            ("array_product", crate::ir::RuntimeFnId::ArrayProduct),
+        ] {
+            let mut sig = callable_wrapper_sig(&function_sig(name).expect("array arithmetic signature"));
+            target.refine_runtime_callable_wrapper_sig(&mut sig);
+            assert_eq!(sig.params[0].1, PhpType::php_array(), "{name}");
+            assert_eq!(sig.return_type, PhpType::Mixed, "{name}");
+        }
 
         let mut clamp = callable_wrapper_sig(&function_sig("clamp").expect("clamp signature"));
         crate::ir::RuntimeFnId::Clamp.refine_runtime_callable_wrapper_sig(&mut clamp);

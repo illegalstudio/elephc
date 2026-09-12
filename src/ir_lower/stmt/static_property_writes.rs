@@ -22,7 +22,10 @@ use super::*;
 ///   *released* after the store (its reference is not the one the slot holds), and
 ///   a borrowed source must be left untouched. Acquiring here would leak the extra
 ///   reference on top of the box's retained one.
-/// - **Moving store** (every other case: concrete-typed slot, or a Mixed→Mixed
+/// - **Unboxing store** (a Mixed/Union value converted into a scalar, string, or
+///   object slot): the slot stores a converted payload, never the source box.
+///   Owning source boxes must be released; borrowed boxes need no extra owner.
+/// - **Moving store** (matching concrete storage, or a Mixed-to-Mixed
 ///   move): the store consumes (moves) its value operand. An owning temporary is
 ///   moved in as-is, but a *borrowed* value (a parameter, local, or container read)
 ///   must be `Acquire`d first. Without this, storing a borrowed `Mixed`
@@ -44,20 +47,26 @@ pub(super) fn lower_static_property_assign(
         }
         return;
     }
-    let value = if ctx.value_is_owning_temporary(value) {
+    let provisional_load = ctx.value_is_owned_unboxed_local_load(value.value);
+    let stored = if ctx.value_is_owning_temporary(value) && !provisional_load {
         value
     } else {
         crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
     };
-    store_static_property(ctx, receiver, property, value.value, span);
+    // A concrete local load can still be borrowed after final frame typing.
+    // Retain its published owner, then retire only an actual Mixed unbox owner.
+    if provisional_load {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    store_static_property(ctx, receiver, property, stored.value, span);
 }
 
 /// Returns true when codegen gives the static-property slot an independently retained value.
 ///
-/// This covers both concrete values boxed into Mixed/Union slots and boxed Mixed values
-/// unboxed into object slots. Both backend paths retain the stored child independently,
-/// so borrowed sources need no `Acquire` and owning temporary sources are released after
-/// the store. Unknown metadata conservatively keeps the moving-store discipline.
+/// Boxing retains a child; unboxing stores an independent scalar, string, or object.
+/// Neither operation consumes the source owner, so borrowed sources need no `Acquire`
+/// and owning temporary sources are released after the store. Unknown metadata keeps
+/// the moving-store discipline.
 pub(super) fn static_property_store_retains_independent_value(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -72,9 +81,11 @@ pub(super) fn static_property_store_retains_independent_value(
     let value_ty = value_ty.codegen_repr();
     let boxes_into_mixed = matches!(slot_ty, PhpType::Mixed | PhpType::Union(_))
         && !matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
-    let unboxes_into_object = matches!(slot_ty, PhpType::Object(_))
+    let unboxes_into_value = matches!(slot_ty,
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+            | PhpType::TaggedScalar | PhpType::Object(_))
         && matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
-    boxes_into_mixed || unboxes_into_object
+    boxes_into_mixed || unboxes_into_value
 }
 
 /// Lowers `Class::$prop[] = value`.
@@ -85,6 +96,20 @@ pub(super) fn lower_static_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![array.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        return;
+    }
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
@@ -132,6 +157,21 @@ pub(super) fn lower_static_property_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
+        let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![array.value, index.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, index, span);
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        return;
+    }
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
@@ -188,6 +228,31 @@ pub(super) fn lower_static_property_array_assign(
     );
 }
 
+/// Publishes a detached boxed PHP array before a static-property element mutation.
+/// The static slot consumes the new cell and releases its previous owner through ordinary storage.
+fn separate_php_array_static_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    span: Span,
+) -> Option<LoweredValue> {
+    let ty = static_property_type(ctx, receiver, property)?;
+    if !ty.is_php_array() {
+        return None;
+    }
+    let previous = load_static_property_as(ctx, receiver, property, ty.clone(), span);
+    let separated = ctx.emit_value(
+        Op::MixedClone,
+        vec![previous.value],
+        None,
+        ty,
+        Op::MixedClone.default_effects(),
+        Some(span),
+    );
+    store_static_property(ctx, receiver, property, separated.value, span);
+    Some(separated)
+}
+
 /// Returns true when a named static-property receiver may resolve through eval metadata.
 pub(super) fn static_property_may_be_eval_dynamic(
     ctx: &LoweringContext<'_, '_>,
@@ -201,4 +266,3 @@ pub(super) fn static_property_may_be_eval_dynamic(
             .classes
             .contains_key(class_name.as_str().trim_start_matches('\\'))
 }
-

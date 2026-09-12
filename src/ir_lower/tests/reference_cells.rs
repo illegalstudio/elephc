@@ -1,0 +1,454 @@
+//! Purpose:
+//! Checks explicit heap reference-cell ownership in lowered EIR and target assembly.
+//!
+//! Called from:
+//! - The AST-to-EIR unit suite.
+//!
+//! Key details:
+//! - Heap cell owners are distinct from dereferenced PHP values and borrowed element addresses.
+//! - Every supported target must emit balanced retain and retirement helpers.
+
+use crate::codegen::platform::Target;
+use crate::ir::{Effects, Immediate, LocalKind, Op};
+use std::path::Path;
+
+/// Non-promoting constructors and explicit parent calls use managed defaults on every target.
+#[test]
+fn ordinary_constructor_defaults_use_managed_reference_leases_on_every_target() {
+    let source = r#"<?php
+class OrdinaryLeaseConstructor {
+    public function __construct(array &$items = [7], int $value = 0) { $items[] = $value; }
+}
+class OrdinaryLeaseChild extends OrdinaryLeaseConstructor {
+    public function __construct(int $value) { parent::__construct(value: $value); }
+}
+function constructOrdinaryLease(int $value): OrdinaryLeaseConstructor {
+    return new OrdinaryLeaseConstructor(value: $value);
+}
+$first = constructOrdinaryLease($argc);
+$second = new OrdinaryLeaseChild($argc);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let caller = asm.split_once("@fn name=constructOrdinaryLease ").unwrap().1
+            .split_once("@endfn name=constructOrdinaryLease").unwrap().0;
+        let constructor = crate::names::method_symbol("OrdinaryLeaseConstructor", "__construct");
+        let call = caller.lines().find(|line| {
+            let line = line.trim_start();
+            (line.starts_with("call ") || line.starts_with("bl "))
+                && line.contains(&constructor)
+        }).expect("ordinary constructor call");
+        let offset = caller.find(call).unwrap();
+        assert!(caller[..offset].contains("__rt_reference_cell_new"), "{name}");
+        assert!(caller[offset..].contains("__rt_reference_cell_release"), "{name}");
+        assert!(asm.matches("__rt_reference_cell_new").count() >= 2, "{name}: direct and parent calls");
+    }
+}
+
+/// Promoted borrowed properties defer constants and property reads to persistent cells.
+#[test]
+fn promoted_reference_guards_accept_materialized_cells_on_every_target() {
+    let source = r#"<?php
+class PromotedReferenceCell {
+    public function __construct(public int &$value = 1) {}
+}
+class PromotedReferenceSource { public int $value = 7; }
+$default = new PromotedReferenceCell();
+$source = new PromotedReferenceSource();
+$class = "PromotedReferenceCell";
+$property = new $class($source->value);
+echo $default->value, $property->value;
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// Array normalization promotes before its final reference-place load.
+#[test]
+fn reference_return_array_normalization_does_not_strand_a_detached_load_on_every_target() {
+    let source = r#"<?php
+function &relayNormalizedArray(array &$value): array { return $value; }
+function consumeNormalizedArray(): void {
+    $value = [1];
+    $alias = &relayNormalizedArray($value);
+    echo $alias[0];
+}
+consumeNormalizedArray();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let caller = module.functions.iter()
+            .find(|function| function.name == "consumeNormalizedArray").unwrap();
+        let call = caller.instructions.iter().enumerate().find(|(_, inst)| inst.op == Op::Call)
+            .expect("normalized array relay call");
+        let argument = caller.instructions.iter().find(|inst| inst.result == call.1.operands.first().copied())
+            .expect("normalized reference argument producer");
+        assert_eq!(argument.op, Op::LoadRefCell, "{name}: call uses the promoted cell place");
+        let Some(Immediate::LocalSlot(slot)) = argument.immediate else { unreachable!(); };
+        let promotion = caller.instructions[..call.0].iter().enumerate().rev().find(|(_, inst)| {
+            matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, .. }) if inst.op == Op::PromoteLocalRefCell && first == slot)
+        }).expect("normalized array is promoted before its final load");
+        let normalized_store = caller.instructions[..promotion.0].iter().rposition(|inst| {
+            matches!(inst.immediate, Some(Immediate::LocalSlot(stored)) if inst.op == Op::StoreLocal && stored == slot)
+        }).expect("normalized array is stored before promotion");
+        assert!(!caller.instructions[normalized_store + 1..promotion.0].iter().any(|inst| {
+            matches!(inst.immediate, Some(Immediate::LocalSlot(loaded)) if inst.op == Op::LoadLocal && loaded == slot)
+        }), "{name}: no detached normalized load may be discarded before promotion");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// Native omitted references use managed cells and scoped owners on every supported ABI.
+///
+/// Both original default containers keep their own unwind owner, and the call's own owned
+/// result is staged in a SEPARATE record that encloses them: it is published first and retired
+/// last, which is the only nesting the runtime's LIFO pop can express. Counting records alone
+/// would accept a missing argument root as soon as any other record was added.
+#[test]
+fn omitted_reference_defaults_have_managed_unwind_leases_on_every_target() {
+    let source = r#"<?php
+function keepDefaultReferences(array &$left = [], array &$right = [7], int $value = 0): callable {
+    $left[] = $value;
+    return function() use (&$left, &$right): int {
+        $left[] = 1; $right[] = 2;
+        return count($left) * 10 + count($right);
+    };
+}
+function callDefaultReferences(int $value): callable {
+    return keepDefaultReferences(value: $value);
+}
+$callback = callDefaultReferences(3);
+echo $callback();
+unset($callback);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let caller = module.functions.iter()
+            .find(|function| function.name == "callDefaultReferences").unwrap();
+        let pushes = caller.instructions.iter().enumerate()
+            .filter_map(|(index, inst)| match (inst.op, &inst.immediate) {
+                (Op::PushCallOperandOwner, Some(Immediate::LocalSlot(slot))) => Some((index, *slot)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let local = |slot: crate::ir::LocalSlotId| &caller.locals[slot.as_raw() as usize];
+        let defaults = pushes.iter().copied()
+            .filter(|(_, slot)| local(*slot).kind == LocalKind::HiddenTemp)
+            .collect::<Vec<_>>();
+        assert_eq!(defaults.len(), 2, "{name}: both original default arrays need unwind owners");
+        let results = pushes.iter().copied()
+            .filter(|(_, slot)| local(*slot).kind == LocalKind::OwnedTemp
+                && local(*slot).php_type.codegen_repr() == crate::types::PhpType::Callable)
+            .collect::<Vec<_>>();
+        assert_eq!(results.len(), 1, "{name}: the call's own result is staged exactly once");
+        assert_eq!(pushes.len(), defaults.len() + results.len(), "{name}: no unaccounted owners");
+        let (result_push, result_slot) = results[0];
+        let detached = |slot: crate::ir::LocalSlotId| caller.instructions.iter()
+            .position(|inst| inst.op == Op::PopCallOperandOwner
+                && inst.immediate == Some(Immediate::LocalSlot(slot)))
+            .unwrap_or_else(|| panic!("{name}: slot {} is never detached", slot.as_raw()));
+        let result_pop = detached(result_slot);
+        for (push, slot) in &defaults {
+            assert!(*push > result_push, "{name}: the result record must enclose every argument root");
+            assert!(detached(*slot) < result_pop, "{name}: argument roots retire inside the result record");
+        }
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let caller_asm = asm.split_once("callDefaultReferences:\n").unwrap().1;
+        let call = caller_asm.lines().find(|line| {
+            let line = line.trim_start();
+            (line.starts_with("call ") || line.starts_with("bl ")) && line.contains("keepDefaultReferences")
+        }).expect("native reference call");
+        let call_offset = caller_asm.find(call).unwrap();
+        let before = &caller_asm[..call_offset];
+        assert_eq!(before.matches("__rt_reference_cell_new").count(), 2, "{name}");
+        assert!(before.contains("__rt_cleanup_call_operand_owner"), "{name}");
+        let after = &caller_asm[call_offset..];
+        assert!(after.contains("__rt_reference_cell_release"), "{name}");
+    }
+}
+
+/// Named regular references use caller element addresses for direct, method and spread calls.
+#[test]
+fn named_array_element_references_preserve_places_on_every_target() {
+    let source = r#"<?php
+function namedReference(int $prefix, mixed &$value): void { $value = "changed"; }
+class NamedReferenceWriter {
+    public function write(int $prefix, mixed &$value): void { $value = "method"; }
+    public static function writeStatic(int $prefix, mixed &$value): void { $value = "static"; }
+}
+$direct = [1]; namedReference(value: $direct[0], prefix: 0);
+$writer = new NamedReferenceWriter();
+$method = [2]; $writer->write(value: $method[0], prefix: 0);
+$static = [3]; NamedReferenceWriter::writeStatic(value: $static[0], prefix: 0);
+$spread = [4]; namedReference(...[0], value: $spread[0]);
+echo $direct[0], $method[0], $static[0], $spread[0];
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let addresses = module.functions.iter().flat_map(|function| &function.instructions)
+            .filter(|inst| inst.op == Op::ArrayElemAddr).collect::<Vec<_>>();
+        assert_eq!(addresses.len(), 4, "{name}: each named place needs its actual element address");
+        for address in addresses {
+            assert_eq!(address.result_php_type, crate::types::PhpType::Pointer(None), "{name}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// Captured locals receive explicit cell owners before any descriptor can borrow their addresses.
+#[test]
+fn closure_local_reference_cells_have_frame_owners_on_every_target() {
+    let source = r#"<?php
+function localReferenceClosure(string $text): callable {
+    $counter = 0;
+    return function() use (&$text, &$counter): string { $counter++; return $text; };
+}
+$callback = localReferenceClosure("owned");
+echo $callback();
+unset($callback);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "localReferenceClosure").unwrap();
+        let promotions = function.instructions.iter().enumerate().filter(|(_, inst)| inst.op == Op::PromoteLocalRefCell)
+            .collect::<Vec<_>>();
+        assert_eq!(promotions.len(), 2, "{name}");
+        let closure = function.instructions.iter().position(|inst| inst.op == Op::ClosureNew).unwrap();
+        for (index, inst) in promotions {
+            let Some(Immediate::LocalSlotPair { second: owner, .. }) = inst.immediate else { panic!("{name}: missing owner"); };
+            assert_eq!(function.locals[owner.as_raw() as usize].kind, LocalKind::RefCell, "{name}");
+            assert!(index < closure, "{name}: promote before capturing the cell address");
+        }
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_reference_cell_new"), "{name}");
+        assert!(asm.contains("__rt_local_ref_cell_release"), "{name}");
+    }
+}
+
+/// Closure construction retains any managed cell behind a captured native reference argument.
+#[test]
+fn closures_retain_managed_reference_arguments_on_every_target() {
+    let source = r#"<?php
+function captureManagedArgument(array &$items): callable {
+    return function() use (&$items): int { return count($items); };
+}
+$items = [1];
+$callback = captureManagedArgument($items);
+echo $callback();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let asm = asm.split_once("captureManagedArgument:\n").unwrap().1;
+        let owner = asm.find("__rt_reference_cell_owner").expect("capture checks for an owned cell");
+        let next_call = if name == "linux-x86_64" {
+            asm[owner..].lines().skip(1).find(|line| line.trim_start().starts_with("call "))
+        } else {
+            asm[owner..].lines().skip(1).find(|line| line.trim_start().starts_with("bl "))
+        }.expect("managed capture retention");
+        assert!(next_call.contains("__rt_incref"), "{name}: {next_call}");
+    }
+}
+
+/// A binding first encountered inside a loop retires the owner retained by earlier iterations.
+#[test]
+fn repeated_reference_aliases_retire_the_previous_owner_on_every_target() {
+    let source = r#"<?php
+function repeatReferenceAlias(): void {
+    $value = 0;
+    for ($i = 0; $i < 5; $i++) { $alias = &$value; $alias = $i; }
+    echo $value, '|', $alias;
+}
+repeatReferenceAlias();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("repeatReferenceAlias")).unwrap();
+        let (retained, owner) = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+            if inst.op != Op::RetainLocalRefCell { return None; }
+            let Some(Immediate::LocalSlotPair { second, .. }) = inst.immediate else { return None; };
+            Some((index, second))
+        }).expect("the alias retains its own cell owner");
+        assert!(function.instructions[..retained].iter().any(|inst| {
+            inst.op == Op::ReleaseLocalRefCell && inst.immediate == Some(Immediate::LocalSlot(owner))
+        }), "{name}: loop aliases retire their previous owner before retaining another");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// Rebinding a local to its own property retains the cell before retiring the old object slot.
+#[test]
+fn reference_rebinding_retires_the_previous_slot_owner_on_every_target() {
+    let source = r#"<?php
+class ReboundReferenceOwner { public array $items = [6]; }
+function rebindReferenceOwner(): void {
+    $holder = new ReboundReferenceOwner();
+    $holder = &$holder->items;
+    echo $holder[0];
+    unset($holder);
+}
+rebindReferenceOwner();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("rebindReferenceOwner")).unwrap();
+        let holder = function.locals.iter().find(|local| local.name.as_deref() == Some("holder")).unwrap().id;
+        let retained = function.instructions.iter().position(|inst| inst.op == Op::BindRefCellPtr
+            && matches!(inst.immediate, Some(Immediate::LocalSlotPair { .. }))).unwrap();
+        let released = function.instructions.iter().enumerate().skip(retained + 1)
+            .find(|(_, inst)| inst.op == Op::ReleaseLocalSlot
+                && inst.immediate == Some(Immediate::LocalSlot(holder)))
+            .map(|(index, _)| index).expect("old object slot is retired explicitly");
+        let rebound = function.instructions.iter().position(|inst| inst.op == Op::AliasLocalRefCell
+            && matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, .. }) if first == holder)).unwrap();
+        assert!(retained < released && released < rebound,
+            "{name}: retain the new cell, retire the old value, then publish the alias");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// Resolved returns lease their managed cells until the caller adopts or copies their values.
+#[test]
+fn reference_returns_transfer_cell_owners_on_every_target() {
+    let source = r#"<?php
+class ReturningReferenceOwner {
+    public string $text = 'value';
+    public function &reference(): string { return $this->text; }
+}
+function &createReturnedReference(): string {
+    $object = new ReturningReferenceOwner();
+    return $object->text;
+}
+function &relayReturnedReference(mixed &$value): mixed {
+    $value = 'relayed';
+    return $value;
+}
+function returnedReferenceSeed(): mixed { return 'start'; }
+function consumeReturnedReference(): void {
+    $alias = &createReturnedReference();
+    $copy = createReturnedReference();
+    $method = &(new ReturningReferenceOwner())->reference();
+    $managed = returnedReferenceSeed();
+    $relayed = &relayReturnedReference($managed);
+    echo $alias, $copy, $method, $relayed;
+}
+consumeReturnedReference();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let callee = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("createReturnedReference")).unwrap();
+        let acquisition = callee.instructions.iter().find(|inst| inst.op == Op::AcquireRefCell)
+            .expect("callee retains a returned property cell before destroying its local object");
+        let Some(Immediate::LocalSlot(owner)) = acquisition.immediate else { unreachable!(); };
+        assert_eq!(callee.locals[owner.as_raw() as usize].kind, LocalKind::ReturnRefCell, "{name}");
+        assert!(acquisition.effects.contains(Effects::REFCOUNT_OP | Effects::WRITES_LOCAL), "{name}");
+        assert!(acquisition.effects.contains(Effects::MAY_THROW),
+            "{name}: replacing a pending reference return can run a payload destructor");
+        let relay = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("relayReturnedReference")).unwrap();
+        let relay_acquire = relay.instructions.iter().find(|inst| inst.op == Op::AcquireRefCell)
+            .expect("local by-reference return retains the managed cell owner");
+        let relay_load = relay.instructions.iter().find(|inst| {
+            inst.result.as_ref() == relay_acquire.operands.first()
+        }).expect("local by-reference return retains its source place");
+        assert_eq!(relay_load.op, Op::LoadRefCell, "{name}");
+        let Some(Immediate::LocalSlot(relay_owner)) = relay_acquire.immediate else { unreachable!(); };
+        assert_eq!(relay.locals[relay_owner.as_raw() as usize].kind, LocalKind::ReturnRefCell, "{name}");
+        let caller = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("consumeReturnedReference")).unwrap();
+        let relay_call = caller.instructions.iter().enumerate().find(|(_, inst)| {
+            inst.op == Op::Call && inst.operands.len() == 1
+        }).expect("caller invokes the one-argument reference relay");
+        let relay_operand = relay_call.1.operands[0];
+        let relay_argument = caller.instructions.iter().find(|inst| inst.result == Some(relay_operand))
+            .expect("reference relay operand has a local-load producer");
+        assert_eq!(relay_argument.op, Op::LoadRefCell, "{name}: caller passes the managed cell");
+        let Some(Immediate::LocalSlot(relay_slot)) = relay_argument.immediate else { unreachable!(); };
+        let promotion = caller.instructions[..relay_call.0].iter().find(|inst| {
+            matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, .. }) if inst.op == Op::PromoteLocalRefCell && first == relay_slot)
+        }).expect("caller promotes the returned by-reference argument before the call");
+        let Some(Immediate::LocalSlotPair { second: relay_owner, .. }) = promotion.immediate else { unreachable!(); };
+        assert_eq!(caller.locals[relay_owner.as_raw() as usize].kind, LocalKind::RefCell, "{name}");
+        assert!(caller.instructions.iter().filter(|inst| inst.op == Op::AdoptRefCellPtr).count() >= 3,
+            "{name}: aliases and value copies consume the returned lease before argument cleanup");
+        assert!(caller.instructions.iter().any(|inst| inst.op == Op::LoadRefCell),
+            "{name}: ordinary calls read the referenced value, not the cell address");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains("__rt_reference_cell_owner"), "{name}");
+        assert!(assembly.contains("__rt_local_ref_cell_release"), "{name}");
+    }
+}
+
+/// Local aliases retain cells, and known object-owned property aliases carry dedicated owner slots.
+#[test]
+fn reference_alias_owners_are_explicit_on_every_target() {
+    let source = r#"<?php
+class ReferenceOwner { public array $items = [1]; }
+function createReferenceOwners(): void {
+    $original = [1, 2];
+    $first = &$original;
+    $last = &$first;
+    unset($original, $first);
+    echo $last[0];
+    $object = new ReferenceOwner();
+    $property = &$object->items;
+    $copy = clone $object;
+    echo $property[0];
+}
+createReferenceOwners();
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name.eq_ignore_ascii_case("createReferenceOwners")).unwrap();
+        let retained = function.instructions.iter().filter(|inst| inst.op == Op::RetainLocalRefCell).count();
+        assert!(retained >= 2, "{name}: both local aliases retain their cell owner");
+        let binding = function.instructions.iter().find(|inst| {
+            inst.op == Op::BindRefCellPtr && matches!(inst.immediate, Some(Immediate::LocalSlotPair { .. }))
+        }).expect("property alias carries an owned heap cell");
+        let Some(Immediate::LocalSlotPair { second: owner, .. }) = binding.immediate else { unreachable!(); };
+        assert_eq!(function.locals[owner.as_raw() as usize].kind, LocalKind::RefCell);
+        assert_eq!(function.value(binding.operands[0]).unwrap().php_type, crate::types::PhpType::Pointer(None));
+        assert!(binding.effects.contains(Effects::REFCOUNT_OP | Effects::WRITES_HEAP));
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains("__rt_incref"), "{name}");
+        assert!(assembly.contains("__rt_local_ref_cell_release"), "{name}");
+        assert!(assembly.contains("__rt_reference_cell_new"), "{name}: property cells have typed headers");
+        assert!(assembly.contains("__rt_reference_cell_clone"), "{name}: clone preserves reference ownership");
+    }
+}

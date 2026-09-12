@@ -1,11 +1,11 @@
 ---
-title: "imageresolution() — internals"
+title: "imageresolution() - internals"
 description: "Compiler internals for imageresolution(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 523
 ---
 
-## `imageresolution()` — internals
+## `imageresolution()` - internals
 
 ## Where it lives
 

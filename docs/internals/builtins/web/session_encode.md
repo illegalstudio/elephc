@@ -1,16 +1,16 @@
 ---
-title: "session_encode() — internals"
+title: "session_encode() - internals"
 description: "Compiler internals for session_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 892
+  order: 918
 ---
 
-## `session_encode()` — internals
+## `session_encode()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3046](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3046) (`session_encode`)
+- **Lowering**: [`src/web_prelude/build.rs`:3088](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3088) (`session_encode`)
 - **Function symbol**: `session_encode()`
 
 

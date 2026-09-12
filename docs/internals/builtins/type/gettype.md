@@ -1,16 +1,16 @@
 ---
-title: "gettype() — internals"
+title: "gettype() - internals"
 description: "Compiler internals for gettype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 860
+  order: 886
 ---
 
-## `gettype()` — internals
+## `gettype()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/gettype.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/gettype.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `independent`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `dynamic_target`

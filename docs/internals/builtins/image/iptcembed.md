@@ -1,11 +1,11 @@
 ---
-title: "iptcembed() — internals"
+title: "iptcembed() - internals"
 description: "Compiler internals for iptcembed(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 537
 ---
 
-## `iptcembed()` — internals
+## `iptcembed()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "cairo_restore() — internals"
+title: "cairo_restore() - internals"
 description: "Compiler internals for cairo_restore(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 429
 ---
 
-## `cairo_restore()` — internals
+## `cairo_restore()` - internals
 
 ## Where it lives
 

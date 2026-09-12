@@ -11,10 +11,26 @@
 use std::collections::HashSet;
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::{EnumInfo, PhpType, TypeEnv};
 
 use super::super::Checker;
+
+/// Returns PHP's canonical spelling for a global builtin iterable interface name.
+///
+/// Matching the complete normalized name keeps a namespaced user interface such as
+/// `Domain\Traversable` nominal and prevents it from acquiring builtin foreach semantics.
+pub(super) fn canonical_builtin_iterable_interface_name(
+    type_name: &str,
+) -> Option<&'static str> {
+    match php_symbol_key(type_name.trim_start_matches('\\')).as_str() {
+        "traversable" => Some("Traversable"),
+        "iterator" => Some("Iterator"),
+        "iteratoraggregate" => Some("IteratorAggregate"),
+        _ => None,
+    }
+}
 
 impl Checker {
     /// Checks whether the current class context can access a member with the given visibility
@@ -134,7 +150,8 @@ impl Checker {
     /// Returns true if `type_name` (a class or interface) implements `Iterator` or
     /// `IteratorAggregate`, which are the interfaces that make a type usable in `foreach`.
     pub(crate) fn object_type_implements_iterable(&self, type_name: &str) -> bool {
-        if type_name == "Traversable" {
+        let type_name = type_name.trim_start_matches('\\');
+        if canonical_builtin_iterable_interface_name(type_name).is_some() {
             return true;
         }
         if self.classes.contains_key(type_name) {
@@ -383,10 +400,16 @@ impl Checker {
                 }
             }
 
-            if !param_has_declared_type {
+            // Sharing a property does not erase another constructor's declared contract or
+            // make a different parameter position refer to this property's constructor input.
+            let maps_same_property = class_info.constructor_param_to_prop.get(param_index)
+                .and_then(|mapped| mapped.as_ref()) == Some(&prop_name);
+            if !param_has_declared_type && maps_same_property {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
-                    if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                        *param_ty = arg_ty.clone();
+                    if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
+                        if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
+                            *param_ty = arg_ty.clone();
+                        }
                     }
                 }
             }

@@ -16,6 +16,7 @@ mod macros;
 
 mod array;
 mod class_metadata;
+pub(super) mod collection_builder;
 mod core;
 #[cfg(feature = "curl")]
 mod curl;

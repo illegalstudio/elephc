@@ -1,11 +1,11 @@
 ---
-title: "mysqli_execute_query() — internals"
+title: "mysqli_execute_query() - internals"
 description: "Compiler internals for mysqli_execute_query(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 113
 ---
 
-## `mysqli_execute_query()` — internals
+## `mysqli_execute_query()` - internals
 
 ## Where it lives
 

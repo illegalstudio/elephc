@@ -1,6 +1,6 @@
 ---
 title: "array_walk_recursive()"
-description: "Applies a user function recursively to every member of an array."
+description: "Applies a user function recursively to array leaf values. AOT boxed arrays pass a writable leaf reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported."
 sidebar:
   order: 47
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_walk_recursive(array $array, callable $callback): void
 ```
 
-Applies a user function recursively to every member of an array.
+Applies a user function recursively to array leaf values. AOT boxed arrays pass a writable leaf reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
@@ -24,7 +24,7 @@ Applies a user function recursively to every member of an array.
 - **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

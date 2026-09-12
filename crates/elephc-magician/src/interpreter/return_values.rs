@@ -33,7 +33,8 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
             values,
         ),
         EvalControl::Throw(result) => {
-            context.set_pending_throw(result);
+            let thrown = if result.is_borrowed() { values.retain(result)? } else { result };
+            context.set_pending_throw(thrown);
             Err(EvalStatus::UncaughtThrowable)
         }
         EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),

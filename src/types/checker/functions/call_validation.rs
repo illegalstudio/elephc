@@ -8,6 +8,8 @@
 //! Key details:
 //! - Diagnostics should map shared planner errors back to source spans without duplicating call semantics.
 
+use std::collections::HashSet;
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::call_args::{self, CallArgPlanError};
@@ -97,6 +99,19 @@ fn assoc_spread_sources(args: &[Expr], env: &TypeEnv) -> Vec<bool> {
             ExprKind::Spread(inner) => is_assoc_spread_source(inner, env),
             _ => false,
         })
+        .collect()
+}
+
+/// Marks every non-static spread that reaches a descriptor invoker as a runtime key provider.
+///
+/// Unlike direct-call lowering, descriptor unpack preserves the source's actual int/string keys
+/// and decides positional versus named binding while iterating. A statically indexed source can
+/// still provide only positional keys, but treating an unresolved spread as positional during
+/// checking would incorrectly report missing or duplicate parameters before that runtime walk.
+fn descriptor_spread_sources(args: &[Expr]) -> Vec<bool> {
+    call_args::expand_static_assoc_spread_args(args)
+        .iter()
+        .map(|arg| matches!(arg.kind, ExprKind::Spread(_)))
         .collect()
 }
 
@@ -200,8 +215,21 @@ impl Checker {
         callee_desc: &str,
         env: &TypeEnv,
     ) -> Result<Vec<Expr>, CompileError> {
-        let allow_unknown_named_variadic = !crate::func_args::sig_collects_surplus_args(sig);
-        self.normalize_call_args(
+        Ok(self.plan_named_call_args(sig, args, span, callee_desc, env)?.normalized_args())
+    }
+
+    /// Retains default-slot provenance while applying user-call named and spread argument rules.
+    pub(crate) fn plan_named_call_args(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+        env: &TypeEnv,
+    ) -> Result<call_args::CallArgPlan, CompileError> {
+        let allow_unknown_named_variadic =
+            sig.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(sig);
+        self.plan_call_args(
             sig,
             args,
             span,
@@ -210,6 +238,33 @@ impl Checker {
             allow_unknown_named_variadic,
             env,
         )
+    }
+
+    /// Plans a descriptor invocation without guessing the keys of a dynamic unpack source.
+    ///
+    /// The runtime descriptor binder validates key types, order, aliases, duplicates and arity.
+    /// The checker still expands fully static associative spreads and retains PHP's syntactic
+    /// ordering errors, but leaves every remaining spread as a possible named-key provider.
+    pub(crate) fn plan_descriptor_call_args(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+    ) -> Result<call_args::CallArgPlan, CompileError> {
+        let allow_unknown_named_variadic =
+            sig.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(sig);
+        let descriptor_spread_sources = descriptor_spread_sources(args);
+        call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+            sig,
+            args,
+            span,
+            call_args::regular_param_count(sig),
+            false,
+            allow_unknown_named_variadic,
+            &descriptor_spread_sources,
+        )
+        .map_err(|err| call_arg_plan_error(sig, callee_desc, err))
     }
 
     /// Plans builtin arguments while retaining which parameter slots came from caller source.
@@ -222,31 +277,6 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<call_args::CallArgPlan, CompileError> {
         self.plan_call_args(sig, args, span, callee_desc, true, false, env)
-    }
-
-    /// Shared argument normalization for both user-defined and builtin calls. Delegates to the
-    /// shared call-argument planner and converts planner errors to `CompileError`.
-    fn normalize_call_args(
-        &self,
-        sig: &FunctionSig,
-        args: &[Expr],
-        span: crate::span::Span,
-        callee_desc: &str,
-        trim_trailing_defaults: bool,
-        allow_unknown_named_variadic: bool,
-        env: &TypeEnv,
-    ) -> Result<Vec<Expr>, CompileError> {
-        Ok(self
-            .plan_call_args(
-                sig,
-                args,
-                span,
-                callee_desc,
-                trim_trailing_defaults,
-                allow_unknown_named_variadic,
-                env,
-            )?
-            .normalized_args())
     }
 
     /// Produces the shared planner result and maps semantic planning errors to checker diagnostics.
@@ -362,6 +392,7 @@ impl Checker {
             callee_desc,
             false,
             false,
+            false,
         )
     }
 
@@ -391,6 +422,7 @@ impl Checker {
             callee_desc,
             false,
             coercive,
+            false,
         )
     }
 
@@ -414,6 +446,7 @@ impl Checker {
             callee_desc,
             true,
             coercive,
+            true,
         )
     }
 
@@ -446,6 +479,7 @@ impl Checker {
             callee_desc,
             true,
             false,
+            true,
         )
     }
 
@@ -453,6 +487,9 @@ impl Checker {
     ///
     /// `coercive_param_binding` opts the callee into PHP's coercive parameter binding for its
     /// declared parameters; see `check_user_declared_call` for when that is sound.
+    /// `descriptor_invocation` selects the descriptor binder as one indivisible contract:
+    /// Traversable sources, runtime key planning and by-value Mixed projections are enabled
+    /// together, so no caller can accidentally request only one part of that representation.
     fn check_known_callable_call_with_options(
         &mut self,
         sig: &FunctionSig,
@@ -462,19 +499,35 @@ impl Checker {
         callee_desc: &str,
         allow_by_ref_spread: bool,
         coercive_param_binding: bool,
+        descriptor_invocation: bool,
     ) -> Result<PhpType, CompileError> {
-        let normalized_args = self.normalize_named_call_args(sig, args, span, callee_desc, caller_env)?;
+        let plan = if descriptor_invocation {
+            self.plan_descriptor_call_args(sig, args, span, callee_desc)?
+        } else {
+            self.plan_named_call_args(sig, args, span, callee_desc, caller_env)?
+        };
+        self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
+        let source_has_spread = plan.has_spread_args();
+        let defaults = plan.default_argument_mask();
+        let descriptor_projections = plan.descriptor_projection_mask();
+        let normalized_args = plan.normalized_args();
         let args = normalized_args.as_slice();
         let effective_arg_count = args
             .iter()
             .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
             .count();
-        let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
+        let has_spread = source_has_spread;
         let regular_param_count = if sig.variadic.is_some() {
             sig.params.len().saturating_sub(1)
         } else {
             sig.params.len()
         };
+        let spread_projects_into_reference = descriptor_projections
+            .iter()
+            .enumerate()
+            .any(|(index, projected)| {
+                *projected && sig.ref_params.get(index).copied().unwrap_or(false)
+            });
         // The variadic collector is represented as the signature's final param
         // with no default expression, but it never contributes to minimum arity.
         let required = sig
@@ -485,6 +538,15 @@ impl Checker {
             .count();
 
         if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread && !allow_by_ref_spread {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                    callee_desc
+                ),
+            ));
+        }
+        if spread_projects_into_reference {
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -518,21 +580,31 @@ impl Checker {
             }
         }
 
-        let variadic_elem_ty = sig.variadic.as_ref().and_then(|_| {
-            sig.params.last().and_then(|(_, ty)| match ty {
-                PhpType::Array(elem) => Some((**elem).clone()),
-                _ => None,
-            })
-        });
+        let variadic_elem_ty = self.variadic_argument_element_type(sig, span, callee_desc)?;
 
         let mut param_idx = 0usize;
         for arg in args {
-            let actual_ty = self.infer_type(arg, caller_env)?;
+            let descriptor_projected = descriptor_invocation
+                && descriptor_projections
+                    .get(param_idx)
+                    .copied()
+                    .unwrap_or(false);
+            let actual_ty = if descriptor_projected {
+                // Descriptor unpack reads a runtime-keyed Mixed cell. Its binder owns the tag
+                // check against the selected parameter after deciding which slot this key fills.
+                PhpType::Mixed
+            } else if descriptor_invocation {
+                self.infer_descriptor_call_arg_type(arg, caller_env)?
+            } else {
+                self.infer_type(arg, caller_env)?
+            };
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }
             if param_idx < regular_param_count {
-                if sig.ref_params.get(param_idx).copied().unwrap_or(false) {
+                let supplied_reference = sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                    && !defaults.get(param_idx).copied().unwrap_or(false);
+                if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -552,22 +624,29 @@ impl Checker {
                     }
                 }
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
+                    let runtime_descriptor_projection = actual_ty.codegen_repr() == PhpType::Mixed
+                        && descriptor_projected
+                        && !supplied_reference;
                     if sig.declared_params.get(param_idx).copied().unwrap_or(false)
-                        && sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                        && supplied_reference
                     {
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
-                            arg.span,
+                            arg,
+                            caller_env,
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
+                        self.record_php_array_reference_output(arg, expected_ty, &actual_ty, span);
                     }
                     // `strict_types` applies to every declared parameter type, including the
                     // closure and first-class-callable surfaces that stay off the coercive
                     // path. Builtin signatures carry `declared_params: false` throughout
                     // (`crate::builtins::registry`), so this never fires for an internal
                     // function whose parameter types the checker does not consume.
-                    if sig.declared_params.get(param_idx).copied().unwrap_or(false) {
+                    if !runtime_descriptor_projection
+                        && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                    {
                         self.require_strict_types_param_binding(
                             expected_ty,
                             &actual_ty,
@@ -575,37 +654,54 @@ impl Checker {
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                     }
-                    if coercive_param_binding
-                        && sig.declared_params.get(param_idx).copied().unwrap_or(false)
-                    {
-                        self.require_bound_param_arg_type(
-                            expected_ty,
-                            &actual_ty,
-                            arg,
-                            caller_env,
-                            &format!("{} parameter ${}", callee_desc, param_name),
-                            None,
-                            sig.ref_params.get(param_idx).copied().unwrap_or(false),
-                        )?;
-                    } else {
-                        self.require_compatible_arg_type(
-                            expected_ty,
-                            &actual_ty,
-                            arg.span,
-                            &format!("{} parameter ${}", callee_desc, param_name),
-                        )?;
+                    // A proven callable array is accepted only where EIR materializes a real
+                    // descriptor for the declared Callable slot. Untracked Array(Mixed) values
+                    // and unresolved literal shapes remain ordinary arrays and retain the error.
+                    let proven_callable_array = matches!(expected_ty, PhpType::Callable)
+                        && !Self::types_compatible(expected_ty, &actual_ty)
+                        && !self.type_accepts(expected_ty, &actual_ty)
+                        && self
+                            .callable_array_param_target(arg, caller_env)?
+                            .is_some();
+                    if !proven_callable_array && !runtime_descriptor_projection {
+                        if coercive_param_binding
+                            && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        {
+                            self.require_bound_param_arg_type(
+                                expected_ty,
+                                &actual_ty,
+                                arg,
+                                caller_env,
+                                &format!("{} parameter ${}", callee_desc, param_name),
+                                None,
+                                supplied_reference,
+                            )?;
+                        } else {
+                            self.require_compatible_arg_type(
+                                expected_ty,
+                                &actual_ty,
+                                arg.span,
+                                &format!("{} parameter ${}", callee_desc, param_name),
+                            )?;
+                        }
                     }
                 }
             } else {
                 // An argument collected by a by-REFERENCE variadic (`&...$xs`) is bound by
                 // reference exactly like a regular by-ref parameter's, so the local it names is
-                // aliased for the rest of the body. The variadic's flag sits at
-                // `regular_param_count` in `ref_params` (it is the signature's last slot).
-                // Recorded outside the element-type check below because that one only runs when
-                // the element type is a known array, which has nothing to do with aliasing.
-                if sig
-                    .ref_params
-                    .get(regular_param_count)
+                // aliased for the rest of the body. Recorded outside the element-type check below
+                // because that one only runs when the element type is a known array, which has
+                // nothing to do with aliasing.
+                //
+                // The collector's own slot is addressed through
+                // `crate::types::signatures::variadic_param_index`, the one rule the whole
+                // descriptor container contract uses. `regular_param_count` is NOT that index: it
+                // deliberately hides the synthesized `__elephc_func_argc` parameter, so for a
+                // body that calls `func_get_args()` it names the slot BEFORE the collector, and
+                // this read answered with the hidden count slot's flag instead.
+                let variadic_index = crate::types::signatures::variadic_param_index(sig);
+                if variadic_index
+                    .and_then(|index| sig.ref_params.get(index))
                     .copied()
                     .unwrap_or(false)
                 {
@@ -614,10 +710,16 @@ impl Checker {
                 if let (Some(vname), Some(expected_ty)) =
                     (sig.variadic.as_ref(), variadic_elem_ty.as_ref())
                 {
-                    // The variadic occupies the last `declared_params` slot, so gating on it
-                    // keeps the strict rejection off builtin variadics, whose registry-derived
-                    // parameter types the checker does not otherwise consume.
-                    if sig.declared_params.last().copied().unwrap_or(false) {
+                    // Gating on the collector's own `declared_params` slot keeps the strict
+                    // rejection off builtin variadics, whose registry-derived parameter types the
+                    // checker does not otherwise consume. The slot is the one
+                    // `variadic_param_index` names, so it stays the collector's flag even when a
+                    // hidden parameter shares the signature.
+                    if variadic_index
+                        .and_then(|index| sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                    {
                         self.require_strict_types_param_binding(
                             expected_ty,
                             &actual_ty,
@@ -637,5 +739,172 @@ impl Checker {
         }
 
         Ok(sig.return_type.clone())
+    }
+
+    /// The element contract ONE argument collected by `sig`'s variadic collector must satisfy.
+    ///
+    /// The SOURCE hint first, the collector's storage only as a fallback. A descriptor-reachable
+    /// collector is STORED as `array<mixed>` so the invoker may hand it a hash
+    /// (`crate::types::signatures::descriptor_variadic_container`), and re-deriving the element
+    /// contract from that storage would silently turn `int ...$xs` into an untyped tail that
+    /// accepts anything: exactly the direct-call check the transport decision must not cost.
+    /// The declaration's own element syntax survives promotion in `param_type_exprs`, so
+    /// resolving it here keeps a direct call checked as strictly as before the storage moved,
+    /// whether or not the callee was ever handed out as a callable.
+    ///
+    /// An UNDECLARED collector has no source contract, so its storage element is the answer; that
+    /// is also the path builtin variadics take, whose registry-derived parameter types carry no
+    /// type syntax.
+    pub(super) fn variadic_argument_element_type(
+        &self,
+        sig: &FunctionSig,
+        span: crate::span::Span,
+        callee_desc: &str,
+    ) -> Result<Option<PhpType>, CompileError> {
+        let Some(index) = crate::types::signatures::variadic_param_index(sig) else {
+            return Ok(None);
+        };
+        if let Some(type_expr) = crate::types::signatures::variadic_source_element_type_expr(sig) {
+            let variadic_name = sig.params[index].0.clone();
+            return self
+                .resolve_declared_param_type_hint(
+                    type_expr,
+                    span,
+                    &format!("{} variadic parameter ${}", callee_desc, variadic_name),
+                )
+                .map(Some);
+        }
+        Ok(match &sig.params[index].1 {
+            PhpType::Array(elem) => Some((**elem).clone()),
+            _ => None,
+        })
+    }
+
+    /// Rejects dynamic spreads that could feed raw array storage into a `Callable` slot.
+    ///
+    /// Argument unpacking can project existing callable descriptors from `array<Callable>`, but
+    /// lowering has no element-wise conversion from PHP callable arrays such as `[$object, 'm']`
+    /// into descriptor values. Mixed elements remain valid because Callable parameter lowering
+    /// unboxes the cell and validates its descriptor tag at runtime.
+    pub(super) fn validate_callable_spread_elements(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        plan: &call_args::CallArgPlan,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<(), CompileError> {
+        if !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+            return Ok(());
+        }
+        let regular_param_count = call_args::regular_param_count(sig);
+        let spread_span = args
+            .iter()
+            .find(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            .map(|arg| arg.span)
+            .unwrap_or_else(crate::span::Span::dummy);
+        let variadic_is_callable = self
+            .variadic_argument_element_type(sig, spread_span, callee_desc)?
+            .is_some_and(|ty| ty.codegen_repr() == PhpType::Callable);
+        let mut checked_spreads = HashSet::new();
+
+        if !plan.regular_args.is_empty() {
+            for (param_idx, planned) in plan.regular_args.iter().enumerate() {
+                let call_args::PlannedRegularArg::SpreadElement {
+                    spread_expr,
+                    spread_span,
+                    ..
+                } = planned
+                else {
+                    continue;
+                };
+                if sig
+                    .params
+                    .get(param_idx)
+                    .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Callable)
+                    && checked_spreads.insert(*spread_span)
+                {
+                    self.require_callable_descriptor_spread(
+                        spread_expr,
+                        *spread_span,
+                        caller_env,
+                        callee_desc,
+                    )?;
+                }
+            }
+        } else {
+            let mut positional_idx = 0usize;
+            for arg in args {
+                if let ExprKind::Spread(inner) = &arg.kind {
+                    let feeds_callable = sig
+                        .params
+                        .iter()
+                        .take(regular_param_count)
+                        .skip(positional_idx)
+                        .any(|(_, ty)| ty.codegen_repr() == PhpType::Callable)
+                        || variadic_is_callable;
+                    if feeds_callable && checked_spreads.insert(arg.span) {
+                        self.require_callable_descriptor_spread(
+                            inner,
+                            arg.span,
+                            caller_env,
+                            callee_desc,
+                        )?;
+                    }
+                } else if !matches!(arg.kind, ExprKind::NamedArg { .. }) {
+                    positional_idx = positional_idx.saturating_add(1);
+                }
+            }
+        }
+
+        if variadic_is_callable {
+            for arg in args {
+                let ExprKind::Spread(inner) = &arg.kind else {
+                    continue;
+                };
+                if checked_spreads.insert(arg.span) {
+                    self.require_callable_descriptor_spread(
+                        inner,
+                        arg.span,
+                        caller_env,
+                        callee_desc,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Requires one dynamic spread source to expose actual callable descriptor elements.
+    fn require_callable_descriptor_spread(
+        &mut self,
+        source: &Expr,
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<(), CompileError> {
+        let spread = Expr::new(ExprKind::Spread(Box::new(source.clone())), span);
+        let element_ty = self.infer_descriptor_call_arg_type(&spread, caller_env)?;
+        if matches!(
+            element_ty.codegen_repr(),
+            PhpType::Callable | PhpType::Mixed
+        ) {
+            return Ok(());
+        }
+        let detail = if matches!(
+            element_ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) {
+            "callable-array elements are not converted to descriptors during argument unpacking"
+        } else {
+            "the spread element type is not a proven callable descriptor"
+        };
+        Err(CompileError::new(
+            span,
+            &format!(
+                "{} spread feeding a Callable parameter must contain Callable descriptors: {}",
+                callee_desc, detail
+            ),
+        ))
     }
 }

@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_full_end_element() — internals"
+title: "xmlwriter_full_end_element() - internals"
 description: "Compiler internals for xmlwriter_full_end_element(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 944
+  order: 969
 ---
 
-## `xmlwriter_full_end_element()` — internals
+## `xmlwriter_full_end_element()` - internals
 
 ## Where it lives
 

@@ -57,7 +57,8 @@ pub(in crate::codegen) fn emit_mixed_string_for_persistent_store(ctx: &mut Funct
 /// Resolves `value` into the canonical integer result register, unboxing a boxed `Mixed`/`Union`
 /// payload through `__rt_mixed_cast_int`.
 ///
-/// `Int`/`Bool` load directly; every other type is an `unsupported` diagnostic. The `Mixed` path
+/// `Int`/`Bool` load directly; tagged nullable integers normalize null to zero without boxing.
+/// Every other type is an `unsupported` diagnostic. The `Mixed` path
 /// emits a call that clobbers the caller-saved argument registers, so a caller that has already
 /// staged other arguments in those registers must spill across this resolution (the integer is left
 /// in the int result register on return).
@@ -69,6 +70,10 @@ pub(in crate::codegen) fn resolve_int_operand_to_result(
     match ctx.value_php_type(value)?.codegen_repr() {
         PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_result(value)?;
+        }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
         }
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, value)?;
@@ -110,4 +115,3 @@ pub(in crate::codegen) fn direct_call_stack_pad_bytes(
 ) -> usize {
     abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes)
 }
-

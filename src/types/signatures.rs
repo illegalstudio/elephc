@@ -14,6 +14,26 @@ use crate::span::Span;
 
 use super::PhpType;
 
+/// Recursion bound shared by compact native-default metadata producers.
+pub(crate) const COMPACT_NATIVE_DEFAULT_MAX_DEPTH: usize = 16;
+
+/// Returns whether a finite literal default exceeds compact metadata's recursion bound.
+pub(crate) fn literal_default_exceeds_compact_depth(expr: &Expr) -> bool {
+    fn exceeds(expr: &Expr, depth: usize) -> bool {
+        if depth > COMPACT_NATIVE_DEFAULT_MAX_DEPTH {
+            return true;
+        }
+        match &expr.kind {
+            ExprKind::ArrayLiteral(items) => items.iter().any(|item| exceeds(item, depth + 1)),
+            ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
+                exceeds(key, depth + 1) || exceeds(value, depth + 1)
+            }),
+            _ => false,
+        }
+    }
+    exceeds(expr, 0)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 /// Metadata for a callable's parameter and return type contract.
 ///
@@ -42,9 +62,9 @@ pub struct FunctionSig {
 impl FunctionSig {
     /// Returns whether the CALLEE's frame owns a reference to by-value parameter `index`.
     ///
-    /// True exactly when the parameter is by-value and its CODEGEN REPR is an array or an
-    /// associative array — which is precisely the set `privatize_container_param` re-binds to an
-    /// owning shadow slot on function entry, giving PHP its by-value array semantics.
+    /// By-value arrays, hashes, and Mixed cells are rebound to owning shadow slots by
+    /// `privatize_container_param`. Mixed parameters own a detached value cell, except resources
+    /// whose shared identity receives an independent reference instead.
     ///
     /// The repr matters, not the surface type: `iterable` keeps its own runtime shape (a raw heap
     /// pointer dispatched on the heap-kind tag), so an `iterable` parameter is NOT privatized and
@@ -55,15 +75,39 @@ impl FunctionSig {
     /// caller (which must then release its owning-temporary argument instead of suppressing it)
     /// can never disagree.
     pub fn param_is_callee_owned(&self, index: usize) -> bool {
-        if self.ref_params.get(index).copied().unwrap_or(false) {
-            return false;
-        }
         self.params.get(index).is_some_and(|(_, php_type)| {
-            matches!(
-                php_type.codegen_repr(),
-                PhpType::Array(_) | PhpType::AssocArray { .. }
+            Self::parameter_needs_owned_shadow(
+                php_type, self.ref_params.get(index).copied().unwrap_or(false),
             )
         })
+    }
+
+    /// Returns whether forwarding this parameter by value produces an independent result owner.
+    /// Reference parameters keep caller storage, but value returns acquire or clone its payload.
+    /// A callable or object returned as Mixed is boxed with its own payload retain, not transferred raw.
+    pub(crate) fn returned_parameter_has_independent_owner(&self, index: usize) -> bool {
+        self.param_is_callee_owned(index)
+            || (!self.by_ref_return
+                && self.return_type.codegen_repr() == PhpType::Mixed
+                && self.params.get(index).is_some_and(|(_, php_type)| {
+                    matches!(
+                        php_type.codegen_repr(),
+                        PhpType::Callable | PhpType::Object(_)
+                    )
+                }))
+            || (!self.by_ref_return
+                && self.ref_params.get(index).copied().unwrap_or(false)
+                && self.params.get(index).is_some_and(|(_, php_type)| {
+                    crate::ir::Ownership::php_type_needs_lifetime_tracking(php_type)
+                }))
+    }
+
+    /// Shares the user-call ownership boundary between caller cleanup, lowering, and inlining.
+    pub(crate) fn parameter_needs_owned_shadow(php_type: &PhpType, by_ref: bool) -> bool {
+        !by_ref && matches!(
+            php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+        )
     }
 }
 
@@ -121,6 +165,133 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
     wrapper_sig.param_type_exprs.push(variadic_type_expr);
     wrapper_sig.param_attributes.push(variadic_attributes);
     wrapper_sig
+}
+
+/// The storage contract a variadic collector needs when a callable DESCRIPTOR may fill it.
+///
+/// A descriptor container holds exactly the arguments PHP supplied, names included, and the
+/// invoker's tail collector copies every unconsumed name into an associative hash. The callee
+/// therefore has to read its variadic parameter through the runtime heap kind instead of as
+/// static indexed storage, which is exactly what `array<mixed>` means to the backend: a
+/// Mixed-element indexed array may carry runtime-promoted hash storage, so its iteration
+/// dispatches on the heap kind (`crate::codegen::lower_inst::iterators`) and its release walks
+/// hash entries when that is what the block holds (`__rt_decref_array`).
+///
+/// `array<mixed>` rather than the `iterable` marker a direct unknown-named call installs: that
+/// marker has its own runtime shape, and a variadic body is ordinary PHP that may still call
+/// `count($rest)` or index it, neither of which accepts `iterable`. Both shapes iterate the same
+/// way, and `array<mixed>` is also what `callable_wrapper_sig` already publishes to callers, so
+/// the promoted callee and its descriptor agree by construction.
+pub(crate) fn descriptor_variadic_container() -> PhpType {
+    PhpType::Array(Box::new(PhpType::Mixed))
+}
+
+/// The parameter slot `sig`'s variadic collector occupies, when it declares one.
+///
+/// The collector is the last slot today, including for a `func_get_args()` body: the hidden
+/// `__elephc_func_argc` slot `crate::func_args` synthesizes is pushed onto the REGULAR parameter
+/// list, and the collector is appended after it. The position is still found by NAME rather than
+/// taken as `params.last()`, because "last" is an invariant of a rewrite pass in another module
+/// and this contract has to keep holding if that pass ever appends a second hidden slot. Every
+/// helper in this contract, and the invoker's own element-type decision, addresses the collector
+/// through this index, so none of them can disagree about which slot they are describing.
+pub(crate) fn variadic_param_index(sig: &FunctionSig) -> Option<usize> {
+    let variadic_name = sig.variadic.as_ref()?;
+    sig.params
+        .iter()
+        .position(|(name, _)| name == variadic_name)
+}
+
+/// Returns whether the collector's STORAGE can physically hold a NAMED tail entry.
+///
+/// The one question the backend asks: may this slot receive a hash block? It is deliberately
+/// asked of the storage type alone, never of `declared_params`, because the SOURCE element
+/// contract of a promoted `int ...$xs` still reads "declared" and says nothing about what the
+/// slot can hold.
+///
+/// Two spellings qualify, and both dispatch on the runtime heap kind rather than on a static
+/// container shape: [`descriptor_variadic_container`] itself, and the `iterable` marker that
+/// `crate::codegen_support::callable_dispatch::static_method_runtime_wrapper_sig` installs on a
+/// static-method wrapper for exactly this reason. `crate::codegen::runtime_callable_invoker`
+/// already resolves both to a `Mixed` element, so a collector spelled either way reads the
+/// entries the invoker's tail collector writes.
+pub(crate) fn variadic_storage_accepts_named_entries(sig: &FunctionSig) -> bool {
+    let Some(index) = variadic_param_index(sig) else {
+        return false;
+    };
+    match &sig.params[index].1 {
+        PhpType::Array(elem) => elem.codegen_repr() == PhpType::Mixed,
+        PhpType::Iterable => true,
+        _ => false,
+    }
+}
+
+/// The collector's SOURCE element hint, the half of the contract promotion must never consume.
+///
+/// `int ...$xs` is stored as ONE parameter whose type describes the COLLECTION, so promoting the
+/// collection to [`descriptor_variadic_container`] would erase `int` if the element contract were
+/// only ever re-derived from that storage. It is not: the declaration's own element type syntax
+/// is kept in `param_type_exprs` at the collector's slot (see
+/// `crate::types::checker::functions::resolution::signature`, which chains `decl.variadic_type`
+/// there), and `declared_params` records that the source actually wrote one. Direct-call
+/// validation resolves THAT, so a promoted callee still rejects `f("x")` on `int ...$xs`.
+///
+/// Returns `None` for an undeclared collector, which has no source contract to preserve.
+pub(crate) fn variadic_source_element_type_expr(sig: &FunctionSig) -> Option<&TypeExpr> {
+    let index = variadic_param_index(sig)?;
+    if !sig.declared_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    sig.param_type_exprs.get(index)?.as_ref()
+}
+
+/// Returns whether `sig`'s variadic collector still carries a shape no descriptor can fill.
+///
+/// A variadic starts out as `array<int>` (the compiler-wide untyped fallback) or as the declared
+/// `array<T>` of an `int ...$xs`, and NEITHER can hold the named entry a descriptor invocation
+/// may deliver. A body compiled for one of them reads an associative tail's hash header as
+/// indexed storage (entry count as the length, the insertion-order head slot as element 0) and
+/// releases it as an indexed array, which leaks every persisted string key. Promoting it to
+/// [`descriptor_variadic_container`] is what keeps the callee and the invoker on one container
+/// contract.
+///
+/// A DECLARED collector is promoted just like an undeclared one, because PHP lets a named
+/// argument reach `int ...$xs` exactly as it reaches `...$xs`; only the STORAGE moves, and
+/// [`variadic_source_element_type_expr`] keeps the `int` that direct calls are checked against.
+///
+/// A by-reference variadic is excluded: its elements are already `Mixed` cells, so its storage is
+/// the descriptor container by construction and the guard below would answer `false` anyway. It
+/// is spelled out so the exclusion is a decision rather than a coincidence.
+pub(crate) fn variadic_needs_descriptor_container(sig: &FunctionSig) -> bool {
+    let Some(index) = variadic_param_index(sig) else {
+        return false;
+    };
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        return false;
+    }
+    match &sig.params[index].1 {
+        PhpType::Array(elem) => elem.codegen_repr() != PhpType::Mixed,
+        // The `iterable` marker has its own heap-kind-dispatched runtime shape, and any other
+        // spelling is not a collector this contract knows how to move.
+        _ => false,
+    }
+}
+
+/// Moves `sig`'s variadic collector onto the descriptor container, reporting whether it moved.
+///
+/// The ONE mutation in this contract. `declared_params`, `ref_params`, `param_type_exprs` and
+/// `defaults` are left untouched on purpose: they carry the source contract, and only the
+/// storage is a transport decision. Idempotent, so a second descriptor for the same callable
+/// reports `false` and nothing downstream re-resolves.
+pub(crate) fn promote_variadic_to_descriptor_container(sig: &mut FunctionSig) -> bool {
+    if !variadic_needs_descriptor_container(sig) {
+        return false;
+    }
+    let Some(index) = variadic_param_index(sig) else {
+        return false;
+    };
+    sig.params[index].1 = descriptor_variadic_container();
+    true
 }
 
 /// Looks up a builtin function's canonical call signature.
@@ -240,6 +411,37 @@ fn int_lit(value: i64) -> Expr {
 mod tests {
     use super::*;
 
+    /// Mixed callable returns have independent box owners; raw and reference returns can transfer.
+    #[test]
+    fn boxed_callable_returns_do_not_transfer_the_argument_descriptor() {
+        let mut sig = variadic_sig(vec![("callback".to_string(), PhpType::Callable)]);
+        sig.variadic = None;
+        assert!(sig.returned_parameter_has_independent_owner(0));
+        assert!(!sig.returned_parameter_has_independent_owner(1));
+        sig.return_type = PhpType::Callable;
+        assert!(!sig.returned_parameter_has_independent_owner(0));
+        sig.return_type = PhpType::Mixed;
+        sig.by_ref_return = true;
+        assert!(!sig.returned_parameter_has_independent_owner(0));
+    }
+
+    /// Mixed object returns retain the payload in a fresh box; raw and reference returns can transfer.
+    #[test]
+    fn boxed_object_returns_do_not_transfer_the_argument_payload() {
+        let mut sig = variadic_sig(vec![(
+            "object".to_string(),
+            PhpType::Object("Owner".to_string()),
+        )]);
+        sig.variadic = None;
+        assert!(sig.returned_parameter_has_independent_owner(0));
+        assert!(!sig.returned_parameter_has_independent_owner(1));
+        sig.return_type = PhpType::Object("Owner".to_string());
+        assert!(!sig.returned_parameter_has_independent_owner(0));
+        sig.return_type = PhpType::Mixed;
+        sig.by_ref_return = true;
+        assert!(!sig.returned_parameter_has_independent_owner(0));
+    }
+
     /// Computes the callable signature metadata for variadic.
     fn variadic_sig(params: Vec<(String, PhpType)>) -> FunctionSig {
         FunctionSig {
@@ -255,6 +457,190 @@ mod tests {
             variadic: Some("values".to_string()),
             deprecation: None,
         }
+    }
+
+    /// A variadic collector a DESCRIPTOR may fill must be readable through the runtime heap kind.
+    ///
+    /// The descriptor invoker copies every unconsumed NAME into an associative tail hash, so a
+    /// callee compiled for `array<int>` reads that hash's header as indexed storage: the entry
+    /// count becomes the length and the insertion-order head slot becomes element 0. The promoted
+    /// marker must also be a fixed point, or every further descriptor would re-resolve the body.
+    #[test]
+    fn an_untyped_variadic_collector_needs_the_descriptor_container() {
+        let mut sig = variadic_sig(vec![
+            ("head".to_string(), PhpType::Int),
+            ("values".to_string(), PhpType::Array(Box::new(PhpType::Int))),
+        ]);
+        assert!(
+            variadic_needs_descriptor_container(&sig),
+            "array<int> storage cannot carry a named tail entry",
+        );
+
+        sig.params[1].1 = descriptor_variadic_container();
+        assert!(
+            !variadic_needs_descriptor_container(&sig),
+            "the promoted container must be a fixed point",
+        );
+
+        sig.params[1].1 = PhpType::Iterable;
+        assert!(
+            !variadic_needs_descriptor_container(&sig),
+            "the iterable marker is already dispatched on the runtime heap kind",
+        );
+
+        sig.params[1].1 = PhpType::Array(Box::new(PhpType::Int));
+        sig.declared_params[1] = true;
+        sig.param_type_exprs[1] = Some(TypeExpr::Int);
+        assert!(
+            variadic_needs_descriptor_container(&sig),
+            "a declared `int ...$values` cannot hold a named tail entry either",
+        );
+        assert!(
+            promote_variadic_to_descriptor_container(&mut sig),
+            "the declared collector's STORAGE moves to the descriptor container",
+        );
+        assert_eq!(
+            sig.params[1].1,
+            descriptor_variadic_container(),
+            "the promoted collector must be hash-capable",
+        );
+        assert_eq!(
+            variadic_source_element_type_expr(&sig),
+            Some(&TypeExpr::Int),
+            "promotion must not consume the SOURCE element contract direct calls are checked \
+             against",
+        );
+        assert!(
+            !promote_variadic_to_descriptor_container(&mut sig),
+            "promotion is idempotent",
+        );
+
+        sig.params[1].1 = PhpType::Array(Box::new(PhpType::Int));
+        sig.declared_params[1] = false;
+        sig.param_type_exprs[1] = None;
+        sig.ref_params[1] = true;
+        assert!(
+            !variadic_needs_descriptor_container(&sig),
+            "a by-reference variadic is already Mixed",
+        );
+
+        sig.ref_params[1] = false;
+        sig.variadic = None;
+        assert!(
+            !variadic_needs_descriptor_container(&sig),
+            "a signature without a variadic has no collector to promote",
+        );
+    }
+
+    /// The STORAGE question and the SOURCE question are answered independently, in both orders.
+    ///
+    /// This is the whole point of splitting them. A promoted `int ...$values` must answer "yes, a
+    /// name fits" to the backend and "yes, elements are ints" to direct-call validation at the
+    /// same time: one collector, two contracts, and a helper that consulted `declared_params` to
+    /// decide the storage question (or the storage type to decide the element question) would
+    /// collapse them into one wrong answer. The `iterable` marker is asserted next to
+    /// `array<mixed>` because the invoker resolves both to a Mixed element, so the gate that
+    /// admits a named tail has to admit both too.
+    #[test]
+    fn the_storage_and_source_halves_of_the_contract_stay_independent() {
+        let mut sig = variadic_sig(vec![
+            ("head".to_string(), PhpType::Int),
+            ("values".to_string(), PhpType::Array(Box::new(PhpType::Int))),
+        ]);
+        sig.declared_params[1] = true;
+        sig.param_type_exprs[1] = Some(TypeExpr::Int);
+
+        assert!(
+            !variadic_storage_accepts_named_entries(&sig),
+            "an indexed `array<int>` collector cannot hold a string key, declared or not",
+        );
+        assert_eq!(
+            variadic_source_element_type_expr(&sig),
+            Some(&TypeExpr::Int),
+            "the source element contract is readable BEFORE promotion",
+        );
+
+        assert!(promote_variadic_to_descriptor_container(&mut sig));
+        assert!(
+            variadic_storage_accepts_named_entries(&sig),
+            "the promoted collector is what admits a named tail entry",
+        );
+        assert_eq!(
+            variadic_source_element_type_expr(&sig),
+            Some(&TypeExpr::Int),
+            "and the source element contract is still `int` AFTER it",
+        );
+
+        sig.params[1].1 = PhpType::Iterable;
+        assert!(
+            variadic_storage_accepts_named_entries(&sig),
+            "the iterable marker is the other heap-kind-dispatched storage the invoker fills",
+        );
+
+        sig.params[1].1 = PhpType::Mixed;
+        assert!(
+            !variadic_storage_accepts_named_entries(&sig),
+            "a collector that is not a container at all admits nothing",
+        );
+
+        let undeclared = variadic_sig(vec![(
+            "values".to_string(),
+            descriptor_variadic_container(),
+        )]);
+        assert!(
+            variadic_storage_accepts_named_entries(&undeclared),
+            "an UNDECLARED promoted collector admits a named tail entry as well",
+        );
+        assert_eq!(
+            variadic_source_element_type_expr(&undeclared),
+            None,
+            "and it has no source element contract to preserve",
+        );
+    }
+
+    /// The collector is addressed by NAME, so a hidden trailing slot cannot shift the answer.
+    ///
+    /// `crate::func_args` synthesizes a hidden `__elephc_func_argc` parameter for a body that
+    /// calls `func_get_args()`, and it lands in the REGULAR parameter list, ahead of the
+    /// collector. The contract does not depend on that: every helper here, and the invoker's
+    /// element-type decision, finds the collector through `variadic_param_index`, which is what
+    /// this pins. Asserting the index rather than the type is deliberate, because a `params.last()`
+    /// rule passes a type assertion by accident whenever the hidden slot happens to sit first.
+    #[test]
+    fn the_collector_is_addressed_by_name_past_a_hidden_parameter() {
+        let mut sig = variadic_sig(vec![
+            ("head".to_string(), PhpType::Int),
+            (
+                crate::func_args::HIDDEN_ARGC_PARAM.to_string(),
+                PhpType::Int,
+            ),
+            ("values".to_string(), PhpType::Array(Box::new(PhpType::Int))),
+        ]);
+
+        assert_eq!(
+            variadic_param_index(&sig),
+            Some(2),
+            "the collector is the slot NAMED by `variadic`, not simply the last one",
+        );
+        assert!(variadic_needs_descriptor_container(&sig));
+        assert!(promote_variadic_to_descriptor_container(&mut sig));
+        assert_eq!(
+            sig.params[2].1,
+            descriptor_variadic_container(),
+            "promotion moved the collector, not the hidden count slot",
+        );
+        assert_eq!(
+            sig.params[1].1,
+            PhpType::Int,
+            "the hidden argc slot keeps its Int storage",
+        );
+
+        sig.variadic = None;
+        assert_eq!(
+            variadic_param_index(&sig),
+            None,
+            "a signature with no collector has no slot to address",
+        );
     }
 
     /// Builds the parameter metadata for callable wrapper sig retypes existing non array variadic.

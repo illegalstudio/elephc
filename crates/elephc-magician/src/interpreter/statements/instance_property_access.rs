@@ -33,6 +33,11 @@ pub(in crate::interpreter) fn eval_property_get_result(
                     values,
                 );
             }
+            if !is_static {
+                return eval_native_property_get_authorized(
+                    object, &declaring_class, property_name, context, values,
+                );
+            }
         }
         return values.property_get(object, property_name);
     };
@@ -68,7 +73,7 @@ pub(in crate::interpreter) fn eval_property_get_result(
         {
             let (hook_class, hook_method) = context
                 .class_method(
-                    &object_class_name,
+                    &declaring_class,
                     &property_hook_get_method(property.name()),
                 )
                 .ok_or(EvalStatus::RuntimeFatal)?;
@@ -92,11 +97,6 @@ pub(in crate::interpreter) fn eval_property_get_result(
                 values,
             );
         }
-    }
-    if !declared_property_found
-        && eval_object_public_property_exists(object, property_name, values)?
-    {
-        return values.property_get(object, property_name);
     }
     if !declared_property_found {
         if let Some((declaring_class, visibility, _, is_static)) =
@@ -126,11 +126,16 @@ pub(in crate::interpreter) fn eval_property_get_result(
                         values,
                     );
                 }
-                return eval_with_native_bridge_scope(&declaring_class, context, || {
-                    values.property_get(object, property_name)
-                });
+                return eval_native_property_get_authorized(
+                    object, &declaring_class, property_name, context, values,
+                );
             }
         }
+    }
+    if !declared_property_found
+        && eval_object_public_property_exists(object, property_name, values)?
+    {
+        return values.property_get(object, property_name);
     }
     if !declared_property_found {
         if let Some(result) =
@@ -145,7 +150,10 @@ pub(in crate::interpreter) fn eval_property_get_result(
     {
         return eval_reference_target_value(&target, context, values);
     }
-    values.property_get(object, &storage_property_name)
+    eval_with_native_property_storage_scope(
+        &object_class_name, &storage_property_name, context, values,
+        |values| values.property_get(object, &storage_property_name),
+    )
 }
 
 /// Writes one object property while enforcing eval-declared member visibility.
@@ -173,6 +181,11 @@ pub(in crate::interpreter) fn eval_property_set_result(
                     write_visibility,
                     context,
                     values,
+                );
+            }
+            if !is_static {
+                return eval_native_property_set_authorized(
+                    object, &declaring_class, property_name, value, context, values,
                 );
             }
         }
@@ -234,7 +247,7 @@ pub(in crate::interpreter) fn eval_property_set_result(
             ) {
                 let (hook_class, hook_method) = context
                     .class_method(
-                        &object_class_name,
+                        &declaring_class,
                         &property_hook_set_method(property.name()),
                     )
                     .ok_or(EvalStatus::RuntimeFatal)?;
@@ -254,7 +267,7 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 values.release(hook_result)?;
                 return Ok(());
             }
-        } else if property.has_get_hook() {
+        } else if property.has_get_hook() && property.is_virtual() {
             return eval_throw_property_hook_readonly_error(
                 &declaring_class,
                 property.name(),
@@ -294,9 +307,9 @@ pub(in crate::interpreter) fn eval_property_set_result(
                         values,
                     );
                 }
-                return eval_with_native_bridge_scope(&declaring_class, context, || {
-                    values.property_set(object, property_name, value)
-                });
+                return eval_native_property_set_authorized(
+                    object, &declaring_class, property_name, value, context, values,
+                );
             }
         }
     }
@@ -333,9 +346,15 @@ pub(in crate::interpreter) fn eval_property_set_result(
             values,
         )?;
         context.mark_dynamic_property_initialized(identity, &storage_property_name);
-        return values.property_set(object, &storage_property_name, value);
+        return eval_with_native_property_storage_scope(
+            &object_class_name, &storage_property_name, context, values,
+            |values| values.property_set(object, &storage_property_name, value),
+        );
     }
-    values.property_set(object, &storage_property_name, value)?;
+    eval_with_native_property_storage_scope(
+        &object_class_name, &storage_property_name, context, values,
+        |values| values.property_set(object, &storage_property_name, value),
+    )?;
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
 }
@@ -375,7 +394,10 @@ pub(super) fn eval_property_reference_bind_result(
     )?;
     let value = eval_reference_target_value(&target, context, values)?;
     context.bind_dynamic_property_alias(identity, &storage_property_name, target);
-    values.property_set(object, &storage_property_name, value)?;
+    eval_with_native_property_storage_scope(
+        &object_class_name, &storage_property_name, context, values,
+        |values| values.property_set(object, &storage_property_name, value),
+    )?;
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
 }
@@ -464,7 +486,7 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             context.replace_execution_scope(previous_scope);
             result
         }
-        EvalReferenceTarget::Cell { cell } => Ok(*cell),
+        EvalReferenceTarget::Cell { cell } => Ok(cell.borrowed()),
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
             eval_invoker_slot_ref_target_value(*slot, *source_tag, values)
         }
@@ -480,6 +502,10 @@ pub(super) fn eval_reference_target_write(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if let EvalReferenceTarget::Variable { scope, name } = &target {
+        let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+        return write_back_owned_variable_ref_target(scope, name, value, context, values);
+    }
     if matches!(target, EvalReferenceTarget::Cell { .. }) {
         context.bind_dynamic_property_alias(
             object_identity,
@@ -503,6 +529,12 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         return Ok(!values.is_null(value)?);
     };
     let Some(class) = context.dynamic_object_class(identity) else {
+        // Native typed slots represent unset with an initialization marker.
+        // Their ordinary getter deliberately rejects that state, while isset
+        // must return false without attempting the read.
+        if !values.property_is_initialized(object, property_name)? {
+            return Ok(false);
+        }
         let value = values.property_get(object, property_name)?;
         return Ok(!values.is_null(value)?);
     };
@@ -568,7 +600,7 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         .map(|result| result.unwrap_or(false))
 }
 
-/// Evaluates PHP `unset($object->property)` for eval-declared object receivers.
+/// Evaluates PHP `unset($object->property)` across eval declarations and native storage.
 pub(in crate::interpreter) fn eval_property_unset_result(
     object: RuntimeCellHandle,
     property_name: &str,
@@ -579,16 +611,43 @@ pub(in crate::interpreter) fn eval_property_unset_result(
         return Ok(());
     };
     let Some(class) = context.dynamic_object_class(identity) else {
+        let class_name = eval_runtime_object_class_name(object, values)?;
+        if !eval_native_property_unset_result(object, &class_name, property_name, context, values)? {
+            eval_magic_property_unset(object, &class_name, property_name, context, values)?;
+        }
         return Ok(());
     };
     let object_class_name = class.name().to_string();
     if context.has_enum(&object_class_name) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    if eval_native_private_property_unset_scope(&object_class_name, property_name, context, values)?.is_some() {
+        return eval_native_property_unset_result(object, &object_class_name, property_name, context, values)
+            .map(|_| ());
+    }
     if let Some((declaring_class, property)) =
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_ok() {
+            if property.has_get_hook() || property.has_set_hook() {
+                return eval_throw_hooked_property_unset_error(
+                    &object_class_name, property.name(), context, values,
+                );
+            }
+            let storage_property_name =
+                eval_instance_property_storage_name(&declaring_class, &property);
+            if property.is_readonly()
+                && context.dynamic_property_is_initialized(identity, &storage_property_name)
+            {
+                return eval_throw_readonly_property_unset_error(
+                    &declaring_class, property.name(), context, values,
+                );
+            }
+            if property.is_readonly() {
+                eval_validate_readonly_unset_scope(
+                    &declaring_class, property.name(), property.write_visibility(), context, values,
+                )?;
+            }
             if validate_eval_property_write_access(&declaring_class, &property, context).is_err() {
                 return eval_throw_property_unset_access_error(
                     &declaring_class,
@@ -597,29 +656,37 @@ pub(in crate::interpreter) fn eval_property_unset_result(
                     values,
                 );
             }
-            if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
-                return eval_throw_readonly_property_unset_error(
-                    &declaring_class,
-                    property.name(),
-                    context,
-                    values,
-                );
-            }
-            let storage_property_name =
-                eval_instance_property_storage_name(&declaring_class, &property);
             context.remove_dynamic_property_alias(identity, &storage_property_name);
             context.mark_dynamic_property_uninitialized(identity, &storage_property_name);
+            if eval_with_native_property_storage_scope(
+                &object_class_name, &storage_property_name, context, values,
+                |values| values.unset_native_typed_property(object, &storage_property_name),
+            )? {
+                return Ok(());
+            }
             let null = values.null()?;
-            return values.property_set(object, &storage_property_name, null);
+            let written = eval_with_native_property_storage_scope(
+                &object_class_name, &storage_property_name, context, values,
+                |values| values.property_set(object, &storage_property_name, null),
+            );
+            let released = release_expr_result(null, context, values);
+            return written.and(released);
         }
         if eval_magic_property_unset(object, &object_class_name, property_name, context, values)? {
             return Ok(());
         }
+        return eval_throw_property_access_error(
+            &declaring_class, property.name(), property.visibility(), context, values,
+        );
+    }
+    if eval_native_property_unset_result(object, &object_class_name, property_name, context, values)? {
         return Ok(());
     }
     if eval_object_public_property_exists(object, property_name, values)? {
         let null = values.null()?;
-        return values.property_set(object, property_name, null);
+        let written = values.property_set(object, property_name, null);
+        let released = release_expr_result(null, context, values);
+        return written.and(released);
     }
     let _ = eval_magic_property_unset(object, &object_class_name, property_name, context, values)?;
     Ok(())
@@ -718,8 +785,23 @@ pub(super) fn eval_magic_property_unset(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let Some((declaring_class, method)) = context.class_method(object_class_name, "__unset") else {
+    let identity = values.object_identity(object)?;
+    let Some(_guard) = EvalPropertyUnsetGuard::enter(identity, property_name) else {
         return Ok(false);
+    };
+    eval_magic_property_unset_inner(object, object_class_name, property_name, context, values)
+}
+
+/// Calls an eval or native magic unsetter while its recursion guard is held by the caller.
+fn eval_magic_property_unset_inner(
+    object: RuntimeCellHandle,
+    object_class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some((declaring_class, method)) = context.class_method(object_class_name, "__unset") else {
+        return eval_native_magic_property_unset(object, object_class_name, property_name, context, values);
     };
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
@@ -730,12 +812,13 @@ pub(super) fn eval_magic_property_unset(
         object_class_name,
         &method,
         object,
-        positional_args(vec![property]),
+        positional_args(vec![property.borrowed()]),
         context,
         values,
-    )?;
-    values.release(result)?;
-    Ok(true)
+    );
+    let result = result.and_then(|result| release_expr_result(result, context, values));
+    let released = release_expr_result(property, context, values);
+    result.and(released).map(|()| true)
 }
 
 /// Returns whether the object already has a public dynamic property with this exact name.
@@ -794,16 +877,20 @@ pub(in crate::interpreter) fn current_eval_property_hook_is(
     let Some(current_class) = context.current_class_scope() else {
         return false;
     };
-    if !same_eval_class_name(current_class, declaring_class) {
-        return false;
-    }
     let Some((_, method)) = context
         .current_function()
         .and_then(|function| function.rsplit_once("::"))
     else {
         return false;
     };
-    method.eq_ignore_ascii_case(hook_method)
+    let same_property_hook = method.eq_ignore_ascii_case(hook_method)
         || method.eq_ignore_ascii_case(&property_hook_get_method(property_name))
-        || method.eq_ignore_ascii_case(&property_hook_set_method(property_name))
+        || method.eq_ignore_ascii_case(&property_hook_set_method(property_name));
+    if !same_property_hook {
+        return false;
+    }
+    // A redeclared child property may inherit either concrete accessor independently.
+    // Its backing access belongs to that accessor's lexical owner, not to the child.
+    context.class_method(declaring_class, method)
+        .is_some_and(|(owner, _)| same_eval_class_name(current_class, &owner))
 }

@@ -184,6 +184,12 @@ pub(super) fn static_callable_array_source(
     let Some(inst_ref) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
+    // Rooting retains the callable container without changing the callback it names.
+    // Resolve a retained local at its original load, where same-block stores are authoritative.
+    let unwrapped = strip_static_callback_acquire(ctx, value)?;
+    if unwrapped != value && value_defining_op(ctx, unwrapped)? == Some(Op::LoadLocal) {
+        return static_callable_array_source(ctx, unwrapped, owner);
+    }
     let candidate = if inst_ref.op == Op::LoadLocal {
         let Some(stored) = static_callback_local_stored_value(ctx, block, index, inst_ref, owner)?
         else {
@@ -271,22 +277,21 @@ pub(super) fn unique_static_callback_local_store(
     Ok(stored)
 }
 
-/// Removes a refcount acquire wrapper from a static callback-array value.
-pub(super) fn strip_static_callback_acquire(ctx: &FunctionContext<'_>, value: ValueId) -> Result<ValueId> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(value);
-    };
-    let Some(inst_ref) = ctx.function.instruction(inst) else {
-        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
-    };
-    if inst_ref.op == Op::Acquire {
-        Ok(inst_ref.operands.first().copied().unwrap_or(value))
-    } else {
-        Ok(value)
+/// Follows retains and identity forwarding while preserving the original callable-array producer.
+pub(super) fn strip_static_callback_acquire(ctx: &FunctionContext<'_>, mut value: ValueId) -> Result<ValueId> {
+    for _ in 0..ctx.function.values.len() {
+        let Some(value_ref) = ctx.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else { return Ok(value); };
+        let Some(inst_ref) = ctx.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if !matches!(inst_ref.op, Op::Acquire | Op::Move | Op::Borrow) { return Ok(value); }
+        let Some(source) = inst_ref.operands.first() else { return Ok(value); };
+        value = *source;
     }
+    Err(CodegenIrError::invalid_module("cyclic callable-array ownership provenance"))
 }
 
 /// Returns the defining opcode for an SSA value when it comes from an instruction.

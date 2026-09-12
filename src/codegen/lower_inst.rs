@@ -38,6 +38,9 @@ mod checked_numeric_chain;
 mod runtime_functions;
 pub(crate) mod builtins;
 mod callables;
+mod callable_argument_normalizer;
+pub(super) use callable_argument_normalizer::emit_callable_argument_normalizer;
+pub(super) use callable_argument_normalizer::CALLABLE_ARGUMENT_NORMALIZER;
 mod comparisons;
 mod conversions;
 mod enums;
@@ -46,6 +49,7 @@ mod mixed_narrowing;
 mod externs;
 mod floats;
 mod hashes;
+mod offset_unset;
 mod iterators;
 mod objects;
 mod ownership;
@@ -63,6 +67,7 @@ mod call_cleanup;
 mod call_operands;
 mod callable_descriptors;
 mod core_closures;
+mod core_builtins;
 mod core_includes;
 mod core_misc;
 mod descriptor_arguments;
@@ -75,7 +80,7 @@ mod generator_instructions;
 mod globals_constants;
 mod instruction_helpers;
 mod local_loads;
-mod local_stores;
+pub(in crate::codegen) mod local_stores;
 mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;
@@ -93,6 +98,7 @@ use call_cleanup::*;
 use call_operands::*;
 use callable_descriptors::*;
 use core_closures::*;
+use core_builtins::*;
 use core_includes::*;
 use core_misc::*;
 use descriptor_arguments::*;
@@ -142,7 +148,6 @@ pub(super) use runtime_wrappers::{
     runtime_builtin_wrapper_sig,
 };
 
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
 
 /// Lowers one EIR instruction by opcode.
@@ -153,6 +158,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         .instruction(inst_id)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
+    core_builtins::prepare_backtrace_call_site(ctx, &inst)?;
     match inst.op {
         Op::ConstI64 => lower_const_i64(ctx, &inst),
         Op::ConstF64 => floats::lower_const_f64(ctx, &inst),
@@ -169,8 +175,11 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
+        Op::RetainLocalRefCell => lower_retain_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, &inst),
+        Op::PushCallOperandOwner => ownership::lower_push_call_operand_owner(ctx, &inst),
+        Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
@@ -272,7 +281,13 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashGetSilent => hashes::lower_hash_get(ctx, &inst, false),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
+        Op::DescriptorArgSet => hashes::lower_descriptor_arg_set(ctx, &inst),
+        Op::DescriptorArgKeyExists => hashes::lower_descriptor_arg_key_exists(ctx, &inst),
+        Op::ThrowNamedParameterOverwrite => {
+            hashes::lower_throw_named_parameter_overwrite(ctx, &inst)
+        }
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
+        Op::OffsetUnset => offset_unset::lower_offset_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),
         Op::HashSpread => hashes::lower_hash_spread(ctx, &inst),
@@ -315,8 +330,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PropGetForWrite => objects::lower_prop_get_for_write(ctx, &inst),
         Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
+        Op::LoadPropRefCellChecked => objects::lower_load_prop_ref_cell_checked(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
-        Op::BindRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
+        Op::BindRefCellPtr | Op::AdoptRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
+        Op::AcquireRefCell => lower_acquire_ref_cell(ctx, &inst),
         Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, &inst),
         Op::DynamicPropGet => objects::lower_dynamic_prop_get(ctx, &inst),
         Op::PropSet => objects::lower_prop_set(ctx, &inst),
@@ -377,6 +394,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::Release => ownership::lower_release(ctx, &inst),
         Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, &inst),
         Op::GcCollect => lower_gc_collect(ctx),
+        Op::GcControl => lower_gc_control(ctx, &inst),
+        Op::CoreBuiltin => lower_core_builtin(ctx, &inst),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),

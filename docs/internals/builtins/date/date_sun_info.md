@@ -1,11 +1,11 @@
 ---
-title: "date_sun_info() — internals"
+title: "date_sun_info() - internals"
 description: "Compiler internals for date_sun_info(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 208
 ---
 
-## `date_sun_info()` — internals
+## `date_sun_info()` - internals
 
 ## Where it lives
 

@@ -13,10 +13,44 @@
 
 use std::ffi::c_void;
 
-use crate::value::{RuntimeCell, RuntimeCellHandle};
+use crate::value::RuntimeCell;
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Updates the canonical resource subtype, or marks it closed when subtype is negative.
+    pub(super) fn __elephc_eval_resource_state(resource: *mut RuntimeCell, subtype: i64);
+    /// Writes an already-dispatched diagnostic without invoking the user handler again.
+    pub(super) fn __elephc_eval_warning_raw(message: *const u8, length: u64);
+    /// Returns one owned boxed native backtrace frame or null after the final visible frame.
+    pub(super) fn __elephc_eval_backtrace_entry(index: u64, options: i64) -> *mut RuntimeCell;
+    /// Returns an owned boxed snapshot of the shared native resource inventory.
+    pub(super) fn __elephc_eval_resource_inventory(selector: i64) -> *mut RuntimeCell;
+    /// Gets or replaces the native PHP error-reporting mask.
+    pub(super) fn __elephc_eval_error_reporting(replacement: i64, replace: u64) -> i64;
+    /// Installs an eval callback into the native user-error-handler stack.
+    pub(super) fn __elephc_eval_error_handler_set(
+        context: *const c_void,
+        callback: *mut RuntimeCell,
+        levels: i64,
+        previous_out: *mut *mut RuntimeCell,
+    ) -> i32;
+    /// Restores the prior native user-error-handler stack entry.
+    pub(super) fn __elephc_eval_error_handler_restore() -> i32;
+    /// Invokes the native user error handler with a boxed argument array.
+    pub(super) fn __elephc_eval_error_handler_dispatch(
+        level: i64,
+        args: *mut RuntimeCell,
+        result_out: *mut *mut RuntimeCell,
+        invoked_out: *mut u64,
+    ) -> i32;
+    /// Installs an eval callback into the native exception-handler stack.
+    pub(super) fn __elephc_eval_exception_handler_set(
+        context: *const c_void,
+        callback: *mut RuntimeCell,
+        previous_out: *mut *mut RuntimeCell,
+    ) -> i32;
+    /// Restores the prior native exception-handler stack entry.
+    pub(super) fn __elephc_eval_exception_handler_restore() -> i32;
     /// Calls one typed generated-runtime builtin over borrowed boxed arguments.
     pub(super) fn __elephc_runtime_builtin_call_v1(
         runtime_builtin_id: u32,
@@ -25,6 +59,14 @@ unsafe extern "C" {
         context: *const c_void,
         result_out: *mut *mut RuntimeCell,
     ) -> i32;
+    /// Collects native cycles and transfers an escaping Throwable as an owned boxed output.
+    #[link_name = "__elephc_eval_gc_collect_cycles_v2"]
+    pub(super) fn __elephc_eval_gc_collect_cycles(throwable_out: *mut *mut RuntimeCell) -> i64;
+    pub(super) fn __elephc_eval_gc_disable() -> i64;
+    pub(super) fn __elephc_eval_gc_enable() -> i64;
+    pub(super) fn __elephc_eval_gc_enabled() -> i64;
+    pub(super) fn __elephc_eval_gc_mem_caches() -> i64;
+    pub(super) fn __elephc_eval_gc_status_metric(metric: u64) -> i64;
     pub(super) fn __elephc_eval_value_array_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string_array_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string_array_push(
@@ -71,6 +113,16 @@ unsafe extern "C" {
         value: *mut RuntimeCell,
         scope_ptr: *const u8,
         scope_len: u64,
+    ) -> u64;
+    /// Clears a native typed slot and returns any escaping exception through the owned output box.
+    #[link_name = "__elephc_eval_value_typed_property_unset_v2"]
+    pub(super) fn __elephc_eval_value_typed_property_unset(
+        object: *mut RuntimeCell,
+        name_ptr: *const u8,
+        name_len: u64,
+        scope_ptr: *const u8,
+        scope_len: u64,
+        throwable_out: *mut *mut RuntimeCell,
     ) -> u64;
     pub(super) fn __elephc_eval_value_static_property_get(
         class_ptr: *const u8,
@@ -249,6 +301,7 @@ unsafe extern "C" {
         scope_len: u64,
         context: *const c_void,
     ) -> u64;
+    #[link_name = "__elephc_eval_value_take_pending_throwable_v2"]
     pub(super) fn __elephc_eval_value_take_pending_throwable() -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_class_exists(name_ptr: *const u8, name_len: u64) -> u64;
     pub(super) fn __elephc_eval_interface_exists(name_ptr: *const u8, name_len: u64) -> u64;
@@ -273,7 +326,7 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_type_tag(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_invoker_ref_cell(
-        slot: *mut RuntimeCellHandle,
+        slot: *mut *mut crate::value::RuntimeCell,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_invoker_raw_ref_cell(
         slot: *mut c_void,
@@ -433,12 +486,19 @@ unsafe extern "C" {
     ) -> i64;
     pub(super) fn __elephc_eval_install_ob_handler_hook(callback: usize);
     pub(super) fn __elephc_eval_value_final_object_identity(value: *mut RuntimeCell) -> u64;
-    pub(super) fn __elephc_eval_value_release(value: *mut RuntimeCell);
+    /// Consumes a boxed owner, preserving or chaining the owned Throwable already held by the slot.
+    /// Returns nonzero only if this release caught a new exception.
+    pub(super) fn __elephc_eval_value_release_v3(value: *mut RuntimeCell, throwable: *mut *mut RuntimeCell) -> i32;
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Retains the original boxed handler value installed by compiled AOT code.
     pub(super) fn __elephc_eval_pcntl_aot_signal_handler(signal: i64) -> *mut RuntimeCell;
-    /// Installs the optional eval dynamic object destructor callback.
+    /// Installs a callback with the v2 owned-Throwable output and 0/1/2 status protocol.
+    #[link_name = "__elephc_eval_install_dynamic_object_destructor_hook_v2"]
     pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
+    /// Installs eval object-edge, final-release, and boxed array-reference retirement callbacks.
+    /// Installs child traversal, boxed-Throwable final release, and array reference retirement callbacks.
+    #[link_name = "__elephc_eval_install_object_owner_hooks_v2"]
+    pub(super) fn __elephc_eval_install_object_owner_hooks(child: usize, release: usize, retire: usize);
 }
 
 /// Forwards one installed eval ob-handler callback address to the generated runtime.

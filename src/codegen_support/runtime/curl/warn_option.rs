@@ -89,13 +89,13 @@ fn emit_unsupported_option_warning(
             abi::emit_symbol_address(emitter, "x1", prefix_symbol);
             emitter.instruction(&format!("mov x2, #{prefix_len}"));             // pass the warning prefix length
 
-            abi::emit_call_label(emitter, "__rt_diag_warning");                 // emit or suppress the warning prefix
+            abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                 // emit or suppress the warning prefix
 
             emitter.instruction("ldr x0, [sp]");                                // reload the option number for decimal formatting
 
             abi::emit_call_label(emitter, "__rt_itoa");                         // format the option number into concat scratch
 
-            abi::emit_call_label(emitter, "__rt_diag_warning");                 // emit or suppress the formatted option number
+            abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                 // emit or suppress the formatted option number
 
             emitter.instruction("ldr x10, [sp, #8]");                           // reload the pre-warning concat cursor
 
@@ -130,7 +130,7 @@ fn emit_unsupported_option_warning(
             abi::emit_symbol_address(emitter, "rdi", prefix_symbol);
             emitter.instruction(&format!("mov esi, {prefix_len}"));             // pass the warning prefix length
 
-            abi::emit_call_label(emitter, "__rt_diag_warning");                 // emit or suppress the warning prefix
+            abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                 // emit or suppress the warning prefix
 
             emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // reload the option number for decimal formatting
 
@@ -140,7 +140,7 @@ fn emit_unsupported_option_warning(
 
             emitter.instruction("mov rsi, rdx");                                // pass the formatted option length to the warning helper
 
-            abi::emit_call_label(emitter, "__rt_diag_warning");                 // emit or suppress the formatted option number
+            abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                 // emit or suppress the formatted option number
 
             emitter.instruction("mov r10, QWORD PTR [rbp - 16]");               // reload the pre-warning concat cursor
 

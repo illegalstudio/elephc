@@ -132,7 +132,29 @@ pub(super) fn lower_method_call_with_receiver(
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
+    // A by-reference-returning method transfers a lease that must outlive this caller's
+    // argument and receiver cleanup, so its staging is published before the arguments.
+    let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
+    // An ordinary owned result gets the same protection as the reference lease: argument roots,
+    // evaluation intermediates and an owning receiver all retire after the call and run PHP
+    // destructors that can throw. Receiver and method alone decide the result type and the alias
+    // summary, so both are available before any argument expression runs.
+    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    let result_staging = prepublish_user_call_result(
+        ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
+    );
+    begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let mut arg_values = arg_values;
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
+    let roots = root_user_call_operands(
+        ctx,
+        &mut arg_values,
+        sig.as_ref(),
+        &return_alias,
+        &result_type,
+        expr.span,
+    );
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
@@ -143,17 +165,23 @@ pub(super) fn lower_method_call_with_receiver(
         op.default_effects(),
         Some(expr.span),
     );
-    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
-    release_owned_call_arg_temporaries_with_signature(
+    let call = finish_reference_return_call(
+        ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    release_owned_call_arg_temporaries_with_roots(
         ctx,
         &arg_values,
         Some(call.value),
         &return_alias,
         sig.as_ref(),
+        &roots,
         expr.span,
     );
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     release_owning_receiver_temporary(ctx, object, expr.span);
-    call
+    let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
+    finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }
 
 /// Lowers a nullsafe dynamic instance method call after the receiver was evaluated and guarded.
@@ -168,9 +196,17 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let receiver_type = strip_void_from_union(ctx.builder.value_php_type(object.value));
+    let receiver_type = ctx.builder.value_php_type(object.value);
     let receiver_name = ctx.declare_hidden_temp(receiver_type.clone());
-    ctx.store_local(&receiver_name, object, receiver_type, Some(expr.span));
+    // The hidden slot is an owner, not a borrow of the caller's variable. Keep
+    // the source representation so boxed nullable receivers are not moved as raw objects.
+    let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, object, Some(expr.span));
+    ctx.store_local(&receiver_name, retained, receiver_type, Some(expr.span));
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+    }
+    let receiver_slot = ctx.local_slots[&receiver_name];
+    register_owned_call_operand(ctx, receiver_slot, expr.span);
     let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);
     let callback = Expr::new(
         ExprKind::ArrayLiteral(vec![receiver, method.clone()]),
@@ -186,7 +222,9 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
         },
         expr.span,
     );
-    lower_expr(ctx, &call)
+    let result = lower_expr(ctx, &call);
+    retire_owned_call_operand(ctx, receiver_slot, expr.span);
+    result
 }
 
 /// Releases normalized call arguments that cannot be returned by this call.
@@ -216,17 +254,57 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
     signature: Option<&FunctionSig>,
     span: Span,
 ) {
+    release_owned_call_arg_temporaries_with_roots(
+        ctx, args, result, return_alias, signature, &[], span,
+    );
+}
+
+/// Retires scoped roots and ordinary temporaries in parameter order without renumbering alias facts.
+pub(super) fn release_owned_call_arg_temporaries_with_roots(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[crate::ir::ValueId],
+    result: Option<crate::ir::ValueId>,
+    return_alias: &ReturnArgAlias,
+    signature: Option<&FunctionSig>,
+    roots: &[(usize, crate::ir::LocalSlotId)],
+    span: Span,
+) {
     for (parameter_index, value) in args.iter().enumerate() {
+        if let Some((_, slot)) = roots.iter().find(|(index, _)| *index == parameter_index) {
+            retire_owned_call_operand(ctx, *slot, span);
+            continue;
+        }
+        let reference_place_view_already_released = signature.is_some_and(|signature| {
+            signature
+                .ref_params
+                .get(parameter_index)
+                .copied()
+                .unwrap_or(false)
+        }) && matches!(
+            ctx.builder.value_defining_op(*value),
+            Some(Op::LoadLocal | Op::LoadRefCell)
+        ) && ctx.builder.function().instructions.iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [*value]
+        });
+        if reference_place_view_already_released {
+            // Source-order evaluation already transferred this incidental value view into an
+            // unwind-visible intermediate. The call operand remains the original load solely so
+            // ABI materialization can recover its local slot; releasing that view again after a
+            // successful call would free the same detached Mixed-to-string result twice.
+            continue;
+        }
         let php_type = ctx.builder.value_php_type(*value);
         let lowered = LoweredValue {
             value: *value,
             ir_type: value_ir_type(&php_type),
         };
-        if ctx.value_is_owning_temporary(lowered) {
-            // PHP callees acquire by-value array/hash parameters into owning COW shadow slots.
+        if ctx.value_needs_release_after_use(lowered) {
+            // PHP callees acquire by-value array/hash/Mixed parameters into owning shadow slots.
+            // By-value returns from reference parameters also acquire or clone a separate owner.
             // Their result therefore cannot be an unretained alias of the caller's argument.
             let callee_owns = signature
-                .is_some_and(|signature| signature.param_is_callee_owned(parameter_index));
+                .is_some_and(|signature| signature.by_ref_return
+                    || signature.returned_parameter_has_independent_owner(parameter_index));
             let independently_boxed = signature.is_some_and(|signature| {
                 call_arg_gets_independent_mixed_box(signature, parameter_index, &php_type)
             });

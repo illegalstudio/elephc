@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_easy_copy() — internals"
+title: "__elephc_curl_easy_copy() - internals"
 description: "Compiler internals for __elephc_curl_easy_copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 979
+  order: 1004
 ---
 
-## `__elephc_curl_easy_copy()` — internals
+## `__elephc_curl_easy_copy()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_copy.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_copy.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

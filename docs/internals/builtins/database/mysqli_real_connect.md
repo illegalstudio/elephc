@@ -1,11 +1,11 @@
 ---
-title: "mysqli_real_connect() — internals"
+title: "mysqli_real_connect() - internals"
 description: "Compiler internals for mysqli_real_connect(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 147
 ---
 
-## `mysqli_real_connect()` — internals
+## `mysqli_real_connect()` - internals
 
 ## Where it lives
 

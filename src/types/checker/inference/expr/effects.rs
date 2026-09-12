@@ -46,7 +46,7 @@ impl Checker {
         expr: &Expr,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        match &expr.kind {
+        let result = match &expr.kind {
             ExprKind::Variable(name) if self.eval_barrier_active && !env.contains_key(name) => {
                 env.insert(name.clone(), PhpType::Mixed);
                 Ok(PhpType::Mixed)
@@ -300,7 +300,14 @@ impl Checker {
                             effects?;
                             continue;
                         }
-                        self.infer_type_with_assignment_effects(arg, env)?;
+                        if php_symbol_key(builtin_name) == "call_user_func"
+                            && idx > 0
+                            && matches!(arg.kind, ExprKind::Spread(_))
+                        {
+                            self.infer_spread_source_assignment_effects(arg, env)?;
+                        } else {
+                            self.infer_type_with_assignment_effects(arg, env)?;
+                        }
                     }
                 }
                 let ty = self.infer_type(expr, env)?;
@@ -360,6 +367,21 @@ impl Checker {
                             let ExprKind::Variable(var) = &arg.kind else {
                                 continue;
                             };
+                            // Detaching a promoted reference is separate from killing its type
+                            // binding: escaped aliases still prohibit incompatible reassignments.
+                            if arg.span.identifies_a_node() {
+                                if env.contains_key(var) && self.local_reference_is_detachable(var) {
+                                    self.local_ref_detach_sites.entry(arg.span).or_default()
+                                        .insert(var.clone());
+                                } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {
+                                    if names.remove(var.as_str()) {
+                                        self.retired_ref_detach_sites.insert((arg.span, var.clone()));
+                                    }
+                                    if names.is_empty() {
+                                        self.local_ref_detach_sites.remove(&arg.span);
+                                    }
+                                }
+                            }
                             // A top-level name some other body declares `global` is NOT killable
                             // however eligible it otherwise looks: `global $a;` in a function binds
                             // the very cell this slot holds, so dropping the name here leaves the
@@ -436,11 +458,17 @@ impl Checker {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 let skip_contextual_callback =
                     self.variable_targets_preg_replace_callback(var.as_str());
+                let descriptor_args = self.callable_param_names.contains(var)
+                    || self.callable_array_targets.contains_key(var);
                 for (idx, arg) in expanded_args.iter().enumerate() {
                     if skip_contextual_callback && idx == 1 {
                         continue;
                     }
-                    self.infer_type_with_assignment_effects(arg, env)?;
+                    if descriptor_args && matches!(arg.kind, ExprKind::Spread(_)) {
+                        self.infer_spread_source_assignment_effects(arg, env)?;
+                    } else {
+                        self.infer_type_with_assignment_effects(arg, env)?;
+                    }
                 }
                 let ty = self.infer_type(expr, env)?;
                 Self::purge_property_narrowings(env);
@@ -455,7 +483,11 @@ impl Checker {
                     if skip_contextual_callback && idx == 1 {
                         continue;
                     }
-                    self.infer_type_with_assignment_effects(arg, env)?;
+                    if matches!(arg.kind, ExprKind::Spread(_)) {
+                        self.infer_spread_source_assignment_effects(arg, env)?;
+                    } else {
+                        self.infer_type_with_assignment_effects(arg, env)?;
+                    }
                 }
                 let ty = self.infer_type(expr, env)?;
                 Self::purge_property_narrowings(env);
@@ -523,7 +555,29 @@ impl Checker {
                 Ok(ty)
             }
             _ => self.infer_type(expr, env),
+        };
+        if result.is_ok() {
+            self.apply_php_array_reference_outputs(expr.span, env);
         }
+        result
+    }
+
+    /// Visits a call-unpack source for assignment effects without choosing its container policy.
+    ///
+    /// The enclosing call checker decides whether this spread is an array-only direct call or a
+    /// descriptor invocation that may walk Traversable. This preliminary effects walk must still
+    /// observe assignments inside the source, but must not reject a source before that decision.
+    fn infer_spread_source_assignment_effects(
+        &mut self,
+        arg: &Expr,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        let ExprKind::Spread(source) = &arg.kind else {
+            self.infer_type_with_assignment_effects(arg, env)?;
+            return Ok(());
+        };
+        self.infer_type_with_assignment_effects(source, env)?;
+        Ok(())
     }
 
     /// Infers effects for a language-construct operand without treating properties as reads.

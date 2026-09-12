@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefrompng() — internals"
+title: "imagecreatefrompng() - internals"
 description: "Compiler internals for imagecreatefrompng(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 489
 ---
 
-## `imagecreatefrompng()` — internals
+## `imagecreatefrompng()` - internals
 
 ## Where it lives
 

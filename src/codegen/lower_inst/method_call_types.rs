@@ -18,6 +18,7 @@ pub(super) struct MethodCallTarget {
     pub(super) ref_params: Vec<bool>,
     pub(super) return_ty: PhpType,
     pub(super) by_ref_return: bool,
+    pub(super) source_abi: bool,
 }
 
 /// Concrete runtime class branch available to a `Mixed` receiver method call.
@@ -37,7 +38,7 @@ pub(super) struct CallArgMaterialization {
     pub(super) borrowed_stack_arg_bytes: usize,
 }
 
-/// Caller-owned temporary argument that must be released after the call returns.
+/// Caller-owned coercion with an adjacent unwind record, retired on return or throw.
 pub(super) struct CallArgTempCleanup {
     pub(super) param_index: usize,
     pub(super) offset: usize,
@@ -51,17 +52,11 @@ pub(super) struct BorrowedStackMixedArg {
     pub(super) source_ty: PhpType,
 }
 
-/// How long the caller-side cell for a by-reference argument with no caller variable behind
-/// it has to stay alive.
-///
-/// The distinction is a MEMORY-SAFETY one, not an optimization: a stack cell dies with the
-/// caller's frame, so it may only be used when the callee cannot keep the reference.
+/// Determines whether omitted reference cells can retire the caller's lease after the call.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RefArgCellLifetime {
-    /// The reference cannot outlive the call, so the cell is a caller-stack slot released
-    /// with the rest of the by-reference cell block. Every ordinary function and method
-    /// call: a PHP callee has no way to bind a by-reference parameter into storage that
-    /// survives its own frame.
+    /// The caller owns a managed lease until return or throw. An escaping closure may
+    /// retain the cell independently, so this lifetime does not prohibit reference escape.
     CallOnly,
     /// The callee may KEEP the reference. A constructor that promotes a by-reference
     /// parameter (`__construct(public int &$value = 1)`) BORROWS the cell for the whole life
@@ -73,15 +68,9 @@ pub(super) enum RefArgCellLifetime {
     MayOutliveCall,
 }
 
-/// A caller-side stack cell standing in for a by-reference argument that has NO caller
-/// variable behind it — an OMITTED optional by-reference argument (`f($x)` against
-/// `f($x, int &$out = null)`), or any other operand that is neither a local nor an array
-/// element.
-///
-/// It lives in the same pushed cell block as [`RefArgWriteback`] and is released with it
-/// after the call. There is nothing to write back (no source local exists), so the callee's
-/// write into it is simply discarded — which is exactly PHP's semantics for an argument the
-/// caller never supplied.
+/// A managed cell for a reference argument without a caller variable, typically a default.
+/// Its stack slot holds the cell pointer, followed by an unwind record for the caller lease.
+/// There is no source location to write back; escaping closures retain independent leases.
 pub(super) struct RefArgTempCell {
     pub(super) param_index: usize,
     pub(super) source_value: ValueId,

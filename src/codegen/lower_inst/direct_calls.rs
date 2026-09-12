@@ -69,7 +69,8 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.store_result_value(result)?;
         }
     }
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // User callees own their Mixed parameter shadows, including an aliased resource return.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
     emit_ref_arg_writebacks(ctx, &call_args)
 }
@@ -174,7 +175,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
     } else {
         Vec::new()
     };
-    let cleanup_bytes = cleanup_slots.len() * 16;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     if cleanup_bytes > 0 {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     }
@@ -260,7 +261,7 @@ pub(super) fn materialize_static_method_call_args_with_refs(
     )?;
     emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
     let cleanup_slots = plan_call_arg_temp_cleanups(ctx, args, param_types, ref_params, &[])?;
-    let cleanup_bytes = cleanup_slots.len() * 16;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     if cleanup_bytes > 0 {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     }
@@ -359,7 +360,7 @@ pub(super) fn materialize_called_class_id(
 /// The planner reserves that slot for exactly the borrowed widening arguments, so the presence
 /// of a cleanup is the same decision as the incref and the two cannot drift: an incref with no
 /// cleanup would leak the clone, and a cleanup with no incref would release the caller's array.
-fn materialize_plain_call_arg(
+pub(super) fn materialize_plain_call_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     param_ty: &PhpType,

@@ -17,6 +17,7 @@ impl EvalStreamResources {
         let listener = TcpListener::bind(eval_tcp_address(address)).ok()?;
         let local = listener.local_addr().ok()?.to_string();
         let id = self.take_next_id();
+        self.resource_types.insert(id, "stream");
         self.socket_names.insert(
             id,
             EvalSocketNames {

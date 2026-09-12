@@ -52,8 +52,9 @@ pub(in crate::interpreter) fn eval_builtin_get_class_methods(
     let [target] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let target = eval_expr(target, context, scope, values)?;
-    eval_get_class_methods_result(&[target], context, values)
+    with_eval_operands(&[target], context, scope, values, |args, context, _, values| {
+        eval_get_class_methods_result(args, context, values)
+    })
 }
 
 /// Evaluates materialized `get_class_methods()` arguments.
@@ -65,10 +66,29 @@ pub(in crate::interpreter) fn eval_get_class_methods_result(
     let [target] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    let tag = values.type_tag(*target)?;
+    if !matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_STRING) {
+        let given = match tag {
+            EVAL_TAG_INT => "int",
+            EVAL_TAG_FLOAT => "float",
+            EVAL_TAG_BOOL => "bool",
+            EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+            EVAL_TAG_NULL => "null",
+            EVAL_TAG_RESOURCE => "resource",
+            _ => "object",
+        };
+        return eval_throw_type_error(
+            &format!("get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, {given} given"),
+            context, values,
+        );
+    }
     let (class_name, target_is_object) =
         eval_class_metadata_target_name(*target, context, values)?;
     if !target_is_object && !eval_class_relation_name_exists(&class_name, context, values)? {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_type_error(
+            "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, string given",
+            context, values,
+        );
     }
     let names = eval_class_method_names_for_scope(&class_name, context, values)?;
     eval_indexed_string_array_result(&names, values)
@@ -106,6 +126,7 @@ fn eval_class_method_names_for_scope(
             .methods()
             .iter()
             .filter(|method| method.visibility() == EvalVisibility::Public)
+            .filter(|method| !trait_decl.properties().iter().any(|property| property.matches_hook_method(method.name())))
             .map(|method| method.name().to_string())
             .collect());
     }
@@ -130,6 +151,11 @@ fn eval_visible_runtime_method_names(
 ) -> Result<Vec<String>, EvalStatus> {
     let mut result = Vec::new();
     for name in names {
+        if values.reflection_method_flags(lookup_class_name, &name)?
+            .is_some_and(|flags| flags & EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK != 0)
+        {
+            continue;
+        }
         let Some((declaring_class, visibility)) =
             eval_runtime_method_access_metadata(lookup_class_name, &name, values)?
         else {

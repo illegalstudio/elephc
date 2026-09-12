@@ -6,8 +6,9 @@
 //!
 //! Key details:
 //! - `gmdate` calls this file for shared formatting and UTC/local timestamp conversion.
+//! - Timezone environment writes use Rust's environment lock shared with process spawning.
 
-use std::os::unix::ffi::OsStrExt;
+use std::ffi::OsStr;
 use std::sync::Mutex;
 
 use super::super::*;
@@ -120,37 +121,29 @@ pub(in crate::interpreter) fn eval_with_timezone<T>(
     let _guard = EVAL_TZ_MUTEX
         .lock()
         .map_err(|_| EvalStatus::RuntimeFatal)?;
-    let previous = std::env::var_os("TZ")
-        .map(|value| CString::new(value.as_bytes()).map_err(|_| EvalStatus::RuntimeFatal))
-        .transpose()?;
+    let previous = std::env::var_os("TZ");
     eval_apply_process_timezone(timezone)?;
     let result = operation();
-    eval_restore_process_timezone(previous.as_ref())?;
+    eval_restore_process_timezone(previous.as_deref())?;
     result
 }
 
 /// Applies one timezone identifier to libc's process-global timezone state.
 fn eval_apply_process_timezone(timezone: &str) -> Result<(), EvalStatus> {
-    let key = CString::new("TZ").map_err(|_| EvalStatus::RuntimeFatal)?;
-    let value = CString::new(timezone).map_err(|_| EvalStatus::RuntimeFatal)?;
-    let status = unsafe { libc::setenv(key.as_ptr(), value.as_ptr(), 1) };
-    if status != 0 {
+    if timezone.as_bytes().contains(&0) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    std::env::set_var("TZ", timezone);
     unsafe { tzset() };
     Ok(())
 }
 
 /// Restores the process timezone that was active before an eval-local conversion.
-fn eval_restore_process_timezone(previous: Option<&CString>) -> Result<(), EvalStatus> {
-    let key = CString::new("TZ").map_err(|_| EvalStatus::RuntimeFatal)?;
-    let status = if let Some(value) = previous {
-        unsafe { libc::setenv(key.as_ptr(), value.as_ptr(), 1) }
+fn eval_restore_process_timezone(previous: Option<&OsStr>) -> Result<(), EvalStatus> {
+    if let Some(value) = previous {
+        std::env::set_var("TZ", value);
     } else {
-        unsafe { libc::unsetenv(key.as_ptr()) }
-    };
-    if status != 0 {
-        return Err(EvalStatus::RuntimeFatal);
+        std::env::remove_var("TZ");
     }
     unsafe { tzset() };
     Ok(())
@@ -249,4 +242,22 @@ pub(in crate::interpreter) fn eval_push_padded_number(
     width: usize,
 ) {
     output.extend_from_slice(format!("{value:0width$}").as_bytes());
+}
+
+#[cfg(test)]
+mod environment_api_tests {
+    /// Calendar helpers cannot bypass the environment lock used by inherited process spawns.
+    #[test]
+    fn timezone_mutation_uses_the_environment_api_shared_with_process_spawn() {
+        let source = include_str!("date.rs");
+        let libc_setenv = ["libc::", "setenv("].concat();
+        let libc_unsetenv = ["libc::", "unsetenv("].concat();
+        let rust_set_var = ["std::env::", "set_var("].concat();
+        let rust_remove_var = ["std::env::", "remove_var("].concat();
+
+        assert!(!source.contains(&libc_setenv));
+        assert!(!source.contains(&libc_unsetenv));
+        assert_eq!(source.matches(&rust_set_var).count(), 2);
+        assert_eq!(source.matches(&rust_remove_var).count(), 1);
+    }
 }

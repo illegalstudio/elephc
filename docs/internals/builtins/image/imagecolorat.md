@@ -1,11 +1,11 @@
 ---
-title: "imagecolorat() — internals"
+title: "imagecolorat() - internals"
 description: "Compiler internals for imagecolorat(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 465
 ---
 
-## `imagecolorat()` — internals
+## `imagecolorat()` - internals
 
 ## Where it lives
 

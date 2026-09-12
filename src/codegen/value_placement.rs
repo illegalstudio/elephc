@@ -93,7 +93,7 @@ mod tests {
     //! Key details:
     //! - These tests verify the stack-slot contract before instruction lowering uses it.
 
-    use crate::ir::{Builder, Function, IrHeapKind, IrType, Op, Ownership};
+    use crate::ir::{Builder, Function, Immediate, IrHeapKind, IrType, Op, Ownership};
     use crate::types::PhpType;
 
     use super::{allocate, bytes_for};
@@ -159,7 +159,10 @@ mod tests {
             .emit(
                 Op::IterStart,
                 vec![array],
-                None,
+                Some(Immediate::IterStart {
+                    by_ref: false,
+                    owner: None,
+                }),
                 IrType::Heap(IrHeapKind::Iterable),
                 PhpType::Iterable,
                 Ownership::MaybeOwned,

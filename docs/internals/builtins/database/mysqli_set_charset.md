@@ -1,11 +1,11 @@
 ---
-title: "mysqli_set_charset() — internals"
+title: "mysqli_set_charset() - internals"
 description: "Compiler internals for mysqli_set_charset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 155
 ---
 
-## `mysqli_set_charset()` — internals
+## `mysqli_set_charset()` - internals
 
 ## Where it lives
 

@@ -11,7 +11,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -44,6 +44,7 @@ impl Checker {
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
         variadic_by_ref: bool,
+        variadic_type: &Option<TypeExpr>,
         captures: &[String],
         span: Span,
         env: &TypeEnv,
@@ -96,12 +97,32 @@ impl Checker {
         }
 
         if let Some(name) = variadic {
-            closure_env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Int)));
-            param_types.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
-            param_type_exprs.push(None);
+            // A closure VALUE is a callable descriptor, so its collector is always
+            // descriptor-reachable and always takes the descriptor container. There is no
+            // reachability question to answer here and nothing to promote later: the body and the
+            // published signature are built from the same storage in one place.
+            //
+            // The body environment used to be seeded with `array<int>` while the signature
+            // published `array<mixed>`, so the frame read boxed Mixed slots as raw integers even
+            // before any named argument was involved. One binding, both sides.
+            let storage = crate::types::signatures::descriptor_variadic_container();
+            // The declared element hint is the SOURCE contract, not the storage: it is what
+            // `$closure(...)` call sites are checked against, and dropping it (this pushed a bare
+            // `None`/`false` pair) silently turned `int ...$xs` into an untyped tail that accepted
+            // anything. Resolving it here also keeps a bad hint an error at the declaration.
+            if let Some(type_ann) = variadic_type {
+                self.resolve_declared_param_type_hint(
+                    type_ann,
+                    span,
+                    &format!("Closure variadic parameter ${}", name),
+                )?;
+            }
+            closure_env.insert(name.clone(), storage.clone());
+            param_types.push((name.clone(), storage));
+            param_type_exprs.push(variadic_type.clone());
             defaults.push(None);
             ref_params.push(variadic_by_ref);
-            declared_params.push(false);
+            declared_params.push(variadic_type.is_some());
         }
 
         Ok(ClosureSignatureContext {
@@ -123,6 +144,7 @@ impl Checker {
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
         variadic_by_ref: bool,
+        variadic_type: &Option<TypeExpr>,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -135,6 +157,7 @@ impl Checker {
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             captures,
             span,
             env,
@@ -249,6 +272,7 @@ impl Checker {
                 params,
                 variadic,
                 variadic_by_ref,
+                variadic_type,
                 return_type,
                 body,
                 captures,
@@ -260,6 +284,7 @@ impl Checker {
                     params,
                     variadic,
                     *variadic_by_ref,
+                    variadic_type,
                     return_type,
                     body,
                     captures,
@@ -304,6 +329,63 @@ impl Checker {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Returns the callable target tracked for a two-element callable-array local.
+    ///
+    /// This is intentionally narrower than general callable-signature resolution. In
+    /// particular, it does not validate the target as a zero-argument invocation and it does
+    /// not classify every `Array(Mixed)` value as callable. The matching EIR path materializes
+    /// this target as a descriptor before crossing a `callable` parameter boundary.
+    pub(crate) fn tracked_callable_array_target(
+        &self,
+        expr: &Expr,
+    ) -> Option<CallableTarget> {
+        let ExprKind::Variable(name) = &expr.kind else {
+            return None;
+        };
+        self.callable_array_targets.get(name).cloned()
+    }
+
+    /// Resolves a callable array that parameter lowering can materialize as a descriptor.
+    ///
+    /// Stored arrays need tracked target metadata. A two-element literal is also safe because
+    /// lowering consumes it directly at the parameter boundary and evaluates its receiver once.
+    pub(crate) fn callable_array_param_target(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<CallableTarget>, CompileError> {
+        let target = if let Some(target) = self.tracked_callable_array_target(expr) {
+            target
+        } else {
+            let ExprKind::ArrayLiteral(items) = &expr.kind else {
+                return Ok(None);
+            };
+            let [receiver, method] = items.as_slice() else {
+                return Ok(None);
+            };
+            let ExprKind::StringLiteral(method) = &method.kind else {
+                return Ok(None);
+            };
+            if let Some(receiver) = self.static_callable_array_receiver(receiver, expr.span)? {
+                CallableTarget::StaticMethod {
+                    receiver,
+                    method: method.clone(),
+                }
+            } else {
+                let receiver_ty = self.infer_type(receiver, env)?;
+                let Some(_) = self.invokable_class_for_type(&receiver_ty) else {
+                    return Ok(None);
+                };
+                CallableTarget::Method {
+                    object: Box::new(receiver.clone()),
+                    method: method.clone(),
+                }
+            }
+        };
+        self.resolve_first_class_callable_sig(&target, expr.span, env)?;
+        Ok(Some(target))
     }
 
     /// Extracts the element callable signature from an expression that yields an array of callables.

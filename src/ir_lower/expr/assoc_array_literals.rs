@@ -38,7 +38,7 @@ pub(super) fn assoc_array_literal_type_from_spreads(
     let mut value_ty = PhpType::Never;
     for item in items {
         let next = match &item.kind {
-            ExprKind::Spread(inner) => match infer_expr_type_syntactic(inner).codegen_repr() {
+            ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
                 PhpType::Array(elem) => elem.codegen_repr(),
                 PhpType::AssocArray { value, .. } => value.codegen_repr(),
                 _ => PhpType::Mixed,
@@ -91,6 +91,9 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     value: &Expr,
 ) -> PhpType {
+    if let Some(storage) = nullsafe_chain::result_storage_type(value) {
+        return storage;
+    }
     match &value.kind {
         ExprKind::Null => PhpType::Mixed,
         ExprKind::ConstRef(name) => ctx
@@ -121,11 +124,6 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         }
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
-                .and_then(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
-        }
-        ExprKind::NullsafeMethodCall { object, method, .. } => {
-            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
                 .and_then(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
@@ -270,4 +268,3 @@ pub(super) fn nullsafe_method_call_expr_type_for_ir(
 pub(crate) fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
-

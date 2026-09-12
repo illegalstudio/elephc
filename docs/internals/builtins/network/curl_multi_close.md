@@ -1,11 +1,11 @@
 ---
-title: "curl_multi_close() — internals"
+title: "curl_multi_close() - internals"
 description: "Compiler internals for curl_multi_close(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 673
+  order: 699
 ---
 
-## `curl_multi_close()` — internals
+## `curl_multi_close()` - internals
 
 ## Where it lives
 

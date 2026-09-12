@@ -1,16 +1,16 @@
 ---
-title: "rewind() — internals"
+title: "rewind() - internals"
 description: "Compiler internals for rewind(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 355
 ---
 
-## `rewind()` — internals
+## `rewind()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/rewind.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rewind.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

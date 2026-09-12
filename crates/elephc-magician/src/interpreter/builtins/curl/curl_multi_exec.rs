@@ -41,20 +41,21 @@ pub(in crate::interpreter) fn eval_builtin_curl_multi_exec_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound, _) =
-        bind_evaluated_ref_builtin_args(&["multi_handle", "still_running"], &evaluated_args, false)?;
-    let multi_handle = required_evaluated_ref_arg(&bound, 0)?;
-    let Some(still_running) = optional_evaluated_ref_arg(&bound, 1) else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let target = still_running.ref_target.clone();
-    let (running, code) = eval_curl_multi_exec_perform(multi_handle.value, context, values)?;
-    match target {
-        Some(target) => eval_curl_multi_exec_write_back(&target, running, context, values)?,
-        None => eval_curl_multi_exec_warn_by_value(values)?,
-    }
-    values.int(code)
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+        let (bound, _) =
+            bind_evaluated_ref_builtin_args(&["multi_handle", "still_running"], &evaluated_args, false)?;
+        let multi_handle = required_evaluated_ref_arg(&bound, 0)?;
+        let Some(still_running) = optional_evaluated_ref_arg(&bound, 1) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        let target = still_running.ref_target.clone();
+        let (running, code) = eval_curl_multi_exec_perform(multi_handle.value, context, values)?;
+        match target {
+            Some(target) => eval_curl_multi_exec_write_back(&target, running, context, values)?,
+            None => eval_curl_multi_exec_warn_by_value(values)?,
+        }
+        values.int(code)
+    })
 }
 
 /// Evaluates `curl_multi_exec()` over plain eval expressions, which still carry enough to
@@ -65,17 +66,8 @@ pub(in crate::interpreter) fn eval_builtin_curl_multi_exec(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [multi_handle, still_running] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let multi_handle = eval_expr(multi_handle, context, scope, values)?;
-    let (_, target) = eval_call_arg_value(still_running, context, scope, values)?;
-    let (running, code) = eval_curl_multi_exec_perform(multi_handle, context, values)?;
-    match target {
-        Some(target) => eval_curl_multi_exec_write_back(&target, running, context, values)?,
-        None => eval_curl_multi_exec_warn_by_value(values)?,
-    }
-    values.int(code)
+    let args = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+    eval_builtin_curl_multi_exec_call(&args, context, scope, values)
 }
 
 /// Dispatches evaluated `curl_multi_exec()` calls through the builtin leaf. This path has

@@ -1,11 +1,11 @@
 ---
-title: "cairo_create() — internals"
+title: "cairo_create() - internals"
 description: "Compiler internals for cairo_create(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 401
 ---
 
-## `cairo_create()` — internals
+## `cairo_create()` - internals
 
 ## Where it lives
 

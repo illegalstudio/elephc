@@ -1,16 +1,16 @@
 ---
-title: "abs() — internals"
+title: "abs() - internals"
 description: "Compiler internals for abs(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 545
 ---
 
-## `abs()` — internals
+## `abs()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/abs.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/abs.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

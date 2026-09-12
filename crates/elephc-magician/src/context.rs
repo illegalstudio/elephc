@@ -47,6 +47,7 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 pub use alias_metadata::*;
 pub use closure_metadata::*;
 pub use core::*;
+pub use functions::{EvalNativeGlobalConstant, EvalNativeUserConstant};
 pub(crate) use global_registry::*;
 pub use native_defaults::*;
 pub use native_function::*;

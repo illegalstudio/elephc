@@ -463,6 +463,7 @@ pub(crate) fn insert_enum_metadata(
             is_final: true,
             is_readonly_class: true,
             allow_dynamic_properties: false,
+            eval_property_storage: false,
             constants,
             constant_deprecations: user_constants
                 .iter()
@@ -502,6 +503,7 @@ pub(crate) fn insert_enum_metadata(
             property_reference_slots,
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
+            property_hooks: HashMap::new(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
             static_property_declaring_classes: HashMap::new(),

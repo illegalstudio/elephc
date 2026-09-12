@@ -1134,6 +1134,79 @@ function dispatch(string $action, int $count, float $ratio, bool $enabled): stri
     fs::remove_dir_all(&dir).ok();
 }
 
+/// Keeps a backtrace-triggered frame collector internal to the exported PHP invocation.
+#[test]
+fn test_unrelated_backtrace_keeps_export_header_and_trampoline_fixed() {
+    let dir = make_test_dir("elephc_cdylib_hidden_collector");
+    fs::write(
+        dir.join("collector.php"),
+        r#"<?php
+#[Export]
+function roundtrip(string $input): string {
+    return $input;
+}
+
+function unrelated_trace(): array {
+    return debug_backtrace();
+}
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "staticlib", "collector.php"])
+        .output()
+        .expect("failed to compile the collector-bearing static library");
+    assert!(
+        output.status.success(),
+        "collector-bearing library compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let header = fs::read_to_string(dir.join("libcollector.h"))
+        .expect("missing generated collector header");
+    assert!(header.contains(
+        "int32_t roundtrip(const char *input_ptr, size_t input_len, char **output_ptr, size_t *output_len);"
+    ));
+    assert!(!header.contains("__elephc_func_args"));
+
+    let asm = fs::read_to_string(dir.join("collector.s"))
+        .expect("missing collector-bearing library assembly");
+    let public_label = if cfg!(target_os = "macos") {
+        "\n_roundtrip:"
+    } else {
+        "\nroundtrip:"
+    };
+    let lifecycle_label = if cfg!(target_os = "macos") {
+        "\n_elephc_abi_version:"
+    } else {
+        "\nelephc_abi_version:"
+    };
+    let start = asm.find(public_label).expect("missing public roundtrip wrapper");
+    let end = asm[start..]
+        .find(lifecycle_label)
+        .map(|offset| start + offset)
+        .expect("missing lifecycle boundary after roundtrip");
+    let wrapper = &asm[start..end];
+    let setjmp = wrapper.find("setjmp").expect("missing recoverable boundary");
+    let allocate = wrapper
+        .find("__rt_array_new")
+        .expect("missing empty internal collector allocation");
+    let publish = wrapper
+        .find("__rt_cleanup_call_operand_owner")
+        .expect("missing collector unwind owner");
+    let invoke = wrapper
+        .find("_fn_roundtrip")
+        .expect("missing internal PHP invocation");
+    let release = wrapper[invoke..]
+        .find("__rt_decref_any")
+        .map(|offset| invoke + offset)
+        .expect("missing normal collector release");
+    assert!(setjmp < allocate && allocate < publish && publish < invoke && invoke < release);
+
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// Verifies the Stage B owned-string ABI with a real C host, including embedded
 /// NUL bytes, empty/long buffers, repeated allocation/free, structured argument
 /// errors, an escaping PHP exception, last-error reset, and post-failure reuse.

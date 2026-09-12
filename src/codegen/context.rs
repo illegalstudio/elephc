@@ -34,6 +34,8 @@ use super::shared_state::SharedCodegenState;
 use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
+mod operand_owners;
+
 /// Runtime representation known for one local slot at the current EIR instruction.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LocalSlotRepresentation {
@@ -62,6 +64,11 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
+    pub(super) exception_cleanup_activation: bool,
+    /// Exceptional callbacks accumulate destructor throws instead of abandoning sibling cleanup.
+    pub(super) unwinding_cleanup: bool,
+    pub(super) backtrace_activation: bool,
+    pub(super) backtrace_enabled: bool,
     pub(super) epilogue_emitted: bool,
     /// `--instrument` id assigned to this function in its prologue, consumed by
     /// its epilogue's `elephc_instr_exit(id)`. `None` outside `--instrument`.
@@ -131,6 +138,10 @@ impl<'a> FunctionContext<'a> {
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
             exception_activation_offset: layout.exception_activation_offset,
+            exception_cleanup_activation: layout.exception_cleanup_activation,
+            unwinding_cleanup: false,
+            backtrace_activation: layout.backtrace_activation,
+            backtrace_enabled: super::frame::module_uses_backtrace(module),
             epilogue_emitted: false,
             instr_id: None,
             is_main,
@@ -877,7 +888,7 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
     ) -> Result<()> {
         let ty = self.local_php_type(slot)?.codegen_repr();
-        if !(matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+        if !(matches!(ty, PhpType::Str | PhpType::Callable | PhpType::Mixed | PhpType::Union(_))
             || ty.is_refcounted())
         {
             return Err(CodegenIrError::unsupported(format!(
@@ -920,15 +931,19 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
-    /// Releases a string or Mixed payload stored through a local ref-cell pointer.
+    /// Clears a ref-cell payload before retiring it, leaving the shared cell alive during cleanup.
     fn release_ref_cell_value(&mut self, slot: LocalSlotId, ty: &PhpType) -> Result<()> {
         let offset = self.local_offset(slot)?;
         let cell_reg = abi::symbol_scratch_reg(self.emitter);
         let result_reg = abi::int_result_reg(self.emitter);
         abi::load_at_offset(self.emitter, cell_reg, offset);
         abi::emit_load_from_address(self.emitter, result_reg, cell_reg, 0);
+        abi::emit_store_zero_to_address(self.emitter, cell_reg, 0);
         if *ty == PhpType::Str {
+            abi::emit_store_zero_to_address(self.emitter, cell_reg, 8);
             abi::emit_call_label(self.emitter, "__rt_heap_free_safe");
+        } else if *ty == PhpType::Callable {
+            abi::emit_call_label(self.emitter, "__rt_callable_descriptor_release");
         } else {
             abi::emit_decref_if_refcounted(self.emitter, ty);
         }
@@ -1091,6 +1106,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns true when Mixed boxing can consume the value's owned source reference.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
+        if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst) {
+            return Ok(false);
+        }
         let value_ty = self.value_php_type(value)?.codegen_repr();
         if value_ty == PhpType::Str {
             return self.value_is_heap_owned_string_for_mixed_box(value);
@@ -1137,6 +1155,9 @@ impl<'a> FunctionContext<'a> {
         value: ValueId,
     ) -> Result<bool> {
         if self.value_ownership(value)? != Ownership::Owned {
+            return Ok(false);
+        }
+        if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst) {
             return Ok(false);
         }
         Ok(!self.function.instructions.iter().any(|inst| {

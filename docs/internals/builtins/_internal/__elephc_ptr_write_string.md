@@ -1,16 +1,16 @@
 ---
-title: "__elephc_ptr_write_string() — internals"
+title: "__elephc_ptr_write_string() - internals"
 description: "Compiler internals for __elephc_ptr_write_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1055
+  order: 1080
 ---
 
-## `__elephc_ptr_write_string()` — internals
+## `__elephc_ptr_write_string()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/__elephc_ptr_write_string.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/__elephc_ptr_write_string.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

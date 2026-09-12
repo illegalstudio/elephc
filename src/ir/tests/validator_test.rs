@@ -53,6 +53,51 @@ fn return_type_mismatch_fails() {
     ));
 }
 
+/// A nominally matching integer is still not a captured reference-cell pointer.
+#[test]
+fn reference_return_rejects_a_payload_shaped_scalar() {
+    let mut function = Function::new("bad_reference".to_string(), IrType::I64, PhpType::Int);
+    function.flags.by_ref_return = true;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let value = builder.emit_const_i64(7);
+        builder.terminate(Terminator::Return { value: Some(value) });
+    }
+    assert!(matches!(
+        validate_function(&function),
+        Err(ValidationError::ReturnTypeMismatch { .. })
+    ));
+}
+
+/// Acquiring a returned cell must publish its pointer snapshot, not only a cleanup side effect.
+#[test]
+fn reference_acquisition_requires_a_pointer_result() {
+    use crate::ir::{Immediate, LocalKind, Op, Ownership};
+    let mut function = Function::new("missing_snapshot".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("lease".to_string()), IrType::I64, PhpType::Pointer(None), LocalKind::ReturnRefCell,
+        );
+        let value = builder.emit_const_i64(0);
+        builder.emit(
+            Op::AcquireRefCell, vec![value], Some(Immediate::LocalSlot(slot)),
+            IrType::Void, PhpType::Void, Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    assert!(matches!(
+        validate_function(&function),
+        Err(ValidationError::InstructionResultMissing(_))
+    ));
+}
+
 /// Branch argument types must match destination block parameter types.
 #[test]
 fn branch_argument_type_mismatch_fails() {

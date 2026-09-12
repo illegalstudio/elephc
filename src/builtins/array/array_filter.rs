@@ -1,61 +1,55 @@
 //! Purpose:
-//! Home of the PHP `array_filter` builtin: its single-source registry declaration and semantic target.
+//! Declares the AOT array_filter binding and contextual predicate validation.
 //!
 //! Called from:
-//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
+//! - The shared builtin registry's checker, EIR and callable consumers.
 //!
 //! Key details:
-//! - The PHP golden signature is `optional(&["array","callback","mode"], 1, &[null, 0])`.
-//!   The legacy CHECK arm required 2 or 3 arguments (`args.len() < 2 || args.len() > 3`),
-//!   so `min_args: 2` reproduces that enforcement in `check_arity`; the derived max of 3
-//!   from the optional signature already matches.
-//! - `check` validates the first argument is an indexed array, derives callback argument types
-//!   from the static mode value, and validates the callback signature. The return type
-//!   preserves the input array element type.
+//! - Omitted/null callbacks remove empty values; filtering preserves PHP keys and value types.
+//! - Result storage is boxed because indexed inputs may acquire holes or retain string keys.
 
 use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::semantics::{BuiltinArgumentLowering, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics};
 use crate::errors::CompileError;
+use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
     contract: "array_filter",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayFilter,
-    ),
+    lazy_check: true,
+    semantics: semantics(),
 }
 
-/// Returns the filtered array type for an `array_filter` call.
-///
-/// Validates the first argument is an indexed array, derives callback argument types
-/// from the optional mode argument, and validates the callback. Arity (2 or 3 args)
-/// is pre-validated by `check_arity`.
+/// Keeps direct, synthetic and callable filter results on the same boxed PHP-array ABI.
+const fn semantics() -> BuiltinSemantics {
+    let mut semantics = crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayFilter);
+    semantics.argument_lowering = BuiltinArgumentLowering::MaterializeDefaults;
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Filtering may retain either integer or string keys, regardless of the input's physical layout.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::php_array()
+}
+
+/// Validates array storage and callback context while leaving dynamic mode dispatch to the runtime.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let array = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if !matches!(array.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CompileError::new(cx.span, "array_filter() first argument must be array"));
+    }
     if let Some(mode) = cx.args.get(2) {
-        cx.checker.infer_type(mode, cx.env)?;
-    }
-    match arr_ty {
-        PhpType::Array(elem_ty) => {
-            let arr_ty = PhpType::Array(elem_ty.clone());
-            let callback_arg_types =
-                crate::types::checker::builtins::array_filter_callback_arg_types(
-                    &arr_ty,
-                    cx.args.get(2),
-                );
-            crate::types::checker::builtins::check_array_callback_builtin_call(
-                cx.checker,
-                &cx.args[1],
-                &callback_arg_types,
-                cx.span,
-                cx.env,
-                "array_filter() callback",
-            )?;
-            Ok(PhpType::Array(elem_ty))
+        let ty = cx.checker.infer_type(mode, cx.env)?;
+        if !matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool) {
+            return Err(CompileError::new(mode.span, "array_filter() third argument must be int"));
         }
-        _ => Err(CompileError::new(
-            cx.span,
-            "array_filter() first argument must be array",
-        )),
     }
+    if cx.args.get(1).is_none_or(|callback| matches!(callback.kind, ExprKind::Null)) {
+        return Ok(PhpType::php_array());
+    }
+    let types = crate::types::checker::builtins::array_filter_callback_arg_types(&array, cx.args.get(2));
+    super::predicate::check_callback(cx, &types)?;
+    Ok(PhpType::php_array())
 }

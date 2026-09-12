@@ -29,6 +29,7 @@ use super::{
 /// Frame slots required by one generic caller-owned string result wrapper.
 struct OwnedStringBoundaryLayout {
     param_offsets: Vec<Vec<usize>>,
+    hidden_collector_offset: Option<usize>,
     output_ptr_offset: usize,
     output_len_offset: usize,
     result_ptr_offset: usize,
@@ -76,6 +77,7 @@ pub(super) fn emit_owned_string_export(
     emitter.label_global(&exported);
     abi::emit_frame_prologue(emitter, layout.frame_size);
     emit_save_public_arguments(emitter, export, &layout);
+    boundary::emit_initialize_hidden_collector_owner(emitter, layout.hidden_collector_offset);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
         emitter,
         &format!("L_cdylib_{suffix}_stack_limit_ready"),
@@ -95,8 +97,16 @@ pub(super) fn emit_owned_string_export(
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
 
     emit_boundary_push(emitter, &labels.escaped, layout.handler_base);
-    boundary::emit_call_body(emitter, export, &layout.param_offsets, &internal);
+    boundary::emit_prepare_hidden_collector(emitter, layout.hidden_collector_offset);
+    boundary::emit_call_body(
+        emitter,
+        export,
+        &layout.param_offsets,
+        layout.hidden_collector_offset,
+        &internal,
+    );
     emit_save_result(emitter, &layout);
+    boundary::emit_release_hidden_collector(emitter, layout.hidden_collector_offset);
     emit_branch_on_allocation_sentinel(emitter, &layout, &labels.allocation_active);
     emit_copy_owned_result(emitter, &layout, &labels);
     emit_release_result_unless_borrowed(
@@ -143,8 +153,8 @@ pub(super) fn emit_owned_string_export(
 /// Computes stable frame slots for all flattened inputs, outputs, result state, and recovery data.
 fn owned_string_boundary_layout(export: &ExportedFunction) -> OwnedStringBoundaryLayout {
     let mut offset = 0usize;
-    let mut param_offsets = Vec::with_capacity(export.sig.params.len());
-    for (_, ty) in &export.sig.params {
+    let mut param_offsets = Vec::with_capacity(export.source_sig.params.len());
+    for (_, ty) in &export.source_sig.params {
         let words = if *ty == PhpType::Str { 2 } else { 1 };
         let mut offsets = Vec::with_capacity(words);
         for _ in 0..words {
@@ -153,6 +163,12 @@ fn owned_string_boundary_layout(export: &ExportedFunction) -> OwnedStringBoundar
         }
         param_offsets.push(offsets);
     }
+    let hidden_collector_offset = if boundary::internal_has_hidden_collector(export) {
+        offset += 8;
+        Some(offset)
+    } else {
+        None
+    };
     offset += 8;
     let output_ptr_offset = offset;
     offset += 8;
@@ -169,6 +185,7 @@ fn owned_string_boundary_layout(export: &ExportedFunction) -> OwnedStringBoundar
     let frame_size = boundary::align_16(handler_base + 16);
     OwnedStringBoundaryLayout {
         param_offsets,
+        hidden_collector_offset,
         output_ptr_offset,
         output_len_offset,
         result_ptr_offset,
@@ -360,7 +377,12 @@ fn emit_release_result_unless_borrowed(
 ) {
     let result = abi::int_result_reg(emitter);
     abi::load_at_offset(emitter, result, layout.result_ptr_offset);
-    for ((_, ty), offsets) in export.sig.params.iter().zip(&layout.param_offsets) {
+    for ((_, ty), offsets) in export
+        .source_sig
+        .params
+        .iter()
+        .zip(&layout.param_offsets)
+    {
         if *ty != PhpType::Str {
             continue;
         }

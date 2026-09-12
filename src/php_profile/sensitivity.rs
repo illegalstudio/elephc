@@ -259,12 +259,15 @@ pub fn scan(program: &[Stmt], web: bool) -> Vec<Sensitivity> {
                 SymbolKind::CallSite => Symbol::call_site(watched.symbol),
                 SymbolKind::Constant => Symbol::constant(watched.symbol),
                 // No syntactic form is profile-SENSITIVE: syntax either exists in a profile or
-                // does not, which is `php_profile::floor`'s question, not this module's. The
-                // arm stays exhaustive so a new form has to come here and say so explicitly.
+                // does not, which is `php_profile::floor`'s question, not this module's. A
+                // `__destruct` declaration is not profile-dependent either: it is an optimizer
+                // question that rides on the same traversal. The arm stays exhaustive so a new
+                // form has to come here and say so explicitly.
                 SymbolKind::PipeOperator
                 | SymbolKind::PropertyHooks
                 | SymbolKind::AsymmetricVisibility
-                | SymbolKind::TypedClassConst => Symbol::syntactic(watched.symbol_kind),
+                | SymbolKind::TypedClassConst
+                | SymbolKind::DestructorDeclaration => Symbol::syntactic(watched.symbol_kind),
             };
             detect::first_reference(program, symbol).map(|span| Sensitivity {
                 symbol: watched.symbol,

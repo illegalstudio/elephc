@@ -76,6 +76,8 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r8 + rcx + 8], rdx");                   // store the property high word on the clone
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property-tag descriptor pointer
     emitter.instruction("movzx r11, BYTE PTR [r9 + r10]");                      // load the compile-time ownership tag for this slot
+    emitter.instruction("cmp r11, 11");                                         // owned property references require PHP reference-aware cloning
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_reference_x86"); // share live aliases and separate singleton cells
     emitter.instruction("cmp r11, 1");                                          // does the slot hold an owned string payload?
     emitter.instruction("je __elephc_eval_value_object_clone_shallow_string_x86"); // string slots need an independent payload copy
     emitter.instruction("cmp r11, 4");                                          // does the slot hold a retained indexed-array payload?
@@ -87,6 +89,14 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 7");                                          // does the slot hold a retained boxed Mixed payload?
     emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained Mixed slots need an extra owner reference
     emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_next_x86"); // scalar slots are copied without ownership changes
+    emitter.label("__elephc_eval_value_object_clone_shallow_reference_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the property index across reference-cell cloning
+    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the property pointer offset
+    emitter.instruction("call __rt_reference_cell_clone");                      // retain shared aliases or copy singleton cell storage
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // restore the property pointer offset
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // restore the cloned object pointer
+    emitter.instruction("mov QWORD PTR [r8 + rcx], rax");                       // replace the copied slot with its correctly owned cell
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_next_x86"); // continue after reference-aware slot cloning
 
     emitter.label("__elephc_eval_value_object_clone_shallow_string_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across string persistence

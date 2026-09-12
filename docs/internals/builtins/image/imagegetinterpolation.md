@@ -1,11 +1,11 @@
 ---
-title: "imagegetinterpolation() — internals"
+title: "imagegetinterpolation() - internals"
 description: "Compiler internals for imagegetinterpolation(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 510
 ---
 
-## `imagegetinterpolation()` — internals
+## `imagegetinterpolation()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "cairo_save() — internals"
+title: "cairo_save() - internals"
 description: "Compiler internals for cairo_save(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 431
 ---
 
-## `cairo_save()` — internals
+## `cairo_save()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "_cairo_pack() — internals"
+title: "_cairo_pack() - internals"
 description: "Compiler internals for _cairo_pack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1060
+  order: 1085
 ---
 
-## `_cairo_pack()` — internals
+## `_cairo_pack()` - internals
 
 ## Where it lives
 

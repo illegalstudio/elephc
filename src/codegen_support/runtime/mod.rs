@@ -18,6 +18,9 @@ mod compare;
 mod curl;
 pub(crate) mod data;
 mod diagnostics;
+mod error_handlers;
+mod handler_state;
+mod warning_dispatch;
 mod emitters;
 mod bcmath;
 mod eval_bridge;
@@ -34,6 +37,8 @@ mod objects;
 mod pdo;
 mod pointers;
 mod resource_ids;
+mod resource_inventory;
+pub(crate) mod reference_cells;
 /// PHP's `round($num, $precision, $mode)` runtime implementation (`__rt_round_mode`).
 mod round_mode;
 /// Standard PHP library constants, functions, and classes.
@@ -59,6 +64,8 @@ pub(crate) fn curl_abi_slots() -> &'static [(&'static str, &'static str)] {
 /// `codegen::lower_inst::exceptions` that report their own synthesized errors without ever
 /// reaching `__rt_report_uncaught_exception`.
 pub(crate) use exceptions::UNCAUGHT_EXIT_STATUS;
+/// Invokes unary cleanup while accumulating destructor exceptions in the caller's frame slot.
+pub(crate) use exceptions::emit_guarded_cleanup_call;
 /// The PHP object-handle pool: binding a handle at allocation and reading one back.
 /// Every object-allocation site in codegen calls `emit_acquire_object_handle`.
 pub(crate) use objects::{

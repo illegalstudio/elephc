@@ -1,11 +1,11 @@
 ---
-title: "mysqli_options() — internals"
+title: "mysqli_options() - internals"
 description: "Compiler internals for mysqli_options(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 143
 ---
 
-## `mysqli_options()` — internals
+## `mysqli_options()` - internals
 
 ## Where it lives
 

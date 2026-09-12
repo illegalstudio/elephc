@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_source_rgb() — internals"
+title: "cairo_set_source_rgb() - internals"
 description: "Compiler internals for cairo_set_source_rgb(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 439
 ---
 
-## `cairo_set_source_rgb()` — internals
+## `cairo_set_source_rgb()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "cairo_fill() — internals"
+title: "cairo_fill() - internals"
 description: "Compiler internals for cairo_fill(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 403
 ---
 
-## `cairo_fill()` — internals
+## `cairo_fill()` - internals
 
 ## Where it lives
 

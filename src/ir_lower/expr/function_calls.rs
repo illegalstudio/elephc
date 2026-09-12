@@ -19,6 +19,12 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     let canonical = name.as_str();
+    if let Some(value) = lower_class_introspection(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_get_defined_vars(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
         return value;
     }
@@ -37,6 +43,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_dynamic_call_user_func_array(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = boxed_user_sort::lower_boxed_usort(ctx, canonical, args, expr) {
+        return value;
+    }
     // A mutating builtin whose by-reference array argument is a property, static property, or
     // container element is rewritten to `$tmp = <place>; f($tmp, ...); <place> = $tmp;` before
     // any builtin fast path runs, so the rewritten call reaches the local-variable
@@ -45,9 +54,6 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
-        return value;
-    }
-    if let Some(value) = lower_static_array_reduce(ctx, canonical, args, expr) {
         return value;
     }
     if let Some(value) = lower_static_array_walk(ctx, canonical, args, expr) {
@@ -80,7 +86,46 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
-    let operands = if is_extern || is_user_function {
+    // A by-reference-returning callee hands back a lease that has to survive this caller's own
+    // cleanup, so its staging is published before the arguments are evaluated. Only the direct
+    // user-call branch below transfers a cell; an extern, builtin or eval-dispatched call with
+    // the same name returns an ordinary value and must not publish a record nothing retires.
+    let reference_staging = if is_user_function && !is_extern {
+        begin_reference_return_call(ctx, sig.as_ref(), expr.span)
+    } else {
+        None
+    };
+    // A fresh owned result is owned by nothing the unwind chain can see while the argument
+    // roots, the evaluation intermediates and their PHP destructors retire, so its staging is
+    // published here too, OUTSIDE every root those steps publish. `call_return_type` reads the
+    // signature alone, so the type declared here is the exact type the call is emitted with.
+    let user_return_alias = is_user_function.then(|| {
+        ctx.return_alias_summaries
+            .function(canonical)
+            .cloned()
+            .unwrap_or(ReturnArgAlias::Unknown)
+    });
+    let result_staging = match (is_user_function && !is_extern, user_return_alias.as_ref()) {
+        (true, Some(return_alias)) => prepublish_user_call_result(
+            ctx,
+            sig.as_ref(),
+            return_alias,
+            &call_return_type(ctx, canonical, &[]),
+            expr.span,
+        ),
+        _ => None,
+    };
+    begin_call_argument_evaluation(ctx);
+    let mut operands = if is_user_function {
+        // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
+        // runtime keys and bind each boxed cell before entering the direct function ABI, just
+        // like the same fixed signature reached through a builtin descriptor surface.
+        sig.as_ref()
+            .and_then(|signature| {
+                dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, canonical)
+            })
+            .unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args))
+    } else if is_extern {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
@@ -95,6 +140,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         call_return_type(ctx, canonical, &operands)
     };
     if is_extern {
+        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
         let data = ctx.intern_function_name(canonical);
         let call = ctx.emit_value(
             Op::ExternCall,
@@ -114,9 +160,16 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             &ReturnArgAlias::Unknown,
             expr.span,
         );
+        retire_call_argument_intermediates(ctx, &evaluation_intermediates);
         return call;
     }
     if is_user_function {
+        let return_alias = user_return_alias
+            .expect("a user function call resolved its return-alias summary before its arguments");
+        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+        let roots = root_user_call_operands(
+            ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
+        );
         let data = ctx.intern_function_name(canonical);
         let call = ctx.emit_value(
             Op::Call,
@@ -129,28 +182,25 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         // Plain user calls release owned argument temporaries the same way method and
         // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
         // that returns its own array argument typed `iterable`) from being freed.
-        let return_alias = ctx
-            .return_alias_summaries
-            .function(canonical)
-            .cloned()
-            .unwrap_or(ReturnArgAlias::Unknown);
-        release_owned_call_arg_temporaries_with_signature(
-            ctx,
-            &operands,
-            Some(call.value),
-            &return_alias,
-            sig.as_ref(),
-            expr.span,
+        let call = finish_reference_return_call(
+            ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
         );
-        return call;
+        stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+        release_owned_call_arg_temporaries_with_roots(
+            ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), &roots, expr.span,
+        );
+        retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+        let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
+        return finish_reference_return_value(ctx, call, reference_staging, expr.span);
     }
     if ctx.has_eval_barrier()
         && plain_positional_call_args(args)
         && canonical_builtin_function_name(canonical).is_none()
     {
+        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
         let dynamic_name = php_symbol_key(canonical.trim_start_matches('\\'));
         let data = ctx.intern_function_name(&dynamic_name);
-        return ctx.emit_value(
+        let call = ctx.emit_value(
             Op::EvalFunctionCall,
             operands,
             Some(Immediate::Data(data)),
@@ -158,9 +208,14 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             Op::EvalFunctionCall.default_effects(),
             Some(expr.span),
         );
+        retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+        return call;
     }
     let eval_literal = eval_literal_fragment(canonical, args);
-    emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    let call = emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal);
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    call
 }
 
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
@@ -174,6 +229,8 @@ pub(super) fn emit_builtin_call_value(
 ) -> LoweredValue {
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
+            let mut operands = operands;
+            let roots = root_non_aliasing_callback_operands(ctx, def, &mut operands, &php_type, span);
             let lowered = crate::builtins::semantics::lower_registry_call(
                 ctx,
                 def,
@@ -190,27 +247,82 @@ pub(super) fn emit_builtin_call_value(
                     error,
                 )
             });
-            let call = LoweredValue {
+            let raw_call = LoweredValue {
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
             };
-            let return_alias = match def.spec.semantics.result_ownership {
-                crate::builtins::semantics::BuiltinResultOwnership::NonHeap
-                | crate::builtins::semantics::BuiltinResultOwnership::Fresh
-                | crate::builtins::semantics::BuiltinResultOwnership::Independent => {
-                    ReturnArgAlias::None
-                }
-                crate::builtins::semantics::BuiltinResultOwnership::Aliases(indexes) => {
-                    ReturnArgAlias::Parameters(indexes.iter().copied().collect())
-                }
-                crate::builtins::semantics::BuiltinResultOwnership::Borrowed
-                | crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments => {
-                    ReturnArgAlias::Unknown
+            // `substr()` can return an interior view into its source string. When source-order
+            // evaluation transferred a pinned temporary into the final call operand, letting
+            // that pin flow through the result would either leak its base allocation forever
+            // or free an interior pointer. Persist the view before retiring the base owner so
+            // the result has an ordinary independent string lifetime.
+            let stabilizes_evaluation_pin = matches!(
+                def.spec.semantics.lowering,
+                crate::builtins::semantics::BuiltinLowering::Runtime(
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr)
+                        | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                            target: crate::ir::RuntimeFnId::Substr,
+                            ..
+                        },
+                ),
+            ) && matches!(
+                def.spec.semantics.result_ownership,
+                crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments,
+            ) && ctx.builder.value_php_type(raw_call.value).codegen_repr() == PhpType::Str
+                && operands.first().is_some_and(|operand| {
+                    value_is_call_argument_evaluation_pin(ctx, *operand)
+                });
+            let call = if stabilizes_evaluation_pin {
+                ctx.emit_owned_value(
+                    Op::StrPersist,
+                    vec![raw_call.value],
+                    None,
+                    PhpType::Str,
+                    Op::StrPersist.default_effects(),
+                    Some(span),
+                )
+            } else {
+                raw_call
+            };
+            // Consumers make lifetime decisions during lowering, before final
+            // ownership refinement. In particular, Fresh strings already own
+            // heap storage and must not be persisted again as concat scratch.
+            if matches!(
+                def.spec.semantics.result_ownership,
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh,
+            ) && Ownership::php_type_needs_lifetime_tracking(
+                &ctx.builder.value_php_type(call.value),
+            ) {
+                ctx.builder.set_value_ownership(call.value, Ownership::Owned);
+            }
+            let return_alias = if stabilizes_evaluation_pin {
+                ReturnArgAlias::None
+            } else {
+                match def.spec.semantics.result_ownership {
+                    crate::builtins::semantics::BuiltinResultOwnership::NonHeap
+                    | crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                    | crate::builtins::semantics::BuiltinResultOwnership::Independent => {
+                        ReturnArgAlias::None
+                    }
+                    crate::builtins::semantics::BuiltinResultOwnership::Aliases(indexes) => {
+                        ReturnArgAlias::Parameters(indexes.iter().copied().collect())
+                    }
+                    crate::builtins::semantics::BuiltinResultOwnership::Borrowed
+                    | crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments => {
+                        ReturnArgAlias::Unknown
+                    }
                 }
             };
+            for (_, slot) in roots.iter().rev() {
+                retire_owned_call_operand(ctx, *slot, span);
+            }
+            let unrooted = operands.iter().enumerate()
+                .filter(|(index, _)| !roots.iter().any(|(root, _)| root == index))
+                .filter(|(index, _)| !builtin_consumes_mutating_ref_operand(def, *index))
+                .map(|(_, value)| *value).collect::<Vec<_>>();
             release_owned_call_arg_temporaries(
                 ctx,
-                &operands,
+                &unrooted,
                 Some(call.value),
                 &return_alias,
                 span,
@@ -218,6 +330,18 @@ pub(super) fn emit_builtin_call_value(
             return call;
         }
     }
+    let is_eval = php_symbol_key(name.trim_start_matches('\\')) == "eval";
+    let mut operands = operands;
+    let eval_source_owner = if is_eval {
+        operands.first().copied().and_then(|code| {
+            let source = LoweredValue { value: code, ir_type: ctx.builder.value_type(code) };
+            let (source, owner) = root_owned_call_operand(ctx, source, span);
+            operands[0] = source.value;
+            owner
+        })
+    } else {
+        None
+    };
     let (op, immediate, effects) = if let Some(fragment) = eval_literal {
         (
             Op::EvalLiteralCall,
@@ -251,18 +375,19 @@ pub(super) fn emit_builtin_call_value(
         effects,
         Some(span),
     );
-    release_owned_call_arg_temporaries(
-        ctx,
-        &operands,
-        Some(call.value),
-        &ReturnArgAlias::Unknown,
-        span,
-    );
+    if let Some(slot) = eval_source_owner {
+        retire_owned_call_operand(ctx, slot, span);
+    } else {
+        // Eval returns a boxed PHP value, never ownership of the code buffer
+        // passed to the parser. Even `return $source` reads its scope cell.
+        let return_alias = if is_eval { ReturnArgAlias::None } else { ReturnArgAlias::Unknown };
+        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), &return_alias, span);
+    }
     let eval_needs_barrier = match eval_literal {
         Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
         None => true,
     };
-    if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
+    if is_eval {
         ctx.mark_eval_executed();
         if eval_needs_barrier {
             ctx.apply_eval_barrier();
@@ -273,6 +398,33 @@ pub(super) fn emit_builtin_call_value(
         }
     }
     call
+}
+
+/// Returns whether a typed builtin backend consumes one by-reference operand owner.
+///
+/// `array_multisort()` is unusual among the mutating builtins: its backend separates and
+/// republishes two receivers, and a concrete array read from widened Mixed local storage owns a
+/// detached payload lease. The backend consumes that lease during COW/storeback, including the
+/// explicit duplicate lease retirement when both arguments name the same place. Ordinary
+/// post-call cleanup must therefore leave those two owners to the backend while retaining the
+/// normal cleanup contract for every other builtin operand.
+fn builtin_consumes_mutating_ref_operand(
+    def: &crate::builtins::registry::BuiltinDef,
+    parameter_index: usize,
+) -> bool {
+    if !def.ref_params.get(parameter_index).copied().unwrap_or(false) {
+        return false;
+    }
+    matches!(
+        def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayMultisort)
+                | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                    target: crate::ir::RuntimeFnId::ArrayMultisort,
+                    ..
+                },
+        )
+    )
 }
 
 /// Resolves a migrated registry builtin's result type from the same descriptor as the checker.

@@ -18,15 +18,8 @@ use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::interpreter::EvalOutcome;
 use crate::scope::{ScopeCellOwnership, ScopeEntry};
-#[cfg(not(test))]
-use crate::value::RuntimeCell;
 use crate::value::RuntimeCellHandle;
 use std::slice;
-
-#[cfg(not(test))]
-unsafe extern "C" {
-    fn __elephc_eval_value_release(value: *mut RuntimeCell);
-}
 
 /// Converts an ABI name byte slice into an owned Rust string.
 pub(crate) fn abi_name_to_string(name_ptr: *const u8, name_len: u64) -> Result<String, EvalStatus> {
@@ -66,22 +59,30 @@ pub(crate) fn scope_entry_abi_flags(entry: ScopeEntry) -> u32 {
     abi_flags
 }
 
-/// Releases every owned cell currently held by a scope.
-pub(crate) fn release_owned_scope_cells(scope: &mut ElephcEvalScope) {
-    for cell in scope.drain_owned_cells() {
-        release_scope_cell(cell);
+/// Releases every scope-owned cell and returns an accumulated owned destructor exception.
+pub(crate) fn release_owned_scope_cells(scope: &mut ElephcEvalScope) -> Option<RuntimeCellHandle> {
+    let cells = scope.drain_owned_cells();
+    #[cfg(not(test))]
+    {
+        crate::runtime_hooks::release::release_native_cells(cells, None)
+    }
+    #[cfg(test)]
+    {
+        let _ = cells;
+        None
     }
 }
 
-/// Releases one scope-owned runtime cell through the generated runtime wrapper.
-pub(crate) fn release_scope_cell(cell: RuntimeCellHandle) {
+/// Releases one scope-owned cell without propagating a native exception through Rust.
+pub(crate) fn release_scope_cell(cell: RuntimeCellHandle) -> Option<RuntimeCellHandle> {
     #[cfg(not(test))]
-    unsafe {
-        __elephc_eval_value_release(cell.as_ptr());
+    {
+        crate::runtime_hooks::release::release_native_cells([cell], None)
     }
     #[cfg(test)]
     {
         let _ = cell;
+        None
     }
 }
 

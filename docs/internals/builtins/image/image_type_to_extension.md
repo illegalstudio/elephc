@@ -1,11 +1,11 @@
 ---
-title: "image_type_to_extension() — internals"
+title: "image_type_to_extension() - internals"
 description: "Compiler internals for image_type_to_extension(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 453
 ---
 
-## `image_type_to_extension()` — internals
+## `image_type_to_extension()` - internals
 
 ## Where it lives
 

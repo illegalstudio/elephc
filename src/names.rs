@@ -203,6 +203,87 @@ pub fn canonical_name_for_decl(namespace: Option<&str>, local_name: &str) -> Str
     local_name.to_string()
 }
 
+/// The `#`-separated tag that marks a compiler-generated frame or parser temporary.
+///
+/// Kept apart from [`GENERATED_LOCAL_MARKER`] so the predicate below can recognise the tag in
+/// any `#` segment, not only the last one.
+const GENERATED_LOCAL_TAG: &str = "gen";
+
+/// Suffix appended to every local name the compiler synthesizes for its own bookkeeping.
+///
+/// A PHP variable name is `[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*`, so `#` cannot appear in
+/// any name a program can write: the marker is unforgeable from source. That is the whole point.
+/// A prefix convention such as `__elephc_` is NOT unforgeable, and hiding on it would make a
+/// perfectly legal user variable such as `$__elephc_func_arg_value` disappear from
+/// `get_defined_vars()` and from eval scope synchronization.
+///
+/// The same `#` discipline already backs the `name#cow` parameter shadows that
+/// `LoweringContext::privatize_container_param` mints, so a generated local that is later
+/// privatized reads `stem#gen#cow`. [`is_generated_local_name`] therefore looks for the tag in
+/// every `#` segment rather than only at the end.
+///
+/// Marking the NAME leaves `LocalKind` alone: a generated temporary stays a `PhpLocal` and keeps
+/// exactly the ownership, initialization and store behaviour it has today.
+pub const GENERATED_LOCAL_MARKER: &str = "#gen";
+
+/// Returns the storage name of a compiler-generated frame or parser temporary.
+pub fn generated_local_name(stem: &str) -> String {
+    format!("{stem}{GENERATED_LOCAL_MARKER}")
+}
+
+/// Returns whether a local's storage name was synthesized by the compiler.
+///
+/// This is the ONE predicate every PHP-visible variable enumeration consults, so AOT
+/// `get_defined_vars()` and eval scope flush/reload cannot drift apart about which locals exist.
+pub fn is_generated_local_name(name: &str) -> bool {
+    name.split('#')
+        .skip(1)
+        .any(|segment| segment == GENERATED_LOCAL_TAG)
+}
+
+/// Storage name of the hidden late-static-binding argument every static method receives.
+///
+/// The slot holds the id of the class the call was made THROUGH, which is what `static::`,
+/// `get_called_class()` and a late-static callback read. It is an ABI slot, not a PHP variable:
+/// `get_defined_vars()` inside a static method must not report it, and an eval fragment must not
+/// be able to name it and overwrite the frame's late-static-binding state. Marking the name is
+/// enough for both, because the one shared predicate above is what every PHP-visible enumeration
+/// consults; the parameter keeps its position, its `Int` type and its calling convention.
+///
+/// Spelled as a literal because a `const` cannot call [`generated_local_name`]. The unit tests at
+/// the bottom of this module pin the two spellings in step, and this is the single definition
+/// every EIR producer and every backend exact-name lookup shares, so they cannot drift apart.
+pub const CALLED_CLASS_ID_LOCAL: &str = "__elephc_called_class_id#gen";
+
+/// Storage name of the eval scope handle threaded into a scope-aware AOT eval fragment.
+///
+/// A literal `eval()` whose fragment writes a caller variable is lowered as its own EIR function
+/// that receives the caller's scope handle by value and reads and writes selected names through
+/// it. The handle is a pointer-sized bookkeeping argument, so it carries the marker and stays out
+/// of `get_defined_vars()` inside the fragment.
+///
+/// The marker also removes an accidental collision: the unmarked spelling was byte-identical to
+/// the `LocalKind::EvalScope` barrier local that `crate::ir_lower::context` declares for a
+/// function that CONTAINS an eval. Those are two different things with two different kinds, and
+/// only this one is a by-value parameter.
+pub const EVAL_AOT_SCOPE_LOCAL: &str = "__eir_eval_scope#gen";
+
+/// Readable stem shared by every synthetic place temporary minted during lowering.
+///
+/// Kept public so the lowering that recognises such a temporary by prefix and the lowering that
+/// mints one agree on a single spelling.
+pub const SYNTHETIC_PLACE_LOCAL_STEM: &str = "__eir_place";
+
+/// Returns the storage name of the `index`-th synthetic place temporary.
+///
+/// A place rewrite desugars `f($obj->items, ...)` into `$tmp = <place>; f($tmp, ...);
+/// <place> = $tmp;`, where `$tmp` is an ordinary `LocalKind::PhpLocal` so the store retains and
+/// function-exit cleanup releases. Only the NAME is marked: the ownership, initialization and
+/// store behaviour of the slot are exactly those of the user-written assignment it stands in for.
+pub fn synthetic_place_local_name(index: usize) -> String {
+    generated_local_name(&format!("{SYNTHETIC_PLACE_LOCAL_STEM}{index}"))
+}
+
 /// Returns the lowercase ASCII key used for PHP symbol lookup.
 ///
 /// PHP symbol lookups are case-insensitive; this produces the normalized key
@@ -667,4 +748,77 @@ pub fn property_hook_set_method(property_name: &str) -> String {
 /// enum case lookup and the enum case table.
 pub fn enum_case_symbol(enum_name: &str, case_name: &str) -> String {
     join_php_symbol("_enum_case", &[enum_name, case_name])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        generated_local_name, is_generated_local_name, synthetic_place_local_name,
+        CALLED_CLASS_ID_LOCAL, EVAL_AOT_SCOPE_LOCAL, GENERATED_LOCAL_MARKER,
+        SYNTHETIC_PLACE_LOCAL_STEM,
+    };
+
+    /// Only names carrying the unforgeable marker segment count as compiler-generated.
+    #[test]
+    fn generated_local_marker_is_not_forgeable_from_php_source() {
+        assert!(is_generated_local_name(&generated_local_name("__elephc_func_args")));
+        assert!(is_generated_local_name(&generated_local_name("__elephc_foreach_3_9")));
+        // A PHP variable name cannot contain `#`, so every legal source spelling stays visible.
+        for visible in [
+            "__elephc_func_args",
+            "__elephc_func_arg_value",
+            "__elephc_napp_1_2_0",
+            "gen",
+            "items",
+        ] {
+            assert!(!is_generated_local_name(visible), "{visible}");
+        }
+    }
+
+    /// A privatized generated temporary keeps its marker behind the `#cow` shadow suffix.
+    #[test]
+    fn generated_local_marker_survives_the_cow_parameter_shadow() {
+        let shadow = format!("{}#cow", generated_local_name("__elephc_func_argc"));
+        assert!(is_generated_local_name(&shadow), "{shadow}");
+        assert!(!is_generated_local_name("items#cow"));
+        assert!(GENERATED_LOCAL_MARKER.starts_with('#'));
+    }
+
+    /// Every centrally spelled generated local carries the marker and its readable stem.
+    ///
+    /// The two constants are literals because a `const` cannot call `generated_local_name`, so
+    /// this test is what keeps the hand-written spelling and the helper from drifting apart.
+    #[test]
+    fn centrally_spelled_generated_locals_match_the_helper() {
+        assert_eq!(
+            CALLED_CLASS_ID_LOCAL,
+            generated_local_name("__elephc_called_class_id")
+        );
+        assert_eq!(EVAL_AOT_SCOPE_LOCAL, generated_local_name("__eir_eval_scope"));
+        for name in [CALLED_CLASS_ID_LOCAL, EVAL_AOT_SCOPE_LOCAL] {
+            assert!(is_generated_local_name(name), "{name}");
+        }
+        // The unmarked spellings are what PHP source could write, and they stay visible.
+        assert!(!is_generated_local_name("__elephc_called_class_id"));
+        assert!(!is_generated_local_name("__eir_eval_scope"));
+    }
+
+    /// A synthetic place temporary is marked hidden while keeping its prefix recognisable.
+    ///
+    /// `crate::ir_lower::expr` still classifies these temporaries by their readable stem, so the
+    /// marker has to be a SUFFIX: a name that lost the prefix would silently re-enable the
+    /// `array_splice()` receiver widening the prefix check exists to refuse.
+    #[test]
+    fn synthetic_place_locals_are_marked_and_keep_their_prefix() {
+        for index in [0usize, 1, 42] {
+            let name = synthetic_place_local_name(index);
+            assert!(is_generated_local_name(&name), "{name}");
+            assert!(name.starts_with(SYNTHETIC_PLACE_LOCAL_STEM), "{name}");
+            assert_eq!(name, format!("__eir_place{index}{GENERATED_LOCAL_MARKER}"));
+        }
+        // Distinct counters keep distinct storage: the marker is not part of the identity.
+        assert_ne!(synthetic_place_local_name(1), synthetic_place_local_name(2));
+        // A user variable that merely spells the stem is not a generated temporary.
+        assert!(!is_generated_local_name(SYNTHETIC_PLACE_LOCAL_STEM));
+    }
 }

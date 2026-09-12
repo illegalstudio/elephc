@@ -1,0 +1,365 @@
+//! Purpose:
+//! End-to-end AOT coverage for Core class-introspection functions shared with eval.
+//!
+//! Called from:
+//! - `cargo test` through Rust's integration test harness.
+//!
+//! Key details:
+//! - Fixtures cover late static binding, object and class-name method lookup, property
+//!   visibility, inherited defaults, named and spread arguments, and callable forms.
+
+use crate::support::*;
+use std::time::Instant;
+
+/// Verifies `get_called_class()` follows late static binding for instance and static calls.
+#[test]
+fn test_core_get_called_class_aot_late_static_binding() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreCalledBase {
+            public static function who(): string { return GeT_CaLlEd_ClAsS(); }
+            public function instanceWho(): string { return get_called_class(); }
+        }
+        class CoreCalledChild extends CoreCalledBase {}
+        echo CoreCalledChild::who(), ":", (new CoreCalledChild())->instanceWho(), ":", CoreCalledBase::who();
+        "#,
+    );
+    assert_eq!(out, "CoreCalledChild:CoreCalledChild:CoreCalledBase");
+}
+
+/// Verifies `get_class_methods()` accepts literal names, named arguments, and typed objects.
+#[test]
+fn test_core_get_class_methods_aot_visibility_and_inputs() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreMethodsBase {
+            public function alpha(): void {}
+            protected function beta(): void {}
+            private function gamma(): void {}
+            public static function delta(): void {}
+            public static function inside(): string {
+                $methods = get_class_methods(object_or_class: CoreMethodsBase::class);
+                return (in_array("alpha", $methods) ? "A" : "a")
+                    . (in_array("beta", $methods) ? "B" : "b")
+                    . (in_array("gamma", $methods) ? "G" : "g");
+            }
+        }
+        $outside = GET_CLASS_METHODS(new CoreMethodsBase());
+        echo (in_array("alpha", $outside) ? "A" : "a"),
+             (in_array("beta", $outside) ? "B" : "b"),
+             (in_array("gamma", $outside) ? "G" : "g"),
+             (in_array("delta", $outside) ? "D" : "d"), ":", CoreMethodsBase::inside();
+        "#,
+    );
+    assert_eq!(out, "AbgD:ABG");
+}
+
+/// Verifies `get_class_vars()` materializes inherited and scoped defaults as fresh Mixed values.
+#[test]
+fn test_core_get_class_vars_aot_defaults_and_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreVarsBase {
+            public int $plain = 4;
+            public array $items = [1, 2];
+            protected string $protected = "p";
+            private bool $private = true;
+            public static string $static = "s";
+            public static function inside(): string {
+                $vars = get_class_vars(class: CoreVarsBase::class);
+                return $vars["plain"] . $vars["items"][1] . $vars["protected"]
+                    . ($vars["private"] ? "T" : "F") . $vars["static"];
+            }
+        }
+        $outside = GET_CLASS_VARS("CoreVarsBase");
+        echo $outside["plain"], $outside["items"][0], $outside["static"], ":",
+             isset($outside["protected"]) ? "x" : "-", isset($outside["private"]) ? "x" : "-",
+             ":", CoreVarsBase::inside();
+        "#,
+    );
+    assert_eq!(out, "41s:--:42pTs");
+}
+
+/// Verifies a boxed class-default extract does not erase later object argument typing.
+#[test]
+fn test_core_class_vars_mixed_extract_preserves_methods_object_type() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreMixedVarsSource {
+            public int $x = 1;
+            public int $bar = 7;
+        }
+        class CoreMixedMethodsTarget {
+            public function m(): void {}
+        }
+        function core_mixed_methods_factory(): CoreMixedMethodsTarget {
+            return new CoreMixedMethodsTarget();
+        }
+
+        $a = get_class_vars("CoreMixedVarsSource")["x"];
+        echo $a, ":", implode(",", get_class_methods(new CoreMixedMethodsTarget())), "|";
+
+        $obj = new CoreMixedMethodsTarget();
+        $x = get_class_vars(CoreMixedVarsSource::class)["bar"];
+        echo $x, ":", implode(",", get_class_methods($obj));
+
+        $factoryValue = get_class_vars(CoreMixedVarsSource::class)["x"];
+        echo "|", $factoryValue, ":", implode(",", get_class_methods(core_mixed_methods_factory()));
+        "#,
+    );
+    assert_eq!(out, "1:m|7:m|1:m");
+}
+
+/// Boxed objects and strings work through direct, CUF, FCC, and spread class-method calls.
+#[test]
+fn test_core_get_class_methods_accepts_boxed_arguments() {
+    let source = r#"<?php
+class BoxedMethodsTarget { public function method(): void {} }
+$source = 'return new BoxedMethodsTarget();' . ' // ' . $argc;
+$object = eval($source);
+echo implode(',', get_class_methods($object)), '|';
+echo implode(',', call_user_func('get_class_methods', $object)), '|';
+$callback = get_class_methods(...);
+echo implode(',', $callback($object)), '|';
+$source = 'return "BoxedMethodsTarget";' . ' // ' . $argc;
+$name = eval($source);
+echo implode(',', get_class_methods(...[$name])), '|', get_class($object);
+"#;
+    let started = Instant::now();
+    eprintln!("boxed get_class_methods: compiling and running eval fixture");
+    let output = compile_and_run(source);
+    eprintln!("boxed get_class_methods: fixture completed in {:?}", started.elapsed());
+    assert_eq!(
+        output,
+        "method|method|method|method|BoxedMethodsTarget",
+    );
+}
+
+/// Boxed non-object/non-string values throw catchable TypeErrors without scalar coercion.
+#[test]
+fn test_core_get_class_methods_rejects_invalid_boxed_arguments() {
+    let source = r#"<?php
+function inspectBoxedMethods(string $source): void {
+    $value = eval($source);
+    try {
+        get_class_methods($value);
+        echo "bad";
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+inspectBoxedMethods('return 7;');
+inspectBoxedMethods('return true;');
+inspectBoxedMethods('return 1.5;');
+inspectBoxedMethods('return null;');
+inspectBoxedMethods('return [];');
+"#;
+    let prefix = "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, ";
+    let expected = ["int", "bool", "float", "null", "array"].into_iter()
+        .map(|kind| format!("{prefix}{kind} given\n")).collect::<String>();
+    assert_eq!(compile_and_run(source), expected);
+}
+
+/// Verifies runtime class-name strings and concrete object subclasses select AOT metadata.
+#[test]
+fn test_core_class_introspection_aot_dynamic_inputs() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreDynamicBase {
+            public int $base = 4;
+            public function baseMethod(): void {}
+        }
+        class CoreDynamicChild extends CoreDynamicBase {
+            public string $child = "c";
+            public function childMethod(): void {}
+        }
+        trait CoreDynamicTrait {
+            public function traitMethod(): void {}
+            protected function hiddenTraitMethod(): void {}
+        }
+        function core_dynamic_name(): string { return "CoreDynamicChild"; }
+        function core_dynamic_object(): CoreDynamicBase { return new CoreDynamicChild(); }
+
+        $name = core_dynamic_name();
+        $vars = get_class_vars($name);
+        $methods = get_class_methods(core_dynamic_object());
+        $traitName = "CoreDynamicTrait";
+        $traitMethods = get_class_methods($traitName);
+        $traitVars = get_class_vars($traitName);
+        echo $vars["base"], $vars["child"], ":",
+             in_array("baseMethod", $methods) ? "B" : "b",
+             in_array("childMethod", $methods) ? "C" : "c", ":",
+             in_array("traitMethod", $traitMethods) ? "T" : "t",
+             in_array("hiddenTraitMethod", $traitMethods) ? "H" : "h",
+             count($traitVars);
+        "#,
+    );
+    assert_eq!(out, "4c:BC:Th0");
+}
+
+/// Verifies unknown runtime class names throw catchable PHP-compatible TypeErrors.
+#[test]
+fn test_core_class_introspection_aot_dynamic_invalid_names() {
+    let output = compile_and_run_capture(
+        r#"<?php
+        $missing = "CoreMissingClass";
+        try {
+            get_class_vars($missing);
+        } catch (TypeError $error) {
+            echo $error->getMessage(), "\n";
+        }
+        try {
+            get_class_methods($missing);
+        } catch (TypeError $error) {
+            echo $error->getMessage();
+        }
+        "#,
+    );
+    assert_eq!(
+        (output.success, output.stdout.as_str(), output.stderr.as_str()),
+        (true, "get_class_vars(): Argument #1 ($class) must be a valid class name, CoreMissingClass given\n\
+get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, string given", "")
+    );
+}
+
+/// Verifies `get_class_vars()` uses AOT metadata through CUF, CUFA, and an FCC.
+#[test]
+fn test_core_get_class_vars_aot_callable_forms() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreCallableVars {
+            public int $plain = 7;
+            public array $items = [2, 4];
+            protected string $hidden = "no";
+        }
+        $fromCuf = call_user_func("get_class_vars", "CoreCallableVars");
+        $fromSpread = call_user_func("get_class_vars", ...["CoreCallableVars"]);
+        $fromCufa = call_user_func_array("get_class_vars", ["class" => "CoreCallableVars"]);
+        $callback = get_class_vars(...);
+        $fromFcc = $callback("CoreCallableVars");
+        echo $fromCuf["plain"], $fromCuf["items"][1], ":",
+             $fromSpread["plain"], $fromSpread["items"][0], ":",
+             $fromCufa["plain"], $fromCufa["items"][0], ":",
+             $fromFcc["plain"], $fromFcc["items"][1], ":",
+             isset($fromFcc["hidden"]) ? "bad" : "visible";
+        "#,
+    );
+    assert_eq!(out, "74:72:72:74:visible");
+}
+
+/// Verifies direct literal spreads specialize class variables and object method inventories.
+#[test]
+fn test_core_class_introspection_aot_direct_literal_spreads() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreDirectSpread {
+            public int $value = 9;
+            public function visible(): void {}
+            private function hidden(): void {}
+        }
+
+        $vars = get_class_vars(...["CoreDirectSpread"]);
+        $methods = get_class_methods(...[new CoreDirectSpread()]);
+        echo $vars["value"], ":", implode(",", $methods);
+        "#,
+    );
+    assert_eq!(out, "9:visible");
+}
+
+/// Verifies non-literal spreads stay on the AOT metadata path without a backend fallback.
+#[test]
+fn test_core_get_class_methods_aot_dynamic_spreads() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreDynamicSpread {
+            public function visible(): void {}
+        }
+        function core_dynamic_spread_name(): string { return "CoreDynamicSpread"; }
+
+        $objectArgs = [new CoreDynamicSpread()];
+        $nameArgs = [core_dynamic_spread_name()];
+        echo implode(",", get_class_methods(...$objectArgs)), ":",
+             implode(",", get_class_methods(...$nameArgs));
+        "#,
+    );
+    assert_eq!(out, "visible:visible");
+}
+
+/// Verifies direct spread and callable forms accept both class names and live objects.
+#[test]
+fn test_core_get_class_methods_aot_callable_forms() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        class CoreCallableMethods {
+            public function alpha(): void {}
+            public static function beta(): void {}
+            private function hidden(): void {}
+        }
+        $name = "CoreCallableMethods";
+        $direct = get_class_methods("CoreCallableMethods");
+        $fromLiteralCuf = call_user_func("get_class_methods", "CoreCallableMethods");
+        $fromSpreadCuf = call_user_func("get_class_methods", ...["CoreCallableMethods"]);
+        $fromDynamicCuf = call_user_func("get_class_methods", $name);
+        $callback = get_class_methods(...);
+        $fromFcc = $callback($name);
+        $fromObjectCuf = call_user_func("get_class_methods", new CoreCallableMethods());
+        $fromObjectCufa = call_user_func_array(
+            "get_class_methods",
+            [new CoreCallableMethods()]
+        );
+        $fromObjectFcc = $callback(new CoreCallableMethods());
+        $fromDirectSpread = get_class_methods(...["CoreCallableMethods"]);
+        echo implode(",", $direct), ":", implode(",", $fromLiteralCuf), ":",
+             implode(",", $fromSpreadCuf), ":", implode(",", $fromDynamicCuf), ":",
+             implode(",", $fromFcc), ":", implode(",", $fromObjectCuf), ":",
+             implode(",", $fromObjectCufa), ":", implode(",", $fromObjectFcc), ":",
+             implode(",", $fromDirectSpread), "\n";
+        var_export([$direct, $fromLiteralCuf]);
+        "#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta\narray (\n  0 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n  1 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n)"
+    );
+    assert_eq!(out.stderr, "");
+}
+
+/// Typed base-class parameters must retain runtime subclass discovery after candidate pruning.
+#[test]
+fn test_core_get_class_methods_typed_object_keeps_subclass_dispatch() {
+    let out = compile_and_run(r#"<?php
+class BoundMethodsBase { public function baseMethod(): void {} }
+class BoundMethodsChild extends BoundMethodsBase { public function childMethod(): void {} }
+class BoundMethodsOther { public function unrelated(): void {} }
+function boundMethods(BoundMethodsBase $value): string {
+    return implode(',', get_class_methods($value));
+}
+echo boundMethods(new BoundMethodsBase()), '|', boundMethods(new BoundMethodsChild());
+"#);
+    assert_eq!(out, "baseMethod|childMethod,baseMethod");
+}
+
+/// Verifies literal array-map inputs keep classes reached only through introspection callbacks.
+#[test]
+fn test_core_class_introspection_aot_array_map_reachability() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreMappedVars {
+            public int $value = 9;
+        }
+        class CoreMappedMethods {
+            public function mapped(): void {}
+        }
+
+        $vars = array_map(get_class_vars(...), ["CoreMappedVars"]);
+        $methods = array_map(get_class_methods(...), ["CoreMappedMethods"]);
+        echo $vars[0]["value"], ":", implode(",", $methods[0]);
+        "#,
+    );
+    assert_eq!(out, "9:mapped");
+}

@@ -28,14 +28,19 @@ pub(super) fn emit_array_map_runtime_call(
                 array_map_runtime_label(callback_elem_ty, env_bytes),
             );
         }
-        ArrayMapTarget::Hash => {
+        ArrayMapTarget::Hash | ArrayMapTarget::Boxed => {
             let result_kind = hash_map_result_kind(callback_elem_ty, env_bytes);
             let dest_value_tag = runtime_value_tag("array_map", callback_elem_ty)?;
             let kind_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
             let tag_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 4);
             abi::emit_load_int_immediate(ctx.emitter, kind_arg_reg, result_kind as i64);
             abi::emit_load_int_immediate(ctx.emitter, tag_arg_reg, dest_value_tag as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_hash_map");
+            let helper = if target == ArrayMapTarget::Boxed {
+                "__rt_array_map_boxed"
+            } else {
+                "__rt_hash_map"
+            };
+            abi::emit_call_label(ctx.emitter, helper);
         }
     }
     Ok(())
@@ -104,6 +109,15 @@ pub(super) fn finish_array_map_result(
     result_elem_ty: &PhpType,
 ) -> Result<()> {
     match target {
+        ArrayMapTarget::Boxed => {
+            let valid = ctx.next_label("array_map_boxed_valid");
+            abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
+            crate::codegen::lower_inst::exceptions::emit_type_error(
+                ctx, "array_map(): Argument #2 ($array) must be of type array",
+            );
+            ctx.emitter.label(&valid);
+            box_hash_result_for_mixed_builtin(ctx, inst, &PhpType::Mixed);
+        }
         ArrayMapTarget::Indexed => {
             normalize_indexed_array_result(ctx, "array_map", callback_elem_ty, result_elem_ty)?;
             box_array_result_for_mixed_builtin(ctx, inst, result_elem_ty);
@@ -167,4 +181,3 @@ pub(super) fn array_map_runtime_label(callback_elem_ty: &PhpType, env_bytes: usi
         "__rt_array_map"
     }
 }
-

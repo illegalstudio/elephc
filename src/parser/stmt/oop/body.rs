@@ -362,10 +362,10 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                     "Hooked properties cannot be readonly",
                 ));
             }
-            if hooks.any() && default.is_some() {
+            if hooks.is_virtual() && default.is_some() {
                 return Err(CompileError::new(
                     member_span,
-                    "Hooked properties cannot have a default value",
+                    "Virtual properties cannot have a default value",
                 ));
             }
             if modifiers.is_abstract {
@@ -1071,5 +1071,8 @@ fn parse_property_hooks(
             "Expected property hook declaration",
         ));
     }
+    hooks.uses_backing_slot = accessors.iter().any(|method| {
+        super::property_hook_storage::body_uses_backing_slot(&method.body, prop_name)
+    });
     Ok((hooks, accessors))
 }

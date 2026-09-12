@@ -6,7 +6,7 @@
 //! - `crate::types::checker::check_types_with_options`, once, after every checker walk has settled.
 //!
 //! Key details:
-//! - `CheckResult::local_bind_kill_sites` / `local_retype_sites` / `mixed_storage_store_sites` are
+//! - Binding kills, reference detaches, retypes and mixed-storage stores are
 //!   keyed by `(Span, local name)`
 //!   and EIR lowering consults them by that key. A `Span` carries line/column and NOTHING about
 //!   which FILE they are in, and include resolution splices every included file's statements into
@@ -48,11 +48,11 @@ use super::is_unset_call;
 
 /// Rejects every recorded decision whose key matches more than one node OF ITS OWN ROLE.
 ///
-/// All three maps are keyed the same way and are walked in one pass, but each is checked against
+/// All decision maps are keyed the same way and are walked in one pass, but each is checked against
 /// the tally for the node kind it names, never against another kind's. That matches how lowering
 /// consults them and is not a weakening: `lower_assign` reads the retype decisions and fires only
 /// at a `StmtKind::Assign`, `unset_local` reads the kill decisions and fires only at an `unset`
-/// argument. A retype and a kill filed under one span for one name could therefore never make
+/// argument, as do reference detaches. A retype and a kill filed under one span could never make
 /// either site re-bind for the other's reason, so cross-role coincidence is not a hazard to detect.
 ///
 /// The MIXED-STORAGE store sites share the retype tally rather than getting one of their own,
@@ -81,11 +81,15 @@ use super::is_unset_call;
 pub(super) fn reject_ambiguous_local_binding_decisions(
     program: &Program,
     kill_sites: &HashMap<Span, HashSet<String>>,
+    ref_detach_sites: &HashMap<Span, HashSet<String>>,
+    retired_ref_detach_sites: &HashSet<(Span, String)>,
     retype_sites: &HashMap<Span, HashSet<String>>,
     mixed_storage_store_sites: &HashMap<Span, HashSet<String>>,
     retired_mixed_storage_store_sites: &HashSet<(Span, String)>,
 ) -> Result<(), CompileError> {
     if kill_sites.is_empty()
+        && ref_detach_sites.is_empty()
+        && retired_ref_detach_sites.is_empty()
         && retype_sites.is_empty()
         && mixed_storage_store_sites.is_empty()
         && retired_mixed_storage_store_sites.is_empty()
@@ -97,6 +101,8 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
     let mut tally = Tally {
         watched: kill_sites
             .keys()
+            .chain(ref_detach_sites.keys())
+            .chain(retired_ref_detach_sites.iter().map(|(span, _)| span))
             .chain(retype_sites.keys())
             .chain(mixed_storage_store_sites.keys())
             .chain(
@@ -139,7 +145,9 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
         .chain(
             kill_sites
                 .iter()
+                .chain(ref_detach_sites.iter())
                 .flat_map(|(span, names)| names.iter().map(move |name| (span, name)))
+                .chain(retired_ref_detach_sites.iter().map(|(span, name)| (span, name)))
                 .map(|(span, name)| (span, name, &tally.unset_args)),
         );
     for (span, name, sites) in decisions {

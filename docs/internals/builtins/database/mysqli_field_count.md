@@ -1,11 +1,11 @@
 ---
-title: "mysqli_field_count() — internals"
+title: "mysqli_field_count() - internals"
 description: "Compiler internals for mysqli_field_count(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 124
 ---
 
-## `mysqli_field_count()` — internals
+## `mysqli_field_count()` - internals
 
 ## Where it lives
 

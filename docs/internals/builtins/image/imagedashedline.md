@@ -1,11 +1,11 @@
 ---
-title: "imagedashedline() — internals"
+title: "imagedashedline() - internals"
 description: "Compiler internals for imagedashedline(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 496
 ---
 
-## `imagedashedline()` — internals
+## `imagedashedline()` - internals
 
 ## Where it lives
 

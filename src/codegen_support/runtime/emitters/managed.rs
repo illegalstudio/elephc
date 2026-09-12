@@ -8,7 +8,8 @@
 //! - Keeps heap, GC, eval-scope, SPL, object, and buffer helpers in dependency order.
 
 use super::super::{
-    arrays, buffers, compare, eval_bridge, eval_scope, objects, resource_ids, spl,
+    arrays, buffers, compare, eval_bridge, eval_scope, io, objects, resource_ids,
+    resource_inventory, spl,
 };
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
@@ -17,6 +18,7 @@ use crate::codegen_support::RuntimeFeatures;
 pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);
+    super::super::reference_cells::emit_reference_cells(emitter);
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);
     arrays::emit_heap_debug_validate_free_list(emitter);
@@ -75,13 +77,17 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_search(emitter);
     arrays::emit_in_array_mixed_int(emitter);
     arrays::emit_array_reverse(emitter);
+    arrays::emit_array_reverse_boxed(emitter);
     arrays::emit_array_reverse_refcounted(emitter);
     arrays::emit_array_sum(emitter);
     arrays::emit_array_sum_mixed(emitter);
     arrays::emit_array_product(emitter);
+    arrays::emit_array_numeric_aggregate(emitter);
     arrays::emit_array_shift(emitter);
+    arrays::emit_array_take_boxed(emitter);
     arrays::emit_array_unshift(emitter);
     arrays::emit_array_merge(emitter);
+    arrays::emit_array_merge_boxed(emitter);
     arrays::emit_array_merge_refcounted(emitter);
     arrays::emit_array_slice(emitter);
     arrays::emit_array_slice_refcounted(emitter);
@@ -106,6 +112,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_intersect(emitter);
     arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_flip(emitter);
+    arrays::emit_array_flip_boxed(emitter);
     arrays::emit_array_count_values(emitter);
     arrays::emit_array_flip_string(emitter);
     arrays::emit_hash_flip(emitter);
@@ -117,6 +124,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_chunk(emitter);
     arrays::emit_array_chunk_refcounted(emitter);
     arrays::emit_array_column(emitter);
+    arrays::emit_array_column_boxed(emitter);
     arrays::emit_array_column_mixed(emitter);
     arrays::emit_array_column_ref(emitter);
     arrays::emit_array_column_str(emitter);
@@ -144,15 +152,17 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_hash_sort(emitter);
     arrays::emit_natsort(emitter);
     arrays::emit_array_map(emitter);
+    arrays::emit_array_map_boxed(emitter);
+    arrays::emit_in_array_boxed(emitter);
     arrays::emit_array_map_mixed(emitter);
     arrays::emit_array_map_str(emitter);
     arrays::emit_array_map_str_owned(emitter);
-    arrays::emit_array_filter(emitter);
-    arrays::emit_array_filter_refcounted(emitter);
-    arrays::emit_array_find_any_all(emitter);
+    arrays::emit_array_predicate_boxed(emitter);
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_reduce_str(emitter);
+    arrays::emit_array_reduce_boxed(emitter);
     arrays::emit_array_walk(emitter);
+    arrays::emit_array_walk_boxed(emitter);
     arrays::emit_array_walk_recursive(emitter);
     arrays::emit_array_udiff_uintersect(emitter);
     arrays::emit_php_compare_slots(emitter);
@@ -164,7 +174,10 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_decref_any(emitter);
     arrays::emit_decref_mixed(emitter);
     arrays::emit_gc_note_child_ref(emitter);
+    arrays::emit_gc_eval_object_children(emitter);
     arrays::emit_gc_mark_reachable(emitter);
+    arrays::emit_gc_control(emitter);
+    arrays::emit_gc_destructors(emitter);
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
@@ -191,6 +204,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);
+    io::emit_backtrace_print_arg(emitter);
     arrays::emit_object_free_deep(emitter, features);
     arrays::emit_refcount(emitter);
     if features.eval_bridge {
@@ -200,7 +214,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
         // the self-contained value wrappers plus the native scope helpers
         // (the magician staticlib supplies the scope symbols only in the full
         // bridge configuration).
-        eval_bridge::emit_eval_bridge_runtime(emitter);
+        eval_bridge::emit_eval_value_runtime(emitter);
         eval_scope::emit_eval_scope_runtime(emitter);
     }
 
@@ -210,6 +224,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
 
     // PHP resource-id registry (its own numbering space, unrelated to object handles)
     resource_ids::emit_resource_ids(emitter);
+    resource_inventory::emit_resource_inventory(emitter, features);
 
     // Object runtime functions
     objects::emit_object_handles(emitter);

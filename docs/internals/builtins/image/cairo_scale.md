@@ -1,11 +1,11 @@
 ---
-title: "cairo_scale() — internals"
+title: "cairo_scale() - internals"
 description: "Compiler internals for cairo_scale(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 432
 ---
 
-## `cairo_scale()` — internals
+## `cairo_scale()` - internals
 
 ## Where it lives
 

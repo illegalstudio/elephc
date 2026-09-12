@@ -1,16 +1,16 @@
 ---
-title: "trim() — internals"
+title: "trim() - internals"
 description: "Compiler internals for trim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 844
+  order: 870
 ---
 
-## `trim()` — internals
+## `trim()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/trim.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/trim.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

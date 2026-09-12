@@ -9,6 +9,7 @@
 //! - `__rt_object_free_deep` calls `__rt_call_object_destructor` at the top of the
 //!   deep-free path, so a destructor runs exactly once when refcount hits zero,
 //!   before any property payloads are released.
+//! - The collector calls it while graph snapshots keep cyclic peers alive, before sweeping.
 //!
 //! Key details:
 //! - `$this` is passed in the first integer argument register and is borrowed by
@@ -17,12 +18,15 @@
 //! - An optional eval callback can claim runtime-generic objects that actually
 //!   belong to eval-declared classes; when no callback is installed, the helper
 //!   follows the original static destructor table path.
+//! - Callback status two transfers an owned boxed Throwable after Rust returns.
+//!   Native propagation then reaches the collector's bounded handler or PHP's catch.
 //! - Re-entrancy guard: before calling the destructor, bit 31 of the 32-bit
 //!   refcount is set. A balanced `$tmp = $this;`/scope-exit inside the body then
 //!   decrements from `0x8000_0001` back to `0x8000_0000` instead of reaching zero,
-//!   so it cannot re-enter the free path and double-free the object. Resurrecting
-//!   `$this` (storing it to outlive the destructor) is unsupported: the object is
-//!   still freed.
+//!   so it cannot re-enter the free path and double-free the object. Ordinary
+//!   last-owner resurrection remains unsupported. Collector snapshots instead
+//!   clear the temporary guard after the callback, recount real owners, and keep
+//!   completed destructors marked separately in heap-kind bit 17.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -47,6 +51,8 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_call_object_destructor");
 
     emitter.instruction("cbz x0, __rt_call_object_destructor_ret");             // null receiver → nothing to destruct
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // inspect persistent cycle-collector destructor completion
+    emitter.instruction("tbnz x9, #17, __rt_call_object_destructor_ret");       // later sweeps and final releases must not rerun completed PHP code
     emitter.instruction("ldr w9, [x0, #-12]");                                  // w9 = object refcount (header offset -12)
     emitter.instruction("tbnz w9, #31, __rt_call_object_destructor_ret");       // destruction already in progress → never run twice
     abi::emit_symbol_address(emitter, "x10", "_elephc_eval_dynamic_object_destruct_fn");
@@ -59,11 +65,16 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address before the Rust call
     emitter.instruction("add x29, sp, #16");                                    // establish the helper frame
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer across the callback
+    emitter.instruction("str xzr, [sp, #8]");                                   // initialize the owned Throwable output to null
+    emitter.instruction("add x1, sp, #8");                                      // pass a writable output slot to the Rust destructor callback
     emitter.instruction("blr x10");                                             // ask eval whether it owns and destructed this object
     emitter.instruction("mov x12, x0");                                         // preserve the eval callback handled flag
+    emitter.instruction("ldr x11, [sp, #8]");                                   // recover a transferred Throwable only after Rust has returned
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the object pointer after the callback
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the eval callback frame
+    emitter.instruction("cmp x12, #2");                                         // status two transfers an escaping eval Throwable
+    emitter.instruction("b.eq __rt_call_object_destructor_eval_throw");         // propagate only outside the Rust callback frame
     emitter.instruction("cbnz x12, __rt_call_object_destructor_ret");           // eval handled the dynamic object → skip static lookup
     emitter.instruction("ldr w9, [x0, #-12]");                                  // reload the refcount after an eval miss
     emitter.instruction("movz w12, #0x8000, lsl #16");                          // w12 = destruction-in-progress flag bit
@@ -89,6 +100,9 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_call_object_destructor_ret");
     emitter.instruction("ret");                                                 // return to __rt_object_free_deep to release the storage
+    emitter.label("__rt_call_object_destructor_eval_throw");
+    emitter.instruction("mov x0, x11");                                         // transfer the owned boxed Throwable into native propagation
+    emitter.instruction("b __rt_throw_boxed_destructor_exception");             // the collector's local handler contains the native throw
 }
 
 /// Emits the x86_64 `__rt_call_object_destructor` helper.
@@ -99,6 +113,8 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rdi, rdi");                                       // null receiver → nothing to destruct
     emitter.instruction("jz __rt_call_object_destructor_ret");                  // skip the lookup for a null object
+    emitter.instruction("test QWORD PTR [rdi - 8], 0x20000");                   // inspect persistent cycle-collector destructor completion
+    emitter.instruction("jnz __rt_call_object_destructor_ret");                 // later sweeps and last-owner releases never rerun completed PHP code
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // eax = object refcount (header offset -12)
     emitter.instruction("test eax, 0x80000000");                                // is destruction already in progress?
     emitter.instruction("jnz __rt_call_object_destructor_ret");                 // never run a destructor twice
@@ -112,10 +128,15 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the eval callback frame
     emitter.instruction("sub rsp, 16");                                         // reserve a spill slot for the object pointer
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer across the callback
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // initialize the owned Throwable output to null
+    emitter.instruction("lea rsi, [rbp - 16]");                                 // pass its address as the Rust callback's second argument
     emitter.instruction("call r10");                                            // ask eval whether it owns and destructed this object
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // recover the transferred Throwable after Rust returns normally
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the object pointer after the callback
     emitter.instruction("add rsp, 16");                                         // release the eval callback spill slot
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("cmp rax, 2");                                          // status two transfers an escaping eval Throwable
+    emitter.instruction("je __rt_call_object_destructor_eval_throw");           // do not perform native unwinding inside Rust frames
     emitter.instruction("test rax, rax");                                       // did eval handle this dynamic object?
     emitter.instruction("jnz __rt_call_object_destructor_ret");                 // eval handled the dynamic object → skip static lookup
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // reload the refcount after an eval miss
@@ -139,4 +160,31 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_call_object_destructor_ret");
     emitter.instruction("ret");                                                 // return to __rt_object_free_deep to release the storage
+    emitter.label("__rt_call_object_destructor_eval_throw");
+    emitter.instruction("mov rax, r11");                                        // pass the owned box to native exception propagation
+    emitter.instruction("jmp __rt_throw_boxed_destructor_exception");           // the protected collector callback catches the native throw
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Eval callbacks receive a Throwable output slot and return before native propagation begins.
+    #[test]
+    fn eval_destructor_throw_status_is_handled_after_the_callback_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_call_object_destructor(&mut emitter);
+            let asm = emitter.output();
+            let (output, callback, status) = match target.arch {
+                Arch::AArch64 => ("add x1, sp, #8", "blr x10", "cmp x12, #2"),
+                Arch::X86_64 => ("lea rsi, [rbp - 16]", "call r10", "cmp rax, 2"),
+            };
+            assert!(asm.find(output).unwrap() < asm.find(callback).unwrap(), "{name}");
+            assert!(asm.find(callback).unwrap() < asm.find(status).unwrap(), "{name}");
+            assert!(asm.find(status).unwrap() < asm.find("__rt_throw_boxed_destructor_exception").unwrap(), "{name}");
+        }
+    }
 }

@@ -3,11 +3,32 @@
 //!
 //! Called from:
 //! - `super::classes::runtime_referenced_class_names()`.
+//! - Program shutdown and web request reset for shared static-property ownership.
 //!
 //! Key details:
 //! - Resolves self, parent, and late-static receivers against the current method owner.
 
 use super::*;
+
+/// Enumerates emitted owning static-property slots once per declaring class, in initializer order.
+pub(in crate::codegen) fn refcounted_static_properties(module: &Module) -> Vec<(String, PhpType)> {
+    let mut class_names = super::runtime_referenced_class_names(module).into_iter().collect::<Vec<_>>();
+    class_names.sort();
+    let mut props = Vec::new();
+    for class_name in class_names {
+        let Some(class_info) = module.class_infos.get(&class_name) else { continue; };
+        for (property, php_type) in &class_info.static_properties {
+            let declaring_class = class_info.static_property_declaring_classes.get(property)
+                .map(String::as_str).unwrap_or(class_name.as_str());
+            if declaring_class != class_name { continue; }
+            let ty = php_type.codegen_repr();
+            if matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted() {
+                props.push((crate::names::static_property_symbol(&class_name, property), php_type.clone()));
+            }
+        }
+    }
+    props
+}
 
 /// Returns class names encoded in static property load/store immediates.
 pub(in crate::codegen) fn referenced_static_property_class_names(module: &Module) -> HashSet<String> {

@@ -45,6 +45,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         owned_reference_property_offsets,
         property_defaults,
         constructor_impl,
+        borrowed_reference_params,
     ) = {
         let class_info =
             ctx.module.class_infos.get(&class_name).ok_or_else(|| {
@@ -104,16 +105,29 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         };
         let marker_offsets = uninitialized_property_marker_offsets(class_info);
         let owned_ref_offsets = owned_reference_property_offsets(class_info);
+        let borrowed_reference_params = class_info
+            .constructor_param_to_prop
+            .iter()
+            .enumerate()
+            .filter_map(|(index, property)| {
+                let property = property.as_ref()?;
+                (class_info.reference_properties.contains(property)
+                    && !class_info.owned_reference_properties.contains(property))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
         (
             class_info.class_id,
             class_info.properties.len(),
-            class_info.allow_dynamic_properties,
+            class_info.has_property_hash_storage(),
             marker_offsets,
             owned_ref_offsets,
             property_defaults,
             constructor_impl,
+            borrowed_reference_params,
         )
     };
+    reject_unmanaged_promoted_reference_args(ctx, inst, &borrowed_reference_params)?;
     emit_object_allocation(
         ctx,
         class_id,
@@ -141,4 +155,81 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         )?;
     }
     Ok(())
+}
+
+/// Rejects borrowed boxed-walk cells before allocating an object that would retain them.
+fn reject_unmanaged_promoted_reference_args(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    param_indices: &[usize],
+) -> Result<()> {
+    for &index in param_indices {
+        let value = *inst.operands.get(index).ok_or_else(|| {
+            CodegenIrError::invalid_module("promoted reference parameter has no constructor operand")
+        })?;
+        let source = peel_argument_owner_aliases(ctx, value)?;
+        if !materialize_existing_promoted_reference_address(ctx, source)? {
+            // Defaults and property reads do not expose a caller cell yet. The constructor
+            // argument materializer gives those operands a persistent cell before the call,
+            // and the promoted-property bind validates that actual cell inside the constructor.
+            continue;
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
+        let safe = ctx.next_label("promoted_reference_argument_managed");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &safe);
+        abi::emit_call_label(ctx.emitter, "__rt_unmanaged_reference_escape_error");
+        ctx.emitter.label(&safe);
+    }
+    Ok(())
+}
+
+/// Materializes an address only when the constructor operand already denotes caller storage.
+fn materialize_existing_promoted_reference_address(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
+    let Some(value_info) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_info.def else {
+        return Ok(false);
+    };
+    let instruction = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match instruction.op {
+        Op::LoadLocal | Op::LoadRefCell => {
+            super::super::materialize_local_ref_arg_address(ctx, value)?;
+            Ok(true)
+        }
+        Op::ArrayElemAddr => {
+            ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Peels ownership-only wrappers while preserving the original local source slot.
+fn peel_argument_owner_aliases(ctx: &FunctionContext<'_>, mut value: ValueId) -> Result<ValueId> {
+    loop {
+        let Some(value_info) = ctx.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_info.def else {
+            return Ok(value);
+        };
+        let instruction = ctx
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if !matches!(instruction.op, Op::Acquire | Op::Move | Op::Borrow) {
+            return Ok(value);
+        }
+        let Some(source) = instruction.operands.first().copied() else {
+            return Ok(value);
+        };
+        value = source;
+    }
 }

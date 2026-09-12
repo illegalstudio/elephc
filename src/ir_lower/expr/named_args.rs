@@ -58,18 +58,18 @@ pub(super) fn lower_named_args_with_signature_options(
         return lower_args(ctx, &normalized);
     }
     let mut source_values = Vec::with_capacity(plan.source_args.len());
-    for source_arg in &plan.source_args {
-        source_values.push(lower_call_source_arg(ctx, source_arg));
+    for source_index in 0..plan.source_args.len() {
+        source_values.push(lower_planned_source_arg(ctx, sig, &plan, source_index));
     }
 
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
-    for arg in &plan.regular_args {
+    for (param_index, arg) in plan.regular_args.iter().enumerate() {
         match arg {
             crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => {
                 operands.push(source_values[*source_index]);
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
-                operands.push(lower_expr(ctx, default).value);
+                operands.push(lower_arg_with_signature(ctx, sig, param_index, default));
             }
             crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => {
                 return lower_args(ctx, args);
@@ -77,9 +77,47 @@ pub(super) fn lower_named_args_with_signature_options(
         }
     }
     if sig.variadic.is_some() {
+        if crate::func_args::sig_has_hidden_argc_param(sig) {
+            let actual_count = named_plan_actual_arg_count(&plan.source_values);
+            operands.push(emit_i64_at_span(ctx, actual_count as i64, call_span).value);
+        }
         operands.push(lower_named_variadic_tail_array(ctx, sig, &plan.source_values, &source_values).value);
     }
     operands
+}
+
+/// Preserves a regular reference argument's place while consuming the shared source-order plan.
+fn lower_planned_source_arg(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    source_index: usize,
+) -> crate::ir::ValueId {
+    if let Some(source) = plan.source_values.iter()
+        .find(|source| source.source_index() == source_index)
+    {
+        if let Some(param_index) = source.param_idx() {
+            if sig.ref_params.get(param_index).copied().unwrap_or(false) {
+                return lower_arg_with_signature(ctx, sig, param_index, source.expr());
+            }
+            if let Some(lowered) =
+                lower_tracked_callable_array_param(ctx, sig, param_index, source.expr())
+            {
+                return if source_index + 1 < plan.source_args.len() {
+                    root_evaluated_call_argument(ctx, lowered, source.expr().span).value
+                } else {
+                    lowered.value
+                };
+            }
+        }
+    }
+    let value = lower_call_source_arg(ctx, &plan.source_args[source_index]);
+    if source_index + 1 < plan.source_args.len() {
+        let lowered = lowered_value_from_id(ctx, value);
+        root_evaluated_call_argument(ctx, lowered, plan.source_args[source_index].span).value
+    } else {
+        value
+    }
 }
 
 /// Lowers dynamic associative prefix spreads for variadic calls far enough to preserve duplicate fatals.
@@ -99,6 +137,7 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
     let first_named_pos = plan.first_named_pos?;
     let prefix_expr = plan.positional_prefix_expr(call_span)?;
     let prefix = lower_expr(ctx, &prefix_expr);
+    let prefix = root_evaluated_call_argument(ctx, prefix, prefix_expr.span);
     if !matches!(ctx.builder.value_php_type(prefix.value).codegen_repr(), PhpType::AssocArray { .. }) {
         return None;
     }
@@ -112,18 +151,18 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
         if matches!(source_arg.kind, ExprKind::Spread(_)) {
             return None;
         }
-        source_values[source_index] = Some(lower_call_source_arg(ctx, source_arg));
+        source_values[source_index] = Some(lower_planned_source_arg(ctx, sig, plan, source_index));
     }
     emit_dynamic_named_prefix_duplicate_guards(ctx, sig, plan, &prefix_temp, first_named_pos);
 
     let mut operands = Vec::with_capacity(plan.regular_args.len() + 1);
-    for arg in &plan.regular_args {
+    for (param_index, arg) in plan.regular_args.iter().enumerate() {
         match arg {
             crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => {
                 operands.push(source_values.get(*source_index).copied().flatten()?);
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
-                operands.push(lower_expr(ctx, default).value);
+                operands.push(lower_arg_with_signature(ctx, sig, param_index, default));
             }
             crate::types::call_args::PlannedRegularArg::SpreadElement {
                 prefix_element_idx,
@@ -162,11 +201,11 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
                         *spread_span,
                     )
                 };
-                operands.push(lower_expr(ctx, &expr).value);
+                operands.push(lower_arg_with_signature(ctx, sig, param_index, &expr));
             }
         }
     }
-    operands.push(lower_variadic_tail_array(ctx, sig, &[]).value);
+    operands.push(lower_variadic_tail_array(ctx, sig, &[], 0).value);
     Some(operands)
 }
 
@@ -275,6 +314,7 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
         return None;
     }
     let prefix = lower_expr(ctx, &prefix_expr);
+    let prefix = root_evaluated_call_argument(ctx, prefix, prefix_expr.span);
     let prefix_type = ctx.builder.value_php_type(prefix.value);
     let prefix_temp_name = ctx.declare_hidden_temp(prefix_type.clone());
     store_value_into_temp(ctx, &prefix_temp_name, prefix_type, prefix, prefix_expr.span);
@@ -294,8 +334,18 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
             .and_then(|source| Some((source.param_idx()?, source.expr())));
         let value = match planned {
             Some((param_idx, expr)) => hinted(ctx, param_idx, expr)
-                .unwrap_or_else(|| lower_call_source_arg(ctx, source_arg)),
-            None => lower_call_source_arg(ctx, source_arg),
+                .map(|value| {
+                    if source_index + 1 < plan.source_args.len()
+                        && !sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                    {
+                        let lowered = lowered_value_from_id(ctx, value);
+                        root_evaluated_call_argument(ctx, lowered, expr.span).value
+                    } else {
+                        value
+                    }
+                })
+                .unwrap_or_else(|| lower_planned_source_arg(ctx, sig, plan, source_index)),
+            None => lower_planned_source_arg(ctx, sig, plan, source_index),
         };
         source_values[source_index] = Some(value);
     }
@@ -318,13 +368,13 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
                         false,
                         plan.source_args.get(*source_index).map(|arg| arg.span).unwrap_or(call_span),
                     );
-                    operands.push(lower_expr(ctx, &expr).value);
+                    operands.push(lower_arg_with_signature(ctx, sig, param_idx, &expr));
                 } else {
                     operands.push(source_values.get(*source_index).copied().flatten()?);
                 }
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
-                operands.push(lower_expr(ctx, default).value);
+                operands.push(lower_arg_with_signature(ctx, sig, param_idx, default));
             }
             crate::types::call_args::PlannedRegularArg::SpreadElement {
                 element_idx: _,
@@ -365,7 +415,7 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
                         *spread_span,
                     )
                 };
-                operands.push(lower_expr(ctx, &expr).value);
+                operands.push(lower_arg_with_signature(ctx, sig, param_idx, &expr));
             }
         }
     }

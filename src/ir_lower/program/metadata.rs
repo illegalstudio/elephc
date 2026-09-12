@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Reserves extra field storage without changing PHP attributes or checker visibility rules.
+pub(super) fn reserve_eval_subclass_property_storage(module: &mut Module) {
+    if !module.required_runtime_features.eval_bridge {
+        return;
+    }
+    for (name, info) in &mut module.class_infos {
+        // Builtin objects may have custom payloads; their layouts remain authoritative.
+        if elephc_builtin_contract::lookup_class(name).is_none() && !info.is_final {
+            info.eval_property_storage = true;
+        }
+    }
+}
+
 /// Converts a PHP source path into the canonical display string stored in EIR metadata.
 pub(super) fn canonical_source_path(source_path: &Path) -> String {
     source_path
@@ -32,7 +45,12 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.declared_trait_uses = collect_declared_trait_uses(program);
     module.declared_trait_method_names = collect_declared_trait_method_names(program);
     module.declared_trait_methods = collect_declared_trait_methods(program);
-    module.declared_trait_property_names = collect_declared_trait_property_names(program);
+    module.declared_trait_properties = collect_declared_trait_properties(program);
+    module.declared_trait_property_names = module.declared_trait_properties.iter()
+        .map(|(name, properties)| {
+            (name.clone(), properties.iter().map(|property| property.name.clone()).collect())
+        })
+        .collect();
     module.declared_trait_constant_names = collect_declared_trait_constant_names(program);
     module.declared_trait_constants = collect_declared_trait_constants(program);
     module.declared_trait_constant_types = collect_declared_trait_constant_types(program);
@@ -105,7 +123,11 @@ pub(super) fn normalize_method_map_for_eir(
     // Stream-wrapper and user-filter contract methods are invoked through
     // runtime vtables with raw fixed-ABI arguments; widening their untyped
     // params to boxed Mixed would desynchronize the dispatcher and the body.
-    let is_wrapper_class = methods.contains_key("stream_open");
+    // Directory-only and metadata-only wrappers need not implement stream_open.
+    // Match the same method inventory that populates the runtime wrapper vtable.
+    let is_wrapper_class = methods.keys().any(|method| {
+        crate::codegen_support::runtime::is_user_wrapper_contract_method(method)
+    });
     let is_filter_class = methods.contains_key("filter");
     for (method_key, signature) in methods.iter_mut() {
         if (is_wrapper_class
@@ -285,4 +307,3 @@ pub(super) fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<S
         _ => false,
     }
 }
-

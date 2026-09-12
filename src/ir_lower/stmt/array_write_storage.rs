@@ -9,9 +9,33 @@
 
 use super::*;
 
+/// Detaches a boxed local before a write can replace its array payload or modify shared cells.
+/// Reference locals publish through the existing reference; value aliases keep the original box.
+pub(in crate::ir_lower) fn load_array_local_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: Span,
+) -> LoweredValue {
+    let ty = ctx.local_type(name);
+    let value = ctx.load_local(name, Some(span));
+    if ty.codegen_repr() != PhpType::Mixed {
+        return value;
+    }
+    let detached = ctx.emit_owned_value(
+        Op::MixedClone,
+        vec![value.value],
+        None,
+        ty.clone(),
+        Op::MixedClone.default_effects(),
+        Some(span),
+    );
+    ctx.store_call_argument_local(name, detached, ty, Some(span));
+    ctx.load_local(name, Some(span))
+}
+
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
-    let array_value = ctx.load_local(array, Some(span));
+    let array_value = load_array_local_for_write(ctx, array, span);
     let value = lower_expr(ctx, value);
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {
         Op::ArrayPush
@@ -218,4 +242,3 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
     normalize_materialized_element_type(item_type)
 }
-

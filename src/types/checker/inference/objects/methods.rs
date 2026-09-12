@@ -285,16 +285,9 @@ impl Checker {
                     &format!("Undefined method: {}::{}", interface_name, method),
                 )
             })?;
-        let normalized_args = self.normalize_named_call_args(
-            &sig,
-            args,
-            expr.span,
-            &format!("Method {}::{}", interface_name, method),
-            env,
-        )?;
         self.check_user_declared_call(
             &sig,
-            &normalized_args,
+            args,
             expr.span,
             env,
             &format!("Method {}::{}", interface_name, method),
@@ -342,6 +335,29 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         self.infer_method_call_on_class_type_with_options(class_name, method, args, expr, env, true)
+    }
+
+    /// Normalizes method arguments under the lowering contract selected by the call surface.
+    ///
+    /// Descriptor invocations keep dynamic spread sources for their runtime key walk. Ordinary
+    /// method calls retain the array-only planner, so accepting a Traversable here cannot widen
+    /// direct `$object->method(...$source)` semantics.
+    fn normalize_method_call_args_with_options(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+        env: &TypeEnv,
+        descriptor_invocation: bool,
+    ) -> Result<Vec<Expr>, CompileError> {
+        if descriptor_invocation {
+            Ok(self
+                .plan_descriptor_call_args(sig, args, span, callee_desc)?
+                .normalized_args())
+        } else {
+            self.normalize_named_call_args(sig, args, span, callee_desc, env)
+        }
     }
 
     /// Shared implementation for class method call inference.
@@ -424,17 +440,18 @@ impl Checker {
                 if method_key == "__call" {
                     Self::relax_magic_call_validation_sig(&mut effective_sig);
                 }
-                normalized_args = self.normalize_named_call_args(
+                normalized_args = self.normalize_method_call_args_with_options(
                     &effective_sig,
                     args,
                     expr.span,
                     &format!("Method {}::{}", class_name, method),
                     env,
+                    allow_by_ref_spread,
                 )?;
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!("Method {}::{}", class_name, method),
@@ -443,7 +460,7 @@ impl Checker {
                 } else {
                     self.check_user_declared_call(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!("Method {}::{}", class_name, method),
@@ -456,17 +473,18 @@ impl Checker {
                 let mut effective_sig =
                     Self::callable_sig_for_declared_params(sig, &declared_flags);
                 Self::relax_magic_call_validation_sig(&mut effective_sig);
-                normalized_args = self.normalize_named_call_args(
+                normalized_args = self.normalize_method_call_args_with_options(
                     &effective_sig,
                     &magic_args,
                     expr.span,
                     &format!("Method {}::__call", class_name),
                     env,
+                    allow_by_ref_spread,
                 )?;
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
-                        &normalized_args,
+                        &magic_args,
                         expr.span,
                         env,
                         &format!("Method {}::__call", class_name),
@@ -493,13 +511,22 @@ impl Checker {
         }
         if let Some(return_ty) = magic_return_ty {
             if let Some(args) = magic_original_args {
-                self.specialize_magic_call_signature(class_name, &args, env)?;
+                self.specialize_magic_call_signature(
+                    class_name,
+                    &args,
+                    env,
+                    allow_by_ref_spread,
+                )?;
             }
             return Ok(return_ty);
         }
         let mut arg_types = Vec::new();
         for arg in &normalized_args {
-            arg_types.push(self.infer_type(arg, env)?);
+            arg_types.push(if allow_by_ref_spread {
+                self.infer_descriptor_call_arg_type(arg, env)?
+            } else {
+                self.infer_type(arg, env)?
+            });
         }
 
         let impl_class_name = self
@@ -640,8 +667,16 @@ impl Checker {
         class_name: &str,
         args: &[Expr],
         env: &TypeEnv,
+        descriptor_invocation: bool,
     ) -> Result<(), CompileError> {
-        self.specialize_magic_dispatch_signature(class_name, "__call", false, args, env)
+        self.specialize_magic_dispatch_signature(
+            class_name,
+            "__call",
+            false,
+            args,
+            env,
+            descriptor_invocation,
+        )
     }
 
     /// Refines a `__callStatic($name, $args)` signature's array parameter from
@@ -652,15 +687,25 @@ impl Checker {
         class_name: &str,
         args: &[Expr],
         env: &TypeEnv,
+        descriptor_invocation: bool,
     ) -> Result<(), CompileError> {
-        self.specialize_magic_dispatch_signature(class_name, "__callstatic", true, args, env)
+        self.specialize_magic_dispatch_signature(
+            class_name,
+            "__callstatic",
+            true,
+            args,
+            env,
+            descriptor_invocation,
+        )
     }
 
     /// Shared body for `__call`/`__callStatic` argument-array specialization.
     ///
     /// Merges all argument types into an element type, then updates the magic
     /// method signature's params[1] (the array parameter) on its implementing
-    /// class, selecting the instance or static method tables via `is_static`.
+    /// class, selecting the instance or static method tables via `is_static`. Descriptor calls
+    /// infer spread elements under their Traversable-aware runtime-walk contract; ordinary magic
+    /// dispatch remains array-only.
     fn specialize_magic_dispatch_signature(
         &mut self,
         class_name: &str,
@@ -668,10 +713,15 @@ impl Checker {
         is_static: bool,
         args: &[Expr],
         env: &TypeEnv,
+        descriptor_invocation: bool,
     ) -> Result<(), CompileError> {
         let mut elem_ty = PhpType::Never;
         for arg in args {
-            let arg_ty = self.infer_type(arg, env)?;
+            let arg_ty = if descriptor_invocation {
+                self.infer_descriptor_call_arg_type(arg, env)?
+            } else {
+                self.infer_type(arg, env)?
+            };
             elem_ty = Self::merge_magic_call_arg_type(elem_ty, arg_ty);
         }
         let args_array_ty = PhpType::Array(Box::new(elem_ty.clone()));
@@ -915,17 +965,18 @@ impl Checker {
                 if method_key == "__callstatic" {
                     Self::relax_magic_call_validation_sig(&mut effective_sig);
                 }
-                normalized_args = self.normalize_named_call_args(
+                normalized_args = self.normalize_method_call_args_with_options(
                     &effective_sig,
                     args,
                     expr.span,
                     &format!("Static method {}::{}", class_name, method),
                     env,
+                    allow_by_ref_spread,
                 )?;
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!("Static method {}::{}", class_name, method),
@@ -934,7 +985,7 @@ impl Checker {
                 } else {
                     self.check_user_declared_call(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!("Static method {}::{}", class_name, method),
@@ -979,7 +1030,7 @@ impl Checker {
                 let declared_flags =
                     Self::declared_method_param_flags(class_info, &method_key, false);
                 let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
-                normalized_args = self.normalize_named_call_args(
+                normalized_args = self.normalize_method_call_args_with_options(
                     &effective_sig,
                     args,
                     expr.span,
@@ -990,11 +1041,12 @@ impl Checker {
                         method
                     ),
                     env,
+                    allow_by_ref_spread,
                 )?;
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!(
@@ -1008,7 +1060,7 @@ impl Checker {
                 } else {
                     self.check_user_declared_call(
                         &effective_sig,
-                        &normalized_args,
+                        args,
                         expr.span,
                         env,
                         &format!(
@@ -1035,12 +1087,13 @@ impl Checker {
                 let mut effective_sig =
                     Self::callable_sig_for_declared_params(sig, &declared_flags);
                 Self::relax_magic_call_validation_sig(&mut effective_sig);
-                normalized_args = self.normalize_named_call_args(
+                normalized_args = self.normalize_method_call_args_with_options(
                     &effective_sig,
                     &magic_args,
                     expr.span,
                     &format!("Static method {}::__callStatic", class_name),
                     env,
+                    allow_by_ref_spread,
                 )?;
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
@@ -1071,10 +1124,15 @@ impl Checker {
             }
         } else if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {
             // The class is not in the closed world (an `eval` fragment may declare it), so no
-            // signature governs the arguments: alias them conservatively.
+            // signature governs the arguments: alias them conservatively. Descriptor invocation
+            // still owns its Traversable spread walk; ordinary static calls remain array-only.
             self.record_unresolved_callee_argument_aliases(args);
             for arg in args {
-                self.infer_type(arg, env)?;
+                if allow_by_ref_spread {
+                    self.infer_descriptor_call_arg_type(arg, env)?;
+                } else {
+                    self.infer_type(arg, env)?;
+                }
             }
             return Ok(PhpType::Mixed);
         } else {
@@ -1085,13 +1143,22 @@ impl Checker {
         }
         if let Some(return_ty) = magic_return_ty {
             if let Some(args) = magic_original_args {
-                self.specialize_magic_static_call_signature(class_name, &args, env)?;
+                self.specialize_magic_static_call_signature(
+                    class_name,
+                    &args,
+                    env,
+                    allow_by_ref_spread,
+                )?;
             }
             return Ok(return_ty);
         }
         let mut arg_types = Vec::new();
         for arg in &normalized_args {
-            arg_types.push(self.infer_type(arg, env)?);
+            arg_types.push(if allow_by_ref_spread {
+                self.infer_descriptor_call_arg_type(arg, env)?
+            } else {
+                self.infer_type(arg, env)?
+            });
         }
 
         let direct_impl_class_name = if parent_call || self_call {

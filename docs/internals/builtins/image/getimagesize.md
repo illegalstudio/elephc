@@ -1,11 +1,11 @@
 ---
-title: "getimagesize() — internals"
+title: "getimagesize() - internals"
 description: "Compiler internals for getimagesize(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 451
 ---
 
-## `getimagesize()` — internals
+## `getimagesize()` - internals
 
 ## Where it lives
 

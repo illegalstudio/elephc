@@ -238,7 +238,7 @@ fn test_mixed_storage_local_blocks_propagation() {
     ];
 
     let folded = crate::optimize::PostTypecheckOptimizer::new(&program)
-        .propagate(program.clone(), std::collections::HashSet::new());
+        .propagate(program.clone(), std::collections::HashSet::new(), Default::default());
     assert_eq!(
         folded[1],
         Stmt::echo(Expr::int_lit(6)),
@@ -248,6 +248,7 @@ fn test_mixed_storage_local_blocks_propagation() {
     let boxed = crate::optimize::PostTypecheckOptimizer::new(&program).propagate(
         program.clone(),
         std::collections::HashSet::from(["x".to_string()]),
+        Default::default(),
     );
     assert_eq!(
         boxed[1],
@@ -268,9 +269,10 @@ fn test_mixed_storage_set_does_not_outlive_its_run() {
     let _ = crate::optimize::PostTypecheckOptimizer::new(&program).propagate(
         program.clone(),
         std::collections::HashSet::from(["x".to_string()]),
+        Default::default(),
     );
     let after = crate::optimize::PostTypecheckOptimizer::new(&program)
-        .propagate(program.clone(), std::collections::HashSet::new());
+        .propagate(program.clone(), std::collections::HashSet::new(), Default::default());
 
     assert_eq!(
         after[1],

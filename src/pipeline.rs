@@ -563,7 +563,9 @@ pub(crate) fn compile(config: CliConfig) {
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which
     // names those are and refuses to record a fact for them.
-    let ast = post_typecheck_optimizer.propagate(ast, check_result.mixed_storage_local_names());
+    let ast = post_typecheck_optimizer.propagate(
+        ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone(),
+    );
     timings.record_since("opt-prop", phase_started);
 
     crate::progress::phase("opt-post");
@@ -617,6 +619,7 @@ pub(crate) fn compile(config: CliConfig) {
             web,
             ir_opt,
             &exported_functions,
+            &opcache_manifest,
             &mut timings,
         );
         return;
@@ -631,12 +634,23 @@ pub(crate) fn compile(config: CliConfig) {
         web,
     ) {
         Ok(module) => module,
+        Err(ir_lower::LoweringError::Unsupported(error)) => {
+            // A refused shape is an ordinary source-level diagnostic, so it is reported with the
+            // same file/line formatting as a checker error instead of a bare backend message.
+            crate::progress::clear();
+            errors::report(&error.with_file(filename.to_string()));
+            process::exit(1);
+        }
         Err(err) => {
             crate::progress::clear();
             eprintln!("EIR lowering error: {}", err);
             process::exit(1);
         }
     };
+    ir_module.included_files = opcache_manifest
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
     timings.record_since("ir-lower", phase_started);
 
     if emit.is_library() || (check_only && !exported_functions.is_empty()) {

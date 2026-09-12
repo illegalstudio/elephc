@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_line_join() — internals"
+title: "cairo_set_line_join() - internals"
 description: "Compiler internals for cairo_set_line_join(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 435
 ---
 
-## `cairo_set_line_join()` — internals
+## `cairo_set_line_join()` - internals
 
 ## Where it lives
 

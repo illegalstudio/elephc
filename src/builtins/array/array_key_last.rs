@@ -25,7 +25,9 @@ builtin! {
 /// Mixed is permitted because heterogeneous arrays are represented as Mixed at compile time.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed) {
+    if !ty.is_php_array()
+        && !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed)
+    {
         return Err(CompileError::new(
             cx.span,
             "array_key_last() argument must be array",

@@ -1,16 +1,16 @@
 ---
-title: "spl_autoload_call() — internals"
+title: "spl_autoload_call() - internals"
 description: "Compiler internals for spl_autoload_call(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 739
+  order: 765
 ---
 
-## `spl_autoload_call()` — internals
+## `spl_autoload_call()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_autoload_call.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_autoload_call.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

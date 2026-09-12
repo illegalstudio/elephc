@@ -110,22 +110,17 @@ impl Checker {
             .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
     }
 
-    /// Returns the element type of an array literal that contains at least one
-    /// spread of an associative array.
-    ///
-    /// Iterates over `elems`, extracting the value type from each `Spread` that
-    /// wraps an `AssocArray`. All spread value types must agree, otherwise
-    /// `Mixed` is returned. Non-spread elements are ignored.
+    /// Merges ordinary elements and spread values for a literal that may carry string keys.
     fn assoc_spread_literal_value_type(&mut self, elems: &[Expr], env: &TypeEnv) -> PhpType {
         let mut value_ty = PhpType::Never;
         for elem in elems {
-            let ExprKind::Spread(inner) = &elem.kind else {
-                continue;
-            };
-            let next = match self.infer_type(inner, env) {
-                Ok(PhpType::Array(elem)) => *elem,
-                Ok(PhpType::AssocArray { value, .. }) => *value,
-                _ => PhpType::Mixed,
+            let next = match &elem.kind {
+                ExprKind::Spread(inner) => match self.infer_type(inner, env) {
+                    Ok(PhpType::Array(elem)) => *elem,
+                    Ok(PhpType::AssocArray { value, .. }) => *value,
+                    _ => PhpType::Mixed,
+                },
+                _ => self.infer_type(elem, env).unwrap_or(PhpType::Mixed),
             };
             if matches!(value_ty, PhpType::Never) {
                 value_ty = next;

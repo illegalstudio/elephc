@@ -39,6 +39,7 @@ pub(super) fn lower_assignment_expr(
         _ => None,
     };
     if let Some(name) = assigned_name {
+        crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
         if is_compound_assignment_self_read(value, name, expr.span) && !ctx.has_local_slot(name) {
             let null_value = ctx.builder.emit_const_null();
             let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
@@ -262,6 +263,9 @@ pub(super) fn lower_dynamic_property_assign(
         Op::DynamicPropSet.default_effects(),
         Some(span),
     );
+    crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
+        ctx, &PhpType::Mixed, value, span,
+    );
 }
 
 /// Lowers pre/post increment and decrement expressions.
@@ -283,6 +287,7 @@ pub(super) fn lower_inc_dec(
     post: bool,
     expr: &Expr,
 ) -> LoweredValue {
+    crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     let old = ctx.load_local(name, Some(expr.span));
     let existing_type = ctx.local_type(name);
     if matches!(existing_type.codegen_repr(), PhpType::Mixed | PhpType::Str) {
@@ -338,4 +343,3 @@ pub(super) fn lower_inc_dec(
         ctx.load_local(name, Some(expr.span))
     }
 }
-

@@ -16,7 +16,7 @@ pub(super) fn emit_object_allocation(
     property_count: usize,
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: &[usize],
-    owned_reference_property_offsets: &[usize],
+    owned_reference_property_offsets: &[(usize, PhpType)],
 ) -> Result<()> {
     let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
     let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
@@ -36,10 +36,10 @@ pub(super) fn emit_object_allocation(
             ctx.emitter
                 .instruction(&format!("mov rax, {}", payload_size)); // request object payload storage for the class id and property slots
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // materialize the x86_64 object heap kind word
                 "mov r10, 0x{:x}",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            ));                                                                 // materialize the x86_64 object heap kind word
+            ));
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
@@ -63,8 +63,8 @@ pub(super) fn emit_object_allocation(
             abi::emit_store_to_address(ctx.emitter, marker_reg, object_reg, *offset);
         }
     }
-    for offset in owned_reference_property_offsets {
-        emit_owned_reference_property_cell(ctx, object_reg, *offset);
+    for (offset, php_type) in owned_reference_property_offsets {
+        emit_owned_reference_property_cell(ctx, object_reg, *offset, php_type);
     }
     if allow_dynamic_properties {
         emit_dynamic_property_hash_init(ctx, object_reg, dynamic_properties_offset);
@@ -80,12 +80,18 @@ pub(super) fn emit_owned_reference_property_cell(
     ctx: &mut FunctionContext<'_>,
     object_reg: &str,
     offset: usize,
+    php_type: &PhpType,
 ) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let cell_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let cell_reg = if object_reg == abi::secondary_scratch_reg(ctx.emitter) {
+        abi::tertiary_scratch_reg(ctx.emitter)
+    } else {
+        abi::secondary_scratch_reg(ctx.emitter)
+    };
     abi::emit_push_reg(ctx.emitter, object_reg);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, 16);                  // 16-byte ref cell: value at +0, tag/len at +8
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0),
+        crate::codegen_support::runtime::reference_cells::payload_tag(php_type));
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
     abi::emit_store_zero_to_address(ctx.emitter, result_reg, 0);                // zero the cell value word
     abi::emit_store_zero_to_address(ctx.emitter, result_reg, 8);               // zero the cell tag/length word
     abi::emit_reg_move(ctx.emitter, cell_reg, result_reg);                      // preserve the cell pointer across the object restore
@@ -126,11 +132,21 @@ pub(super) fn emit_clone_declared_property_slots(
     dest_reg: &str,
     property_count: usize,
     retained_offsets: &[usize],
+    owned_references: &[(usize, PhpType)],
 ) {
     for index in 0..property_count {
         let offset = 8 + index * 16;
         emit_copy_property_slot(ctx, source_reg, dest_reg, offset);
-        if retained_offsets.contains(&offset) {
+        if owned_references.iter().any(|(owned_offset, _)| *owned_offset == offset) {
+            let result = abi::int_result_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, source_reg);
+            abi::emit_push_reg(ctx.emitter, dest_reg);
+            abi::emit_load_from_address(ctx.emitter, result, dest_reg, offset);
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_clone");
+            abi::emit_pop_reg(ctx.emitter, dest_reg);
+            abi::emit_pop_reg(ctx.emitter, source_reg);
+            abi::emit_store_to_address(ctx.emitter, result, dest_reg, offset);
+        } else if retained_offsets.contains(&offset) {
             emit_retain_cloned_property_pointer(ctx, source_reg, dest_reg, offset);
         }
     }

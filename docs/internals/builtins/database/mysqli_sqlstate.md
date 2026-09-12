@@ -1,11 +1,11 @@
 ---
-title: "mysqli_sqlstate() — internals"
+title: "mysqli_sqlstate() - internals"
 description: "Compiler internals for mysqli_sqlstate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 157
 ---
 
-## `mysqli_sqlstate()` — internals
+## `mysqli_sqlstate()` - internals
 
 ## Where it lives
 

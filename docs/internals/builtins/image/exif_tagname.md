@@ -1,11 +1,11 @@
 ---
-title: "exif_tagname() — internals"
+title: "exif_tagname() - internals"
 description: "Compiler internals for exif_tagname(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 448
 ---
 
-## `exif_tagname()` — internals
+## `exif_tagname()` - internals
 
 ## Where it lives
 

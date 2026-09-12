@@ -1,11 +1,11 @@
 ---
-title: "_imagick_norm_color() — internals"
+title: "_imagick_norm_color() - internals"
 description: "Compiler internals for _imagick_norm_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1070
+  order: 1095
 ---
 
-## `_imagick_norm_color()` — internals
+## `_imagick_norm_color()` - internals
 
 ## Where it lives
 

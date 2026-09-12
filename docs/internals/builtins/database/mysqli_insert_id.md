@@ -1,11 +1,11 @@
 ---
-title: "mysqli_insert_id() — internals"
+title: "mysqli_insert_id() - internals"
 description: "Compiler internals for mysqli_insert_id(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 137
 ---
 
-## `mysqli_insert_id()` — internals
+## `mysqli_insert_id()` - internals
 
 ## Where it lives
 

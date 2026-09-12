@@ -1,11 +1,11 @@
 ---
-title: "cairo_pattern_add_color_stop_rgb() — internals"
+title: "cairo_pattern_add_color_stop_rgb() - internals"
 description: "Compiler internals for cairo_pattern_add_color_stop_rgb(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 422
 ---
 
-## `cairo_pattern_add_color_stop_rgb()` — internals
+## `cairo_pattern_add_color_stop_rgb()` - internals
 
 ## Where it lives
 

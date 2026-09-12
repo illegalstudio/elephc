@@ -74,11 +74,38 @@ pub(super) fn lower_builtin_call_args(
     if canonical == "eval" {
         return lower_eval_args(ctx, sig, args);
     }
-    let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
+    let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
+    if matches!(argument_lowering,
+        crate::builtins::semantics::BuiltinArgumentLowering::Standard
+        | crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
+    ) {
+        if let Some(sig) = sig {
+            if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, name) {
+                return operands;
+            }
+        }
+    }
+    if !crate::types::call_args::has_named_args(args)
+        && argument_lowering != crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted
+    {
+        if let Some(sig) = sig {
+            if let Some(operands) = lower_positional_spread_args_with_signature(
+                ctx, sig, args, Some(name),
+            ) {
+                for (name, ty) in pcntl_outputs {
+                    ctx.set_local_logical_type(&name, ty);
+                }
+                return operands;
+            }
+        }
+    }
     let lowered = match argument_lowering {
+        crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults => {
+            lower_args_with_signature(ctx, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::Count => {
             lower_count_args(ctx, sig, args)
         }
@@ -104,7 +131,21 @@ pub(super) fn lower_builtin_call_args(
             if !crate::types::call_args::has_named_args(args)
                 && !args.iter().any(is_spread_arg) =>
         {
-            lower_args(ctx, args)
+            args.iter()
+                .enumerate()
+                .map(|(index, arg)| {
+                    let value = lower_expr(ctx, arg);
+                    if index + 1 < args.len()
+                        && !sig.is_some_and(|sig| {
+                            sig.ref_params.get(index).copied().unwrap_or(false)
+                        })
+                    {
+                        root_evaluated_call_argument(ctx, value, arg.span).value
+                    } else {
+                        value.value
+                    }
+                })
+                .collect()
         }
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
             if !crate::types::call_args::has_named_args(args)
@@ -271,10 +312,18 @@ pub(super) fn lower_positional_builtin_args_with_signature(
     args.iter()
         .enumerate()
         .map(|(index, arg)| {
-            if index < regular_param_count {
+            let value = if index < regular_param_count {
                 lower_arg_with_signature(ctx, sig, index, arg)
             } else {
                 lower_expr(ctx, arg).value
+            };
+            if index + 1 < args.len()
+                && !sig.ref_params.get(index).copied().unwrap_or(false)
+            {
+                let lowered = lowered_value_from_id(ctx, value);
+                root_evaluated_call_argument(ctx, lowered, arg.span).value
+            } else {
+                value
             }
         })
         .collect()
@@ -495,6 +544,7 @@ pub(super) fn lower_value_sort_comparator_closure(
         capture_refs,
         callback,
         &[elem_ty.clone(), elem_ty],
+        None,
         None,
         *is_static,
     )

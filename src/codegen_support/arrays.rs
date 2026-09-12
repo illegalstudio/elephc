@@ -28,6 +28,7 @@ pub(crate) fn emit_array_value_type_stamp(
         PhpType::Mixed => 7,
         PhpType::Union(_) => 7,
         PhpType::Void => 8,
+        PhpType::Callable => 10,
         _ => return,
     };
     match emitter.target.arch {
@@ -50,6 +51,25 @@ pub(crate) fn emit_array_value_type_stamp(
             emitter.instruction("or r10, r12");                                 // combine the preserved heap kind with the stamped array value_type tag
             emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // persist the packed array kind word in the heap header
             abi::emit_pop_reg(emitter, "r12");                                  // restore the x86_64 nested-call scratch register after the array value-type stamp is complete
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Packed callable arrays must advertise descriptors to boxed reads and deep cleanup on every ABI.
+    #[test]
+    fn callable_array_headers_use_the_descriptor_value_tag_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let result = abi::int_result_reg(&emitter);
+            emit_array_value_type_stamp(&mut emitter, result, &PhpType::Callable);
+            let assembly = emitter.output();
+            let expected = if name == "linux-x86_64" { "mov r12, 10" } else { "mov x11, #10" };
+            assert!(assembly.contains(expected), "{name}: {assembly}");
         }
     }
 }

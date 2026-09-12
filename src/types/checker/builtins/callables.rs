@@ -24,6 +24,9 @@ use super::super::Checker;
 
 mod preg_replace_callback;
 
+#[cfg(test)]
+mod tests;
+
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
 /// Type-checks a first-class `preg_replace_callback(...)` invocation with callback context.
@@ -115,14 +118,14 @@ fn specialize_dynamic_assoc_variadic_first_class_callback(
 
 /// Returns the element type carried by an array/associative-array type.
 ///
-/// A `Mixed` receiver yields `Mixed` elements so callback validation can preserve the
+/// A boxed receiver yields `Mixed` elements so callback validation can preserve the
 /// declaration as the only available contract. Other non-array types retain the historical
 /// `Int` fallback; callers that require arrays diagnose the invalid container separately.
 pub(crate) fn array_element_type(arr_ty: &PhpType) -> PhpType {
     match arr_ty {
         PhpType::Array(elem_ty) => (**elem_ty).clone(),
         PhpType::AssocArray { value, .. } => (**value).clone(),
-        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
         _ => PhpType::Int,
     }
 }
@@ -130,14 +133,14 @@ pub(crate) fn array_element_type(arr_ty: &PhpType) -> PhpType {
 /// Returns the array key type carried by an array/associative-array type.
 ///
 /// Indexed arrays are integer-keyed; an associative array reports its declared key type.
-/// A `Mixed` receiver yields `Mixed` keys so callback validation keeps the declaration as
+/// A boxed receiver yields `Mixed` keys so callback validation keeps the declaration as
 /// the only available contract. Other non-array types retain the `Int` fallback, matching
 /// [`array_element_type`]; callers that require arrays diagnose the container separately.
 pub(crate) fn array_key_type(arr_ty: &PhpType) -> PhpType {
     match arr_ty {
         PhpType::Array(_) => PhpType::Int,
         PhpType::AssocArray { key, .. } => (**key).clone(),
-        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
         _ => PhpType::Int,
     }
 }
@@ -242,6 +245,31 @@ pub(crate) fn check_array_callback_builtin_call(
             span,
             env,
             label,
+            false,
+        )
+    })
+}
+
+/// Validates a walk callback, exposing boxed declared-array values as writable Mixed storage.
+pub(crate) fn check_array_walk_callback_builtin_call(
+    checker: &mut Checker,
+    callback: &Expr,
+    arr_ty: &PhpType,
+    span: crate::span::Span,
+    env: &TypeEnv,
+    label: &str,
+) -> Result<PhpType, CompileError> {
+    let callback_arg_types = array_walk_callback_arg_types(checker, arr_ty, callback);
+    let writable_mixed_value = arr_ty.is_php_array();
+    checker.with_internal_callback_binding(|checker| {
+        check_array_callback_builtin_call_in_engine_frame(
+            checker,
+            callback,
+            &callback_arg_types,
+            span,
+            env,
+            label,
+            writable_mixed_value,
         )
     })
 }
@@ -255,18 +283,29 @@ fn check_array_callback_builtin_call_in_engine_frame(
     span: crate::span::Span,
     env: &TypeEnv,
     label: &str,
+    writable_mixed_value: bool,
 ) -> Result<PhpType, CompileError> {
     let mut callback_env = env.clone();
     let callback_args = callback_arg_types
         .iter()
         .enumerate()
-        .map(|(index, ty)| callback_dummy_arg_for_type(ty, index, span, &mut callback_env))
+        .map(|(index, ty)| {
+            if index == 0
+                && writable_mixed_value
+                && *ty == PhpType::Mixed
+            {
+                writable_mixed_callback_dummy_arg(index, span, &mut callback_env)
+            } else {
+                callback_dummy_arg_for_type(ty, index, span, &mut callback_env)
+            }
+        })
         .collect::<Vec<_>>();
 
     if let ExprKind::Closure {
         params,
         variadic,
         variadic_by_ref,
+        variadic_type,
         return_type,
         body,
         captures,
@@ -283,6 +322,7 @@ fn check_array_callback_builtin_call_in_engine_frame(
             params,
             variadic,
             *variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             captures,
@@ -295,6 +335,7 @@ fn check_array_callback_builtin_call_in_engine_frame(
             params,
             variadic,
             *variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             captures,
@@ -322,6 +363,17 @@ fn check_array_callback_builtin_call_in_engine_frame(
     )
 }
 
+/// Builds an addressable boxed Mixed slot for a walk callback's writable value parameter.
+fn writable_mixed_callback_dummy_arg(
+    index: usize,
+    span: crate::span::Span,
+    env: &mut TypeEnv,
+) -> Expr {
+    let name = format!("{}_writable_{}", CALLBACK_ARG_PLACEHOLDER_PREFIX, index);
+    env.insert(name.clone(), PhpType::Mixed);
+    Expr::new(ExprKind::Variable(name), span)
+}
+
 /// Checks object or array callable call and reports a compile error when it is invalid.
 fn check_object_or_array_callable_call(
     checker: &mut Checker,
@@ -331,9 +383,20 @@ fn check_object_or_array_callable_call(
     env: &TypeEnv,
     allow_by_ref_spread: bool,
     allow_runtime_callable_array: bool,
+    descriptor_traversable_spread: bool,
 ) -> Result<Option<PhpType>, CompileError> {
     if let ExprKind::Variable(var_name) = &callback.kind {
         if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
+            if descriptor_traversable_spread {
+                return check_descriptor_callable_target_call(
+                    checker,
+                    &target,
+                    callback_args,
+                    callback,
+                    env,
+                )
+                .map(Some);
+            }
             return check_callable_target_call(
                 checker,
                 &target,
@@ -347,6 +410,18 @@ fn check_object_or_array_callable_call(
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
+    if descriptor_traversable_spread {
+        if let Some(target) = resolve_literal_callable_target(checker, callback, env)? {
+            return check_descriptor_callable_target_call(
+                checker,
+                &target,
+                callback_args,
+                callback,
+                env,
+            )
+            .map(Some);
+        }
+    }
     if runtime_callable_array_type(&callback_ty) {
         if !allow_runtime_callable_array {
             return Err(CompileError::new(
@@ -360,7 +435,11 @@ fn check_object_or_array_callable_call(
         // and `$obj->$m($a)` desugar to.
         checker.record_unresolved_callee_argument_aliases(callback_args);
         for arg in callback_args {
-            checker.infer_type(arg, env)?;
+            if descriptor_traversable_spread {
+                checker.infer_descriptor_call_arg_type(arg, env)?;
+            } else {
+                checker.infer_type(arg, env)?;
+            }
         }
         return Ok(Some(PhpType::Mixed));
     }
@@ -370,6 +449,20 @@ fn check_object_or_array_callable_call(
             .get(&class_name)
             .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
         {
+            if descriptor_traversable_spread {
+                let target = CallableTarget::Method {
+                    object: Box::new(callback.clone()),
+                    method: "__invoke".to_string(),
+                };
+                return check_descriptor_callable_target_call(
+                    checker,
+                    &target,
+                    callback_args,
+                    callback,
+                    env,
+                )
+                .map(Some);
+            }
             return if allow_by_ref_spread {
                 checker.infer_method_call_on_class_type_allowing_by_ref_spread(
                     &class_name,
@@ -395,6 +488,20 @@ fn check_object_or_array_callable_call(
         return Ok(None);
     };
     if let Some(receiver) = static_callable_receiver(checker, receiver, callback.span)? {
+        if descriptor_traversable_spread {
+            let target = CallableTarget::StaticMethod {
+                receiver,
+                method: method.to_string(),
+            };
+            return check_descriptor_callable_target_call(
+                checker,
+                &target,
+                callback_args,
+                callback,
+                env,
+            )
+            .map(Some);
+        }
         return if allow_by_ref_spread {
             checker.infer_static_method_call_type_allowing_by_ref_spread(
                 &receiver,
@@ -412,6 +519,20 @@ fn check_object_or_array_callable_call(
     let Some(class_name) = checker.invokable_class_for_type(&receiver_ty) else {
         return Ok(None);
     };
+    if descriptor_traversable_spread {
+        let target = CallableTarget::Method {
+            object: Box::new(receiver.clone()),
+            method: method.to_string(),
+        };
+        return check_descriptor_callable_target_call(
+            checker,
+            &target,
+            callback_args,
+            callback,
+            env,
+        )
+        .map(Some);
+    }
     if allow_by_ref_spread {
         checker
             .infer_method_call_on_class_type_allowing_by_ref_spread(
@@ -427,6 +548,49 @@ fn check_object_or_array_callable_call(
             .infer_method_call_on_class_type(&class_name, method, callback_args, callback, env)
             .map(Some)
     }
+}
+
+/// Validates a resolved callback through the descriptor invoker's spread policy.
+fn check_descriptor_callable_target_call(
+    checker: &mut Checker,
+    target: &CallableTarget,
+    callback_args: &[Expr],
+    callback: &Expr,
+    env: &TypeEnv,
+) -> Result<PhpType, CompileError> {
+    let sig = checker.resolve_first_class_callable_sig(target, callback.span, env)?;
+    checker.check_known_callable_call_allowing_by_ref_spread(
+        &sig,
+        callback_args,
+        callback.span,
+        env,
+        "call_user_func() callback",
+    )
+}
+
+/// Resolves a literal two-element callable array before the runtime-array fallback.
+fn resolve_literal_callable_target(
+    checker: &mut Checker,
+    callback: &Expr,
+    env: &TypeEnv,
+) -> Result<Option<CallableTarget>, CompileError> {
+    let Some((receiver, method)) = callable_array_parts(callback) else {
+        return Ok(None);
+    };
+    if let Some(receiver) = static_callable_receiver(checker, receiver, callback.span)? {
+        return Ok(Some(CallableTarget::StaticMethod {
+            receiver,
+            method: method.to_string(),
+        }));
+    }
+    let receiver_ty = checker.infer_type(receiver, env)?;
+    if checker.invokable_class_for_type(&receiver_ty).is_none() {
+        return Ok(None);
+    }
+    Ok(Some(CallableTarget::Method {
+        object: Box::new(receiver.clone()),
+        method: method.to_string(),
+    }))
 }
 
 /// Resolves a receiver-bound callable return type when argument details are runtime-only.
@@ -763,7 +927,7 @@ fn callback_builtin_allows_complex_descriptor_env(
     label: &str,
     callback: &Expr,
 ) -> bool {
-    matches!(
+    (is_keyed_array_predicate_callback(label) || matches!(
         label,
         "array_map() callback"
             | "array_filter() callback"
@@ -774,7 +938,7 @@ fn callback_builtin_allows_complex_descriptor_env(
             | "uksort() callback"
             | "uasort() callback"
             | "iterator_apply() callback"
-    )
+    ))
         && callback_supports_complex_descriptor_env(callback)
 }
 
@@ -821,8 +985,8 @@ fn callback_descriptor_env_ownership(callback: &Expr) -> CallbackDescriptorEnvOw
 /// and returns the inferred return type. Handles `FirstClassCallable`, `Variable`,
 /// `StringLiteral`, and `resolve_expr_callable_sig` callback forms.
 ///
-/// Returns the callback's return type on success, or an error if the callback
-/// does not have a statically known callable signature.
+/// Returns the known result type, or Mixed for supported runtime callback dispatch.
+/// Unsupported callback forms still require a statically known signature.
 pub(crate) fn check_callback_builtin_call(
     checker: &mut Checker,
     callback: &Expr,
@@ -883,6 +1047,10 @@ fn check_callback_builtin_call_in_engine_frame(
     }
 
     if let ExprKind::StringLiteral(cb_name) = &callback.kind {
+        // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
+        // this function a named entry, so its collector has to be compiled for the descriptor
+        // container before its signature is read here.
+        checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             return checker.check_known_callable_call(&sig, callback_args, span, env, label);
         }
@@ -931,13 +1099,36 @@ fn check_callback_builtin_call_in_engine_frame(
             env,
             false,
             callback_builtin_allows_runtime_callable_array(label),
+            false,
         )?
     {
         return Ok(ret_ty);
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
+    if (matches!(label, "array_map() callback" | "array_filter() callback") || is_keyed_array_predicate_callback(label))
+        && matches!(callback_ty.codegen_repr(), PhpType::Mixed | PhpType::Callable | PhpType::Void)
+    {
+        // Boxed array reads erase callable signatures. The map runtime resolves
+        // these values and validates the selected target's argument contract.
+        checker.record_unresolved_callee_argument_aliases(callback_args);
+        for arg in callback_args {
+            checker.infer_type(arg, env)?;
+        }
+        return Ok(PhpType::Mixed);
+    }
     if callback_builtin_allows_runtime_string_descriptor(label) && callback_ty == PhpType::Str {
+        for arg in callback_args {
+            checker.infer_type(arg, env)?;
+        }
+        return Ok(PhpType::Mixed);
+    }
+    if matches!(label, "usort() callback" | "uksort() callback" | "uasort() callback")
+        && callback_ty.codegen_repr() == PhpType::Callable
+    {
+        // Sort emitters already invoke descriptors and validate their selected
+        // targets at runtime. A callable-returning factory may have no static
+        // signature, including when evaluating it always throws.
         for arg in callback_args {
             checker.infer_type(arg, env)?;
         }
@@ -952,7 +1143,7 @@ fn check_callback_builtin_call_in_engine_frame(
 
 /// Returns true when a callback builtin can resolve string callbacks at runtime.
 fn callback_builtin_allows_runtime_string_descriptor(label: &str) -> bool {
-    matches!(
+    is_keyed_array_predicate_callback(label) || matches!(
         label,
         "array_map() callback"
             | "array_filter() callback"
@@ -967,7 +1158,7 @@ fn callback_builtin_allows_runtime_string_descriptor(label: &str) -> bool {
 
 /// Returns true when a callback builtin has codegen support for runtime-selected callable arrays.
 fn callback_builtin_allows_runtime_callable_array(label: &str) -> bool {
-    matches!(
+    is_keyed_array_predicate_callback(label) || matches!(
         label,
         "array_map() callback"
             | "array_filter() callback"
@@ -979,6 +1170,11 @@ fn callback_builtin_allows_runtime_callable_array(label: &str) -> bool {
             | "uasort() callback"
             | "iterator_apply() callback"
     )
+}
+
+/// Identifies callback sites backed by the keyed, boxed predicate invoker.
+fn is_keyed_array_predicate_callback(label: &str) -> bool {
+    matches!(label, "array_find() callback" | "array_any() callback" | "array_all() callback")
 }
 
 
@@ -1097,6 +1293,10 @@ pub(crate) fn check_call_user_func_array(
                 }
             }
         }
+        // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
+        // this function a named entry, so its collector has to be compiled for the descriptor
+        // container before its signature is read here.
+        checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             validate_call_user_func_array_dynamic_arg_array(
                 checker,
@@ -1182,6 +1382,7 @@ pub(crate) fn check_call_user_func_array(
             env,
             true,
             true,
+            false,
         )?
     {
         if !call_user_func_array_arg_container_is_supported(&arg_array_ty) {
@@ -1240,13 +1441,27 @@ pub(crate) fn check_call_user_func(
     span: crate::span::Span,
     env: &TypeEnv,
 ) -> Result<PhpType, CompileError> {
-    for arg in args {
-        checker.infer_type(arg, env)?;
+    for (index, arg) in args.iter().enumerate() {
+        if index == 0 {
+            checker.infer_type(arg, env)?;
+        } else {
+            checker.infer_descriptor_call_arg_type(arg, env)?;
+        }
     }
+    let has_traversable_spread =
+        checker.descriptor_call_has_traversable_spread(&args[1..], env)?;
     if let ExprKind::FirstClassCallable(target) = &args[0].kind {
-        let sig =
-            checker.specialize_first_class_callable_target(target, &args[1..], span, env)?;
-        let ret_ty = checker.check_known_callable_call(
+        let sig = if has_traversable_spread {
+            checker.resolve_first_class_callable_sig(target, span, env)?
+        } else {
+            checker.specialize_first_class_callable_target_for_descriptor_call(
+                target,
+                &args[1..],
+                span,
+                env,
+            )?
+        };
+        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
             &sig,
             &args[1..],
             span,
@@ -1257,17 +1472,32 @@ pub(crate) fn check_call_user_func(
     }
     if let ExprKind::Variable(var_name) = &args[0].kind {
         if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() {
-            let sig = checker.specialize_first_class_callable_target(
-                &target,
-                &args[1..],
-                span,
-                env,
-            )?;
+            let sig = if has_traversable_spread {
+                checker.resolve_first_class_callable_sig(&target, span, env)?
+            } else {
+                checker.specialize_first_class_callable_target_for_descriptor_call(
+                    &target,
+                    &args[1..],
+                    span,
+                    env,
+                )?
+            };
             checker.callable_sigs.insert(var_name.clone(), sig.clone());
             checker
                 .closure_return_types
                 .insert(var_name.clone(), sig.return_type.clone());
-            let ret_ty = checker.check_known_callable_call(
+            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+                &sig,
+                &args[1..],
+                span,
+                env,
+                "call_user_func() callback",
+            )?;
+            return Ok(ret_ty);
+        }
+        if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
+            let sig = checker.resolve_first_class_callable_sig(&target, args[0].span, env)?;
+            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,
                 &args[1..],
                 span,
@@ -1290,11 +1520,16 @@ pub(crate) fn check_call_user_func(
                 return Ok(ret_ty);
             }
         }
-        let cb_name = checker
-            .canonical_function_name_folded(cb_name)
+        let canonical_function_name = checker.canonical_function_name_folded(cb_name);
+        let cb_name = canonical_function_name
+            .clone()
             .unwrap_or_else(|| cb_name.clone());
+        // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
+        // this function a named entry, so its collector has to be compiled for the descriptor
+        // container before its signature is read here.
+        checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
-            let ret_ty = checker.check_known_callable_call(
+            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,
                 &args[1..],
                 span,
@@ -1303,8 +1538,32 @@ pub(crate) fn check_call_user_func(
             )?;
             return Ok(ret_ty);
         }
-        let cb_args = args[1..].to_vec();
-        let ret_ty = checker.check_function_call(&cb_name, &cb_args, span, env)?;
+        let has_only_positional_arguments = args[1..].iter().all(|arg| {
+            !matches!(
+                arg.kind,
+                ExprKind::NamedArg { .. } | ExprKind::Spread(_)
+            )
+        });
+        if canonical_function_name.is_none()
+            && checker.eval_barrier_active
+            && !cb_name.contains("::")
+            && has_only_positional_arguments
+        {
+            // `eval()` may publish a free function after static declaration collection. The EIR
+            // lowering owns this exact string-literal shape through `EvalFunctionCall`; keep the
+            // callback runtime-opaque while preserving conservative by-reference aliasing.
+            checker.record_unresolved_callee_argument_aliases(&args[1..]);
+            return Ok(PhpType::Mixed);
+        }
+        let target = CallableTarget::Function(Name::from(cb_name.clone()));
+        let sig = checker.resolve_first_class_callable_sig(&target, span, env)?;
+        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            &sig,
+            &args[1..],
+            span,
+            env,
+            "call_user_func() callback",
+        )?;
         return Ok(ret_ty);
     }
     if let Some(ret_ty) =
@@ -1316,12 +1575,13 @@ pub(crate) fn check_call_user_func(
             env,
             true,
             true,
+            has_traversable_spread,
         )?
     {
         return Ok(ret_ty);
     }
     if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
-        let ret_ty = checker.check_known_callable_call(
+        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
             &sig,
             &args[1..],
             span,
@@ -1337,7 +1597,7 @@ pub(crate) fn check_call_user_func(
         // would alias the local, so the arguments lose kill/retype eligibility.
         checker.record_unresolved_callee_argument_aliases(&args[1..]);
         for arg in &args[1..] {
-            checker.infer_type(arg, env)?;
+            checker.infer_descriptor_call_arg_type(arg, env)?;
         }
         return Ok(PhpType::Mixed);
     }
@@ -1349,7 +1609,7 @@ pub(crate) fn check_call_user_func(
         // return type is not statically known, so the call yields Mixed.
         checker.record_unresolved_callee_argument_aliases(&args[1..]);
         for arg in &args[1..] {
-            checker.infer_type(arg, env)?;
+            checker.infer_descriptor_call_arg_type(arg, env)?;
         }
         return Ok(PhpType::Mixed);
     }
@@ -1409,8 +1669,8 @@ pub(crate) fn check_function_exists(
 
 /// Returns contextual callback argument types for `array_filter()` based on a static mode.
 ///
-/// Unknown or invalid runtime modes use the default value-only shape for type checking;
-/// runtime validation still throws before invoking the callback when the mode is invalid.
+/// Dynamic modes keep both contextual slots opaque; runtime binding decides the actual arity.
+/// Other literal integers use value-only context, with validation delegated to the PHP profile.
 pub(crate) fn array_filter_callback_arg_types(
     arr_ty: &PhpType,
     mode_arg: Option<&Expr>,
@@ -1419,6 +1679,7 @@ pub(crate) fn array_filter_callback_arg_types(
     match mode_arg.and_then(static_array_filter_mode_value) {
         Some(1) => vec![elem_ty, array_key_type(arr_ty)],
         Some(2) => vec![array_key_type(arr_ty)],
+        None if mode_arg.is_some() => vec![PhpType::Mixed, PhpType::Mixed],
         _ => vec![elem_ty],
     }
 }
@@ -1426,12 +1687,16 @@ pub(crate) fn array_filter_callback_arg_types(
 /// Returns the contextual callback parameter types for `array_walk()`/`array_walk_recursive()`.
 ///
 /// PHP always invokes the callback as `callback($value, $key)`, but declaring only the value
-/// parameter is legal and common. The key slot is therefore added only when the callback is a
-/// closure literal that declares at least two parameters, so a one-parameter callback keeps
-/// passing arity validation while `function ($v, $k)` gets its key typed from the array.
-pub(crate) fn array_walk_callback_arg_types(arr_ty: &PhpType, callback: &Expr) -> Vec<PhpType> {
+/// parameter is legal and common. The key slot is therefore added only when the callback has a
+/// known two-parameter contract, so a one-parameter callback keeps passing arity validation while
+/// `function ($v, $k)` gets its key typed from the array.
+fn array_walk_callback_arg_types(
+    checker: &Checker,
+    arr_ty: &PhpType,
+    callback: &Expr,
+) -> Vec<PhpType> {
     let elem_ty = array_element_type(arr_ty);
-    if callback_declares_at_least_two_params(callback) {
+    if callback_declares_at_least_two_params(checker, callback) {
         vec![elem_ty, array_key_type(arr_ty)]
     } else {
         vec![elem_ty]
@@ -1440,13 +1705,38 @@ pub(crate) fn array_walk_callback_arg_types(arr_ty: &PhpType, callback: &Expr) -
 
 /// Reports whether a callback expression is a closure literal declaring two or more parameters.
 ///
-/// Only literal closures/arrow functions are inspected; every other callable shape keeps the
-/// single-parameter contract the checker can prove without resolving the callable.
-fn callback_declares_at_least_two_params(callback: &Expr) -> bool {
+/// Literal closures and already-resolved callable variables expose their declared arity. Other
+/// runtime-selected shapes keep the single-parameter contract the checker can prove here.
+fn callback_declares_at_least_two_params(checker: &Checker, callback: &Expr) -> bool {
     match &callback.kind {
         ExprKind::Closure { params, .. } => params.len() >= 2,
+        ExprKind::Variable(name) => checker
+            .callable_sigs
+            .get(name)
+            .is_some_and(callback_signature_accepts_walk_key),
+        ExprKind::StringLiteral(name) => {
+            let canonical = checker
+                .canonical_function_name_folded(name.as_str())
+                .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
+            checker
+                .functions
+                .get(canonical.as_str())
+                .is_some_and(callback_signature_accepts_walk_key)
+                || checker
+                    .fn_decls
+                    .get(canonical.as_str())
+                    .is_some_and(|decl| decl.params.len() >= 2 || decl.variadic.is_some())
+        }
+        ExprKind::Assignment { value, .. } => {
+            callback_declares_at_least_two_params(checker, value)
+        }
         _ => false,
     }
+}
+
+/// Reports whether a resolved callable signature can consume the walk key argument.
+fn callback_signature_accepts_walk_key(sig: &FunctionSig) -> bool {
+    sig.params.len() >= 2 || sig.variadic.is_some()
 }
 
 /// Returns a compile-time `array_filter()` mode value for integer literals and predefined constants.

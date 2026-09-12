@@ -51,9 +51,7 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_do_while_stmt(body, condition, context, scope, values)
         }
         EvalStmt::Echo(expr) => {
-            let value = eval_expr(expr, context, scope, values)?;
-            let value = eval_string_context_value(value, context, values)?;
-            values.echo(value)?;
+            eval_echo_expr(expr, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::For {
@@ -139,8 +137,7 @@ pub(in crate::interpreter) fn execute_stmt(
             then_branch,
             else_branch,
         } => {
-            let condition = eval_expr(condition, context, scope, values)?;
-            if values.truthy(condition)? {
+            if eval_condition(condition, context, scope, values)? {
                 execute_statements(then_branch, context, scope, values)
             } else {
                 execute_statements(else_branch, context, scope, values)
@@ -195,13 +192,12 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {
-            let value = eval_expr(value, context, scope, values)?;
-            for replaced in set_scope_cell(
+            let value = eval_owned_expr(value, context, scope, values)?;
+            for replaced in set_owned_scope_cell(
                 context,
                 scope,
                 name.clone(),
                 value,
-                ScopeCellOwnership::Owned,
             )? {
                 eval_release_value(context, values, replaced)?;
             }
@@ -211,8 +207,11 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_switch_stmt(expr, cases, context, scope, values)
         }
         EvalStmt::Throw(expr) => {
-            let thrown = eval_expr(expr, context, scope, values)?;
-            if values.type_tag(thrown)? != EVAL_TAG_OBJECT {
+            let thrown = eval_owned_expr(expr, context, scope, values)?;
+            let tag = values.type_tag(thrown);
+            if tag != Ok(EVAL_TAG_OBJECT) {
+                let _ = eval_release_value(context, values, thrown);
+                tag?;
                 return Err(EvalStatus::RuntimeFatal);
             }
             Ok(EvalControl::Throw(thrown))
@@ -233,10 +232,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::While { condition, body } => {
-            while {
-                let condition = eval_expr(condition, context, scope, values)?;
-                values.truthy(condition)?
-            } {
+            while eval_condition(condition, context, scope, values)? {
                 match execute_statements(body, context, scope, values)? {
                     EvalControl::None | EvalControl::Continue => {}
                     EvalControl::Break => break,
@@ -249,7 +245,7 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::Expr(expr) => {
             let result = eval_expr(expr, context, scope, values)?;
-            eval_release_value(context, values, result)?;
+            release_expr_result(result, context, values)?;
             Ok(EvalControl::None)
         }
     }

@@ -8,36 +8,10 @@
 //! - Preserves callback ABI, target parity, array storage, and ownership contracts.
 
 use super::*;
-use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
-/// Returns the scalar callback element type for an indexed-array predicate/comparator builtin.
-///
-/// The `__rt_array_find_any_all` / `__rt_array_udiff_uintersect` runtimes load each element as a
-/// single 8-byte word and pass it in an integer argument register, so only `int`/`bool` indexed
-/// arrays are supported (float elements would need the float register file).
-pub(super) fn predicate_callback_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
-    match ty.codegen_repr() {
-        PhpType::Array(elem) => {
-            let elem = elem.codegen_repr();
-            if matches!(elem, PhpType::Int | PhpType::Bool) {
-                Ok(elem)
-            } else {
-                Err(CodegenIrError::unsupported(format!(
-                    "{} indexed-array element PHP type {:?}",
-                    name, elem
-                )))
-            }
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name, other
-        ))),
-    }
-}
 
 /// Loads the `(wrapper, array, env[, mode])` argument registers and calls a single-array callback
-/// runtime helper. Shared by `array_find`/`array_any`/`array_all` (mode 0/1/2) and
-/// `array_walk_recursive` (no mode). The callback wrapper goes in arg0, the array in arg1, the
+/// runtime helper. Recursive walking uses no mode. The callback wrapper goes in arg0, the array in arg1, the
 /// environment pointer in arg2, and the optional mode selector in arg3.
 pub(super) fn emit_single_array_callback_call(
     ctx: &mut FunctionContext<'_>,
@@ -149,50 +123,6 @@ pub(super) fn lower_single_array_callback_builtin(
     }
 }
 
-/// Lowers a predicate builtin (`array_find` mode 0 / `array_any` mode 1 / `array_all` mode 2)
-/// over an indexed scalar array, validating the element type and routing through the shared
-/// `__rt_array_find_any_all` runtime. The predicate callback always returns `bool`; the builtin's
-/// own result type (Mixed for `array_find`, bool for any/all) is taken from `inst.result_php_type`.
-pub(super) fn lower_array_predicate_builtin(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    mode: i64,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 2)?;
-    let array = expect_operand(inst, 0)?;
-    let callback = expect_operand(inst, 1)?;
-    let elem_ty = predicate_callback_element_type(ctx.value_php_type(array)?, name)?;
-    let source_arg_ty = PhpType::Array(Box::new(elem_ty.clone()));
-    lower_single_array_callback_builtin(
-        ctx,
-        inst,
-        name,
-        "__rt_array_find_any_all",
-        array,
-        callback,
-        &source_arg_ty,
-        vec![elem_ty],
-        PhpType::Bool,
-        Some(mode),
-    )
-}
-
-/// Lowers `array_find()`: returns the first element satisfying the predicate, boxed as Mixed (or null).
-pub(crate) fn lower_array_find(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_array_predicate_builtin(ctx, inst, "array_find", 0)
-}
-
-/// Lowers `array_any()`: returns true when some element satisfies the predicate.
-pub(crate) fn lower_array_any(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_array_predicate_builtin(ctx, inst, "array_any", 1)
-}
-
-/// Lowers `array_all()`: returns true when every element satisfies the predicate.
-pub(crate) fn lower_array_all(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_array_predicate_builtin(ctx, inst, "array_all", 2)
-}
-
 /// Lowers `array_walk_recursive()`: invokes the callback on each scalar leaf of a (possibly nested)
 /// array, descending into array-valued elements. Returns void; leaves are passed as 8-byte scalars.
 pub(crate) fn lower_array_walk_recursive(
@@ -202,6 +132,16 @@ pub(crate) fn lower_array_walk_recursive(
     super::super::ensure_arg_count(inst, "array_walk_recursive", 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
+    if super::boxed_walk::lower_boxed_array_walk(
+        ctx,
+        inst,
+        array,
+        callback,
+        "array_walk_recursive",
+        true,
+    )? {
+        return Ok(());
+    }
     require_array_like_operand(ctx.value_php_type(array)?, "array_walk_recursive")?;
     let source_arg_ty = PhpType::Array(Box::new(PhpType::Int));
     lower_single_array_callback_builtin(
@@ -218,155 +158,7 @@ pub(crate) fn lower_array_walk_recursive(
     )
 }
 
-/// Loads the `(wrapper, arr1, arr2, env, mode)` argument registers and calls the two-array
-/// comparator runtime helper `__rt_array_udiff_uintersect`. The comparator wrapper goes in arg0,
-/// the two arrays in arg1/arg2, the environment pointer in arg3, and the mode selector in arg4.
-pub(super) fn emit_two_array_comparator_call(
-    ctx: &mut FunctionContext<'_>,
-    wrapper_label: &str,
-    arr1: ValueId,
-    arr2: ValueId,
-    env_bytes: usize,
-    mode: i64,
-) -> Result<()> {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x0", wrapper_label);
-            ctx.load_value_to_reg(arr1, "x1")?;
-            ctx.load_value_to_reg(arr2, "x2")?;
-            load_static_callback_env_arg(ctx, "x3", env_bytes);
-            abi::emit_load_int_immediate(ctx.emitter, "x4", mode);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rdi", wrapper_label);
-            ctx.load_value_to_reg(arr1, "rsi")?;
-            ctx.load_value_to_reg(arr2, "rdx")?;
-            load_static_callback_env_arg(ctx, "rcx", env_bytes);
-            abi::emit_load_int_immediate(ctx.emitter, "r8", mode);
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_udiff_uintersect");
-    Ok(())
-}
 
-/// Lowers a two-array comparator builtin (`array_udiff` mode 0 / `array_uintersect` mode 1) over
-/// indexed scalar arrays, dispatching on the comparator's closure/string/static form. The result is
-/// a sequentially re-indexed array of the first array's surviving elements.
-pub(super) fn lower_two_array_comparator_builtin(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    mode: i64,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 3)?;
-    let arr1 = expect_operand(inst, 0)?;
-    let arr2 = expect_operand(inst, 1)?;
-    let comparator = expect_operand(inst, 2)?;
-    let elem_ty = predicate_callback_element_type(ctx.value_php_type(arr1)?, name)?;
-    predicate_callback_element_type(ctx.value_php_type(arr2)?, name)?;
-    // The comparator returns an int (negative/zero/positive); the builtin's own array result type
-    // is taken from `inst.result_php_type` at `store_if_result`.
-    let comparator_return_ty = PhpType::Int;
-    let source_arg_ty = PhpType::Array(Box::new(elem_ty.clone()));
-    let visible_arg_types = vec![elem_ty.clone(), elem_ty];
-    match ctx.value_php_type(comparator)?.codegen_repr() {
-        PhpType::Callable => {
-            lower_descriptor_callback_runtime(
-                ctx,
-                comparator,
-                visible_arg_types,
-                comparator_return_ty,
-                |ctx, wrapper_label, env_bytes| {
-                    emit_two_array_comparator_call(ctx, wrapper_label, arr1, arr2, env_bytes, mode)
-                },
-            )?;
-            store_if_result(ctx, inst)
-        }
-        PhpType::Str => {
-            lower_runtime_string_descriptor_callback(
-                ctx,
-                comparator,
-                Some(&source_arg_ty),
-                visible_arg_types,
-                comparator_return_ty,
-                super::super::super::instruction_strict_php_profile(inst),
-                name,
-                |ctx, wrapper_label, env_bytes| {
-                    emit_two_array_comparator_call(ctx, wrapper_label, arr1, arr2, env_bytes, mode)
-                },
-            )?;
-            store_if_result(ctx, inst)
-        }
-        _ => {
-            let binding = static_sort_callback_binding(
-                ctx,
-                comparator,
-                &format!("{} comparator", name),
-                Some(&visible_arg_types),
-            )?;
-            let env_bytes = reserve_static_callback_env(ctx, binding.env_source)?;
-            emit_two_array_comparator_call(ctx, &binding.label, arr1, arr2, env_bytes, mode)?;
-            if env_bytes != 0 {
-                abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
-            }
-            store_if_result(ctx, inst)
-        }
-    }
-}
-
-/// Lowers `array_udiff()`: keeps first-array elements not equal (per comparator) to any second-array element.
-pub(crate) fn lower_array_udiff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_two_array_comparator_builtin(ctx, inst, "array_udiff", 0)
-}
-
-/// Lowers `array_uintersect()`: keeps first-array elements equal (per comparator) to some second-array element.
-pub(crate) fn lower_array_uintersect(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    lower_two_array_comparator_builtin(ctx, inst, "array_uintersect", 1)
-}
-
-/// Lowers `array_multisort()`: stable-sorts the first indexed array ascending and reorders the second
-/// in tandem, both in place. Both arguments are by-reference, so each is copy-on-write split with
-/// `ensure_unique_sort_source` and the (possibly relocated) pointer is written back to its local
-/// before the runtime mutates the storage. Returns `true`. Supports 8-byte scalar indexed arrays.
-pub(crate) fn lower_array_multisort(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_multisort", 2)?;
-    let arr1 = expect_operand(inst, 0)?;
-    let arr2 = expect_operand(inst, 1)?;
-    eight_byte_indexed_array_element_type(ctx.value_php_type(arr1)?, "array_multisort")?;
-    eight_byte_indexed_array_element_type(ctx.value_php_type(arr2)?, "array_multisort")?;
-
-    // -- copy-on-write split both by-ref arrays and publish the new pointers to their locals --
-    let receiver1 = ReceiverPlace::resolve(ctx, arr1)?;
-    ensure_unique_sort_source(ctx, arr1)?;
-    receiver1.store_back_value(ctx, arr1)?;
-    let receiver2 = ReceiverPlace::resolve(ctx, arr2)?;
-    ensure_unique_sort_source(ctx, arr2)?;
-    receiver2.store_back_value(ctx, arr2)?;
-
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(arr1, "x0")?;
-            ctx.load_value_to_reg(arr2, "x1")?;
-        }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(arr1, "rdi")?;
-            ctx.load_value_to_reg(arr2, "rsi")?;
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_multisort");
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
-}
 
 /// Lowers `array_search()` for indexed arrays with integer-like payloads.
 ///
@@ -441,6 +233,9 @@ pub(super) fn lower_in_array_with_mode(
     array_ty: PhpType,
     mode: InArrayMode,
 ) -> Result<()> {
+    if super::boxed_membership::needs_dynamic_membership(&needle_ty, &array_ty) {
+        return super::boxed_membership::lower_dynamic_membership(ctx, needle, array, mode);
+    }
     if search::try_lower_assoc_in_array(
         ctx,
         needle,
@@ -485,4 +280,3 @@ pub(super) fn lower_in_array_with_mode(
     }
     Ok(())
 }
-

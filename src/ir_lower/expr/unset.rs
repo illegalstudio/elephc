@@ -58,9 +58,9 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
 /// EIR backend can remove.
 ///
 /// Associative arrays remove the element directly; packed indexed arrays are converted to a hash at
-/// the unset site (PHP `unset()` leaves a sparse array). By-reference locals are excluded: their
-/// storage is aliased to a caller whose static type would no longer match after a representation
-/// change.
+/// the unset site (PHP `unset()` leaves a sparse array). Declared PHP arrays keep a boxed
+/// packed-or-hash representation, so their reference aliases can observe sparse mutation too.
+/// Raw by-reference arrays still cannot change their caller's storage representation.
 pub(super) fn unset_array_access_has_local_array_receiver(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
@@ -68,8 +68,11 @@ pub(super) fn unset_array_access_has_local_array_receiver(
     let ExprKind::Variable(name) = &array.kind else {
         return false;
     };
+    if ctx.local_type(name).is_php_array() {
+        return true;
+    }
     if ctx.is_ref_bound_local(name) {
-        return false;
+        return ctx.local_type(name).codegen_repr() == PhpType::Mixed;
     }
     matches!(
         ctx.local_type(name).codegen_repr(),
@@ -98,7 +101,7 @@ pub(super) fn unset_array_access_has_object_receiver(
 /// An associative-array local removes the element in place through `Op::HashUnset`. A packed
 /// indexed-array local is first converted to a hash (PHP keeps the surviving keys without
 /// renumbering) and then removed. An `ArrayAccess` object dispatches to its `offsetUnset($key)`
-/// method like before. By-reference array locals fall through to the object path.
+/// method. Declared PHP arrays use boxed sparse storage without changing their reference ABI.
 pub(super) fn lower_unset_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
@@ -106,6 +109,13 @@ pub(super) fn lower_unset_array_access(
     expr: &Expr,
 ) {
     if let ExprKind::Variable(name) = &array.kind {
+        if ctx.local_type(name).is_php_array()
+            || (ctx.is_ref_bound_local(name)
+                && ctx.local_type(name).codegen_repr() == PhpType::Mixed)
+        {
+            lower_unset_boxed_array_element(ctx, name, array.span, index, expr);
+            return;
+        }
         if !ctx.is_ref_bound_local(name) {
             match ctx.local_type(name).codegen_repr() {
                 PhpType::AssocArray { .. } => {
@@ -134,6 +144,32 @@ pub(super) fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.
+fn lower_unset_boxed_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let index_value = lower_expr(ctx, index);
+    // Clearing a key temp through a PHP null assignment widens its storage to Mixed.
+    // Reloading it as Str then creates an unrooted copy before the destructor can throw.
+    // Keep the concrete operand and clear its scoped owner without changing the slot type.
+    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
+    let array_value = crate::ir_lower::stmt::load_array_local_for_write(ctx, name, array_span);
+    ctx.emit_void(
+        Op::OffsetUnset,
+        vec![array_value.value, index_value.value],
+        None,
+        Op::OffsetUnset.default_effects(),
+        Some(expr.span),
+    );
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
 }
 
 /// Lowers `unset($hash[$key])` for an associative-array local as a `HashUnset` instruction.
@@ -354,4 +390,3 @@ pub(super) fn lower_nullable_magic_property_unset(
 
     ctx.builder.position_at_end(merge);
 }
-

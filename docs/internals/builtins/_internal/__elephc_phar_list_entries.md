@@ -1,16 +1,16 @@
 ---
-title: "__elephc_phar_list_entries() — internals"
+title: "__elephc_phar_list_entries() - internals"
 description: "Compiler internals for __elephc_phar_list_entries(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1045
+  order: 1070
 ---
 
-## `__elephc_phar_list_entries()` — internals
+## `__elephc_phar_list_entries()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_list_entries.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_list_entries.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

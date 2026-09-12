@@ -1,16 +1,16 @@
 ---
-title: "__elephc_initialize_pdo_statement() — internals"
+title: "__elephc_initialize_pdo_statement() - internals"
 description: "Compiler internals for __elephc_initialize_pdo_statement(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1025
+  order: 1050
 ---
 
-## `__elephc_initialize_pdo_statement()` — internals
+## `__elephc_initialize_pdo_statement()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_initialize_pdo_statement.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_initialize_pdo_statement.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

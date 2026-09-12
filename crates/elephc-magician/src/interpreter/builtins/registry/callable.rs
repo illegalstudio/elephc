@@ -32,6 +32,34 @@ enum EvalObjectCallbackKind {
     Method,
 }
 
+/// Returns the canonical name of a scope builtin that PHP forbids through dynamic invocation.
+fn eval_forbidden_dynamic_scope_builtin(name: &str) -> Option<&'static str> {
+    if name.eq_ignore_ascii_case("func_get_arg") {
+        Some("func_get_arg")
+    } else if name.eq_ignore_ascii_case("func_get_args") {
+        Some("func_get_args")
+    } else if name.eq_ignore_ascii_case("func_num_args") {
+        Some("func_num_args")
+    } else if name.eq_ignore_ascii_case("get_defined_vars") {
+        Some("get_defined_vars")
+    } else {
+        None
+    }
+}
+
+/// Throws PHP's dynamic-call diagnostic for one forbidden scope builtin.
+fn eval_throw_forbidden_dynamic_scope_builtin<T>(
+    name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!("Cannot call {name}() dynamically"),
+        context,
+        values,
+    )
+}
+
 /// Dispatches `call_user_func_array` with optional lexical scope for special class receivers.
 pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
     callback: RuntimeCellHandle,
@@ -40,6 +68,7 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback_is_object = values.type_tag(callback)? == EVAL_TAG_OBJECT;
     let callback = eval_call_user_func_callback(
         callback,
         "call_user_func_array",
@@ -50,8 +79,30 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let evaluated_args = eval_array_call_arg_values(arg_array, context, values)?;
-    eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+    with_eval_array_call_arguments(arg_array, context, values, |evaluated_args, context, values| {
+        if let EvaluatedCallable::Named { name, .. } = &callback {
+            if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+                if forbidden != "get_defined_vars" || callback_is_object {
+                    return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+                }
+            }
+            if name.eq_ignore_ascii_case("get_defined_vars") {
+                if let Some(lexical_scope) = lexical_scope {
+                    if evaluated_args.iter().any(|arg| arg.name.is_some()) {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                    let evaluated_values =
+                        evaluated_args.iter().map(|arg| arg.value).collect::<Vec<_>>();
+                    return eval_get_defined_vars_from_scope(
+                        &evaluated_values,
+                        lexical_scope,
+                        values,
+                    );
+                }
+            }
+        }
+        eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+    })
 }
 
 /// Dispatches `call_user_func` with optional lexical scope for special class receivers.
@@ -64,8 +115,21 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values_from_scope(
     let Some((callback, callback_args)) = evaluated_args.split_first() else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    let callback_is_object = values.type_tag(*callback)? == EVAL_TAG_OBJECT;
     let callback =
         eval_call_user_func_callback(*callback, "call_user_func", lexical_scope, context, values)?;
+    if let EvaluatedCallable::Named { name, .. } = &callback {
+        if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+            if forbidden != "get_defined_vars" || callback_is_object {
+                return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+            }
+        }
+        if name.eq_ignore_ascii_case("get_defined_vars") {
+            if let Some(lexical_scope) = lexical_scope {
+                return eval_get_defined_vars_from_scope(callback_args, lexical_scope, values);
+            }
+        }
+    }
     eval_evaluated_callable_with_call_user_func_values(
         &callback,
         callback_args.to_vec(),
@@ -118,6 +182,21 @@ pub(in crate::interpreter) fn eval_callable_from_scope(
     eval_callable_with_optional_scope(callback, context, Some(scope), values)
 }
 
+/// Normalizes one callback for a non-invoking probe and reports any owned array receiver.
+pub(in crate::interpreter) fn eval_callable_for_probe(
+    callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    lexical_scope: Option<&ElephcEvalScope>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(EvaluatedCallable, Option<RuntimeCellHandle>), EvalStatus> {
+    eval_callable_with_optional_scope_and_array_receiver(
+        callback,
+        context,
+        lexical_scope,
+        values,
+    )
+}
+
 /// Normalizes one PHP callback with optional scope-sensitive special class receivers.
 pub(in crate::interpreter) fn eval_callable_with_optional_scope(
     callback: RuntimeCellHandle,
@@ -125,25 +204,50 @@ pub(in crate::interpreter) fn eval_callable_with_optional_scope(
     lexical_scope: Option<&ElephcEvalScope>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
+    eval_callable_with_optional_scope_and_array_receiver(
+        callback,
+        context,
+        lexical_scope,
+        values,
+    )
+    .map(|(callback, _)| callback)
+}
+
+/// Normalizes one callback while preserving ownership supplied by an array read.
+fn eval_callable_with_optional_scope_and_array_receiver(
+    callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    lexical_scope: Option<&ElephcEvalScope>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(EvaluatedCallable, Option<RuntimeCellHandle>), EvalStatus> {
     if let Some(owner) =
         crate::context::pcntl_runtime::begin_callable_use(callback, context)
     {
         let Some(owner_context) = (unsafe { owner.context_ptr().as_ref() }) else {
             return Err(EvalStatus::RuntimeFatal);
         };
-        let callback = eval_callable_with_optional_scope(callback, owner_context, None, values)?;
-        return Ok(EvaluatedCallable::ForeignContext {
-            callback: Box::new(callback),
-            owner,
-        });
+        let (callback, array_receiver) = eval_callable_with_optional_scope_and_array_receiver(
+            callback,
+            owner_context,
+            None,
+            values,
+        )?;
+        return Ok((
+            EvaluatedCallable::ForeignContext {
+                callback: Box::new(callback),
+                owner,
+            },
+            array_receiver,
+        ));
     }
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
-        return eval_object_callable(callback, context, values);
+        return eval_object_callable(callback, context, values).map(|callback| (callback, None));
     }
     if values.is_array_like(callback)? {
-        return eval_array_callable(callback, context, lexical_scope, values);
+        return eval_array_callable_with_receiver_owner(callback, context, lexical_scope, values);
     }
     eval_string_callable(callback, context, lexical_scope, values)
+        .map(|callback| (callback, None))
 }
 
 /// Normalizes one invokable eval object for dynamic callable dispatch.
@@ -241,100 +345,112 @@ fn eval_closure_object_target_callable(target: &EvalClosureObjectTarget) -> Eval
     }
 }
 
-/// Normalizes one two-element object-method or static-method callable array.
-pub(in crate::interpreter) fn eval_array_callable(
+/// Normalizes a callable array and identifies the owned object extracted for dispatch.
+fn eval_array_callable_with_receiver_owner(
     callback: RuntimeCellHandle,
     context: &ElephcEvalContext,
     lexical_scope: Option<&ElephcEvalScope>,
     values: &mut impl RuntimeValueOps,
-) -> Result<EvaluatedCallable, EvalStatus> {
+) -> Result<(EvaluatedCallable, Option<RuntimeCellHandle>), EvalStatus> {
     if values.array_len(callback)? != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let zero = values.int(0)?;
-    let one = match values.int(1) {
-        Ok(one) => one,
-        Err(status) => {
-            values.release(zero)?;
-            return Err(status);
-        }
-    };
-    let receiver = match values.array_get(callback, zero) {
-        Ok(receiver) => receiver,
-        Err(status) => {
-            values.release(zero)?;
-            values.release(one)?;
-            return Err(status);
-        }
-    };
-    let method = match values.array_get(callback, one) {
-        Ok(method) => method,
-        Err(status) => {
-            values.release(zero)?;
-            values.release(one)?;
-            return Err(status);
-        }
-    };
-    values.release(zero)?;
-    values.release(one)?;
-    let method =
-        String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
-    match values.type_tag(receiver)? {
-        EVAL_TAG_OBJECT => {
-            let native_dispatch = context
-                .eval_object_callable_native_dispatch(callback, receiver, &method)
-                .map(|(native_class, bridge_scope, called_class)| {
-                    (
-                        native_class.to_string(),
-                        bridge_scope.to_string(),
-                        called_class.to_string(),
-                    )
-                });
-            let (native_class, bridge_scope, called_class) = native_dispatch
-                .map(|(native_class, bridge_scope, called_class)| {
-                    (Some(native_class), Some(bridge_scope), Some(called_class))
+    let mut temporaries = Vec::with_capacity(4);
+    let result = (|| {
+        let zero = values.int(0)?;
+        temporaries.push(zero);
+        let one = values.int(1)?;
+        temporaries.push(one);
+        let receiver = values.array_get(callback, zero)?;
+        temporaries.push(receiver);
+        let method = values.array_get(callback, one)?;
+        temporaries.push(method);
+        let method =
+            String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
+        match values.type_tag(receiver)? {
+            EVAL_TAG_OBJECT => {
+                let native_dispatch = context
+                    .eval_object_callable_native_dispatch(callback, receiver, &method)
+                    .map(|(native_class, bridge_scope, called_class)| {
+                        (
+                            native_class.to_string(),
+                            bridge_scope.to_string(),
+                            called_class.to_string(),
+                        )
+                    });
+                let (native_class, bridge_scope, called_class) = native_dispatch
+                    .map(|(native_class, bridge_scope, called_class)| {
+                        (Some(native_class), Some(bridge_scope), Some(called_class))
+                    })
+                    .unwrap_or((None, None, None));
+                Ok(EvaluatedCallable::ObjectMethod {
+                    object: receiver,
+                    method,
+                    called_class,
+                    native_class,
+                    bridge_scope,
                 })
-                .unwrap_or((None, None, None));
-            Ok(EvaluatedCallable::ObjectMethod {
-                object: receiver,
-                method,
-                called_class,
-                native_class,
-                bridge_scope,
-            })
-        }
-        EVAL_TAG_STRING => {
-            let class_name = String::from_utf8(values.string_bytes(receiver)?)
-                .map_err(|_| EvalStatus::RuntimeFatal)?;
-            if let Some(callable) = eval_special_class_array_callable(
-                &class_name,
-                &method,
-                lexical_scope,
-                context,
-                values,
-            )? {
-                return Ok(callable);
             }
-            let called_class = context
-                .eval_static_callable_called_class(callback, &class_name, &method)
-                .map(str::to_string);
-            let native_dispatch = context
-                .eval_static_callable_native_dispatch(callback, &class_name, &method)
-                .map(|(native_class, bridge_scope)| {
-                    (native_class.to_string(), bridge_scope.to_string())
-                });
-            let (native_class, bridge_scope) = native_dispatch
-                .map(|(native_class, bridge_scope)| (Some(native_class), Some(bridge_scope)))
-                .unwrap_or((None, None));
-            Ok(EvaluatedCallable::StaticMethod {
-                class_name,
-                method,
-                called_class,
-                native_class,
-                bridge_scope,
-            })
+            EVAL_TAG_STRING => {
+                let class_name = String::from_utf8(values.string_bytes(receiver)?)
+                    .map_err(|_| EvalStatus::RuntimeFatal)?;
+                if let Some(callable) = eval_special_class_array_callable(
+                    &class_name,
+                    &method,
+                    lexical_scope,
+                    context,
+                    values,
+                )? {
+                    return Ok(callable);
+                }
+                let called_class = context
+                    .eval_static_callable_called_class(callback, &class_name, &method)
+                    .map(str::to_string);
+                let native_dispatch = context
+                    .eval_static_callable_native_dispatch(callback, &class_name, &method)
+                    .map(|(native_class, bridge_scope)| {
+                        (native_class.to_string(), bridge_scope.to_string())
+                    });
+                let (native_class, bridge_scope) = native_dispatch
+                    .map(|(native_class, bridge_scope)| (Some(native_class), Some(bridge_scope)))
+                    .unwrap_or((None, None));
+                Ok(EvaluatedCallable::StaticMethod {
+                    class_name,
+                    method,
+                    called_class,
+                    native_class,
+                    bridge_scope,
+                })
+            }
+            _ => Err(EvalStatus::UnsupportedConstruct),
         }
-        _ => Err(EvalStatus::UnsupportedConstruct),
+    })();
+    // Only an object-method result transfers the array read's receiver owner.
+    // Special class strings resolve to a borrowed $this, not the temporary string cell.
+    let receiver = match &result {
+        Ok(EvaluatedCallable::ObjectMethod { object, .. })
+            if !object.is_borrowed() && temporaries.contains(object) =>
+        {
+            Some(*object)
+        }
+        _ => None,
+    };
+    let mut cleanup = Ok(());
+    for temporary in temporaries {
+        if Some(temporary) != receiver {
+            let released = values.release(temporary);
+            if cleanup.is_ok() { cleanup = released; }
+        }
+    }
+    match (result, cleanup) {
+        (Err(status), _) => Err(status),
+        (Ok(_), Err(status)) => {
+            if let Some(receiver) = receiver.filter(|cell| !cell.is_borrowed()) {
+                let _ = values.release(receiver);
+            }
+            Err(status)
+        }
+        (Ok(callable), Ok(())) => Ok((callable, receiver)),
     }
 }
 

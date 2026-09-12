@@ -165,7 +165,8 @@ pub(super) fn notification_callback_value(
     ctx: &FunctionContext<'_>,
     params: ValueId,
 ) -> Result<Option<ValueId>> {
-    if !value_is_static_hash_new(ctx, params)? {
+    let params_source = transparent_callback_source(ctx.function, params)?;
+    if !value_is_static_hash_new(ctx, params_source)? {
         return Ok(None);
     }
     let mut found = None;
@@ -173,7 +174,7 @@ pub(super) fn notification_callback_value(
         if instruction.op != Op::HashSet || instruction.operands.len() != 3 {
             continue;
         }
-        if instruction.operands[0] != params {
+        if transparent_callback_source(ctx.function, instruction.operands[0])? != params_source {
             continue;
         }
         if value_is_string_literal(ctx, instruction.operands[1], "notification")? {
@@ -185,6 +186,7 @@ pub(super) fn notification_callback_value(
 
 /// Returns true when `value` is produced by a literal hash allocation in this function.
 pub(super) fn value_is_static_hash_new(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    let value = transparent_callback_source(ctx.function, value)?;
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };
@@ -232,6 +234,7 @@ pub(super) fn is_capturable_notification_callable(
     ctx: &FunctionContext<'_>,
     value: ValueId,
 ) -> Result<bool> {
+    let value = transparent_callback_source(ctx.function, value)?;
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };
@@ -242,6 +245,112 @@ pub(super) fn is_capturable_notification_callable(
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
     Ok(matches!(inst.op, Op::ClosureNew | Op::FirstClassCallableNew))
+}
+
+/// Follows identity-preserving ownership operations used to stage call operands.
+fn transparent_callback_source(
+    function: &crate::ir::Function,
+    mut value: ValueId,
+) -> Result<ValueId> {
+    loop {
+        let Some(value_ref) = function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(value);
+        };
+        let Some(inst) = function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if !matches!(inst.op, Op::Acquire | Op::Move | Op::Borrow) {
+            return Ok(value);
+        }
+        value = expect_operand(inst, 0)?;
+    }
+}
+
+#[cfg(test)]
+mod producer_tests {
+    use super::transparent_callback_source;
+    use crate::ir::{Builder, Function, Immediate, IrType, Op, Ownership};
+    use crate::types::PhpType;
+
+    /// Stream notification discovery sees through argument-owner staging for both
+    /// the params hash and the callback descriptor without changing either use operand.
+    #[test]
+    fn wrapped_notification_params_and_callback_keep_their_original_producers() {
+        let mut function =
+            Function::new("wrapped_notification".into(), IrType::Void, PhpType::Void);
+        let hash_ty = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Callable),
+        };
+        let (hash, wrapped_hash, callback, wrapped_callback) = {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let hash = builder
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::from_php(&hash_ty),
+                    hash_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let wrapped_hash = wrap_argument_owner_chain(&mut builder, hash, &hash_ty);
+            let callback = builder
+                .emit(
+                    Op::ClosureNew,
+                    Vec::new(),
+                    None,
+                    IrType::from_php(&PhpType::Callable),
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let wrapped_callback =
+                wrap_argument_owner_chain(&mut builder, callback, &PhpType::Callable);
+            (hash, wrapped_hash, callback, wrapped_callback)
+        };
+
+        assert_eq!(transparent_callback_source(&function, wrapped_hash).unwrap(), hash);
+        assert_eq!(
+            transparent_callback_source(&function, wrapped_callback).unwrap(),
+            callback
+        );
+    }
+
+    /// Builds the `Borrow(Acquire(original))` chain introduced by argument-owner staging.
+    fn wrap_argument_owner_chain(
+        builder: &mut Builder<'_>,
+        source: crate::ir::ValueId,
+        php_type: &PhpType,
+    ) -> crate::ir::ValueId {
+        let ir_type = IrType::from_php(php_type);
+        let acquired = builder
+            .emit(
+                Op::Acquire,
+                vec![source],
+                None,
+                ir_type,
+                php_type.clone(),
+                Ownership::Owned,
+            )
+            .unwrap();
+        builder
+            .emit(
+                Op::Borrow,
+                vec![acquired],
+                None,
+                ir_type,
+                php_type.clone(),
+                Ownership::Borrowed,
+            )
+            .unwrap()
+    }
 }
 
 /// Stores the loaded callable descriptor into `_stream_notification_callback`.

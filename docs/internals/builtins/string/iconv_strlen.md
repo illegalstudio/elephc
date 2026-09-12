@@ -1,16 +1,16 @@
 ---
-title: "iconv_strlen() — internals"
+title: "iconv_strlen() - internals"
 description: "Compiler internals for iconv_strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 786
+  order: 812
 ---
 
-## `iconv_strlen()` — internals
+## `iconv_strlen()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/iconv_strlen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/iconv_strlen.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

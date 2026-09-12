@@ -1,11 +1,11 @@
 ---
-title: "unset() — internals"
+title: "unset() - internals"
 description: "Compiler internals for unset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 661
+  order: 686
 ---
 
-## `unset()` — internals
+## `unset()` - internals
 
 ## Where it lives
 

@@ -176,5 +176,9 @@ fn declared_builtin_registry_derives_core_metadata() {
             eval_declared_builtin_param_names("ptr_sizeof"),
             Some(["type"].as_slice())
         );
+        assert_eq!(
+            eval_declared_builtin_default_value("trigger_error", 1),
+            Some(EvalBuiltinDefaultValue::Int(1_024))
+        );
 
 }

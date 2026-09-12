@@ -15,7 +15,7 @@ pub(super) fn emit_x86_64_compare(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_concat");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for right operand and left string pair
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for operands, cast strings, and the boxed result
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
     emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_string input
     emitter.instruction("call __rt_mixed_cast_string");                         // cast the left boxed operand to a PHP string pair
@@ -23,6 +23,7 @@ pub(super) fn emit_x86_64_compare(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the left string length
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for string casting
     emitter.instruction("call __rt_mixed_cast_string");                         // cast the right boxed operand to a PHP string pair
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the right cast allocation until concatenation consumes it
     emitter.instruction("mov rdi, rax");                                        // move the right string pointer into concat's right pointer register
     emitter.instruction("mov rsi, rdx");                                        // move the right string length into concat's right length register
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the left string pointer for concat
@@ -32,7 +33,13 @@ pub(super) fn emit_x86_64_compare(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rdx");                                        // move the concat string length into mixed value_hi
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string for boxing the concat result
     emitter.instruction("call __rt_mixed_from_value");                          // persist and box the concatenated string
-    emitter.instruction("add rsp, 32");                                         // release the concat wrapper slots
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the independent result across cast cleanup
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // recover the left string cast result
+    emitter.instruction("call __rt_heap_free");                                 // release owned copies while ignoring borrowed scalar scratch
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // recover the right string cast result
+    emitter.instruction("call __rt_heap_free");                                 // release its owned copy or ignore borrowed scratch
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return only the independent boxed concatenation
+    emitter.instruction("add rsp, 48");                                         // release the concat wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed concat result to Rust
 

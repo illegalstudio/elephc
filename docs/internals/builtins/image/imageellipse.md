@@ -1,11 +1,11 @@
 ---
-title: "imageellipse() — internals"
+title: "imageellipse() - internals"
 description: "Compiler internals for imageellipse(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 498
 ---
 
-## `imageellipse()` — internals
+## `imageellipse()` - internals
 
 ## Where it lives
 

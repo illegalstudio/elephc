@@ -491,48 +491,18 @@ fn spent_hash_context_raises_phps_exact_type_error_for_all_three_calls() {
     );
 }
 
-/// KNOWN BOUNDED REGRESSION — the rejected-reuse path leaks TWO heap blocks.
+/// Rejected spent-context calls retire property-derived arguments before unwinding.
 ///
-/// This test used to assert `live_blocks=0`. It cannot any more, and the reason is worth
-/// stating precisely because the number must never be allowed to drift.
-///
-/// `hash_update` / `hash_final` / `hash_copy` are elephc-PHP wrappers now
-/// (`elephc::hash_prelude`), so the guard's `\TypeError` is raised by the runtime helper
-/// INSIDE a PHP function frame and unwinds THROUGH it. A builtin that throws through a
-/// PHP frame strands one block per unwind — a PRE-EXISTING defect this migration merely
-/// reaches. It is hash-independent and reproduces with no hashing at all:
-///
-/// ```php
-/// class R { public mixed $m = null; }
-/// function f(R $r): bool { $v = $r->m; throw new TypeError("x"); }
-/// $r = new R(); try { f($r); } catch (TypeError $e) {}
-/// ```
-///
-/// leaks one block under `--heap-debug`; the same function WITHOUT the local is clean,
-/// and the same builtin throwing at top level with no wrapper frame is clean. Every
-/// pure-PHP workaround was measured and none helps: binding the argument to a local,
-/// leaving it inline, binding the result, `try`/`finally`, and catch-and-rethrow all
-/// still leak on the throwing path (catch-and-rethrow leaks TWO). Fixing it properly
-/// means fixing frame cleanup during unwind, not the prelude.
-///
-/// The SUCCESS path is unaffected and stays exactly clean — see
-/// `hash_contexts_in_containers_leave_a_clean_heap`, which runs 1 000 contexts through
-/// `hash_copy`/`hash_final` at `allocs == frees`. What leaks here is bounded by the
-/// number of REJECTED calls, three in this program, costing two blocks.
-///
-/// `--heap-debug` is the authoritative instrument for elephc's own heap. It cannot see
-/// the elephc-crypto context itself, which the bridge allocates outside elephc's heap —
-/// that side is covered by the ownership argument on `elephc_crypto_final` (it still
-/// finalizes a CLONE and still never frees, so `__rt_hash_ctx_free` remains the single
-/// destructor and still runs exactly once) and by the flat-RSS measurement recorded on
-/// `hash_contexts_in_containers_leave_a_clean_heap`.
+/// `hash_copy()` evaluates the owned `$context->algo` string before its runtime copy
+/// helper rejects the finalized context. The source-argument evaluation ledger keeps
+/// that string reachable during the throw, then same-frame unwind cleanup retires it.
 #[test]
-fn rejected_reuse_leaks_one_block_per_rejected_call() {
+fn rejected_reuse_leaves_a_clean_elephc_heap() {
     assert_program_output_and_live_blocks(
         "hashctx_spent_heap",
         SPENT_CONTEXT_SRC,
         SPENT_CONTEXT_EXPECTED,
-        2,
+        0,
     );
 }
 
@@ -1100,13 +1070,24 @@ fn assert_asm_contains_ordered(asm: &str, needles: &[&str]) {
 /// the host `as`, which rejects `xor eax, eax`). Generating the runtime text directly is
 /// therefore the mechanism that gives the x86_64 body real coverage here, and it proves
 /// something the emitter unit tests cannot: that the helper is actually REGISTERED in
-/// `emit_runtime` and that the two literals it names exist in the data section.
+/// `emit_runtime` and that the three literals it names exist in the data section.
 #[test]
 fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
-    for (target_name, closed_label, open_needles, closed_needles, end_label) in [
+    for (
+        target_name,
+        closed_label,
+        filter_label,
+        context_label,
+        open_needles,
+        closed_needles,
+        filter_needles,
+        end_label,
+    ) in [
         (
             "macos-aarch64",
             "L__rt_resource_type_name_closed:",
+            "L__rt_resource_type_name_filter:",
+            "L__rt_resource_type_name_context:",
             vec![
                 "tbnz x0, #63, L__rt_resource_type_name_closed",
                 "adrp x1, _resource_type_stream@PAGE",
@@ -1120,11 +1101,19 @@ fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
                 "mov x2, #7",
                 "ret",
             ],
+            vec![
+                "adrp x1, _resource_type_stream_filter@PAGE",
+                "add x1, x1, _resource_type_stream_filter@PAGEOFF",
+                "mov x2, #13",
+                "ret",
+            ],
             "__rt_resource_write_stdout",
         ),
         (
             "linux-x86_64",
             "__rt_resource_type_name_closed_x86:",
+            "__rt_resource_type_name_filter_x86:",
+            "__rt_resource_type_name_context_x86:",
             vec![
                 "test rax, rax",
                 "js __rt_resource_type_name_closed_x86",
@@ -1135,6 +1124,11 @@ fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
             vec![
                 "lea rax, [rip + _resource_type_unknown]",
                 "mov rdx, 7",
+                "ret",
+            ],
+            vec![
+                "lea rax, [rip + _resource_type_stream_filter]",
+                "mov rdx, 13",
                 "ret",
             ],
             "__rt_resource_write_stdout",
@@ -1152,11 +1146,18 @@ fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
             !open_arm.contains("_resource_type_unknown"),
             "the open arm must not name the closed literal ({target_name}):\n{open_arm}"
         );
-        let closed_arm = asm_between_labels(&runtime_asm, closed_label, end_label);
+        let closed_arm = asm_between_labels(&runtime_asm, closed_label, filter_label);
         assert_asm_contains_ordered(closed_arm, &closed_needles);
         assert!(
             !closed_arm.contains("_resource_type_stream"),
             "the closed arm must not name the open literal ({target_name}):\n{closed_arm}"
+        );
+        let filter_arm = asm_between_labels(&runtime_asm, filter_label, context_label);
+        assert_asm_contains_ordered(filter_arm, &filter_needles);
+        let context_arm = asm_between_labels(&runtime_asm, context_label, end_label);
+        assert!(
+            context_arm.contains("_resource_type_stream_context"),
+            "the context arm must name the stream-context literal ({target_name}):\n{context_arm}"
         );
         assert!(
             runtime_asm.contains("_resource_type_stream:\n    .ascii \"stream\""),
@@ -1165,6 +1166,12 @@ fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
         assert!(
             runtime_asm.contains("_resource_type_unknown:\n    .ascii \"Unknown\""),
             "the closed type-name literal must exist ({target_name})"
+        );
+        assert!(
+            runtime_asm.contains(
+                "_resource_type_stream_filter:\n    .ascii \"stream filter\""
+            ),
+            "the filter type-name literal must exist ({target_name})"
         );
     }
 }

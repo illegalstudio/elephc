@@ -20,10 +20,15 @@ impl Checker {
     ///
     /// Used by variant-group resolution and other paths that have a pre-resolved
     /// signature and do not need re-specialization or deprecation warnings.
+    /// `default_args` preserves the planner's distinction between declaration defaults
+    /// and explicit caller arguments, which alone require a by-reference lvalue.
+    /// `descriptor_projections` preserves which normalized values came from spread slots.
     pub(crate) fn check_function_call_pre_normalized(
         &mut self,
         name: &str,
         normalized_args: &[Expr],
+        default_args: &[bool],
+        descriptor_projections: &[bool],
         span: crate::span::Span,
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
@@ -38,6 +43,8 @@ impl Checker {
             &sig,
             &effective_sig,
             normalized_args,
+            default_args,
+            descriptor_projections,
             span,
             caller_env,
         )
@@ -46,6 +53,7 @@ impl Checker {
     /// Validates a resolved, normalized function call against its effective
     /// signature: arity constraints, by-ref argument validation, and type
     /// compatibility for each argument position (regular and variadic).
+    /// Default-backed slots bind temporary cells instead of aliasing caller storage.
     ///
     /// Does **not** re-specialize or check deprecation — those are handled by
     /// the caller before dispatching here. Returns the signature's return type
@@ -56,6 +64,8 @@ impl Checker {
         sig: &FunctionSig,
         effective_sig: &FunctionSig,
         args: &[Expr],
+        default_args: &[bool],
+        descriptor_projections: &[bool],
         span: crate::span::Span,
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
@@ -99,17 +109,33 @@ impl Checker {
                 ));
             }
         }
-        let regular_param_count = if effective_sig.variadic.is_some() {
-            effective_sig.params.len().saturating_sub(1)
-        } else {
-            effective_sig.params.len()
-        };
-        let variadic_elem_ty = effective_sig.variadic.as_ref().and_then(|_| {
-            effective_sig.params.last().and_then(|(_, ty)| match ty {
-                PhpType::Array(elem) => Some((**elem).clone()),
-                _ => None,
+        let regular_param_count = crate::types::call_args::regular_param_count(effective_sig);
+        let variadic_index = crate::types::signatures::variadic_param_index(effective_sig);
+        let variadic_elem_ty = self.variadic_argument_element_type(
+            effective_sig,
+            span,
+            &format!("Function '{}'", name),
+        )?;
+        if descriptor_projections
+            .iter()
+            .enumerate()
+            .any(|(index, projected)| {
+                *projected
+                    && effective_sig
+                        .ref_params
+                        .get(index)
+                        .copied()
+                        .unwrap_or(false)
             })
-        });
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                    name
+                ),
+            ));
+        }
         let mut param_idx = 0usize;
         for arg in args {
             let actual_ty = self.infer_type(arg, caller_env)?;
@@ -117,12 +143,22 @@ impl Checker {
                 continue;
             }
             if param_idx < regular_param_count {
-                if effective_sig
-                    .ref_params
+                let supplied_reference = effective_sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                    && !default_args.get(param_idx).copied().unwrap_or(false);
+                let descriptor_projected = descriptor_projections
                     .get(param_idx)
                     .copied()
-                    .unwrap_or(false)
-                {
+                    .unwrap_or(false);
+                if supplied_reference && descriptor_projected {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                            name
+                        ),
+                    ));
+                }
+                if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -142,29 +178,40 @@ impl Checker {
                     }
                 }
                 if let Some((param_name, expected_ty)) = effective_sig.params.get(param_idx) {
+                    let runtime_unboxed_callable = expected_ty.codegen_repr() == PhpType::Callable
+                        && actual_ty.codegen_repr() == PhpType::Mixed
+                        && descriptor_projected
+                        && !supplied_reference;
+                    let proven_callable_array = expected_ty.codegen_repr() == PhpType::Callable
+                        && !supplied_reference
+                        && !Self::types_compatible(expected_ty, &actual_ty)
+                        && !self.type_accepts(expected_ty, &actual_ty)
+                        && self
+                            .callable_array_param_target(arg, caller_env)?
+                            .is_some();
                     if effective_sig
                         .declared_params
                         .get(param_idx)
                         .copied()
                         .unwrap_or(false)
-                        && effective_sig
-                            .ref_params
-                            .get(param_idx)
-                            .copied()
-                            .unwrap_or(false)
+                        && supplied_reference
                     {
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
-                            arg.span,
+                            arg,
+                            caller_env,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
+                        self.record_php_array_reference_output(arg, expected_ty, &actual_ty, span);
                     }
                     // PHP's parameter binding only applies to a *declared* parameter type.
                     // An inferred parameter's "expected" type is just what earlier call sites
                     // produced, so coercing against it would invent a conversion PHP does not
                     // perform.
-                    if effective_sig
+                    if !runtime_unboxed_callable
+                        && !proven_callable_array
+                        && effective_sig
                         .declared_params
                         .get(param_idx)
                         .copied()
@@ -177,9 +224,9 @@ impl Checker {
                             caller_env,
                             &format!("Function '{}' parameter ${}", name, param_name),
                             Some((name, param_name.as_str())),
-                            effective_sig.ref_params.get(param_idx).copied().unwrap_or(false),
+                            supplied_reference,
                         )?;
-                    } else {
+                    } else if !runtime_unboxed_callable && !proven_callable_array {
                         self.require_compatible_arg_type(
                             expected_ty,
                             &actual_ty,
@@ -192,9 +239,8 @@ impl Checker {
                 // An argument collected by a by-REFERENCE variadic (`&...$xs`) is bound by
                 // reference exactly like a regular by-ref parameter's. Its flag sits at
                 // `regular_param_count` in `ref_params` (the signature's last slot).
-                if effective_sig
-                    .ref_params
-                    .get(regular_param_count)
+                if variadic_index
+                    .and_then(|index| effective_sig.ref_params.get(index))
                     .copied()
                     .unwrap_or(false)
                 {
@@ -203,6 +249,18 @@ impl Checker {
                 if let (Some(vname), Some(expected_ty)) =
                     (effective_sig.variadic.as_ref(), variadic_elem_ty.as_ref())
                 {
+                    if variadic_index
+                        .and_then(|index| effective_sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        self.require_strict_types_param_binding(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("Function '{}' variadic parameter ${}", name, vname),
+                        )?;
+                    }
                     self.require_compatible_arg_type(
                         expected_ty,
                         &actual_ty,

@@ -1,11 +1,11 @@
 ---
-title: "imagecolorset() — internals"
+title: "imagecolorset() - internals"
 description: "Compiler internals for imagecolorset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 475
 ---
 
-## `imagecolorset()` — internals
+## `imagecolorset()` - internals
 
 ## Where it lives
 

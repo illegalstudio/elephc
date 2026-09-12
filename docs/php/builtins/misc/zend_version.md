@@ -2,7 +2,7 @@
 title: "zend_version()"
 description: "Implemented by the compiler-injected version prelude."
 sidebar:
-  order: 663
+  order: 689
 ---
 
 ## zend_version()
@@ -20,9 +20,9 @@ Implemented by the compiler-injected version prelude.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected version prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/zend_version.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/zend_version.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -1,16 +1,16 @@
 ---
-title: "ini_get() — internals"
+title: "ini_get() - internals"
 description: "Compiler internals for ini_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 882
+  order: 908
 ---
 
-## `ini_get()` — internals
+## `ini_get()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:4356](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L4356) (`ini_get`)
+- **Lowering**: [`src/web_prelude/build.rs`:4398](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L4398) (`ini_get`)
 - **Function symbol**: `ini_get()`
 
 

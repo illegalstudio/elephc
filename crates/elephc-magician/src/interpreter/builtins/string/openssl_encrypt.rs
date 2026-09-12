@@ -27,21 +27,8 @@ pub(in crate::interpreter) fn eval_builtin_openssl_encrypt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !(3..=OPENSSL_ENCRYPT_ARG_COUNT).contains(&args.len()) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let mut bound = [None; OPENSSL_ENCRYPT_ARG_COUNT];
-    let mut tag_target = None;
-    for (index, arg) in args.iter().enumerate() {
-        if index == 5 {
-            let (value, target) = eval_call_arg_value(arg, context, scope, values)?;
-            bound[index] = Some(value);
-            tag_target = Some(target.ok_or(EvalStatus::RuntimeFatal)?);
-        } else {
-            bound[index] = Some(eval_expr(arg, context, scope, values)?);
-        }
-    }
-    eval_openssl_encrypt_bound_result(&bound, tag_target.as_ref(), context, values)
+    let args = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+    eval_builtin_openssl_encrypt_call(&args, context, scope, values)
 }
 
 /// Evaluates a full `openssl_encrypt()` call with named arguments and tag writeback metadata.
@@ -51,34 +38,35 @@ pub(in crate::interpreter) fn eval_builtin_openssl_encrypt_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound_args, _) = bind_evaluated_ref_builtin_args(
-        &[
-            "data",
-            "cipher_algo",
-            "passphrase",
-            "options",
-            "iv",
-            "tag",
-            "aad",
-            "tag_length",
-        ],
-        &evaluated_args,
-        false,
-    )?;
-    let mut bound = [None; OPENSSL_ENCRYPT_ARG_COUNT];
-    for (index, arg) in bound_args.iter().enumerate() {
-        bound[index] = arg.as_ref().map(|arg| arg.value);
-    }
-    for index in 0..3 {
-        required_openssl_arg(&bound, index)?;
-    }
-    let tag_target = bound_args
-        .get(5)
-        .and_then(Option::as_ref)
-        .map(|arg| arg.ref_target.as_ref().ok_or(EvalStatus::RuntimeFatal))
-        .transpose()?;
-    eval_openssl_encrypt_bound_result(&bound, tag_target, context, values)
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+        let (bound_args, _) = bind_evaluated_ref_builtin_args(
+            &[
+                "data",
+                "cipher_algo",
+                "passphrase",
+                "options",
+                "iv",
+                "tag",
+                "aad",
+                "tag_length",
+            ],
+            &evaluated_args,
+            false,
+        )?;
+        let mut bound = [None; OPENSSL_ENCRYPT_ARG_COUNT];
+        for (index, arg) in bound_args.iter().enumerate() {
+            bound[index] = arg.as_ref().map(|arg| arg.value);
+        }
+        for index in 0..3 {
+            required_openssl_arg(&bound, index)?;
+        }
+        let tag_target = bound_args
+            .get(5)
+            .and_then(Option::as_ref)
+            .map(|arg| arg.ref_target.as_ref().ok_or(EvalStatus::RuntimeFatal))
+            .transpose()?;
+        eval_openssl_encrypt_bound_result(&bound, tag_target, context, values)
+    })
 }
 
 /// Applies by-value callable semantics for `openssl_encrypt()` after registry binding.

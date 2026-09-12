@@ -18,6 +18,7 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 /// Converts all entry payloads of an associative array to boxed Mixed cells.
 /// COW is enforced first via `__rt_hash_ensure_unique` so entries can be safely rewritten.
 /// Each entry is stamped with value_type tag 7. The hash header is also stamped with 7.
+/// The input owner is consumed by the COW boundary and the returned hash is its replacement owner.
 /// Dispatches to `emit_hash_to_mixed_linux_x86_64` on x86_64; uses ARM64 otherwise.
 pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {

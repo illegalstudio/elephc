@@ -24,6 +24,9 @@ use super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
+#[cfg(test)]
+mod element_address_tests;
+
 /// Lowers indexed-array allocation through the shared runtime constructor.
 pub(super) fn lower_array_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let capacity = expect_capacity(inst)?.max(4);
@@ -559,6 +562,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::AArch64 => lower_array_set_aarch64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
         Arch::X86_64 => lower_array_set_x86_64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
     }
+    stamp_scalar_array_write_result(ctx, &value_ty);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
@@ -729,12 +733,28 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
         Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, &elem_ty)?,
         Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
     }
+    let stored_type = if matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never) {
+        ctx.value_php_type(value)?.codegen_repr()
+    } else {
+        elem_ty.codegen_repr()
+    };
+    stamp_scalar_array_write_result(ctx, &stored_type);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     Ok(())
+}
+
+/// Restores semantic tags after shared word-write helpers specialize an empty array's storage.
+fn stamp_scalar_array_write_result(ctx: &mut FunctionContext<'_>, stored_type: &PhpType) {
+    if matches!(stored_type, PhpType::Float | PhpType::Bool | PhpType::Callable) {
+        // The helper has already performed COW and possible growth. Stamp its returned
+        // owner, not the original pointer, so aliases retain their original metadata.
+        let result = abi::int_result_reg(ctx.emitter);
+        crate::codegen::emit_array_value_type_stamp(ctx.emitter, result, stored_type);
+    }
 }
 
 /// Lowers appends through a boxed Mixed array cell.
@@ -2380,8 +2400,10 @@ fn emit_array_elem_addr_result_aarch64(
     index: ValueId,
     elem_size: i64,
 ) -> Result<()> {
-    ctx.load_value_to_reg(array, "x9")?;
+    // A spilled index beyond the unscaled frame range uses x9 as its address scratch.
+    // Load it first so the array base is not replaced by the index's stack address.
     ctx.load_value_to_reg(index, "x10")?;
+    ctx.load_value_to_reg(array, "x9")?;
     ctx.emitter.instruction("cmp x10, #0");                                     // keep negative by-reference offsets aligned with the materialized slot
     ctx.emitter.instruction("csel x10, xzr, x10, lt");                          // clamp unsupported negative offsets to the safe slot
     match elem_size {

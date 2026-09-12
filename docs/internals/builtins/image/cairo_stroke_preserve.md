@@ -1,11 +1,11 @@
 ---
-title: "cairo_stroke_preserve() — internals"
+title: "cairo_stroke_preserve() - internals"
 description: "Compiler internals for cairo_stroke_preserve(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 442
 ---
 
-## `cairo_stroke_preserve()` — internals
+## `cairo_stroke_preserve()` - internals
 
 ## Where it lives
 
