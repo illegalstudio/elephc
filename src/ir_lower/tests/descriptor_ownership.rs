@@ -7,7 +7,7 @@
 //! Key details:
 //! - Frame roots must survive exceptional calls and retire after ordinary returns on all targets.
 
-use crate::ir::Op;
+use crate::ir::{Immediate, LocalKind, Op, Ownership};
 
 /// Concrete descriptor strings transfer one exact owner and retire it after expression use.
 #[test]
@@ -51,6 +51,100 @@ fn concrete_descriptor_string_results_are_owned_and_released_once_on_all_targets
             1,
             "{target}",
         );
+    }
+}
+
+/// Static callable-array expression forms stage one exact descriptor string owner.
+#[test]
+fn static_callable_array_string_results_are_owned_and_staged_on_all_targets() {
+    let source = r#"<?php
+        class StaticDescriptorStringResult {
+            public static function stamp(string $value = "ok"): string {
+                return "[" . $value . "]";
+            }
+        }
+        function direct_static_descriptor(): void {
+            $callback = [StaticDescriptorStringResult::class, "stamp"];
+            echo $callback(value: "direct");
+        }
+        function parenthesized_static_descriptor(): void {
+            $callback = [StaticDescriptorStringResult::class, "stamp"];
+            echo ($callback)("parenthesized");
+        }
+        function literal_static_descriptor(): void {
+            echo ([StaticDescriptorStringResult::class, "stamp"])(value: "literal");
+        }
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for function_name in [
+            "direct_static_descriptor",
+            "parenthesized_static_descriptor",
+            "literal_static_descriptor",
+        ] {
+            let function = module
+                .functions
+                .iter()
+                .find(|function| function.name == function_name)
+                .unwrap();
+            let invokes = function
+                .instructions
+                .iter()
+                .enumerate()
+                .filter(|(_, inst)| inst.op == Op::ExprCall)
+                .collect::<Vec<_>>();
+            assert_eq!(invokes.len(), 1, "{target}: {function_name}");
+            let (invoke_index, invoke) = invokes[0];
+            let result = invoke
+                .result
+                .expect("static descriptor string invocation must produce a result");
+            let metadata = function.value(result).unwrap();
+            assert_eq!(metadata.php_type, crate::types::PhpType::Str, "{target}: {function_name}");
+            assert_eq!(metadata.ownership, Ownership::Owned, "{target}: {function_name}");
+            assert_eq!(invoke.result_ownership, Ownership::Owned, "{target}: {function_name}");
+
+            let (stage_index, stage) = function.instructions[invoke_index + 1..]
+                .iter()
+                .enumerate()
+                .find(|(_, inst)| inst.op == Op::StoreLocal && inst.operands == [result])
+                .map(|(index, inst)| (invoke_index + 1 + index, inst))
+                .expect("descriptor result must move into its prepublished owner slot");
+            let result_slot = match stage.immediate.as_ref() {
+                Some(Immediate::LocalSlot(slot)) => *slot,
+                _ => panic!("{target}: {function_name}: result staging must name a local slot"),
+            };
+            assert_eq!(
+                function.locals[result_slot.as_raw() as usize].kind,
+                LocalKind::OwnedTemp,
+                "{target}: {function_name}",
+            );
+            assert!(function.instructions[..invoke_index].iter().any(|inst| {
+                inst.op == Op::PushCallOperandOwner
+                    && inst.immediate == Some(Immediate::LocalSlot(result_slot))
+            }), "{target}: {function_name}: result owner must be published before invocation");
+
+            let result_pop = function.instructions[stage_index + 1..]
+                .iter()
+                .position(|inst| {
+                    inst.op == Op::PopCallOperandOwner
+                        && inst.immediate == Some(Immediate::LocalSlot(result_slot))
+                })
+                .map(|index| stage_index + 1 + index)
+                .expect("descriptor result staging must be retired after callback cleanup");
+            assert!(function.instructions[stage_index + 1..result_pop].iter().any(|inst| {
+                inst.op == Op::ReleaseLocalSlot
+                    && inst.immediate != Some(Immediate::LocalSlot(result_slot))
+            }), "{target}: {function_name}: descriptor owner must retire while the result stays staged");
+            assert!(function.instructions[result_pop + 1..].iter().any(|inst| {
+                inst.op == Op::UnsetLocal
+                    && inst.immediate == Some(Immediate::LocalSlot(result_slot))
+            }), "{target}: {function_name}: staging slot must transfer the result back to SSA");
+        }
     }
 }
 

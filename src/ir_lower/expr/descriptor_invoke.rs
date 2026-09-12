@@ -65,6 +65,34 @@ pub(super) fn emit_rooted_expr_call(
     take_prepublished_call_result(ctx, result_staging, call, span)
 }
 
+/// Emits a call known to return through the descriptor invoker's owned Mixed box.
+///
+/// General string-producing call opcodes stay `MaybeOwned` because their result can borrow
+/// scratch or argument storage. The descriptor ABI is narrower: concrete string unboxing
+/// detaches the buffer before consuming the result box, so this producer owns that buffer.
+pub(super) fn emit_descriptor_invoker_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    op: Op,
+    operands: Vec<crate::ir::ValueId>,
+    immediate: Option<Immediate>,
+    result_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let result = ctx.emit_value(
+        op,
+        operands,
+        immediate,
+        result_type,
+        op.default_effects(),
+        Some(span),
+    );
+    if ctx.builder.value_php_type(result.value).codegen_repr() == PhpType::Str {
+        ctx.builder
+            .set_value_ownership(result.value, Ownership::Owned);
+    }
+    result
+}
+
 /// Lowers dynamic `call_user_func()` callbacks through descriptor invocation.
 pub(super) fn lower_dynamic_call_user_func(
     ctx: &mut LoweringContext<'_, '_>,
@@ -457,21 +485,14 @@ pub(super) fn emit_callable_descriptor_invoke(
     // or a separate retain of a prebuilt Mixed box. Root both raw and boxed
     // owners so a throw cannot bypass their EIR retirement.
     let (arg_container, container_owner) = root_owned_call_operand(ctx, arg_container, span);
-    let result = ctx.emit_value(
+    let result = emit_descriptor_invoker_value(
+        ctx,
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value],
         callable_profile_immediate(),
         result_type,
-        Op::CallableDescriptorInvoke.default_effects(),
-        Some(span),
+        span,
     );
-    if ctx.builder.value_php_type(result.value).codegen_repr() == PhpType::Str {
-        // The descriptor ABI returns an owned Mixed box. Concrete string lowering detaches the
-        // string through `__rt_mixed_cast_string` before consuming that box, so the resulting
-        // buffer is an exact owner rather than the scratch-or-owned ambiguity of general Str ops.
-        ctx.builder
-            .set_value_ownership(result.value, Ownership::Owned);
-    }
     // Retiring the container or the callback destroys a captured object or an argument the
     // container still owns, and those destructors run PHP code that can throw into a catch in
     // this same frame. The result is already staged when they do.

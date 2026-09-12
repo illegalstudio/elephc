@@ -269,26 +269,32 @@ pub(super) fn lower_static_method_descriptor_call(
     let wrapper_sig = sig
         .as_ref()
         .map(crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig);
-    let target = CallableTarget::StaticMethod {
-        receiver: receiver.clone(),
-        method: method.to_string(),
-    };
-    let descriptor = lower_first_class_callable(ctx, &target, expr);
-    let mut operands = Vec::with_capacity(args.len() + 1);
-    operands.push(descriptor.value);
-    operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
         .unwrap_or_else(|| fallback_expr_type(expr));
-    ctx.emit_value(
+    let target = CallableTarget::StaticMethod {
+        receiver: receiver.clone(),
+        method: method.to_string(),
+    };
+    let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
+    let descriptor = lower_first_class_callable(ctx, &target, expr);
+    let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
+    let mut operands = vec![descriptor.value];
+    operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
+    let result = emit_descriptor_invoker_value(
+        ctx,
         Op::ExprCall,
         operands,
         callable_profile_immediate(),
         result_type,
-        Op::ExprCall.default_effects(),
-        Some(expr.span),
-    )
+        expr.span,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    if let Some(slot) = descriptor_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    take_prepublished_call_result(ctx, result_staging, result, expr.span)
 }
 
 /// Lowers a static-method descriptor call when operands have already been evaluated.
@@ -300,25 +306,37 @@ pub(super) fn lower_static_method_descriptor_value_call(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let sig = static_method_implementation_signature(ctx, receiver, method).cloned();
-    let target = CallableTarget::StaticMethod {
-        receiver: receiver.clone(),
-        method: method.to_string(),
-    };
-    let descriptor = lower_first_class_callable(ctx, &target, expr);
-    let mut operands = Vec::with_capacity(args.len() + 1);
-    operands.push(descriptor.value);
-    operands.extend(args);
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
         .unwrap_or_else(|| fallback_expr_type(expr));
-    Some(ctx.emit_value(
+    let target = CallableTarget::StaticMethod {
+        receiver: receiver.clone(),
+        method: method.to_string(),
+    };
+    let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
+    let descriptor = lower_first_class_callable(ctx, &target, expr);
+    let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
+    let mut operands = Vec::with_capacity(args.len() + 1);
+    operands.push(descriptor.value);
+    operands.extend(args);
+    let result = emit_descriptor_invoker_value(
+        ctx,
         Op::ExprCall,
         operands,
         callable_profile_immediate(),
         result_type,
-        Op::ExprCall.default_effects(),
-        Some(expr.span),
+        expr.span,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    if let Some(slot) = descriptor_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    Some(take_prepublished_call_result(
+        ctx,
+        result_staging,
+        result,
+        expr.span,
     ))
 }
 
