@@ -11,9 +11,8 @@
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
 //! - Constructors are bridged for scalar/Mixed/array/object arguments, including
 //!   generated variadic array slots and supported scalar/Mixed by-reference parameters.
-//! - By-value arguments stay borrowed while fallible staging runs, then refcounted values
-//!   acquire the independent owner consumed by the constructor. By-reference slots acquire
-//!   their writeback-owned payload during staging instead.
+//! - By-value arguments stay borrowed from the caller's normalized argument array for the whole
+//!   native activation. Only by-reference slots acquire a raw owner for writeback.
 //! - Non-public constructors are accepted when the active eval class scope
 //!   satisfies PHP visibility.
 
@@ -75,16 +74,16 @@ const X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET: usize = 64;
 
 /// Whether one staged constructor argument keeps an owner beyond the cast that produced it.
 ///
-/// A BY-VALUE argument stays borrowed during fallible preparation. Once every argument is valid
-/// and the constructor exception boundary is active, `emit_acquire_constructor_value_arg_owners`
-/// gives each refcounted value the independent owner consumed by the generated callee.
+/// A BY-VALUE argument is rooted by Magician's normalized argument array for the whole native
+/// activation, so the bridge stages only a borrowed payload. The generated function prologue
+/// independently retains parameter slots that its ownership analysis marks as owned.
 ///
 /// A BY-REFERENCE slot is different. `eval_ref_arg_slots` gives constructor slots
 /// `raw_refcounted_owned = true`, so writeback releases the raw slot on the changed and the
 /// unchanged path alike; that release is only balanced when the staging cast acquired an owner.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ConstructorArgOwner {
-    /// The argument array keeps the payload alive during fallible staging.
+    /// The argument array keeps the payload alive for the whole native activation.
     Borrowed,
     /// The raw by-reference slot owns the staged payload until writeback releases it.
     Owned,
@@ -927,7 +926,6 @@ fn emit_aarch64_constructor_body(
     emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
     let escape_label = format!("{}_escape", body_label);
     emit_aarch64_constructor_exception_boundary_push(emitter, &escape_label);
-    emit_acquire_constructor_value_arg_owners(emitter, &slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     let overflow_bytes =
         materialize_constructor_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
@@ -994,7 +992,6 @@ fn emit_x86_64_constructor_body(
     emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
     let escape_label = format!("{}_escape_x", body_label);
     emit_x86_64_constructor_exception_boundary_push(emitter, &escape_label);
-    emit_acquire_constructor_value_arg_owners(emitter, &slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     let overflow_bytes =
         materialize_constructor_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
@@ -1307,36 +1304,6 @@ fn materialize_constructor_args(
     arg_types.extend(eval_abi_param_types_for_refs(params, ref_params));
     let assignments = abi::build_outgoing_arg_assignments_for_target(module.target, &arg_types, 0);
     abi::materialize_outgoing_args(emitter, &assignments)
-}
-
-/// Gives refcounted by-value constructor parameters the independent owner consumed by the callee.
-///
-/// Preparation leaves these slots borrowed so every validation failure can discard the temporary
-/// stack without releasing partially acquired owners. This runs only after all preparation has
-/// succeeded and the exception boundary is active. By-reference parameters are cell pointers and
-/// already own their raw payload through the separate writeback lifecycle.
-fn emit_acquire_constructor_value_arg_owners(
-    emitter: &mut Emitter,
-    params: &[PhpType],
-    ref_params: &[bool],
-) {
-    let visible_abi_params = eval_abi_param_types_for_refs(params, ref_params);
-    for (index, param_ty) in params.iter().enumerate() {
-        if ref_params.get(index).copied().unwrap_or(false) {
-            continue;
-        }
-        let repr = param_ty.codegen_repr();
-        if !repr.is_refcounted() && repr != PhpType::Callable {
-            continue;
-        }
-        let offset = visible_abi_params[index + 1..]
-            .iter()
-            .map(eval_arg_temp_slot_size)
-            .sum();
-        let result_reg = abi::int_result_reg(emitter).to_string();
-        abi::emit_load_temporary_stack_slot(emitter, &result_reg, offset);
-        abi::emit_incref_if_refcounted(emitter, &repr);
-    }
 }
 
 /// Prepares ARM64 stack cells for eval-supplied by-reference constructor arguments.
@@ -2003,18 +1970,14 @@ mod argument_ownership_tests {
     ];
 
     /// Builds a one-parameter constructor slot in the shape the bridge collects from a class.
-    ///
-    /// The parameter type mirrors the compiler-generated `__elephc_func_args#gen` collector that
-    /// `crate::func_args` appends to every constructor once a program can reach `eval()`, which is
-    /// why this leak reproduced for constructors whose PHP source declares no array parameter.
-    fn collector_slot(by_ref: bool) -> EvalConstructorSlot {
+    fn constructor_slot(param_ty: PhpType, by_ref: bool) -> EvalConstructorSlot {
         EvalConstructorSlot {
             class_id: 7,
             class_name: "Fixture".to_string(),
             impl_class: "Fixture".to_string(),
             visibility: Visibility::Public,
             allowed_scopes: Vec::new(),
-            params: vec![PhpType::Array(Box::new(PhpType::Mixed))],
+            params: vec![param_ty],
             ref_params: vec![by_ref],
             supported: true,
             runtime_helper: None,
@@ -2022,14 +1985,14 @@ mod argument_ownership_tests {
         }
     }
 
-    /// Stages one constructor argument, acquires callee owners, and returns the bridge assembly.
-    fn constructor_argument_asm(target: Target, by_ref: bool) -> String {
+    /// Stages one constructor argument and returns the bridge assembly.
+    fn constructor_argument_asm(target: Target, param_ty: PhpType, by_ref: bool) -> String {
         let module = Module::new(target);
         let mut emitter = Emitter::new(target);
         let mut data = DataSection::new();
         let callable_support =
             emit_eval_callable_descriptor_support(&module, &mut emitter, &mut data, false);
-        let slot = collector_slot(by_ref);
+        let slot = constructor_slot(param_ty, by_ref);
         match target.arch {
             Arch::AArch64 => {
                 emit_aarch64_prepare_constructor_args(
@@ -2052,27 +2015,22 @@ mod argument_ownership_tests {
                 );
             }
         }
-        emit_acquire_constructor_value_arg_owners(
-            &mut emitter,
-            &slot.params,
-            &slot.ref_params,
-        );
         emitter.output()
     }
 
-    /// By-value constructor arguments acquire exactly one callee owner after staging.
+    /// By-value refcounted constructor arguments stay borrowed on every target.
     ///
-    /// Magician's normalized array roots the borrowed value while validation runs. The generated
-    /// `__construct` consumes a physical by-value owner, so the bridge must transfer one separate
-    /// reference only after preparation can no longer branch to its owner-free failure cleanup.
+    /// Magician's normalized array roots the value for the whole native activation. An extra
+    /// bridge-side owner would have no matching release and would leak once per constructor call.
     #[test]
-    fn by_value_constructor_arguments_acquire_one_callee_owner_on_every_target() {
-        for name in SUPPORTED_TARGETS {
-            let target = Target::parse(name).unwrap();
-            let asm = constructor_argument_asm(target, false);
-            assert!(asm.contains("__rt_mixed_unbox"), "{name}: {asm}");
-            assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
-            assert!(!asm.contains("__rt_decref"), "{name}: {asm}");
+    fn by_value_constructor_arguments_do_not_acquire_bridge_owners_on_every_target() {
+        for param_ty in [PhpType::Str, PhpType::Object("Payload".to_string())] {
+            for name in SUPPORTED_TARGETS {
+                let target = Target::parse(name).unwrap();
+                let asm = constructor_argument_asm(target, param_ty.clone(), false);
+                assert!(!asm.contains("__rt_incref"), "{name} {param_ty:?}: {asm}");
+                assert!(!asm.contains("__rt_decref"), "{name} {param_ty:?}: {asm}");
+            }
         }
     }
 
@@ -2085,7 +2043,11 @@ mod argument_ownership_tests {
     fn by_reference_constructor_slots_acquire_one_owner_on_every_target() {
         for name in SUPPORTED_TARGETS {
             let target = Target::parse(name).unwrap();
-            let asm = constructor_argument_asm(target, true);
+            let asm = constructor_argument_asm(
+                target,
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                true,
+            );
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
         }
     }
