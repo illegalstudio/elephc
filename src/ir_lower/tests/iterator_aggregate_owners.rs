@@ -11,6 +11,8 @@
 //!   `PopCallOperandOwner` then `ReleaseLocalSlot` on normal completion,
 //!   skipped-loop `break`, `return`, and `throw`. Innermost `break` and
 //!   `continue` must not double-retire.
+//! - Tracked instance callable arrays route dynamic aggregate spreads through descriptor binding,
+//!   never through a direct method ABI with the spread source as one operand.
 
 use crate::codegen::platform::Target;
 use crate::ir::{
@@ -363,6 +365,71 @@ function callUnpacked(callable $callback): mixed {{
     );
     for target in TARGETS {
         assert_single_owner_lifetime(&lower_function(target, &source, "callUnpacked"), target);
+    }
+}
+
+/// A tracked instance callable array cannot lower a dynamic aggregate as one direct ABI operand.
+#[test]
+fn tracked_instance_callable_aggregate_spread_uses_descriptor_binder_on_every_target() {
+    let source = format!(
+        "<?php {PRELUDE}
+class UnpackTarget {{
+    public function add(int $first, int $second): int {{ return $first + $second; }}
+}}
+function callTrackedUnpacked(): int {{
+    $callback = [new UnpackTarget(), 'add'];
+    return $callback(...new FreshAgg());
+}}
+function callTrackedIndexed(array $values): int {{
+    $callback = [new UnpackTarget(), 'add'];
+    return $callback(...$values);
+}}
+function callTrackedPositional(): int {{
+    $callback = [new UnpackTarget(), 'add'];
+    return $callback(1, 2);
+}}
+"
+    );
+    for target in TARGETS {
+        let function = lower_function(target, &source, "callTrackedUnpacked");
+        assert_eq!(
+            function
+                .instructions
+                .iter()
+                .filter(|instruction| instruction.op == Op::CallableDescriptorInvoke)
+                .count(),
+            1,
+            "{target}: dynamic aggregate spread must use descriptor invocation"
+        );
+        assert!(
+            !function
+                .instructions
+                .iter()
+                .any(|instruction| instruction.op == Op::MethodCall),
+            "{target}: dynamic aggregate spread must not reach the direct method ABI"
+        );
+        assert_single_owner_lifetime(&function, target);
+
+        for control in ["callTrackedIndexed", "callTrackedPositional"] {
+            let function = lower_function(target, &source, control);
+            let call = function
+                .instructions
+                .iter()
+                .find(|instruction| instruction.op == Op::MethodCall)
+                .unwrap_or_else(|| panic!("{target}/{control}: direct method call must remain"));
+            assert_eq!(
+                call.operands.len(),
+                3,
+                "{target}/{control}: receiver and both arguments must reach the method ABI"
+            );
+            assert!(
+                !function
+                    .instructions
+                    .iter()
+                    .any(|instruction| instruction.op == Op::CallableDescriptorInvoke),
+                "{target}/{control}: direct-safe arguments must not use descriptor invocation"
+            );
+        }
     }
 }
 

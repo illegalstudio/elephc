@@ -16,12 +16,22 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     }
     let mut result_type = None;
     let mut instance_signature = None;
+    let mut tracked_instance_descriptor_spread = false;
     let descriptor_signature = ctx.callable_param_signature(var).cloned();
     if let Some(target) = ctx.static_callable_local(var) {
         result_type = Some(static_callable_return_type(ctx, &target));
         instance_signature = instance_callable_signature(&target).cloned();
-        if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
-            return value;
+        tracked_instance_descriptor_spread = matches!(
+            target,
+            StaticCallableBinding::InstanceMethod {
+                direct_call: true,
+                ..
+            }
+        ) && instance_callable_args_need_descriptor_binder(ctx, args);
+        if !tracked_instance_descriptor_spread {
+            if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
+                return value;
+            }
         }
     }
     let callable = ctx.load_local(var, Some(expr.span));
@@ -32,6 +42,15 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
                 .map(|sig| descriptor_invoker_result_type(Some(sig)))
         })
         .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+    if tracked_instance_descriptor_spread {
+        return lower_call_user_func_descriptor_invoke_from_value(
+            ctx,
+            callable,
+            args,
+            instance_signature.as_ref(),
+            expr,
+        );
+    }
     if instance_signature.is_none() {
         let callable = root_descriptor_callback(ctx, callable, result_type, expr.span);
         let arg_container = if descriptor_signature.is_some() {
@@ -56,6 +75,24 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         Op::ClosureCall.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns whether a tracked instance callable has an unpack source the direct ABI cannot bind.
+///
+/// Indexed array sources and static associative literals already have signature-aware direct
+/// lowering. Other spread shapes need the descriptor walk to preserve runtime keys and expand
+/// Traversable values instead of passing the source itself as one method operand.
+fn instance_callable_args_need_descriptor_binder(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> bool {
+    args.iter().any(|arg| match &arg.kind {
+        ExprKind::Spread(source) => {
+            indexed_spread_source_type(ctx, source).is_none()
+                && !matches!(source.kind, ExprKind::ArrayLiteralAssoc(_))
+        }
+        _ => false,
+    })
 }
 
 /// Lowers `$object(...)` when the local object has an `__invoke` method.
