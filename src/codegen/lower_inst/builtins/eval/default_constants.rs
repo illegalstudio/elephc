@@ -6,213 +6,26 @@
 //!
 //! Key details:
 //! - Class ancestry, array-key normalization, and binary formats are unchanged.
+//! - Class ancestry and key normalization are resolved by the SHARED folder in
+//!   `crate::codegen::const_default_values`; only the libelephc-magician binary encoding and the
+//!   eval-specific property-default subset live here.
 
 use super::*;
 
-/// Resolves and materializes one global constant default expression.
-pub(super) fn eval_native_global_constant_default(
-    default_context: &EvalNativeDefaultContext<'_>,
-    name: &str,
-    depth: usize,
-) -> Option<EvalNativeCallableDefault> {
-    let expr_kind = default_context
-        .module
-        .global_constants
-        .get(name)
-        .or_else(|| {
-            default_context
-                .module
-                .global_constants
-                .get(name.trim_start_matches('\\'))
-        })
-        .map(|(expr_kind, _)| expr_kind.clone())?;
-    let expr = Expr::new(expr_kind, crate::span::Span::dummy());
-    eval_native_callable_default_at(&expr, default_context, depth + 1)
-}
-
-/// Resolves and materializes one class-like constant default expression.
-pub(super) fn eval_native_scoped_constant_default(
-    default_context: &EvalNativeDefaultContext<'_>,
-    receiver: &StaticReceiver,
-    constant_name: &str,
-    depth: usize,
-) -> Option<EvalNativeCallableDefault> {
-    let class_name = eval_native_static_receiver_name(default_context, receiver)?;
-    if let Some((declaring_name, value)) =
-        eval_native_class_constant_expr(default_context.module, &class_name, constant_name)
-    {
-        let nested_context =
-            EvalNativeDefaultContext::for_class(default_context.module, declaring_name);
-        return eval_native_callable_default_at(value, &nested_context, depth + 1);
-    }
-    if let Some((declaring_name, value)) =
-        eval_native_interface_constant_expr(default_context.module, &class_name, constant_name)
-    {
-        let nested_context =
-            EvalNativeDefaultContext::for_class(default_context.module, declaring_name);
-        return eval_native_callable_default_at(value, &nested_context, depth + 1);
-    }
-    if let Some((declaring_name, value)) =
-        eval_native_trait_constant_expr(default_context.module, &class_name, constant_name)
-    {
-        let nested_context =
-            EvalNativeDefaultContext::for_class(default_context.module, declaring_name);
-        return eval_native_callable_default_at(value, &nested_context, depth + 1);
-    }
-    None
-}
-
-/// Resolves `self`, `static`, `parent`, or a named receiver for default constants.
-pub(super) fn eval_native_static_receiver_name(
-    default_context: &EvalNativeDefaultContext<'_>,
-    receiver: &StaticReceiver,
-) -> Option<String> {
-    match receiver {
-        StaticReceiver::Named(name) => {
-            Some(name.as_canonical().trim_start_matches('\\').to_string())
-        }
-        StaticReceiver::Self_ | StaticReceiver::Static => {
-            default_context.current_class.map(str::to_string)
-        }
-        StaticReceiver::Parent => {
-            let current = default_context.current_class?;
-            resolve_eval_native_default_class(default_context.module, current)
-                .and_then(|(_, class_info)| class_info.parent.clone())
-        }
-    }
-}
-
-/// Looks up a class constant expression, including inherited parent classes.
-pub(super) fn eval_native_class_constant_expr<'a>(
-    module: &'a Module,
-    class_name: &str,
-    constant_name: &str,
-) -> Option<(&'a str, &'a Expr)> {
-    let (resolved_name, class_info) = resolve_eval_native_default_class(module, class_name)?;
-    if let Some(value) = class_info.constants.get(constant_name) {
-        return Some((resolved_name, value));
-    }
-    for interface_name in &class_info.interfaces {
-        if let Some(value) =
-            eval_native_interface_constant_expr(module, interface_name, constant_name)
-        {
-            return Some(value);
-        }
-    }
-    if let Some(parent_name) = class_info.parent.as_deref() {
-        return eval_native_class_constant_expr(module, parent_name, constant_name);
-    }
-    None
-}
-
-/// Looks up an interface constant expression, including inherited interfaces.
-pub(super) fn eval_native_interface_constant_expr<'a>(
-    module: &'a Module,
-    interface_name: &str,
-    constant_name: &str,
-) -> Option<(&'a str, &'a Expr)> {
-    let mut visited = std::collections::HashSet::new();
-    let mut queue = vec![interface_name.to_string()];
-    while let Some(name) = queue.pop() {
-        let Some((resolved_name, interface_info)) =
-            resolve_eval_native_default_interface(module, &name)
-        else {
-            continue;
-        };
-        if !visited.insert(php_symbol_key(resolved_name.trim_start_matches('\\'))) {
-            continue;
-        }
-        if let Some(value) = interface_info.constants.get(constant_name) {
-            return Some((resolved_name, value));
-        }
-        queue.extend(interface_info.parents.iter().cloned());
-    }
-    None
-}
-
-/// Looks up a direct trait constant expression by PHP-style trait name.
-pub(super) fn eval_native_trait_constant_expr<'a>(
-    module: &'a Module,
-    trait_name: &str,
-    constant_name: &str,
-) -> Option<(&'a str, &'a Expr)> {
-    let trait_key = php_symbol_key(trait_name.trim_start_matches('\\'));
-    let resolved_name = module
-        .trait_table
-        .names
-        .iter()
-        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == trait_key)?;
-    let value = module
-        .declared_trait_constants
-        .get(resolved_name)
-        .and_then(|constants| constants.get(constant_name))?;
-    Some((resolved_name.as_str(), value))
-}
-
-/// Looks up class metadata by PHP-style case-insensitive name.
-pub(super) fn resolve_eval_native_default_class<'a>(
-    module: &'a Module,
-    class_name: &str,
-) -> Option<(&'a str, &'a ClassInfo)> {
-    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
-    module
-        .class_infos
-        .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
-        .map(|(name, info)| (name.as_str(), info))
-}
-
-/// Looks up interface metadata by PHP-style case-insensitive name.
-pub(super) fn resolve_eval_native_default_interface<'a>(
-    module: &'a Module,
-    interface_name: &str,
-) -> Option<(&'a str, &'a InterfaceInfo)> {
-    let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
-    module
-        .interface_infos
-        .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == interface_key)
-        .map(|(name, info)| (name.as_str(), info))
-}
-
-/// Converts one literal static array key into bridge metadata.
-pub(super) fn eval_native_literal_array_default_key(expr: &Expr) -> Option<EvalNativeCallableArrayDefaultKey> {
-    match &expr.kind {
-        ExprKind::IntLiteral(value) => Some(EvalNativeCallableArrayDefaultKey::Int(*value)),
-        ExprKind::BoolLiteral(value) => {
-            Some(EvalNativeCallableArrayDefaultKey::Int(i64::from(*value)))
-        }
-        ExprKind::FloatLiteral(value) => {
-            Some(EvalNativeCallableArrayDefaultKey::Int(*value as i64))
-        }
-        ExprKind::StringLiteral(value) => eval_native_string_array_default_key(value),
-        ExprKind::Null => Some(EvalNativeCallableArrayDefaultKey::String(String::new())),
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => value
-                .checked_neg()
-                .map(EvalNativeCallableArrayDefaultKey::Int),
-            ExprKind::FloatLiteral(value) => {
-                Some(EvalNativeCallableArrayDefaultKey::Int((-*value) as i64))
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
+use crate::codegen::const_default_values::const_default_string_array_key;
 
 /// Normalizes one string default-array key to PHP's integer-key rules.
-pub(super) fn eval_native_string_array_default_key(value: &str) -> Option<EvalNativeCallableArrayDefaultKey> {
-    if is_php_integer_array_key(value) {
-        value
-            .parse::<i64>()
-            .ok()
-            .map(EvalNativeCallableArrayDefaultKey::Int)
-    } else {
-        Some(EvalNativeCallableArrayDefaultKey::String(value.to_string()))
-    }
+pub(super) fn eval_native_string_array_default_key(
+    value: &str,
+) -> Option<EvalNativeCallableArrayDefaultKey> {
+    const_default_string_array_key(value)
 }
 
 /// Converts supported property defaults into the compact eval bridge default ABI.
+///
+/// Property defaults deliberately stay on the LITERAL and array subset: a property initializer is
+/// materialized by object allocation, not by the callable default path, so it must not silently
+/// gain object construction.
 pub(super) fn eval_native_property_default(
     default: Option<&Expr>,
     is_declared: bool,
@@ -227,25 +40,6 @@ pub(super) fn eval_native_property_default(
         kind: NATIVE_DEFAULT_NULL,
         payload: 0,
     })
-}
-
-/// Converts a negated literal default into the compact eval bridge default ABI.
-pub(super) fn eval_native_callable_negated_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
-    match &expr.kind {
-        ExprKind::IntLiteral(value) => {
-            value
-                .checked_neg()
-                .map(|payload| EvalNativeCallableDefault::Scalar {
-                    kind: NATIVE_DEFAULT_INT,
-                    payload,
-                })
-        }
-        ExprKind::FloatLiteral(value) => Some(EvalNativeCallableDefault::Scalar {
-            kind: NATIVE_DEFAULT_FLOAT,
-            payload: (-*value).to_bits() as i64,
-        }),
-        _ => None,
-    }
 }
 
 /// Encodes an object-valued native callable default for libelephc-magician.

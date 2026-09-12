@@ -382,7 +382,7 @@ fn eval_user_function_callable_cases(
         let owns_string_return = module.functions.iter().find(|function| function.name == name)
             .is_some_and(super::runtime_callable_invoker::function_returns_owned_string);
         let invoker_label =
-            emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &[], owns_string_return);
+            emit_eval_runtime_callable_invoker_inline(module, emitter, data, state, &case_sig, &[], owns_string_return, None);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             data,
             &function_symbol(&name),
@@ -590,7 +590,7 @@ fn eval_static_method_callable_cases(
                     module, &impl_class, &method_key, true,
                 );
                 let invoker_label =
-                    emit_eval_runtime_callable_invoker_inline(emitter, data, state, &wrapper_sig, &[], owns_string_return);
+                    emit_eval_runtime_callable_invoker_inline(module, emitter, data, state, &wrapper_sig, &[], owns_string_return, Some(&impl_class));
                 let descriptor_label =
                     callable_descriptor::static_descriptor_with_optional_invoker_meta(
                         data,
@@ -666,7 +666,7 @@ fn receiver_bound_instance_method_case(
         module, impl_class, method_key, false,
     );
     let invoker_label =
-        emit_eval_runtime_callable_invoker_inline(emitter, data, state, &case_sig, &captures, owns_string_return);
+        emit_eval_runtime_callable_invoker_inline(module, emitter, data, state, &case_sig, &captures, owns_string_return, Some(impl_class));
     let (kind, invocation_shape) = match shape {
         EvalInstanceCallableShape::ObjectInvoke => (
             callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
@@ -701,23 +701,35 @@ fn receiver_bound_instance_method_case(
 }
 
 /// Emits a descriptor invoker inline and branches around its global entry body.
+///
+/// `current_class` is the class that DECLARES the callee, which is the scope `self::`,
+/// `static::` and `parent::` resolve in when the invoker materializes a parameter default.
+#[allow(clippy::too_many_arguments)]
 fn emit_eval_runtime_callable_invoker_inline(
+    module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
     state: &mut EvalCallableEmitState,
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
     owns_string_return: bool,
+    current_class: Option<&str>,
 ) -> String {
     state.argument_normalizer_needed |=
         super::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     let label = state.next_label("callable_invoker");
     let done_label = state.next_label("callable_invoker_done");
+    let defaults = super::runtime_callable_invoker::resolve_invoker_defaults(
+        module,
+        current_class,
+        sig,
+    );
     let invoker = RuntimeCallableInvoker {
         label: &label,
         sig,
         captures,
         owns_string_return,
+        defaults: &defaults,
     };
     let enclosing = emitter.current_text_section();
     abi::emit_jump(emitter, &done_label);

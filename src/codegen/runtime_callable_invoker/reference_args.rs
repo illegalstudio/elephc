@@ -67,6 +67,7 @@ mod tests {
                     "ref_argument",
                     owners,
                     false,
+                    Vec::new(),
                 );
                 push_owned_cell(&mut emitter, &mut ctx, 0, &ty);
                 let asm = emitter.output();
@@ -89,6 +90,7 @@ mod tests {
                 "ref_hash_argument",
                 owners,
                 false,
+                Vec::new(),
             );
             push_owned_boxed_value(&mut emitter, &mut ctx, &mut DataSection::new(), 0, Some(&PhpType::Mixed));
             let asm = emitter.output();

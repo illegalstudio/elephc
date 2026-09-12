@@ -11,6 +11,7 @@
 
 mod block_emit;
 pub(crate) mod callable_reachability;
+mod const_default_values;
 pub(crate) mod context;
 mod enum_singletons;
 mod eval_callable_helpers;

@@ -40,7 +40,7 @@ use super::{
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
-    emit_runtime_callable_invoker_inline, property_values, store_if_result,
+    property_values, store_if_result,
     store_method_call_result,
 };
 use crate::codegen::fibers;

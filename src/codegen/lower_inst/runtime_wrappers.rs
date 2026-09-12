@@ -27,9 +27,31 @@ pub(super) fn emit_runtime_callable_invoker_with_string_owner(
     captures: &[(String, PhpType, bool)],
     owns_string_return: bool,
 ) -> String {
+    emit_runtime_callable_invoker_in_class(ctx, sig, captures, owns_string_return, None)
+}
+
+/// Emits a descriptor invoker whose defaults resolve in the DECLARING class's constant scope.
+///
+/// `self::`, `static::` and `parent::` in a parameter default answer to the class that declares
+/// the callee, so a method invoker must name it. A free function passes `None`.
+pub(super) fn emit_runtime_callable_invoker_in_class(
+    ctx: &mut FunctionContext<'_>,
+    sig: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+    owns_string_return: bool,
+    current_class: Option<&str>,
+) -> String {
     ctx.shared.callable_argument_normalizer |=
         crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
-    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures, owns_string_return) {
+    let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
+        ctx.module,
+        current_class,
+        sig,
+    );
+    if let Some(label) =
+        ctx.shared
+            .runtime_callable_invoker(sig, captures, owns_string_return, &defaults)
+    {
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
@@ -39,6 +61,7 @@ pub(super) fn emit_runtime_callable_invoker_with_string_owner(
         sig,
         captures,
         owns_string_return,
+        defaults: &defaults,
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
     // enclosing function back before continuing it, or its tail lands in there.
@@ -48,7 +71,7 @@ pub(super) fn emit_runtime_callable_invoker_with_string_owner(
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, owns_string_return, &label);
+        .cache_runtime_callable_invoker(sig, captures, owns_string_return, &defaults, &label);
     label
 }
 

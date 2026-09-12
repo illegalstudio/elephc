@@ -244,12 +244,16 @@ pub(super) fn emit_eval_native_function_invoker_inline(
     let label = ctx.next_global_label("eval_callable_invoker");
     let done_label = ctx.next_label("eval_callable_invoker_done");
     let captures: [(String, PhpType, bool); 0] = [];
+    // A registered native FREE function has no class scope, so its defaults resolve globally.
+    let defaults =
+        crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(ctx.module, None, sig);
     let invoker = RuntimeCallableInvoker {
         label: &label,
         sig,
         captures: &captures,
         owns_string_return: ctx.module.functions.iter().find(|function| function.name == name)
             .is_some_and(crate::codegen::runtime_callable_invoker::function_returns_owned_string),
+        defaults: &defaults,
     };
     let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);

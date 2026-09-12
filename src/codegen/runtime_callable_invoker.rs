@@ -30,6 +30,7 @@
 //!   remembering positions in a bitset, so no signature length silently escapes the check.
 
 mod argument_owners;
+mod defaults;
 mod owned_value_args;
 mod public_args;
 mod reference_args;
@@ -42,6 +43,8 @@ pub(super) use string_return::method_returns_owned_string;
 use public_args::InvokerParamShape;
 
 use argument_owners::InvokerArgumentOwners;
+use crate::codegen::const_default_values::ConstDefaultValue;
+pub(in crate::codegen) use defaults::{resolve_invoker_defaults, InvokerDefaults};
 use crate::codegen::callable_descriptor;
 use crate::codegen::callable_invoker_args::{
     emit_branch_if_mixed_arg_tag, emit_call_user_func_array_invalid_mixed_args_abort,
@@ -57,7 +60,6 @@ use crate::codegen::{
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
-use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
@@ -111,6 +113,10 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
     pub(super) owns_string_return: bool,
+    /// Parameter defaults ALREADY resolved against the module, indexed like `sig.params`.
+    /// A declared default that could not be folded into a materializable value stays `None`, and
+    /// the invoker keeps its fatal diagnostic for that slot rather than inventing a value.
+    pub(super) defaults: &'a [Option<ConstDefaultValue>],
 }
 
 /// Reports whether regular or variadic callable parameters can require runtime normalization.
@@ -127,6 +133,8 @@ struct InvokerEmitContext {
     label_counter: usize,
     argument_owners: InvokerArgumentOwners,
     owns_string_return: bool,
+    /// Resolved parameter defaults for this body, indexed like `FunctionSig::params`.
+    defaults: InvokerDefaults,
 }
 
 impl InvokerEmitContext {
@@ -135,13 +143,20 @@ impl InvokerEmitContext {
         invoker_label: &str,
         argument_owners: InvokerArgumentOwners,
         owns_string_return: bool,
+        defaults: InvokerDefaults,
     ) -> Self {
         Self {
             label_prefix: local_label_prefix(invoker_label),
             label_counter: 0,
             argument_owners,
             owns_string_return,
+            defaults,
         }
+    }
+
+    /// Returns the resolved default for one parameter index, if it was materializable.
+    fn resolved_default(&self, index: usize) -> Option<ConstDefaultValue> {
+        self.defaults.get(index).cloned().flatten()
     }
 
     /// Allocates a deterministic local label for generated branches.
@@ -195,7 +210,12 @@ fn emit_runtime_callable_invoker_impl(
     let escape_label = format!("{}_eval_escape", invoker.label);
     let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
-    let mut ctx = InvokerEmitContext::new(invoker.label, argument_owners, invoker.owns_string_return);
+    let mut ctx = InvokerEmitContext::new(
+        invoker.label,
+        argument_owners,
+        invoker.owns_string_return,
+        invoker.defaults.to_vec(),
+    );
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -586,11 +606,11 @@ fn emit_loaded_indexed_array_callback_call(
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let is_ref = sig.ref_params.get(index).copied().unwrap_or(false);
         if is_ref {
-            if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref) {
+            if sig.defaults.get(index).and_then(Option::as_ref).is_some() {
                 let load_label = ctx.next_label("invoker_ref_load_arg");
                 let done_label = ctx.next_label("invoker_ref_arg_done");
                 emit_compare_len_ge(emitter, len_reg, index + 1, &load_label);
-                push_default_ref_arg(default_expr, target_ty, index, emitter, ctx, data);
+                push_default_ref_arg(index, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done_label);
                 emitter.label(&load_label);
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
@@ -607,11 +627,11 @@ fn emit_loaded_indexed_array_callback_call(
         let pushed_ty = target_ty
             .map(PhpType::codegen_repr)
             .unwrap_or_else(|| elem_ty.codegen_repr());
-        if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref) {
+        if sig.defaults.get(index).and_then(Option::as_ref).is_some() {
             let load_label = ctx.next_label("invoker_load_arg");
             let done_label = ctx.next_label("invoker_arg_done");
             emit_compare_len_ge(emitter, len_reg, index + 1, &load_label);
-            push_default_value_arg(default_expr, target_ty, emitter, ctx, data);
+            push_default_value_arg(index, target_ty, emitter, ctx, data);
             abi::emit_jump(emitter, &done_label);
             emitter.label(&load_label);
             load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
@@ -782,14 +802,14 @@ fn emit_loaded_assoc_array_callback_call(
 
         let is_ref = sig.ref_params.get(index).copied().unwrap_or(false);
         if is_ref {
-            if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref) {
+            if sig.defaults.get(index).and_then(Option::as_ref).is_some() {
                 let use_default = ctx.next_label("invoker_assoc_ref_default");
                 let done = ctx.next_label("invoker_assoc_ref_done");
                 abi::emit_branch_if_int_result_zero(emitter, &use_default);
                 push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done);
                 emitter.label(&use_default);
-                push_default_ref_arg(default_expr, target_ty, index, emitter, ctx, data);
+                push_default_ref_arg(index, target_ty, index, emitter, ctx, data);
                 emitter.label(&done);
             } else {
                 let missing = ctx.next_label("invoker_assoc_ref_missing");
@@ -805,15 +825,14 @@ fn emit_loaded_assoc_array_callback_call(
             continue;
         }
 
-        let pushed_ty = if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref)
-        {
+        let pushed_ty = if sig.defaults.get(index).and_then(Option::as_ref).is_some() {
             let use_default = ctx.next_label("invoker_assoc_default");
             let done = ctx.next_label("invoker_assoc_done");
             abi::emit_branch_if_int_result_zero(emitter, &use_default);
             let loaded_ty = push_loaded_hash_value_arg(&elem_ty, target_ty, emitter, ctx, data);
             abi::emit_jump(emitter, &done);
             emitter.label(&use_default);
-            let default_ty = push_default_value_arg(default_expr, target_ty, emitter, ctx, data);
+            let default_ty = push_default_value_arg(index, target_ty, emitter, ctx, data);
             emitter.label(&done);
             widen_callback_arg_type(&loaded_ty, &default_ty)
         } else {
@@ -2175,15 +2194,15 @@ fn box_raw_hash_value_to_mixed_result(emitter: &mut Emitter) {
     emit_box_runtime_payload_as_mixed(emitter, raw_tag_reg, raw_lo_reg, raw_hi_reg);
 }
 
-/// Emits and pushes a default value argument.
+/// Emits and pushes a default value argument from the descriptor's resolved default metadata.
 fn push_default_value_arg(
-    default: &Expr,
+    index: usize,
     target_ty: Option<&PhpType>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    let source_ty = emit_default_to_result(default, target_ty, emitter, ctx, data);
+    let source_ty = emit_default_to_result(index, target_ty, emitter, ctx, data);
     let pushed_ty = if source_ty.is_refcounted()
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
         && source_ty.codegen_repr() != PhpType::Mixed
@@ -2200,69 +2219,35 @@ fn push_default_value_arg(
 
 /// Emits and pushes a default value by-reference cell.
 fn push_default_ref_arg(
-    default: &Expr,
+    index: usize,
     target_ty: Option<&PhpType>,
     owner_index: usize,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    let pushed_ty = push_default_value_arg(default, target_ty, emitter, ctx, data);
+    let pushed_ty = push_default_value_arg(index, target_ty, emitter, ctx, data);
     reference_args::push_owned_cell(emitter, ctx, owner_index, &pushed_ty);
     PhpType::Int
 }
 
-/// Emits a supported default expression into result registers.
+/// Emits one parameter's resolved default into result registers.
+///
+/// The descriptor metadata carries an ALREADY FOLDED constant value, so nothing here inspects a
+/// parser expression. A parameter whose declared default could not be folded into a materializable
+/// value arrives as `None` and keeps the fatal diagnostic; it is never quietly replaced by null.
 fn emit_default_to_result(
-    default: &Expr,
+    index: usize,
     target_ty: Option<&PhpType>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    match &default.kind {
-        ExprKind::IntLiteral(value) => {
-            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), *value);
-            PhpType::Int
+    match ctx.resolved_default(index) {
+        Some(default) => {
+            defaults::emit_const_default_to_result(&default, target_ty, emitter, ctx, data)
         }
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => {
-                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), -*value);
-                PhpType::Int
-            }
-            ExprKind::FloatLiteral(value) => {
-                emit_float_literal_to_result(emitter, data, -*value);
-                PhpType::Float
-            }
-            _ => emit_null_default_to_result(emitter, target_ty),
-        },
-        ExprKind::BoolLiteral(value) => {
-            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::from(*value));
-            PhpType::Bool
-        }
-        ExprKind::FloatLiteral(value) => {
-            emit_float_literal_to_result(emitter, data, *value);
-            PhpType::Float
-        }
-        ExprKind::StringLiteral(value) => {
-            let (label, len) = data.add_string(value.as_bytes());
-            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            abi::emit_symbol_address(emitter, ptr_reg, &label);
-            abi::emit_load_int_immediate(emitter, len_reg, len as i64);
-            PhpType::Str
-        }
-        ExprKind::ArrayLiteral(items) if items.is_empty() => {
-            let elem_ty = target_ty
-                .and_then(|ty| match ty.codegen_repr() {
-                    PhpType::Array(elem) => Some(*elem),
-                    _ => None,
-                })
-                .unwrap_or(PhpType::Mixed);
-            emit_empty_indexed_array(emitter, &elem_ty);
-            PhpType::Array(Box::new(elem_ty))
-        }
-        ExprKind::Null => emit_null_default_to_result(emitter, target_ty),
-        _ => {
+        None => {
             emit_unsupported_default_abort(emitter, data, ctx);
             PhpType::Void
         }
@@ -3099,17 +3084,48 @@ mod tests {
     #[test]
     fn invoker_cache_separates_owned_and_borrowed_string_returns() {
         let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
+        let defaults: InvokerDefaults = vec![None; sig.params.len()];
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, "borrowed_result");
-        assert!(state.runtime_callable_invoker(&sig, &[], true).is_none());
-        state.cache_runtime_callable_invoker(&sig, &[], true, "owned_result");
+        state.cache_runtime_callable_invoker(&sig, &[], false, &defaults, "borrowed_result");
+        assert!(state
+            .runtime_callable_invoker(&sig, &[], true, &defaults)
+            .is_none());
+        state.cache_runtime_callable_invoker(&sig, &[], true, &defaults, "owned_result");
         assert_eq!(
-            state.runtime_callable_invoker(&sig, &[], false).as_deref(),
+            state
+                .runtime_callable_invoker(&sig, &[], false, &defaults)
+                .as_deref(),
             Some("borrowed_result")
         );
         assert_eq!(
-            state.runtime_callable_invoker(&sig, &[], true).as_deref(),
+            state
+                .runtime_callable_invoker(&sig, &[], true, &defaults)
+                .as_deref(),
             Some("owned_result")
+        );
+    }
+
+    /// The same ABI signature cannot share one body when its defaults resolve to different values.
+    ///
+    /// Two classes can declare the same method shape and fold `self::` constants differently, so
+    /// the RESOLVED defaults are part of the cache key, not just the signature.
+    #[test]
+    fn invoker_cache_separates_signatures_by_resolved_default_value() {
+        let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
+        let mut left: InvokerDefaults = vec![None; sig.params.len()];
+        let mut right = left.clone();
+        left[0] = Some(ConstDefaultValue::String("left".to_string()));
+        right[0] = Some(ConstDefaultValue::String("right".to_string()));
+        let mut state = crate::codegen::shared_state::SharedCodegenState::default();
+        state.cache_runtime_callable_invoker(&sig, &[], false, &left, "left_body");
+        assert!(state
+            .runtime_callable_invoker(&sig, &[], false, &right)
+            .is_none());
+        assert_eq!(
+            state
+                .runtime_callable_invoker(&sig, &[], false, &left)
+                .as_deref(),
+            Some("left_body")
         );
     }
 
@@ -3195,6 +3211,7 @@ mod tests {
             sig: &sig,
             captures: &[],
             owns_string_return: false,
+            defaults: &[None],
         };
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
@@ -3244,7 +3261,7 @@ mod tests {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
-            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false);
+            let mut ctx = InvokerEmitContext::new("mixed_ref_cell", owners, false, Vec::new());
             let (ref_cell_reg, source_tag_reg, branch) = match target.arch {
                 Arch::AArch64 => ("x19", "x20", "b.eq mixed_ref_cell_invoker_ref_mixed_0"),
                 Arch::X86_64 => ("r12", "r13", "je mixed_ref_cell_invoker_ref_mixed_0"),
@@ -3330,12 +3347,16 @@ mod tests {
 
     /// Emits one indexed invoker body for a signature.
     fn emit_invoker_asm(target_name: &str, sig: &FunctionSig, label: &str) -> String {
-        let mut emitter = Emitter::new(Target::parse(target_name).unwrap());
+        let target = Target::parse(target_name).unwrap();
+        let mut emitter = Emitter::new(target);
+        // Resolve through the shared folder so the emitted body sees exactly what codegen ships.
+        let defaults = resolve_invoker_defaults(&crate::ir::Module::new(target), None, sig);
         let invoker = RuntimeCallableInvoker {
             label,
             sig,
             captures: &[],
             owns_string_return: false,
+            defaults: &defaults,
         };
         emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
         emitter.output()

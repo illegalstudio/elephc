@@ -644,7 +644,14 @@ pub(super) fn emit_dynamic_new_mixed_constructor_container_call(
         &constructor_key,
         &constructor.sig,
     )?;
-    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &constructor.sig, &captures);
+    // A constructor's defaults resolve in its own declaring class scope, not the caller's.
+    let invoker_label = super::super::runtime_wrappers::emit_runtime_callable_invoker_in_class(
+        ctx,
+        &constructor.sig,
+        &captures,
+        false,
+        Some(&constructor.impl_class),
+    );
     let php_name = format!("{}::__construct", candidate.class_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,

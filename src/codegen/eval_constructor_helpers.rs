@@ -127,6 +127,14 @@ pub(super) fn emit_eval_constructor_helpers(
     );
 }
 
+/// Returns true when this module emits `__elephc_eval_value_construct_object`.
+///
+/// The descriptor invoker's object-valued parameter defaults construct through that bridge, so
+/// they are only materializable in a module that actually emits it.
+pub(super) fn module_emits_eval_constructor_bridge(module: &Module) -> bool {
+    module_uses_eval(module)
+}
+
 /// Returns true when the EIR module contains a function that can call eval.
 fn module_uses_eval(module: &Module) -> bool {
     all_module_functions(module).any(function_uses_eval)

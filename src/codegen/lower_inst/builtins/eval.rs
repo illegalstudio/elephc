@@ -14,6 +14,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::codegen::const_default_values;
 use crate::codegen::eval_ref_arg_helpers::eval_signature_ref_params_supported;
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime_callable_invoker::RuntimeCallableInvoker;
@@ -22,10 +23,10 @@ use crate::codegen::{
 };
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Module, Op, ValueId};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
-use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{
-    is_php_integer_array_key, AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, FunctionSig,
-    InterfaceInfo, PhpType, PropertyHookContract,
+    AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, FunctionSig, InterfaceInfo, PhpType,
+    PropertyHookContract,
 };
 
 use super::super::super::context::FunctionContext;
@@ -69,11 +70,7 @@ const EVAL_CLASS_RELATION_IMPLEMENTS: i64 = 0;
 const EVAL_CLASS_RELATION_PARENTS: i64 = 1;
 const EVAL_CLASS_RELATION_USES: i64 = 2;
 const EVAL_CALLABLE_ARG_ARRAY_OFFSET: usize = EVAL_CODE_PTR_OFFSET;
-const NATIVE_DEFAULT_NULL: i64 = 0;
-const NATIVE_DEFAULT_BOOL: i64 = 1;
-const NATIVE_DEFAULT_INT: i64 = 2;
-const NATIVE_DEFAULT_FLOAT: i64 = 3;
-const NATIVE_DEFAULT_EMPTY_ARRAY: i64 = 4;
+const NATIVE_DEFAULT_NULL: i64 = const_default_values::CONST_DEFAULT_NULL;
 const NATIVE_GLOBAL_CONSTANT_NULL: i64 = 0;
 const NATIVE_GLOBAL_CONSTANT_BOOL: i64 = 1;
 const NATIVE_GLOBAL_CONSTANT_INT: i64 = 2;
@@ -103,8 +100,7 @@ const NATIVE_OBJECT_DEFAULT_ARG_ARRAY: u8 = 4;
 const NATIVE_ARRAY_DEFAULT_KEY_AUTO: u8 = 0;
 const NATIVE_ARRAY_DEFAULT_KEY_INT: u8 = 1;
 const NATIVE_ARRAY_DEFAULT_KEY_STRING: u8 = 2;
-const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
-const MAX_NATIVE_DEFAULT_CONSTANT_DEPTH: usize = 16;
+const MAX_NATIVE_DEFAULT_CONSTANT_DEPTH: usize = const_default_values::MAX_CONST_DEFAULT_DEPTH;
 
 /// Local slot metadata needed for conservative eval scope synchronization.
 #[derive(Clone)]
@@ -224,37 +220,15 @@ struct EvalNativeMemberAttributeRegistration {
     attribute_args: Option<Vec<AttrArgEntry>>,
 }
 
-/// Native callable default that can be registered with libelephc-magician.
-enum EvalNativeCallableDefault {
-    Scalar {
-        kind: i64,
-        payload: i64,
-    },
-    String(String),
-    Array(Vec<EvalNativeCallableArrayDefaultElement>),
-    Object {
-        class_name: String,
-        args: Vec<EvalNativeCallableObjectDefaultArg>,
-    },
-}
-
-/// Array element metadata for a native callable default registered with eval.
-struct EvalNativeCallableArrayDefaultElement {
-    key: Option<EvalNativeCallableArrayDefaultKey>,
-    default: EvalNativeCallableDefault,
-}
-
-/// Static array key metadata for a native callable default registered with eval.
-enum EvalNativeCallableArrayDefaultKey {
-    Int(i64),
-    String(String),
-}
-
-/// Constructor argument metadata for an object-valued native callable default.
-struct EvalNativeCallableObjectDefaultArg {
-    name: Option<String>,
-    default: EvalNativeCallableDefault,
-}
+/// Native callable defaults registered with libelephc-magician are the SHARED resolved constant
+/// values from `crate::codegen::const_default_values`. The descriptor invoker materializes the very
+/// same tree, so there is one folder and one answer to what a representable default is.
+use crate::codegen::const_default_values::{
+    ConstDefaultArrayElement as EvalNativeCallableArrayDefaultElement,
+    ConstDefaultArrayKey as EvalNativeCallableArrayDefaultKey,
+    ConstDefaultObjectArg as EvalNativeCallableObjectDefaultArg,
+    ConstDefaultValue as EvalNativeCallableDefault,
+};
 
 
 mod calls;

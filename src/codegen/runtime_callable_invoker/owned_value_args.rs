@@ -70,6 +70,7 @@ mod tests {
                     "callable_argument",
                     owners,
                     false,
+                    Vec::new(),
                 );
                 let result = coerce(&mut emitter, &mut ctx, &mut DataSection::new(), &source, Some(&PhpType::Callable));
                 assert_eq!(result, (PhpType::Callable, true), "{target}: {source:?}");

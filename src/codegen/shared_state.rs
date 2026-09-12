@@ -81,6 +81,10 @@ struct RuntimeCallableInvokerCacheEntry {
     signature: FunctionSig,
     captures: Vec<(String, PhpType, bool)>,
     owns_string_return: bool,
+    /// The RESOLVED defaults the body materializes. Two signatures can be identical as ABI and
+    /// still fold `self::`/`parent::` defaults differently in different class scopes, so the
+    /// resolved values are part of the key rather than the declaring class name.
+    defaults: crate::codegen::runtime_callable_invoker::InvokerDefaults,
     label: String,
 }
 
@@ -267,6 +271,7 @@ impl SharedCodegenState {
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
         owns_string_return: bool,
+        defaults: &[Option<crate::codegen::const_default_values::ConstDefaultValue>],
     ) -> Option<String> {
         self.runtime_callable_invokers
             .iter()
@@ -274,6 +279,7 @@ impl SharedCodegenState {
                 entry.signature == *signature
                     && entry.captures == captures
                     && entry.owns_string_return == owns_string_return
+                    && entry.defaults == defaults
             })
             .map(|entry| entry.label.clone())
     }
@@ -284,6 +290,7 @@ impl SharedCodegenState {
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
         owns_string_return: bool,
+        defaults: &[Option<crate::codegen::const_default_values::ConstDefaultValue>],
         label: &str,
     ) {
         self.runtime_callable_invokers
@@ -291,6 +298,7 @@ impl SharedCodegenState {
                 signature: signature.clone(),
                 captures: captures.to_vec(),
                 owns_string_return,
+                defaults: defaults.to_vec(),
                 label: label.to_string(),
             });
     }
