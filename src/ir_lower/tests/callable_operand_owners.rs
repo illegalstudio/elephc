@@ -17,7 +17,8 @@
 //!   callback has already been evaluated and published.
 //! - Every supported target lowers these paths to the same owner structure.
 
-use crate::ir::{Function, Immediate, LocalKind, Op};
+use crate::ir::{Function, Immediate, LocalKind, Op, Terminator};
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::codegen::platform::Target;
@@ -114,30 +115,74 @@ fn lower_function(source: &str, target: &str, name: &str) -> (crate::ir::Module,
 }
 
 /// Proves every owner record in `function` nests and retires in strict publication order.
+///
+/// Owner retirement must be followed through the CFG. A descriptor unpack guard has distinct
+/// invalid-key and normal-exit cleanup blocks, so replaying the flat instruction table would
+/// incorrectly treat both mutually exclusive pops as one execution path.
 fn assert_owner_records_are_lifo(function: &Function, target: &str) {
-    let mut active: Vec<crate::ir::LocalSlotId> = Vec::new();
-    for (index, inst) in function.instructions.iter().enumerate() {
-        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+    let mut arrivals = HashMap::new();
+    let mut pending = vec![(function.entry, Vec::<crate::ir::LocalSlotId>::new())];
+    while let Some((block_id, mut active)) = pending.pop() {
+        if let Some(previous) = arrivals.get(&block_id) {
+            assert_eq!(
+                previous, &active,
+                "{target}: {} owner stacks agree at {block_id:?}",
+                function.name,
+            );
             continue;
-        };
-        match inst.op {
-            Op::PushCallOperandOwner => active.push(slot),
-            Op::PopCallOperandOwner => {
-                assert_eq!(
-                    active.pop(),
-                    Some(slot),
-                    "{target}: {} retires its owner records in LIFO order at {index}",
+        }
+        arrivals.insert(block_id, active.clone());
+        let block = function.block(block_id).expect("reachable block exists");
+        for instruction in &block.instructions {
+            let inst = function
+                .instruction(*instruction)
+                .expect("block instruction exists");
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                continue;
+            };
+            match inst.op {
+                Op::PushCallOperandOwner => active.push(slot),
+                Op::PopCallOperandOwner => {
+                    assert_eq!(
+                        active.pop(),
+                        Some(slot),
+                        "{target}: {} retires its owner records in LIFO order in {}",
+                        function.name,
+                        block.name,
+                    );
+                }
+                _ => {}
+            }
+        }
+        let successors = match block.terminator.as_ref().expect("terminated block") {
+            Terminator::Br { target, .. } => vec![*target],
+            Terminator::CondBr {
+                then_target,
+                else_target,
+                ..
+            } => vec![*then_target, *else_target],
+            Terminator::Switch { cases, default, .. } => cases
+                .iter()
+                .map(|case| case.target)
+                .chain(std::iter::once(*default))
+                .collect(),
+            Terminator::GeneratorSuspend { resume, .. } => vec![*resume],
+            Terminator::Return { .. } => {
+                assert!(
+                    active.is_empty(),
+                    "{target}: {} retires every owner record it publishes before returning",
                     function.name,
                 );
+                Vec::new()
             }
-            _ => {}
+            Terminator::Throw { .. } | Terminator::Fatal { .. } | Terminator::Unreachable => {
+                Vec::new()
+            }
+        };
+        for successor in successors {
+            pending.push((successor, active.clone()));
         }
     }
-    assert!(
-        active.is_empty(),
-        "{target}: {} retires every owner record it publishes",
-        function.name,
-    );
 }
 
 /// Returns the index of the first instruction with `op`.
