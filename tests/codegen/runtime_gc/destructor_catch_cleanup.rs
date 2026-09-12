@@ -118,8 +118,9 @@ fn test_core_rebinding_a_local_runs_its_destructor_into_a_same_frame_catch() {
 class ThrowingRebound {
     public function __destruct() { echo 'rebound|'; throw new RuntimeException('rebound'); }
 }
+function makeThrowingRebound(): mixed { return new ThrowingRebound(); }
 function rebindWithSameFrameCatch(): string {
-    $held = new ThrowingRebound();
+    $held = makeThrowingRebound();
     try {
         $held = 42;
         echo 'unreached|', $held;
