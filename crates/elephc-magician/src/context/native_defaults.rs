@@ -275,6 +275,8 @@ pub struct NativeCallableSignature {
     pub(super) param_names: Vec<String>,
     pub(super) param_types: Vec<Option<EvalParameterType>>,
     pub(super) param_defaults: Vec<Option<NativeCallableDefault>>,
+    /// Compiler-emitted zero-argument helpers for optional defaults outside compact metadata.
+    pub(super) compiled_param_defaults: Vec<Option<usize>>,
     pub(super) param_by_ref: Vec<bool>,
     pub(super) variadic_index: Option<usize>,
     pub(super) return_type: Option<EvalParameterType>,
@@ -290,6 +292,7 @@ impl NativeCallableSignature {
             param_names: Vec::new(),
             param_types: Vec::new(),
             param_defaults: Vec::new(),
+            compiled_param_defaults: Vec::new(),
             param_by_ref: Vec::new(),
             variadic_index: None,
             return_type: None,
@@ -336,6 +339,18 @@ impl NativeCallableSignature {
             self.param_defaults.resize(self.param_count, None);
         }
         self.param_defaults[index] = Some(default);
+        true
+    }
+
+    /// Records a compiler-emitted Mixed-returning helper for one optional parameter default.
+    pub fn set_compiled_param_default(&mut self, index: usize, callback: usize) -> bool {
+        if index >= self.param_count || callback == 0 {
+            return false;
+        }
+        if self.compiled_param_defaults.len() < self.param_count {
+            self.compiled_param_defaults.resize(self.param_count, None);
+        }
+        self.compiled_param_defaults[index] = Some(callback);
         true
     }
 
@@ -393,6 +408,11 @@ impl NativeCallableSignature {
     /// Returns the registered scalar default for one parameter slot, if any.
     pub fn param_default(&self, index: usize) -> Option<&NativeCallableDefault> {
         self.param_defaults.get(index).and_then(Option::as_ref)
+    }
+
+    /// Returns the compiled fallback helper for one optional slot, if registered.
+    pub fn compiled_param_default(&self, index: usize) -> Option<usize> {
+        self.compiled_param_defaults.get(index).copied().flatten()
     }
 
     /// Returns whether one registered parameter is by-reference.
@@ -530,6 +550,18 @@ mod tests {
         let collector = hidden_collector_with_count();
         assert_eq!(collector.param_default(1), None);
         assert_eq!(collector.required_param_count(), 1);
+    }
+
+    /// A compiled fallback fills the physical slot without becoming reflection value metadata.
+    #[test]
+    fn compiled_defaults_stay_separate_from_php_value_metadata() {
+        let mut signature = hidden_collector_with_count();
+        assert!(signature.set_compiled_param_default(1, 0x1234));
+        assert_eq!(signature.param_default(1), None);
+        assert_eq!(signature.compiled_param_default(1), Some(0x1234));
+        assert_eq!(signature.required_param_count(), 1);
+        assert!(signature.collector_needs_count());
+        assert!(!signature.set_compiled_param_default(1, 0));
     }
 
     /// The collector's count prefix is declared metadata, never inferred from a default.

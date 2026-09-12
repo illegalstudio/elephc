@@ -310,11 +310,16 @@ pub(super) fn bind_native_signature_args(
             if position < signature.required_param_count() {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let Some(default) = signature.param_default(position) else {
-                return Err(EvalStatus::RuntimeFatal);
+            let default_value = match signature.param_default(position) {
+                Some(default) => materialize_native_callable_default(default, context, values)?,
+                None => materialize_compiled_native_callable_default(
+                    signature
+                        .compiled_param_default(position)
+                        .ok_or(EvalStatus::RuntimeFatal)?,
+                )?,
             };
             *value = Some(BoundMethodArg {
-                value: materialize_native_callable_default(default, context, values)?,
+                value: default_value,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
             });
@@ -328,6 +333,50 @@ pub(super) fn bind_native_signature_args(
         return Err(status);
     }
     finish_native_argument_binding(signature, bound_args, by_ref_mode, context, values)
+}
+
+/// Calls one compiler-emitted, zero-argument helper that returns an owned boxed Mixed default.
+///
+/// Registration accepts only helpers lowered from finite side-effect-free literal trees. Those
+/// helpers may allocate strings or nested arrays, but they cannot dispatch PHP code or raise a
+/// PHP Throwable across the Rust stack. A null return remains fatal instead of fabricating a PHP
+/// value after an allocation failure. The returned Mixed owner joins `bound_args`, whose ordinary
+/// coercion-error, later-binding-error, normal-return, and exceptional cleanup paths release it.
+fn materialize_compiled_native_callable_default(
+    callback: usize,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if callback == 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let callback: unsafe extern "C" fn() -> *mut crate::value::RuntimeCell =
+        unsafe { std::mem::transmute(callback) };
+    let value = unsafe { callback() };
+    if value.is_null() {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(RuntimeCellHandle::from_raw(value))
+    }
+}
+
+#[cfg(test)]
+mod compiled_default_tests {
+    use super::*;
+
+    /// Returns a non-null opaque cell identity without dereferencing it.
+    unsafe extern "C" fn compiled_default_stub() -> *mut crate::value::RuntimeCell {
+        std::ptr::dangling_mut::<crate::value::RuntimeCell>()
+    }
+
+    /// A compiled fallback enters binding as an owned Mixed cell, never as a borrowed sentinel.
+    #[test]
+    fn compiled_default_callback_returns_an_owned_mixed_cell() {
+        let callback = compiled_default_stub as *const () as usize;
+        let value =
+            materialize_compiled_native_callable_default(callback).expect("compiled default");
+        assert_eq!(value.as_ptr(), std::ptr::dangling_mut());
+        assert!(!value.is_borrowed());
+        assert_eq!(materialize_compiled_native_callable_default(0), Err(EvalStatus::RuntimeFatal));
+    }
 }
 
 /// Applies type coercion and reference degradation, reclaiming partial binding on errors.

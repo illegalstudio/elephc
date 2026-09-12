@@ -33,6 +33,7 @@ mod destructor_catch_preservation;
 mod dynamic_spreads;
 mod effects;
 mod eval_ownership;
+mod eval_default_helpers;
 mod exhaustive;
 mod ownership;
 mod object_mixed_return_owners;

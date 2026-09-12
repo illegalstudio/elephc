@@ -71,6 +71,8 @@ const EVAL_CLASS_RELATION_PARENTS: i64 = 1;
 const EVAL_CLASS_RELATION_USES: i64 = 2;
 const EVAL_CALLABLE_ARG_ARRAY_OFFSET: usize = EVAL_CODE_PTR_OFFSET;
 const NATIVE_DEFAULT_NULL: i64 = const_default_values::CONST_DEFAULT_NULL;
+/// Scalar-default ABI kind whose payload is a compiled `fn() -> Mixed*` helper address.
+const NATIVE_DEFAULT_COMPILED: i64 = 5;
 const NATIVE_GLOBAL_CONSTANT_NULL: i64 = 0;
 const NATIVE_GLOBAL_CONSTANT_BOOL: i64 = 1;
 const NATIVE_GLOBAL_CONSTANT_INT: i64 = 2;

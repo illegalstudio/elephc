@@ -2586,19 +2586,15 @@ mod source_entry_tests {
     fn plain_methods_keep_the_declared_signature_and_raw_symbol() {
         let declared = signature(vec![("handler".to_string(), PhpType::Callable)]);
         for module in modules() {
-            match eval_method_entry(
+            let EvalMethodEntry::Raw(physical, symbol) = eval_method_entry(
                 &module,
                 "XMLParser",
                 "setHandler",
                 &declared,
                 MethodKind::Instance,
-            ) {
-                EvalMethodEntry::Raw(physical, symbol) => {
-                    assert_eq!(physical.params, declared.params);
-                    assert_eq!(symbol, method_symbol("XMLParser", "setHandler"));
-                }
-                _ => panic!("a method without generated slots must resolve to its raw entry"),
-            }
+            );
+            assert_eq!(physical.params, declared.params);
+            assert_eq!(symbol, method_symbol("XMLParser", "setHandler"));
         }
     }
 
@@ -2612,22 +2608,18 @@ mod source_entry_tests {
         ]);
         let physical = with_generated_collector(visible.clone());
         for module in modules() {
-            match eval_method_entry(
+            let EvalMethodEntry::Raw(resolved, symbol) = eval_method_entry(
                 &module,
                 "Handlers",
                 "setElementHandler",
                 &physical,
                 MethodKind::Instance,
-            ) {
-                EvalMethodEntry::Raw(resolved, symbol) => {
-                    assert_eq!(resolved.params, physical.params);
-                    assert_eq!(resolved.ref_params, physical.ref_params);
-                    assert_eq!(resolved.variadic, physical.variadic);
-                    assert_eq!(resolved.return_type, physical.return_type);
-                    assert_eq!(symbol, method_symbol("Handlers", "setElementHandler"));
-                }
-                _ => panic!("a generated collector must resolve to its raw physical entry"),
-            }
+            );
+            assert_eq!(resolved.params, physical.params);
+            assert_eq!(resolved.ref_params, physical.ref_params);
+            assert_eq!(resolved.variadic, physical.variadic);
+            assert_eq!(resolved.return_type, physical.return_type);
+            assert_eq!(symbol, method_symbol("Handlers", "setElementHandler"));
         }
     }
 
@@ -2638,20 +2630,16 @@ mod source_entry_tests {
         let physical =
             with_generated_collector(signature(vec![("data".to_string(), PhpType::Str)]));
         for module in modules() {
-            match eval_method_entry(
+            let EvalMethodEntry::Raw(resolved, symbol) = eval_method_entry(
                 &module,
                 "BaseParser",
                 "parseInto",
                 &physical,
                 MethodKind::Instance,
-            ) {
-                EvalMethodEntry::Raw(resolved, symbol) => {
-                    assert_eq!(resolved.params, physical.params);
-                    assert_eq!(symbol, method_symbol("BaseParser", "parseInto"));
-                    assert_ne!(symbol, method_symbol("DerivedParser", "parseInto"));
-                }
-                _ => panic!("an inherited collector must enter the owner's raw physical method"),
-            }
+            );
+            assert_eq!(resolved.params, physical.params);
+            assert_eq!(symbol, method_symbol("BaseParser", "parseInto"));
+            assert_ne!(symbol, method_symbol("DerivedParser", "parseInto"));
         }
     }
 
@@ -2696,16 +2684,11 @@ mod source_entry_tests {
     fn plain_static_methods_keep_the_declared_signature_and_raw_symbol() {
         let declared = signature(vec![("path".to_string(), PhpType::Str)]);
         for module in modules() {
-            match eval_method_entry(&module, "Loader", "fromFile", &declared, MethodKind::Static) {
-                EvalMethodEntry::Raw(physical, symbol) => {
-                    assert_eq!(physical.params, declared.params);
-                    assert_eq!(symbol, static_method_symbol("Loader", "fromFile"));
-                    assert_ne!(symbol, method_symbol("Loader", "fromFile"));
-                }
-                _ => {
-                    panic!("a static method without generated slots must resolve to its raw entry")
-                }
-            }
+            let EvalMethodEntry::Raw(physical, symbol) =
+                eval_method_entry(&module, "Loader", "fromFile", &declared, MethodKind::Static);
+            assert_eq!(physical.params, declared.params);
+            assert_eq!(symbol, static_method_symbol("Loader", "fromFile"));
+            assert_ne!(symbol, method_symbol("Loader", "fromFile"));
         }
     }
 
@@ -2716,17 +2699,14 @@ mod source_entry_tests {
         let visible = signature(vec![("label".to_string(), PhpType::Str)]);
         let physical = with_generated_collector(visible.clone());
         for module in modules() {
-            match eval_method_entry(&module, "Registry", "record", &physical, MethodKind::Static) {
-                EvalMethodEntry::Raw(resolved, symbol) => {
-                    assert_eq!(resolved.params, physical.params);
-                    assert_eq!(resolved.ref_params, physical.ref_params);
-                    assert_eq!(resolved.variadic, physical.variadic);
-                    assert_eq!(resolved.return_type, physical.return_type);
-                    assert_eq!(symbol, static_method_symbol("Registry", "record"));
-                    assert_ne!(symbol, method_symbol("Registry", "record"));
-                }
-                _ => panic!("a generated static collector must resolve to its raw physical entry"),
-            }
+            let EvalMethodEntry::Raw(resolved, symbol) =
+                eval_method_entry(&module, "Registry", "record", &physical, MethodKind::Static);
+            assert_eq!(resolved.params, physical.params);
+            assert_eq!(resolved.ref_params, physical.ref_params);
+            assert_eq!(resolved.variadic, physical.variadic);
+            assert_eq!(resolved.return_type, physical.return_type);
+            assert_eq!(symbol, static_method_symbol("Registry", "record"));
+            assert_ne!(symbol, method_symbol("Registry", "record"));
         }
     }
 
@@ -2737,15 +2717,11 @@ mod source_entry_tests {
         let physical =
             with_generated_collector(signature(vec![("data".to_string(), PhpType::Str)]));
         for module in modules() {
-            match eval_method_entry(&module, "BaseRegistry", "make", &physical, MethodKind::Static)
-            {
-                EvalMethodEntry::Raw(resolved, symbol) => {
-                    assert_eq!(resolved.params, physical.params);
-                    assert_eq!(symbol, static_method_symbol("BaseRegistry", "make"));
-                    assert_ne!(symbol, static_method_symbol("DerivedRegistry", "make"));
-                }
-                _ => panic!("an inherited static collector must enter the owner's raw method"),
-            }
+            let EvalMethodEntry::Raw(resolved, symbol) =
+                eval_method_entry(&module, "BaseRegistry", "make", &physical, MethodKind::Static);
+            assert_eq!(resolved.params, physical.params);
+            assert_eq!(symbol, static_method_symbol("BaseRegistry", "make"));
+            assert_ne!(symbol, static_method_symbol("DerivedRegistry", "make"));
         }
     }
 

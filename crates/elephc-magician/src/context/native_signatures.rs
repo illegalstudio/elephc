@@ -126,6 +126,19 @@ impl ElephcEvalContext {
             .is_some_and(|signature| signature.set_param_default(index, default))
     }
 
+    /// Records a compiler-emitted default helper for an instance method parameter.
+    pub fn define_native_method_compiled_param_default(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+        callback: usize,
+    ) -> bool {
+        self.native_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_compiled_param_default(index, callback))
+    }
+
     /// Records whether one native AOT instance-method parameter is by-reference.
     pub fn define_native_method_param_by_ref(
         &mut self,
@@ -220,6 +233,19 @@ impl ElephcEvalContext {
             .is_some_and(|signature| signature.set_param_default(index, default))
     }
 
+    /// Records a compiler-emitted default helper for a static method parameter.
+    pub fn define_native_static_method_compiled_param_default(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+        callback: usize,
+    ) -> bool {
+        self.native_static_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_compiled_param_default(index, callback))
+    }
+
     /// Records whether one native AOT static-method parameter is by-reference.
     pub fn define_native_static_method_param_by_ref(
         &mut self,
@@ -309,6 +335,18 @@ impl ElephcEvalContext {
         self.native_constructors
             .get_mut(&normalize_class_name(class_name))
             .is_some_and(|signature| signature.set_param_default(index, default))
+    }
+
+    /// Records a compiler-emitted default helper for a constructor parameter.
+    pub fn define_native_constructor_compiled_param_default(
+        &mut self,
+        class_name: &str,
+        index: usize,
+        callback: usize,
+    ) -> bool {
+        self.native_constructors
+            .get_mut(&normalize_class_name(class_name))
+            .is_some_and(|signature| signature.set_compiled_param_default(index, callback))
     }
 
     /// Records whether one native AOT constructor parameter is by-reference.

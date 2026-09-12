@@ -1048,6 +1048,177 @@ pub(crate) fn dynamic_constructor_thunk_name(class_id: u64, provided_args: usize
     format!("_class_ctor_{}_{}", class_id, provided_args)
 }
 
+/// Returns the internal function name that materializes one native eval parameter default.
+pub(crate) fn eval_native_default_helper_name(
+    class_id: u64,
+    is_static: bool,
+    method_name: &str,
+    param_index: usize,
+) -> String {
+    format!(
+        "__elephc_eval_default\\{}\\{}\\{}\\{}",
+        class_id,
+        if is_static { "static" } else { "instance" },
+        method_name,
+        param_index,
+    )
+}
+
+/// Lowers safe literal defaults into zero-argument Mixed-returning helpers for native eval calls.
+///
+/// Compact eval metadata deliberately has a recursion bound. A finite source literal beyond that
+/// bound is still safe for the compiler to lower normally, so the binder calls one of these
+/// helpers when no compact value was registered. Defaults outside this side-effect-free literal
+/// subset remain unsupported instead of executing arbitrary PHP while Rust owns the eval stack.
+pub(crate) fn lower_eval_native_default_helpers(
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) {
+    let uses_eval = super::program::all_lowered_functions(module).any(|function| {
+        function.locals.iter().any(|local| {
+            matches!(
+                local.kind,
+                crate::ir::LocalKind::EvalContext
+                    | crate::ir::LocalKind::EvalScope
+                    | crate::ir::LocalKind::EvalGlobalScope
+            )
+        })
+    });
+    if !uses_eval {
+        return;
+    }
+    let mut specs = Vec::new();
+    let mut classes = module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, info)| info.class_id);
+    for (class_name, class_info) in classes {
+        for (is_static, methods) in [
+            (false, &class_info.methods),
+            (true, &class_info.static_methods),
+        ] {
+            let mut methods = methods.iter().collect::<Vec<_>>();
+            methods.sort_by_key(|(name, _)| name.as_str());
+            for (method_name, signature) in methods {
+                for (param_index, default) in signature.defaults.iter().enumerate() {
+                    let Some(default) = default else { continue };
+                    if eval_native_default_helper_literal(&default.kind)
+                        && crate::types::signatures::literal_default_exceeds_compact_depth(default)
+                    {
+                        specs.push((
+                            class_name.clone(),
+                            class_info.clone(),
+                            is_static,
+                            method_name.clone(),
+                            param_index,
+                            default.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for (class_name, class_info, is_static, method_name, param_index, default) in specs {
+        let function_name = eval_native_default_helper_name(
+            class_info.class_id,
+            is_static,
+            &method_name,
+            param_index,
+        );
+        if module.functions.iter().any(|function| function.name == function_name) {
+            continue;
+        }
+        let mut function = Function::new(
+            function_name.clone(),
+            value_ir_type(&PhpType::Mixed),
+            PhpType::Mixed,
+        );
+        function.flags.is_synthetic = true;
+        let signature = FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Mixed,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        };
+        function.source_signature = Some(source_signature(&function_name, &signature));
+        function.signature = Some(eir_runtime_metadata_signature(&signature));
+        let body = [Stmt::new(StmtKind::Return(Some(default)), Span::dummy())];
+        let closures = lower_body_into_function(
+            &mut function,
+            Some(&class_info),
+            &mut module.data,
+            &body,
+            TypeEnv::new(),
+            web_gated_global_env(&check_result.global_env, module.web),
+            &check_result.functions,
+            &check_result.extern_functions,
+            &check_result.extern_globals,
+            &check_result.callable_param_sigs,
+            &check_result.return_alias_summaries,
+            fiber_return_sigs,
+            &module.class_infos,
+            &check_result.enums,
+            &check_result.interfaces,
+            &module.declared_trait_names,
+            &module.declared_trait_methods,
+            &module.declared_trait_properties,
+            &check_result.packed_classes,
+            &check_result.throw_access_sites,
+            &check_result.builtin_call_types,
+            &check_result.loop_storage_types,
+            &check_result.string_incdec_locals,
+            &check_result.local_bind_kill_sites,
+            &check_result.local_ref_detach_sites,
+            &check_result.local_retype_sites,
+            &check_result.mixed_storage_store_sites,
+            function_name.clone(),
+            constants,
+            Some(class_name),
+            PhpType::Mixed,
+            true,
+            &[],
+            None,
+            false,
+            std::collections::HashSet::new(),
+            module.source_path.clone(),
+            None,
+            module.web,
+        );
+        add_closures(module, closures);
+        module.add_function(function);
+    }
+}
+
+/// Returns whether a default is a finite, side-effect-free literal tree.
+fn eval_native_default_helper_literal(expr: &ExprKind) -> bool {
+    match expr {
+        ExprKind::Null
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_) => true,
+        ExprKind::Negate(inner) => matches!(
+            &inner.kind,
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        ),
+        ExprKind::ArrayLiteral(items) => items
+            .iter()
+            .all(|item| eval_native_default_helper_literal(&item.kind)),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().all(|(key, value)| {
+            eval_native_default_helper_literal(&key.kind)
+                && eval_native_default_helper_literal(&value.kind)
+        }),
+        _ => false,
+    }
+}
+
 /// Lowers one closure literal into an EIR function plus any nested closure functions.
 pub(crate) fn lower_closure_function(
     parent: &mut LoweringContext<'_, '_>,

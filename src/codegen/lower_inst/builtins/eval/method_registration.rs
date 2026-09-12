@@ -139,21 +139,41 @@ pub(super) fn register_eval_native_method(
         ) {
             continue;
         }
-        let Some(default) = default
+        if let Some(default) = default
             .as_ref()
             .and_then(|expr| eval_native_callable_default(expr, &default_context))
-        else {
+        {
+            register_eval_native_method_param_default(
+                ctx,
+                context_offset,
+                &method_key_label,
+                method_key_len,
+                registration.is_static,
+                index,
+                &default,
+            );
+            continue;
+        }
+        let Some(class_info) = ctx.module.class_infos.get(&registration.class_name) else {
             continue;
         };
-        register_eval_native_method_param_default(
-            ctx,
-            context_offset,
-            &method_key_label,
-            method_key_len,
+        let helper = crate::ir_lower::eval_native_default_helper_name(
+            class_info.class_id,
             registration.is_static,
+            &registration.method_name,
             index,
-            &default,
         );
+        if ctx.module.functions.iter().any(|function| function.name == helper) {
+            register_eval_native_method_compiled_default(
+                ctx,
+                context_offset,
+                &method_key_label,
+                method_key_len,
+                registration.is_static,
+                index,
+                &helper,
+            );
+        }
     }
     if let Some(type_spec) = eval_native_callable_return_type_spec(&registration.signature) {
         register_eval_native_method_return_type(
@@ -165,6 +185,54 @@ pub(super) fn register_eval_native_method(
             &type_spec,
         );
     }
+}
+
+/// Registers a compiled Mixed-returning helper for a default outside compact eval metadata.
+fn register_eval_native_method_compiled_default(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    method_key_label: &str,
+    method_key_len: usize,
+    is_static: bool,
+    param_index: usize,
+    helper_name: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        method_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        method_key_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        NATIVE_DEFAULT_COMPILED,
+    );
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        &function_symbol(helper_name),
+    );
+    let symbol = if is_static {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_static_method_param_default_scalar")
+    } else {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_method_param_default_scalar")
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native method bridge-support registration call.

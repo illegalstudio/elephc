@@ -14,6 +14,26 @@ use crate::span::Span;
 
 use super::PhpType;
 
+/// Recursion bound shared by compact native-default metadata producers.
+pub(crate) const COMPACT_NATIVE_DEFAULT_MAX_DEPTH: usize = 16;
+
+/// Returns whether a finite literal default exceeds compact metadata's recursion bound.
+pub(crate) fn literal_default_exceeds_compact_depth(expr: &Expr) -> bool {
+    fn exceeds(expr: &Expr, depth: usize) -> bool {
+        if depth > COMPACT_NATIVE_DEFAULT_MAX_DEPTH {
+            return true;
+        }
+        match &expr.kind {
+            ExprKind::ArrayLiteral(items) => items.iter().any(|item| exceeds(item, depth + 1)),
+            ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
+                exceeds(key, depth + 1) || exceeds(value, depth + 1)
+            }),
+            _ => false,
+        }
+    }
+    exceeds(expr, 0)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 /// Metadata for a callable's parameter and return type contract.
 ///

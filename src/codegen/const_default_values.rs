@@ -35,7 +35,8 @@ pub(in crate::codegen) const CONST_DEFAULT_EMPTY_ARRAY: i64 = 4;
 /// Largest constructor argument count an object-valued default may carry.
 pub(in crate::codegen) const MAX_CONST_DEFAULT_OBJECT_ARGS: usize = u8::MAX as usize;
 /// Recursion bound for constant-backed default resolution.
-pub(in crate::codegen) const MAX_CONST_DEFAULT_DEPTH: usize = 16;
+pub(in crate::codegen) const MAX_CONST_DEFAULT_DEPTH: usize =
+    crate::types::signatures::COMPACT_NATIVE_DEFAULT_MAX_DEPTH;
 
 /// One fully resolved PHP default value.
 #[derive(Clone, PartialEq)]

@@ -113,6 +113,12 @@ pub(crate) fn lower(
         &constants,
         &fiber_return_sigs,
     );
+    function::lower_eval_native_default_helpers(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    );
     lower_literal_eval_aot_functions(&mut module, check_result, &constants, &fiber_return_sigs);
     lower_dynamic_constructor_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
     include_lowered_runtime_features(&mut module);
