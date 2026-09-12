@@ -11,6 +11,9 @@
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
 //! - Constructors are bridged for scalar/Mixed/array/object arguments, including
 //!   generated variadic array slots and supported scalar/Mixed by-reference parameters.
+//! - By-value arguments are BORROWED from the caller's argument array, exactly as the eval
+//!   method bridge stages them. Only a by-reference slot acquires an owner, because its
+//!   writeback is the one path that releases the raw slot again.
 //! - Non-public constructors are accepted when the active eval class scope
 //!   satisfies PHP visibility.
 
@@ -69,6 +72,25 @@ const CONSTRUCTOR_HELPER_HANDLER_OFFSET: usize = CONSTRUCTOR_HELPER_BASE_FRAME_S
 const CONSTRUCTOR_HELPER_FRAME_SIZE: usize =
     CONSTRUCTOR_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
 const X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET: usize = 64;
+
+/// Whether one staged constructor argument keeps an owner beyond the cast that produced it.
+///
+/// A BY-VALUE argument is rooted by Magician's normalized argument array for the whole native
+/// activation and is released with it, so the bridge only borrows the unboxed payload. This is
+/// exactly how the eval method bridge stages the same parameter types, and the generated
+/// `__construct` never consumes an argument: the AOT direct-call site retires its own argument
+/// temporaries after the call instead.
+///
+/// A BY-REFERENCE slot is different. `eval_ref_arg_slots` gives constructor slots
+/// `raw_refcounted_owned = true`, so writeback releases the raw slot on the changed and the
+/// unchanged path alike; that release is only balanced when the staging cast acquired an owner.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConstructorArgOwner {
+    /// The argument array keeps the only owner for the duration of the call.
+    Borrowed,
+    /// The raw by-reference slot owns the staged payload until writeback releases it.
+    Owned,
+}
 
 /// Constructor metadata needed by the eval constructor bridge.
 #[derive(Clone)]
@@ -1160,6 +1182,7 @@ fn emit_aarch64_prepare_constructor_args(
                 fail_label,
                 data,
                 callable_support,
+                ConstructorArgOwner::Borrowed,
             );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
             emitter.instruction(&format!("b {}", done_label));                  // skip default materialization after an explicit argument
@@ -1179,7 +1202,14 @@ fn emit_aarch64_prepare_constructor_args(
             let label_prefix = format!("{}_arg_{}", body_label, index);
             if !emit_borrowed_string_arg(emitter, param_ty, 16, fail_label) {
                 emit_aarch64_cast_eval_arg(
-                    module, emitter, param_ty, &label_prefix, fail_label, data, callable_support,
+                    module,
+                    emitter,
+                    param_ty,
+                    &label_prefix,
+                    fail_label,
+                    data,
+                    callable_support,
+                    ConstructorArgOwner::Borrowed,
                 );
             }
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
@@ -1231,6 +1261,7 @@ fn emit_x86_64_prepare_constructor_args(
                 fail_label,
                 data,
                 callable_support,
+                ConstructorArgOwner::Borrowed,
             );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
             emitter.instruction(&format!("jmp {}", done_label));                // skip default materialization after an explicit argument
@@ -1250,7 +1281,14 @@ fn emit_x86_64_prepare_constructor_args(
             let label_prefix = format!("{}_arg_{}", body_label, index);
             if !emit_borrowed_string_arg(emitter, param_ty, 40, fail_label) {
                 emit_x86_64_cast_eval_arg(
-                    module, emitter, param_ty, &label_prefix, fail_label, data, callable_support,
+                    module,
+                    emitter,
+                    param_ty,
+                    &label_prefix,
+                    fail_label,
+                    data,
+                    callable_support,
+                    ConstructorArgOwner::Borrowed,
                 );
             }
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
@@ -1304,6 +1342,7 @@ fn emit_aarch64_constructor_ref_arg_cells(
                 fail_label,
                 data,
                 callable_support,
+                ConstructorArgOwner::Owned,
             );
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
@@ -1340,6 +1379,7 @@ fn emit_x86_64_constructor_ref_arg_cells(
                 fail_label,
                 data,
                 callable_support,
+                ConstructorArgOwner::Owned,
             );
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
@@ -1357,6 +1397,22 @@ fn emit_x86_64_load_eval_arg(_module: &Module, emitter: &mut Emitter, index: usi
     super::eval_argument_helpers::emit_borrowed_argument(emitter, index, 32, 40, fail_label);
 }
 
+/// Acquires an owner for a staged constructor argument only when the slot owns it.
+///
+/// `abi::emit_incref_if_refcounted` already selects the active ABI, so both targets share this
+/// rule. A borrowed by-value argument keeps exactly one owner, the one Magician's normalized
+/// argument array holds across the whole native activation; acquiring a second one here would
+/// leak a reference the bridge has no path on which to release it.
+fn emit_acquire_staged_constructor_arg(
+    emitter: &mut Emitter,
+    param_ty: &PhpType,
+    owner: ConstructorArgOwner,
+) {
+    if owner == ConstructorArgOwner::Owned {
+        abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+    }
+}
+
 /// Casts one boxed eval argument into ARM64 result registers for temporary staging.
 fn emit_aarch64_cast_eval_arg(
     module: &Module,
@@ -1366,6 +1422,7 @@ fn emit_aarch64_cast_eval_arg(
     fail_label: &str,
     data: &mut DataSection,
     callable_support: &EvalCallableDescriptorSupport,
+    owner: ConstructorArgOwner,
 ) {
     if param_ty.is_php_array() {
         emitter.instruction("ldr x0, [x29, #-16]");                             // borrow the boxed argument before checking its PHP array constraint
@@ -1410,16 +1467,18 @@ fn emit_aarch64_cast_eval_arg(
             emitter.instruction("cmp x0, #6");                                  // runtime tag 6 means the eval argument is an object
             emitter.instruction(&format!("b.ne {}", fail_label));               // reject malformed non-object constructor arguments
             emitter.instruction("mov x0, x1");                                  // move the unboxed object payload into the result register
-            abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+            emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
         }
         PhpType::Array(_) => {
-            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 4, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 4, fail_label, owner);
         }
         PhpType::AssocArray { .. } => {
-            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 5, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 5, fail_label, owner);
         }
         PhpType::Iterable => {
-            emit_aarch64_cast_eval_iterable_arg(module, emitter, param_ty, label_prefix, fail_label);
+            emit_aarch64_cast_eval_iterable_arg(
+                module, emitter, param_ty, label_prefix, fail_label, owner,
+            );
         }
         _ => {}
     }
@@ -1450,6 +1509,7 @@ fn emit_aarch64_cast_eval_array_arg(
     param_ty: &PhpType,
     expected_tag: i64,
     fail_label: &str,
+    owner: ConstructorArgOwner,
 ) {
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the eval array payload for the constructor ABI
@@ -1457,7 +1517,7 @@ fn emit_aarch64_cast_eval_array_arg(
     emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject array payloads with an incompatible ABI shape
     emitter.instruction("mov x0, x1");                                          // move the unboxed array payload into the result register
-    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+    emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
 }
 
 /// Validates and unboxes one ARM64 iterable-typed eval argument for native constructors.
@@ -1467,6 +1527,7 @@ fn emit_aarch64_cast_eval_iterable_arg(
     param_ty: &PhpType,
     label_prefix: &str,
     fail_label: &str,
+    owner: ConstructorArgOwner,
 ) {
     let payload_ok = format!("{}_iterable_payload", label_prefix);
     let object_case = format!("{}_iterable_object", label_prefix);
@@ -1489,7 +1550,7 @@ fn emit_aarch64_cast_eval_iterable_arg(
     emitter.label(&object_ok);
     emitter.instruction("ldr x0, [sp], #16");                                   // restore the iterable object pointer as the result
     emitter.label(&done);
-    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+    emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
 }
 
 /// Validates the ARM64 object payload saved in `x1` against Traversable interfaces.
@@ -1526,6 +1587,7 @@ fn emit_x86_64_cast_eval_arg(
     fail_label: &str,
     data: &mut DataSection,
     callable_support: &EvalCallableDescriptorSupport,
+    owner: ConstructorArgOwner,
 ) {
     if param_ty.is_php_array() {
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // borrow the boxed argument before checking its PHP array constraint
@@ -1571,16 +1633,18 @@ fn emit_x86_64_cast_eval_arg(
             emitter.instruction("cmp rax, 6");                                  // runtime tag 6 means the eval argument is an object
             emitter.instruction(&format!("jne {}", fail_label));                // reject malformed non-object constructor arguments
             emitter.instruction("mov rax, rdi");                                // move the unboxed object payload into the result register
-            abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+            emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
         }
         PhpType::Array(_) => {
-            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 4, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 4, fail_label, owner);
         }
         PhpType::AssocArray { .. } => {
-            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 5, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 5, fail_label, owner);
         }
         PhpType::Iterable => {
-            emit_x86_64_cast_eval_iterable_arg(module, emitter, param_ty, label_prefix, fail_label);
+            emit_x86_64_cast_eval_iterable_arg(
+                module, emitter, param_ty, label_prefix, fail_label, owner,
+            );
         }
         _ => {}
     }
@@ -1609,6 +1673,7 @@ fn emit_x86_64_cast_eval_array_arg(
     param_ty: &PhpType,
     expected_tag: i64,
     fail_label: &str,
+    owner: ConstructorArgOwner,
 ) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // expose the eval array payload for the constructor ABI
@@ -1616,7 +1681,7 @@ fn emit_x86_64_cast_eval_array_arg(
     emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
     emitter.instruction(&format!("jne {}", fail_label));                        // reject array payloads with an incompatible ABI shape
     emitter.instruction("mov rax, rdi");                                        // move the unboxed array payload into the result register
-    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+    emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
 }
 
 /// Validates and unboxes one x86_64 iterable-typed eval argument for native constructors.
@@ -1626,6 +1691,7 @@ fn emit_x86_64_cast_eval_iterable_arg(
     param_ty: &PhpType,
     label_prefix: &str,
     fail_label: &str,
+    owner: ConstructorArgOwner,
 ) {
     let payload_ok = format!("{}_iterable_payload", label_prefix);
     let object_case = format!("{}_iterable_object", label_prefix);
@@ -1648,7 +1714,7 @@ fn emit_x86_64_cast_eval_iterable_arg(
     emitter.label(&object_ok);
     abi::emit_pop_reg(emitter, "rax");
     emitter.label(&done);
-    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+    emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
 }
 
 /// Validates the x86_64 object payload saved in `rdi` against Traversable interfaces.
@@ -1846,5 +1912,112 @@ mod catalog_tests {
                 "{name} is not in the shared class catalog"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod argument_ownership_tests {
+    use super::*;
+    use crate::codegen::eval_callable_helpers::emit_eval_callable_descriptor_support;
+    use crate::codegen::platform::Target;
+
+    const SUPPORTED_TARGETS: &[&str] = &[
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ];
+
+    /// Builds a one-parameter constructor slot in the shape the bridge collects from a class.
+    ///
+    /// The parameter type mirrors the compiler-generated `__elephc_func_args#gen` collector that
+    /// `crate::func_args` appends to every constructor once a program can reach `eval()`, which is
+    /// why this leak reproduced for constructors whose PHP source declares no array parameter.
+    fn collector_slot(by_ref: bool) -> EvalConstructorSlot {
+        EvalConstructorSlot {
+            class_id: 7,
+            class_name: "Fixture".to_string(),
+            impl_class: "Fixture".to_string(),
+            visibility: Visibility::Public,
+            allowed_scopes: Vec::new(),
+            params: vec![PhpType::Array(Box::new(PhpType::Mixed))],
+            ref_params: vec![by_ref],
+            supported: true,
+            runtime_helper: None,
+            zero_default_first_arg: false,
+        }
+    }
+
+    /// Stages one constructor argument and returns the emitted bridge assembly.
+    fn staged_argument_asm(target: Target, by_ref: bool) -> String {
+        let module = Module::new(target);
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let callable_support =
+            emit_eval_callable_descriptor_support(&module, &mut emitter, &mut data, false);
+        let slot = collector_slot(by_ref);
+        match target.arch {
+            Arch::AArch64 => {
+                emit_aarch64_prepare_constructor_args(
+                    &module,
+                    &mut emitter,
+                    &mut data,
+                    &slot,
+                    "fail",
+                    &callable_support,
+                );
+            }
+            Arch::X86_64 => {
+                emit_x86_64_prepare_constructor_args(
+                    &module,
+                    &mut emitter,
+                    &mut data,
+                    &slot,
+                    "fail",
+                    &callable_support,
+                );
+            }
+        }
+        emitter.output()
+    }
+
+    /// By-value constructor arguments are borrowed from the caller's argument array.
+    ///
+    /// Magician owns that array for the whole native activation and releases it afterwards, and
+    /// the generated `__construct` does not consume its arguments, so the bridge has no path on
+    /// which it could retire a second owner. Acquiring one here leaked exactly one reference per
+    /// constructor call, which is what the eval method bridge has always avoided.
+    #[test]
+    fn by_value_constructor_arguments_are_borrowed_on_every_target() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = staged_argument_asm(target, false);
+            assert!(asm.contains("__rt_mixed_unbox"), "{name}: {asm}");
+            assert!(!asm.contains("__rt_incref"), "{name}: {asm}");
+            assert!(!asm.contains("__rt_decref"), "{name}: {asm}");
+        }
+    }
+
+    /// By-reference constructor slots still acquire the owner their writeback releases.
+    ///
+    /// `eval_ref_arg_slots` marks constructor slots `raw_refcounted_owned`, so writeback releases
+    /// the raw slot on both the changed and the unchanged path. Dropping this acquisition would
+    /// turn that release into an over-release.
+    #[test]
+    fn by_reference_constructor_slots_acquire_one_owner_on_every_target() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = staged_argument_asm(target, true);
+            assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+        }
+    }
+
+    /// Constructor by-reference slots own their raw payload while method slots borrow it.
+    #[test]
+    fn constructor_reference_slots_stay_owned_unlike_method_slots() {
+        let params = [PhpType::Array(Box::new(PhpType::Mixed))];
+        let slots = eval_ref_arg_slots(&params, &[true], true);
+        assert!(slots[0].raw_refcounted_owned);
     }
 }
