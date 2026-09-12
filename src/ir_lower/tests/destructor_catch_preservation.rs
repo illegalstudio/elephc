@@ -96,6 +96,24 @@ function invokeIifeWithLastOwnedCapture(): string {
 echo invokeIifeWithLastOwnedCapture(), ':', invokeIifeWithLastOwnedCapture();
 "#;
 
+/// A Mixed local whose replacement retires a throwing object inside the surrounding `try`.
+const MIXED_LOCAL_OVERWRITE_SOURCE: &str = r#"<?php
+class ThrowingRebound {
+    public function __destruct() { throw new RuntimeException('rebound'); }
+}
+function makeThrowingRebound(): mixed { return new ThrowingRebound(); }
+function rebindWithSameFrameCatch(): string {
+    $held = makeThrowingRebound();
+    try {
+        $held = 42;
+        return 'no';
+    } catch (RuntimeException $error) {
+        return 'caught';
+    }
+}
+echo rebindWithSameFrameCatch();
+"#;
+
 /// A quiet destructor over the same shape, which must still lose its unreachable handler.
 const QUIET_DESTRUCTOR_SOURCE: &str = r#"<?php
 class ResultPayload {
@@ -196,6 +214,55 @@ fn immediately_invoked_closure_capture_cleanup_keeps_its_handler_on_every_target
             body.contains("_exc_handler_top") && body.contains("setjmp"),
             "{target}: the IIFE handler must survive to assembly:\n{body}",
         );
+    }
+}
+
+/// Verifies a local overwrite restores its same-frame handler before propagating destruction.
+#[test]
+fn mixed_local_overwrite_bounds_destructor_cleanup_on_every_target() {
+    for target in TARGETS {
+        let (module, function) = lower_function(
+            MIXED_LOCAL_OVERWRITE_SOURCE,
+            target,
+            "rebindWithSameFrameCatch",
+        );
+        assert!(
+            function.instructions.iter().any(|inst| inst.op == Op::TryPushHandler),
+            "{target}: the local overwrite must install an EIR handler",
+        );
+        assert!(
+            function.instructions.iter().any(|inst| inst.op == Op::ReleaseLocalSlot),
+            "{target}: the old Mixed owner must retire before replacement",
+        );
+        let body = function_assembly(&module, "rebindWithSameFrameCatch", target);
+        let bounded = body
+            .find("__rt_cleanup_preserve_exception")
+            .unwrap_or_else(|| panic!("{target}: overwrite cleanup must be bounded:\n{body}"));
+        let retirement = &body[bounded..];
+        let pending = retirement
+            .find("_exc_value")
+            .map(|offset| bounded + offset)
+            .unwrap_or_else(|| panic!("{target}: overwrite cleanup must inspect pending state:\n{body}"));
+        let conditional_throw = if target == "linux-x86_64" {
+            "jne __rt_throw_current"
+        } else {
+            "b __rt_throw_current"
+        };
+        let propagate = retirement
+            .find(conditional_throw)
+            .map(|offset| bounded + offset)
+            .unwrap_or_else(|| panic!("{target}: pending destructor throw must propagate:\n{body}"));
+        assert!(pending < propagate, "{target}: inspect pending state before propagation");
+        let condition = if target == "linux-x86_64" {
+            "test rax, rax"
+        } else {
+            "cbz x0, 1f"
+        };
+        assert!(
+            body[pending..propagate].contains(condition),
+            "{target}: only a non-null pending throw may propagate:\n{body}",
+        );
+        assert!(bounded < propagate, "{target}: restore the handler before propagation");
     }
 }
 
