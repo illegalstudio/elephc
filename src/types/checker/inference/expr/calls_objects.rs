@@ -414,32 +414,28 @@ impl Checker {
             PhpType::AssocArray { value, .. } => Ok(*value),
             PhpType::Mixed => Ok(PhpType::Mixed),
             ty if ty.is_php_array() => Ok(PhpType::Mixed),
-            ty if allow_traversable && self.descriptor_spread_source_is_traversable(&ty) => {
+            ty if allow_traversable && self.descriptor_spread_source_may_be_traversable(&ty) => {
                 Ok(PhpType::Mixed)
             }
             _ => Err(CompileError::new(span, "Spread operator requires an array")),
         }
     }
 
-    /// Returns whether descriptor runtime iteration can consume this non-array source type.
-    pub(crate) fn descriptor_spread_source_is_traversable(&self, ty: &PhpType) -> bool {
+    /// Returns whether descriptor runtime iteration can validate this non-array source type.
+    ///
+    /// Every object is a possible `Traversable` at runtime. Keeping acceptance tied to the
+    /// descriptor path is important: its iterator setup owns the runtime interface check, while
+    /// ordinary calls still only know how to unpack array storage. Known concrete classes and
+    /// interface hints therefore do not need a second, brittle nominal proof here.
+    pub(crate) fn descriptor_spread_source_may_be_traversable(&self, ty: &PhpType) -> bool {
         match ty {
             PhpType::Iterable => true,
-            PhpType::Object(class_name) => {
-                matches_builtin_traversable_name(class_name)
-                    || self.object_type_implements_iterable(class_name)
-                    || self
-                        .classes
-                        .keys()
-                        .chain(self.interfaces.keys())
-                        .find(|known| known.eq_ignore_ascii_case(class_name))
-                        .is_some_and(|known| self.object_type_implements_iterable(known))
-            }
+            PhpType::Object(_) => true,
             PhpType::Union(members) => members
                 .iter()
                 .all(|member| match member {
                     PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
-                    other => self.descriptor_spread_source_is_traversable(other),
+                    other => self.descriptor_spread_source_may_be_traversable(other),
                 }),
             _ => false,
         }
@@ -456,18 +452,10 @@ impl Checker {
                 continue;
             };
             let ty = self.infer_type(inner, env)?;
-            if self.descriptor_spread_source_is_traversable(&ty) {
+            if self.descriptor_spread_source_may_be_traversable(&ty) {
                 return Ok(true);
             }
         }
         Ok(false)
     }
-}
-
-/// Recognizes the three intrinsic interface names accepted by descriptor iteration.
-fn matches_builtin_traversable_name(name: &str) -> bool {
-    let name = name.trim_start_matches('\\');
-    name.eq_ignore_ascii_case("Traversable")
-        || name.eq_ignore_ascii_case("Iterator")
-        || name.eq_ignore_ascii_case("IteratorAggregate")
 }

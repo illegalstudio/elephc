@@ -751,6 +751,20 @@ fn test_untyped_call_user_func_targets_accept_traversable_spreads() {
     );
 }
 
+/// Traversable unpack remains limited to descriptor invokers until direct-call lowering owns
+/// the same runtime iterator walk. Scalar sources remain invalid on the descriptor surface.
+#[test]
+fn test_descriptor_traversable_spread_does_not_weaken_other_unpack_surfaces() {
+    expect_error(
+        "<?php class DescriptorValues implements IteratorAggregate { public function getIterator(): Traversable { yield 5; } } function direct($value): int { return $value; } $values = new DescriptorValues(); echo direct(...$values);",
+        "Spread operator requires an array",
+    );
+    expect_error(
+        "<?php function descriptorFunction($value): int { return $value; } echo call_user_func('descriptorFunction', ...1);",
+        "Spread operator requires an array",
+    );
+}
+
 /// Verifies that implementing a BUILTIN interface stays valid when the program's `eval()` gives
 /// every frame the hidden argument collector.
 ///
