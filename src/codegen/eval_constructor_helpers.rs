@@ -11,9 +11,9 @@
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
 //! - Constructors are bridged for scalar/Mixed/array/object arguments, including
 //!   generated variadic array slots and supported scalar/Mixed by-reference parameters.
-//! - By-value arguments are BORROWED from the caller's argument array, exactly as the eval
-//!   method bridge stages them. Only a by-reference slot acquires an owner, because its
-//!   writeback is the one path that releases the raw slot again.
+//! - By-value arguments stay borrowed while fallible staging runs, then refcounted values
+//!   acquire the independent owner consumed by the constructor. By-reference slots acquire
+//!   their writeback-owned payload during staging instead.
 //! - Non-public constructors are accepted when the active eval class scope
 //!   satisfies PHP visibility.
 
@@ -75,18 +75,16 @@ const X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET: usize = 64;
 
 /// Whether one staged constructor argument keeps an owner beyond the cast that produced it.
 ///
-/// A BY-VALUE argument is rooted by Magician's normalized argument array for the whole native
-/// activation and is released with it, so the bridge only borrows the unboxed payload. This is
-/// exactly how the eval method bridge stages the same parameter types, and the generated
-/// `__construct` never consumes an argument: the AOT direct-call site retires its own argument
-/// temporaries after the call instead.
+/// A BY-VALUE argument stays borrowed during fallible preparation. Once every argument is valid
+/// and the constructor exception boundary is active, `emit_acquire_constructor_value_arg_owners`
+/// gives each refcounted value the independent owner consumed by the generated callee.
 ///
 /// A BY-REFERENCE slot is different. `eval_ref_arg_slots` gives constructor slots
 /// `raw_refcounted_owned = true`, so writeback releases the raw slot on the changed and the
 /// unchanged path alike; that release is only balanced when the staging cast acquired an owner.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ConstructorArgOwner {
-    /// The argument array keeps the only owner for the duration of the call.
+    /// The argument array keeps the payload alive during fallible staging.
     Borrowed,
     /// The raw by-reference slot owns the staged payload until writeback releases it.
     Owned,
@@ -624,18 +622,10 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("cmp x9, #0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("b.eq {}", success_label));                    // keep the empty Throwable defaults when no message was supplied
     emit_aarch64_load_eval_arg(module, emitter, 0, fail_label);
-    emit_aarch64_cast_eval_arg(
-        module,
-        emitter,
-        &PhpType::Str,
-        "__elephc_eval_builtin_throwable_message",
-        fail_label,
-        data,
-        callable_support,
-        ConstructorArgOwner::Borrowed,
-    );
+    emit_borrowed_string_arg(emitter, &PhpType::Str, 16, fail_label);
+    abi::emit_call_label(emitter, "__rt_str_persist");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
-    emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
+    emitter.instruction("str x1, [x9, #8]");                                    // transfer the owned message pointer into the compact Throwable payload
     emitter.instruction("str x2, [x9, #16]");                                   // store the message length in the compact Throwable payload
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the code argument
     emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
@@ -676,18 +666,10 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emitter.instruction("cmp r11, 0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("je {}", success_label));                      // keep the empty Throwable defaults when no message was supplied
     emit_x86_64_load_eval_arg(module, emitter, 0, fail_label);
-    emit_x86_64_cast_eval_arg(
-        module,
-        emitter,
-        &PhpType::Str,
-        "__elephc_eval_builtin_throwable_message_x",
-        fail_label,
-        data,
-        callable_support,
-        ConstructorArgOwner::Borrowed,
-    );
+    emit_borrowed_string_arg(emitter, &PhpType::Str, 40, fail_label);
+    abi::emit_call_label(emitter, "__rt_str_persist");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
-    emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the message pointer in the compact Throwable payload
+    emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // transfer the owned message pointer into the compact Throwable payload
     emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                       // store the message length in the compact Throwable payload
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the code argument
     emitter.instruction("cmp r11, 1");                                          // did the eval call pass a code argument?
@@ -937,6 +919,7 @@ fn emit_aarch64_constructor_body(
     emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
     let escape_label = format!("{}_escape", body_label);
     emit_aarch64_constructor_exception_boundary_push(emitter, &escape_label);
+    emit_acquire_constructor_value_arg_owners(emitter, &slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     let overflow_bytes =
         materialize_constructor_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
@@ -1003,6 +986,7 @@ fn emit_x86_64_constructor_body(
     emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
     let escape_label = format!("{}_escape_x", body_label);
     emit_x86_64_constructor_exception_boundary_push(emitter, &escape_label);
+    emit_acquire_constructor_value_arg_owners(emitter, &slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     let overflow_bytes =
         materialize_constructor_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
@@ -1315,6 +1299,36 @@ fn materialize_constructor_args(
     arg_types.extend(eval_abi_param_types_for_refs(params, ref_params));
     let assignments = abi::build_outgoing_arg_assignments_for_target(module.target, &arg_types, 0);
     abi::materialize_outgoing_args(emitter, &assignments)
+}
+
+/// Gives refcounted by-value constructor parameters the independent owner consumed by the callee.
+///
+/// Preparation leaves these slots borrowed so every validation failure can discard the temporary
+/// stack without releasing partially acquired owners. This runs only after all preparation has
+/// succeeded and the exception boundary is active. By-reference parameters are cell pointers and
+/// already own their raw payload through the separate writeback lifecycle.
+fn emit_acquire_constructor_value_arg_owners(
+    emitter: &mut Emitter,
+    params: &[PhpType],
+    ref_params: &[bool],
+) {
+    let visible_abi_params = eval_abi_param_types_for_refs(params, ref_params);
+    for (index, param_ty) in params.iter().enumerate() {
+        if ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let repr = param_ty.codegen_repr();
+        if !repr.is_refcounted() && repr != PhpType::Callable {
+            continue;
+        }
+        let offset = visible_abi_params[index + 1..]
+            .iter()
+            .map(eval_arg_temp_slot_size)
+            .sum();
+        let result_reg = abi::int_result_reg(emitter).to_string();
+        abi::emit_load_temporary_stack_slot(emitter, &result_reg, offset);
+        abi::emit_incref_if_refcounted(emitter, &repr);
+    }
 }
 
 /// Prepares ARM64 stack cells for eval-supplied by-reference constructor arguments.
@@ -1907,6 +1921,53 @@ mod catalog_tests {
         }
     }
 
+    /// Builtin Throwable construction persists the normalized message before storing it.
+    #[test]
+    fn throwable_message_storage_receives_an_independent_owner_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let module = super::Module::new(target);
+            let mut data = super::DataSection::new();
+            let mut support_emitter = super::Emitter::new(target);
+            let callable_support =
+                crate::codegen::eval_callable_helpers::emit_eval_callable_descriptor_support(
+                    &module,
+                    &mut support_emitter,
+                    &mut data,
+                    false,
+                );
+            let mut emitter = super::Emitter::new(target);
+            let message_store = match target.arch {
+                super::Arch::AArch64 => {
+                    super::emit_aarch64_builtin_throwable_constructor_body(
+                        &module,
+                        &mut emitter,
+                        &mut data,
+                        "fail",
+                        "done",
+                        &callable_support,
+                    );
+                    "str x1, [x9, #8]"
+                }
+                super::Arch::X86_64 => {
+                    super::emit_x86_64_builtin_throwable_constructor_body(
+                        &module,
+                        &mut emitter,
+                        &mut data,
+                        "fail",
+                        "done",
+                        &callable_support,
+                    );
+                    "mov QWORD PTR [r11 + 8], rax"
+                }
+            };
+            let asm = emitter.output();
+            assert!(!asm.contains("__rt_mixed_cast_string"), "{name}: {asm}");
+            assert_eq!(asm.matches("__rt_str_persist").count(), 1, "{name}: {asm}");
+            assert!(asm.find("__rt_str_persist").unwrap() < asm.find(message_store).unwrap(), "{name}: {asm}");
+        }
+    }
+
     /// Every throwable this helper can materialize is a catalogued builtin class.
     #[test]
     fn throwable_list_is_a_subset_of_the_class_catalog() {
@@ -1953,8 +2014,8 @@ mod argument_ownership_tests {
         }
     }
 
-    /// Stages one constructor argument and returns the emitted bridge assembly.
-    fn staged_argument_asm(target: Target, by_ref: bool) -> String {
+    /// Stages one constructor argument, acquires callee owners, and returns the bridge assembly.
+    fn constructor_argument_asm(target: Target, by_ref: bool) -> String {
         let module = Module::new(target);
         let mut emitter = Emitter::new(target);
         let mut data = DataSection::new();
@@ -1983,22 +2044,26 @@ mod argument_ownership_tests {
                 );
             }
         }
+        emit_acquire_constructor_value_arg_owners(
+            &mut emitter,
+            &slot.params,
+            &slot.ref_params,
+        );
         emitter.output()
     }
 
-    /// By-value constructor arguments are borrowed from the caller's argument array.
+    /// By-value constructor arguments acquire exactly one callee owner after staging.
     ///
-    /// Magician owns that array for the whole native activation and releases it afterwards, and
-    /// the generated `__construct` does not consume its arguments, so the bridge has no path on
-    /// which it could retire a second owner. Acquiring one here leaked exactly one reference per
-    /// constructor call, which is what the eval method bridge has always avoided.
+    /// Magician's normalized array roots the borrowed value while validation runs. The generated
+    /// `__construct` consumes a physical by-value owner, so the bridge must transfer one separate
+    /// reference only after preparation can no longer branch to its owner-free failure cleanup.
     #[test]
-    fn by_value_constructor_arguments_are_borrowed_on_every_target() {
+    fn by_value_constructor_arguments_acquire_one_callee_owner_on_every_target() {
         for name in SUPPORTED_TARGETS {
             let target = Target::parse(name).unwrap();
-            let asm = staged_argument_asm(target, false);
+            let asm = constructor_argument_asm(target, false);
             assert!(asm.contains("__rt_mixed_unbox"), "{name}: {asm}");
-            assert!(!asm.contains("__rt_incref"), "{name}: {asm}");
+            assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
             assert!(!asm.contains("__rt_decref"), "{name}: {asm}");
         }
     }
@@ -2012,7 +2077,7 @@ mod argument_ownership_tests {
     fn by_reference_constructor_slots_acquire_one_owner_on_every_target() {
         for name in SUPPORTED_TARGETS {
             let target = Target::parse(name).unwrap();
-            let asm = staged_argument_asm(target, true);
+            let asm = constructor_argument_asm(target, true);
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
         }
     }
