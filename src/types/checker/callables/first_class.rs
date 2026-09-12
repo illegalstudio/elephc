@@ -36,7 +36,10 @@ impl Checker {
     ) -> Result<FunctionSig, CompileError> {
         match target {
             CallableTarget::Function(name) => {
-                let function_name = name.as_str();
+                let canonical_function_name = self
+                    .canonical_function_name_folded(name.as_str())
+                    .unwrap_or_else(|| name.as_str().to_string());
+                let function_name = canonical_function_name.as_str();
                 let function_key =
                     crate::names::php_symbol_key(function_name.trim_start_matches('\\'));
                 let prefer_extension_builtin = !crate::strict_php::is_enabled()
@@ -61,6 +64,11 @@ impl Checker {
                                 ),
                             )
                         });
+                }
+                if self.function_variant_groups.contains_key(function_name)
+                    && !self.functions.contains_key(function_name)
+                {
+                    self.ensure_function_variant_group_signature(function_name, span)?;
                 }
                 self.promote_descriptor_variadic_container(function_name)?;
                 if let Some(sig) = self.functions.get(function_name) {
@@ -294,19 +302,22 @@ impl Checker {
                 if crate::name_resolver::is_builtin_function(name.as_str()) {
                     return Ok(base_sig);
                 }
+                let function_name = self
+                    .canonical_function_name_folded(name.as_str())
+                    .unwrap_or_else(|| name.as_str().to_string());
                 let plan = self.plan_named_call_args(&base_sig, args, span, "first-class callable", env)?;
                 let defaults = plan.default_argument_mask();
                 let descriptor_projections = plan.descriptor_projection_mask();
                 let normalized_args = plan.normalized_args();
                 self.check_function_call_pre_normalized(
-                    name.as_str(),
+                    &function_name,
                     &normalized_args,
                     &defaults,
                     &descriptor_projections,
                     span,
                     env,
                 )?;
-                self.specialize_untyped_function_params(name.as_str(), &normalized_args, env)?;
+                self.specialize_untyped_function_params(&function_name, &normalized_args, env)?;
             }
             CallableTarget::StaticMethod { receiver, method } => {
                 let call_expr = Expr::new(
@@ -591,6 +602,7 @@ impl Checker {
 
 #[cfg(test)]
 mod tests {
+    use crate::parser::ast::{Stmt, StmtKind};
     use crate::codegen_support::platform::Target;
     use crate::types::PhpType;
 
@@ -665,5 +677,49 @@ echo unpackSpareName(keepsSpareName(...)), ':', positionalOnlyTail(1, 2);
                  specialized element storage",
             );
         }
+    }
+
+    /// A first-class callable may name an include function variant before the final checker pass.
+    ///
+    /// The resolver normally synthesizes the group statement from mutually exclusive includes.
+    /// Building that exact checker input here pins both early group materialization and PHP's
+    /// case-insensitive lookup without requiring an executable multi-file fixture.
+    #[test]
+    fn a_first_class_callable_materializes_a_case_folded_function_variant_group() {
+        let source = r#"<?php
+function variant_tail_left(string $head, ...$rest): string { return $head; }
+function variant_tail_right(string $head, ...$rest): string { return $head; }
+$callback = vArIaNt_TaIl(...);
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let mut program = crate::parser::parse(&tokens).expect("parse");
+        program.push(Stmt::new(
+            StmtKind::FunctionVariantGroup {
+                name: "variant_tail".to_string(),
+                variants: vec![
+                    "variant_tail_left".to_string(),
+                    "variant_tail_right".to_string(),
+                ],
+            },
+            crate::span::Span::dummy(),
+        ));
+
+        let checked = crate::types::checker::check_types(
+            &program,
+            Target::parse("linux-x86_64").expect("supported target"),
+        )
+        .expect("a statically inventoried variant group is a valid first-class callable");
+        let tail = checked
+            .functions
+            .get("variant_tail")
+            .expect("the group signature is materialized during callable resolution")
+            .params
+            .last()
+            .expect("the variadic occupies the last parameter slot");
+        assert_eq!(
+            tail.1,
+            crate::types::signatures::descriptor_variadic_container(),
+            "the group and its variants must use the descriptor-safe tail container",
+        );
     }
 }

@@ -612,6 +612,26 @@ fn test_error_callable_parameter_rejects_unknown_name_string() {
     );
 }
 
+/// An eval barrier permits only the runtime function-table form of a literal CUF callback.
+#[test]
+fn test_eval_barrier_allows_a_runtime_declared_call_user_func_name() {
+    for source in [
+        "<?php eval('function dyn_eval_cuf($value) { return $value + 1; }'); echo call_user_func('dyn_eval_cuf', 4);",
+        r#"<?php eval('namespace EvalInnerNs; function dyn_eval_inner_ns() { return 7; }'); echo call_user_func("EvalInnerNs\\dyn_eval_inner_ns");"#,
+    ] {
+        expect_no_error(source);
+    }
+}
+
+/// Without an eval barrier, an unknown literal CUF callback remains a compile-time error.
+#[test]
+fn test_error_call_user_func_rejects_an_unknown_literal_without_eval() {
+    expect_error(
+        "<?php echo call_user_func('never_declared', 1);",
+        "Undefined function for first-class callable: never_declared",
+    );
+}
+
 /// Verifies a callable string that is only known at run time is rejected with a named
 /// diagnostic instead of being bound to storage the callee could not invoke.
 #[test]

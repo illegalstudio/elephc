@@ -1520,8 +1520,9 @@ pub(crate) fn check_call_user_func(
                 return Ok(ret_ty);
             }
         }
-        let cb_name = checker
-            .canonical_function_name_folded(cb_name)
+        let canonical_function_name = checker.canonical_function_name_folded(cb_name);
+        let cb_name = canonical_function_name
+            .clone()
             .unwrap_or_else(|| cb_name.clone());
         // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
         // this function a named entry, so its collector has to be compiled for the descriptor
@@ -1536,6 +1537,23 @@ pub(crate) fn check_call_user_func(
                 "call_user_func() callback",
             )?;
             return Ok(ret_ty);
+        }
+        let has_only_positional_arguments = args[1..].iter().all(|arg| {
+            !matches!(
+                arg.kind,
+                ExprKind::NamedArg { .. } | ExprKind::Spread(_)
+            )
+        });
+        if canonical_function_name.is_none()
+            && checker.eval_barrier_active
+            && !cb_name.contains("::")
+            && has_only_positional_arguments
+        {
+            // `eval()` may publish a free function after static declaration collection. The EIR
+            // lowering owns this exact string-literal shape through `EvalFunctionCall`; keep the
+            // callback runtime-opaque while preserving conservative by-reference aliasing.
+            checker.record_unresolved_callee_argument_aliases(&args[1..]);
+            return Ok(PhpType::Mixed);
         }
         let target = CallableTarget::Function(Name::from(cb_name.clone()));
         let sig = checker.resolve_first_class_callable_sig(&target, span, env)?;
