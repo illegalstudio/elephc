@@ -19,7 +19,15 @@ impl FakeOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let method = method.to_ascii_lowercase();
-        if method == "__clone" && args.is_empty() {
+        if method == "__clone" {
+            let collector_len = match args.as_slice() {
+                [] => None,
+                [collector] => match self.get(*collector) {
+                    FakeValue::Array(values) => Some(values.len()),
+                    _ => return Err(EvalStatus::RuntimeFatal),
+                },
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
             let object_id = object.as_ptr() as usize;
             let declaring_class = self
                 .object_classes
@@ -31,6 +39,8 @@ impl FakeOps {
             );
             self.native_clone_calls
                 .push((declaring_class, called_class));
+            self.native_clone_arg_shapes
+                .push((args.len(), collector_len));
             return self.null();
         }
         match (self.get(object), method.as_str()) {

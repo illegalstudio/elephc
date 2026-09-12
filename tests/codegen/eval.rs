@@ -29509,7 +29509,7 @@ echo get_resource_type($evaluated["STDOUT"]);
 }
 
 /// Verifies eval method bridges preserve the physical collector ABI for instance and static
-/// methods, including a zero-argument curl prelude getter in a program containing eval.
+/// methods, including a statically rooted zero-argument curl prelude getter.
 ///
 /// Magician materializes every hidden collector before calling the bridge. The bridge must keep
 /// that physical slot and call the raw method symbol. Entering a source adapter would append a
@@ -29528,6 +29528,7 @@ class EvalPhysicalCollector {
     }
 }
 $file = new CURLFile("/tmp/a.txt");
+$file->getFilename();
 $object = new EvalPhysicalCollector();
 $code = 'return $file->getFilename() . $object->collect("instance") . EvalPhysicalCollector::collectStatic("static");';
 echo eval($code);

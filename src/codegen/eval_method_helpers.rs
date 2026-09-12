@@ -26,7 +26,7 @@ use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, LocalKind, Module};
-use crate::codegen_support::source_method_adapters::{MethodKind, uses_physical_func_args_abi};
+use crate::codegen_support::source_method_adapters::MethodKind;
 use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -203,8 +203,6 @@ fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
 enum EvalMethodEntry {
     /// Magician binds this physical signature before entering the raw method symbol.
     Raw(crate::types::FunctionSig, String),
-    /// The generated ABI cannot be bridged from eval, so this method gets no slot.
-    Unsupported,
 }
 
 /// Returns the physical entry symbol one method kind publishes without any adaptation.
@@ -218,11 +216,11 @@ fn raw_method_entry_symbol(impl_class: &str, method: &str, kind: MethodKind) -> 
 /// Resolves the physical signature and raw entry symbol for one method implementation.
 ///
 /// Eval method registration and Magician's native argument binder both retain the physical
-/// parameter count. A generated collector must therefore reach the raw implementation with its
-/// physical signature instead of entering the source adapter, which appends a different empty
-/// collector. A hidden actual-count shape remains unsupported here because it cannot be safely
-/// projected through the eval bridge. The physical signature is read from the implementing class
-/// so inherited instance and static methods both resolve to the symbol that owns their body.
+/// parameter count. Generated collectors and hidden actual-count slots therefore reach the raw
+/// implementation with their physical signature instead of entering a source adapter. Magician's
+/// binder materializes both internal shapes before entering this bridge. The physical signature
+/// is read from the implementing class so inherited instance and static methods both resolve to
+/// the symbol that owns their body.
 fn eval_method_entry(
     module: &Module,
     impl_class: &str,
@@ -238,11 +236,6 @@ fn eval_method_entry(
             MethodKind::Static => class_info.static_methods.get(method),
         })
         .unwrap_or(declared);
-    if uses_physical_func_args_abi(physical)
-        && !crate::func_args::sig_collects_surplus_args(physical)
-    {
-        return EvalMethodEntry::Unsupported;
-    }
     EvalMethodEntry::Raw(
         physical.clone(),
         raw_method_entry_symbol(impl_class, method, kind),
@@ -283,7 +276,6 @@ fn collect_class_method_slots(
         };
         let (sig, entry_symbol) = match &entry {
             EvalMethodEntry::Raw(physical, symbol) => (physical, symbol),
-            EvalMethodEntry::Unsupported => continue,
         };
         if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
             continue;
@@ -337,7 +329,6 @@ fn collect_hidden_private_ancestor_method_slots(
             let entry = eval_method_entry(module, impl_class, method, sig, MethodKind::Instance);
             let (sig, entry_symbol) = match &entry {
                 EvalMethodEntry::Raw(physical, symbol) => (physical, symbol),
-                EvalMethodEntry::Unsupported => continue,
             };
             if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
                 continue;
@@ -400,7 +391,6 @@ fn collect_class_static_method_slots(
         let entry = eval_method_entry(module, impl_class, method, sig, MethodKind::Static);
         let (sig, entry_symbol) = match &entry {
             EvalMethodEntry::Raw(physical, symbol) => (physical, symbol),
-            EvalMethodEntry::Unsupported => continue,
         };
         if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
             continue;
@@ -2665,10 +2655,9 @@ mod source_entry_tests {
         }
     }
 
-    /// A source variadic keeps its raw physical entry, and the hidden actual-count form the
-    /// projection refuses to bridge drops out of the bridge instead of being mis-emitted.
+    /// A source variadic and its hidden actual-count slot both stay on the raw physical entry.
     #[test]
-    fn source_variadics_stay_raw_and_unbridgeable_shapes_get_no_slot() {
+    fn source_variadics_and_hidden_counts_stay_on_the_raw_entry() {
         let mut variadic = signature(vec![("values".to_string(), PhpType::Mixed)]);
         variadic.variadic = Some("values".to_string());
         let mut with_hidden_count = variadic.clone();
@@ -2686,16 +2675,18 @@ mod source_entry_tests {
                 eval_method_entry(&module, "Collector", "add", &variadic, MethodKind::Instance),
                 EvalMethodEntry::Raw(_, _)
             ));
-            assert!(matches!(
-                eval_method_entry(
-                    &module,
-                    "Collector",
-                    "add",
-                    &with_hidden_count,
-                    MethodKind::Instance
-                ),
-                EvalMethodEntry::Unsupported
-            ));
+            match eval_method_entry(
+                &module,
+                "Collector",
+                "add",
+                &with_hidden_count,
+                MethodKind::Instance,
+            ) {
+                EvalMethodEntry::Raw(physical, symbol) => {
+                    assert_eq!(physical.params, with_hidden_count.params);
+                    assert_eq!(symbol, method_symbol("Collector", "add"));
+                }
+            }
         }
     }
 
@@ -2758,10 +2749,9 @@ mod source_entry_tests {
         }
     }
 
-    /// A static source variadic keeps its raw physical entry, and the hidden actual-count form
-    /// the projection refuses to bridge stays fail-closed with no slot at all.
+    /// A static source variadic and its hidden actual-count slot stay on the raw physical entry.
     #[test]
-    fn static_source_variadics_stay_raw_and_unbridgeable_shapes_get_no_slot() {
+    fn static_source_variadics_and_hidden_counts_stay_on_the_raw_entry() {
         let mut variadic = signature(vec![("values".to_string(), PhpType::Mixed)]);
         variadic.variadic = Some("values".to_string());
         let mut with_hidden_count = variadic.clone();
@@ -2778,16 +2768,18 @@ mod source_entry_tests {
                 eval_method_entry(&module, "Aggregator", "sum", &variadic, MethodKind::Static),
                 EvalMethodEntry::Raw(_, _)
             ));
-            assert!(matches!(
-                eval_method_entry(
-                    &module,
-                    "Aggregator",
-                    "sum",
-                    &with_hidden_count,
-                    MethodKind::Static
-                ),
-                EvalMethodEntry::Unsupported
-            ));
+            match eval_method_entry(
+                &module,
+                "Aggregator",
+                "sum",
+                &with_hidden_count,
+                MethodKind::Static,
+            ) {
+                EvalMethodEntry::Raw(physical, symbol) => {
+                    assert_eq!(physical.params, with_hidden_count.params);
+                    assert_eq!(symbol, static_method_symbol("Aggregator", "sum"));
+                }
+            }
         }
     }
 }

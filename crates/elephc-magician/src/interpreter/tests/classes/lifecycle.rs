@@ -10,6 +10,7 @@
 
 use super::super::super::*;
 use super::super::support::*;
+use crate::context::NativeCallableShape;
 
 /// Verifies anonymous eval classes instantiate, reuse their synthetic class, and reflect as anonymous.
 #[test]
@@ -114,6 +115,41 @@ return clone $box;"#,
         .expect("native clone hook should run");
 
     assert!(matches!(values.get(result), FakeValue::Object(_)));
+    assert_eq!(
+        values.native_clone_calls,
+        vec![(
+            "KnownClonePublic".to_string(),
+            Some("KnownClonePublic".to_string()),
+        )]
+    );
+}
+
+/// Verifies native clone dispatch materializes a physical hidden collector before bridging.
+#[test]
+fn execute_program_materializes_aot_clone_hidden_collector() {
+    let program = parse_fragment(
+        br#"$box = new KnownClonePublic();
+return clone $box;"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(1);
+    assert!(signature.set_param_name(0, ""));
+    assert!(signature.set_variadic_index(0));
+    signature.set_shape(NativeCallableShape::new(0, 0, false, false));
+    assert!(context.define_native_method_signature(
+        "KnownClonePublic",
+        "__clone",
+        signature,
+    ));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("native clone hook should receive its hidden collector");
+
+    assert!(matches!(values.get(result), FakeValue::Object(_)));
+    assert_eq!(values.native_clone_arg_shapes, vec![(1, Some(0))]);
     assert_eq!(
         values.native_clone_calls,
         vec![(

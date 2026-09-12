@@ -292,24 +292,26 @@ pub(in crate::interpreter) fn eval_object_clone_result(
             )?;
             eval_release_value(context, values, result)?;
         } else if let Some(hook) = dynamic_native_clone_hook {
-            let result = eval_native_method_call_with_scope(
-                &hook.declaring_class,
-                Some(&hook.called_class),
+            let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
                 clone,
+                &hook.called_class,
                 "__clone",
                 Vec::new(),
+                Some(&hook.declaring_class),
+                Some(&hook.called_class),
                 context,
                 values,
             )?;
             values.release(result)?;
         }
     } else if let Some(hook) = aot_clone_hook {
-        let result = eval_native_method_call_with_scope(
-            &hook.declaring_class,
-            Some(&hook.called_class),
+        let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
             clone,
+            &hook.called_class,
             "__clone",
             Vec::new(),
+            Some(&hook.declaring_class),
+            Some(&hook.called_class),
             context,
             values,
         )?;

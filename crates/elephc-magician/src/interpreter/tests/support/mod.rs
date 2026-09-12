@@ -94,6 +94,8 @@ pub(super) struct FakeOps {
     pub(super) object_classes: HashMap<usize, String>,
     /// Native clone calls recorded as `(declaring frame class, called class override)`.
     pub(super) native_clone_calls: Vec<(String, Option<String>)>,
+    /// Physical clone argument shapes recorded as `(slot count, hidden collector length)`.
+    pub(super) native_clone_arg_shapes: Vec<(usize, Option<usize>)>,
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
     /// Zero-based release call that consumes its owner but reports an injected cleanup exception.
