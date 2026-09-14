@@ -16,9 +16,18 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// - ARM64: `emit_file_put_contents_arm64` (default)
 /// - x86_64 Linux: `emit_file_put_contents_linux_x86_64`
 ///
+/// Two entry points share one body. `__rt_file_put_contents` keeps the original
+/// two-argument ABI and writes with no PHP flags; `__rt_file_put_contents_flagged` takes
+/// PHP's `$flags` word in an extra register. Splitting them this way leaves the six internal
+/// callers of the original label — phar writes, `copy()` — untouched (issue #506).
+///
+/// `FILE_APPEND` (8) selects `O_APPEND` over `O_TRUNC`; `LOCK_EX` (2) takes an exclusive
+/// `flock` on the open descriptor, which `close()` then releases.
+///
 /// # Input (ARM64 calling convention)
 /// - x1/x2: filename string (pointer/length)
 /// - x3/x4: data string (pointer/length)
+/// - x5: PHP `$flags` (flagged entry point only)
 ///
 /// # Output
 /// - x0: bytes written on success, -1 on error
@@ -31,6 +40,12 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_put_contents ---");
     emitter.label_global("__rt_file_put_contents");
+    emitter.instruction("mov x5, #0");                                          // the two-argument form writes with no PHP flags
+    emitter.instruction("b __rt_file_put_contents_flagged");                    // share one body with the flag-taking entry point
+
+    emitter.blank();
+    emitter.comment("--- runtime: file_put_contents (with PHP $flags) ---");
+    emitter.label_global("__rt_file_put_contents_flagged");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
@@ -39,17 +54,33 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
 
     // -- save data string for after cstr call --
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save data ptr and len on stack
+    emitter.instruction("str x5, [sp, #40]");                                   // save the PHP flags across the cstr call
 
     // -- null-terminate the filename --
     emitter.instruction("bl __rt_cstr");                                        // convert filename to C string, x0=cstr path
     emitter.instruction("str x0, [sp, #0]");                                    // save null-terminated path pointer
 
-    // -- open file with write+create+truncate --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload null-terminated path
+    // -- open the file, appending instead of truncating when FILE_APPEND is set --
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the PHP flags
     emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_trunc())); // O_WRONLY|O_CREAT|O_TRUNC
+    emitter.instruction(&format!("mov x10, #0x{:X}", emitter.platform.o_wronly_creat_append())); // O_WRONLY|O_CREAT|O_APPEND
+    emitter.instruction("tst x9, #8");                                          // FILE_APPEND is PHP constant 8
+    emitter.instruction("csel x1, x10, x1, ne");                                // choose the append open flags when it is set
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload null-terminated path
     emitter.instruction("mov x2, #0x1A4");                                      // file mode 0644 (octal)
     emitter.syscall(5);
     emitter.instruction("str x0, [sp, #8]");                                    // save fd on stack
+
+    // -- take an exclusive lock when LOCK_EX is set, as PHP does --
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the PHP flags
+    emitter.instruction("tst x9, #2");                                          // LOCK_EX is PHP constant 2
+    emitter.instruction("b.eq __rt_fpc_write");                                 // no lock requested: write straight away
+    emitter.instruction("ldr x0, [sp, #8]");                                    // pass the open fd to the lock helper
+    emitter.instruction("cmp x0, #0");                                          // a failed open has nothing to lock
+    emitter.instruction("b.lt __rt_fpc_write");                                 // skip the lock and let write() report the failure
+    emitter.instruction("mov x1, #2");                                          // LOCK_EX, in the PHP numbering __rt_flock expects
+    emitter.instruction("bl __rt_flock");                                       // block until the exclusive lock is held
+    emitter.label("__rt_fpc_write");
 
     // -- write data to file --
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload fd
@@ -86,21 +117,43 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_put_contents ---");
     emitter.label_global("__rt_file_put_contents");
+    emitter.instruction("xor r8d, r8d");                                        // the two-argument form writes with no PHP flags
+    emitter.instruction("jmp __rt_file_put_contents_flagged");                  // share one body with the flag-taking entry point
+
+    emitter.blank();
+    emitter.comment("--- runtime: file_put_contents (with PHP $flags) ---");
+    emitter.label_global("__rt_file_put_contents_flagged");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while file_put_contents uses stack locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for saved pointers and lengths
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned stack space for data, path, fd, and byte-count temporaries
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned stack space for data, path, fd, flags, and byte-count temporaries
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the data pointer while the filename is converted to a C string
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the data length while the filename is converted to a C string
+    emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // save the PHP flags across the cstr call
     emitter.instruction("call __rt_cstr");                                      // convert the elephc filename in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the C filename pointer for the later open() call
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the C filename pointer as the first libc open() argument
     emitter.instruction(&format!("mov rsi, 0x{:X}", emitter.platform.o_wronly_creat_trunc())); // pass O_WRONLY|O_CREAT|O_TRUNC as the open() flags
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the PHP flags
+    emitter.instruction("test rax, 8");                                         // FILE_APPEND is PHP constant 8
+    emitter.instruction("je __rt_fpc_open_linux_x86_64");                       // no append requested: keep the truncating flags
+    emitter.instruction(&format!("mov rsi, 0x{:X}", emitter.platform.o_wronly_creat_append())); // pass O_WRONLY|O_CREAT|O_APPEND instead
+    emitter.label("__rt_fpc_open_linux_x86_64");
     emitter.instruction("mov rdx, 0x1A4");                                      // pass mode 0644 for newly created files
-    emitter.instruction("call open");                                           // open the destination file for overwriting through libc open()
+    emitter.instruction("call open");                                           // open the destination file through libc open()
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the opened file descriptor for the later write() and close() calls
+
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the PHP flags
+    emitter.instruction("test rax, 2");                                         // LOCK_EX is PHP constant 2
+    emitter.instruction("je __rt_fpc_write_linux_x86_64");                      // no lock requested: write straight away
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the open fd to the lock helper
+    emitter.instruction("cmp rdi, 0");                                          // a failed open has nothing to lock
+    emitter.instruction("jl __rt_fpc_write_linux_x86_64");                      // skip the lock and let write() report the failure
+    emitter.instruction("mov rsi, 2");                                          // LOCK_EX, in the PHP numbering __rt_flock expects
+    emitter.instruction("call __rt_flock");                                     // block until the exclusive lock is held
+    emitter.label("__rt_fpc_write_linux_x86_64");
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the file descriptor as the first libc write() argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // pass the source data pointer as the second libc write() argument

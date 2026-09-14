@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function file_put_contents(string $filename, string $data): int
+function file_put_contents(string $filename, string $data, int $flags = 0): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes 2–3 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

@@ -274,6 +274,12 @@ fn emit_file_put_contents_maybe_phar_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_put_contents_maybe_phar ---");
     emitter.label_global("__rt_file_put_contents_maybe_phar");
+    emitter.instruction("mov x5, #0");                                          // the two-argument form carries no PHP flags
+    emitter.instruction("b __rt_file_put_contents_maybe_phar_flagged");         // share one body with the flag-taking entry point
+
+    emitter.blank();
+    emitter.comment("--- runtime: file_put_contents_maybe_phar (with PHP $flags) ---");
+    emitter.label_global("__rt_file_put_contents_maybe_phar_flagged");
     emitter.instruction("cmp x2, #7");                                          // filename at least "phar://" long?
     emitter.instruction("b.lt __rt_fpc_maybe_phar_plain");                      // too short: use ordinary filesystem writes
     emitter.instruction("ldrb w9, [x1, #0]");                                   // filename byte 0
@@ -297,6 +303,12 @@ fn emit_file_put_contents_maybe_phar_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldrb w9, [x1, #6]");                                   // filename byte 6
     emitter.instruction("cmp w9, #0x2f");                                       // '/'
     emitter.instruction("b.ne __rt_fpc_maybe_phar_plain");                      // not phar://: use ordinary filesystem writes
+    // A phar entry is rewritten whole by the bridge, so there is nothing for FILE_APPEND to
+    // append to and no descriptor for LOCK_EX to lock. Report the write as failed rather than
+    // dropping the flag and truncating what the caller asked to extend (issue #506). The
+    // LITERAL phar destination is rejected at compile time; this is the dynamic path, where
+    // the URL is only known here.
+    emitter.instruction("cbnz x5, __rt_fpc_maybe_phar_fail");                   // flags on a phar:// destination are not supported
     abi::emit_symbol_address(emitter, "x9", "_elephc_phar_put_url_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the optional PHAR URL writer bridge pointer
     emitter.instruction("cbz x9, __rt_fpc_maybe_phar_fail");                    // phar:// without a bridge cannot be written
@@ -319,7 +331,7 @@ fn emit_file_put_contents_maybe_phar_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #-1");                                         // report failure for phar:// when the bridge is unavailable
     emitter.instruction("ret");                                                 // return the failure result
     emitter.label("__rt_fpc_maybe_phar_plain");
-    emitter.instruction("b __rt_file_put_contents");                            // tail-call the ordinary filesystem writer
+    emitter.instruction("b __rt_file_put_contents_flagged");                    // tail-call the ordinary filesystem writer, forwarding the flags
 }
 
 /// Emits the x86_64 Linux variant of the phar-write runtime routines.
@@ -531,6 +543,12 @@ fn emit_file_put_contents_maybe_phar_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_put_contents_maybe_phar ---");
     emitter.label_global("__rt_file_put_contents_maybe_phar");
+    emitter.instruction("xor r8d, r8d");                                        // the two-argument form carries no PHP flags
+    emitter.instruction("jmp __rt_file_put_contents_maybe_phar_flagged");       // share one body with the flag-taking entry point
+
+    emitter.blank();
+    emitter.comment("--- runtime: file_put_contents_maybe_phar (with PHP $flags) ---");
+    emitter.label_global("__rt_file_put_contents_maybe_phar_flagged");
     emitter.instruction("cmp rdx, 7");                                          // filename at least "phar://" long?
     emitter.instruction("jl __rt_fpc_maybe_phar_plain_x86");                    // too short: use ordinary filesystem writes
     emitter.instruction("cmp BYTE PTR [rax + 0], 0x70");                        // 'p'
@@ -547,6 +565,12 @@ fn emit_file_put_contents_maybe_phar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_fpc_maybe_phar_plain_x86");                   // not phar://: use ordinary filesystem writes
     emitter.instruction("cmp BYTE PTR [rax + 6], 0x2f");                        // '/'
     emitter.instruction("jne __rt_fpc_maybe_phar_plain_x86");                   // not phar://: use ordinary filesystem writes
+    // A phar entry is rewritten whole by the bridge, so there is nothing for FILE_APPEND to
+    // append to and no descriptor for LOCK_EX to lock. Report the write as failed rather than
+    // dropping the flag and truncating what the caller asked to extend (issue #506). Checked
+    // BEFORE the bridge arguments are arranged, which is where r8 stops holding the flags.
+    emitter.instruction("test r8, r8");                                         // any PHP flags on a phar:// destination?
+    emitter.instruction("jnz __rt_fpc_maybe_phar_fail_x86");                    // flags on a phar:// destination are not supported
     abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_phar_put_url_fn", 0); // load the optional PHAR URL writer bridge pointer
     emitter.instruction("test r10, r10");                                       // was the writer bridge published?
     emitter.instruction("jz __rt_fpc_maybe_phar_fail_x86");                     // phar:// without a bridge cannot be written
@@ -565,5 +589,5 @@ fn emit_file_put_contents_maybe_phar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, -1");                                         // report failure for phar:// when the bridge is unavailable
     emitter.instruction("ret");                                                 // return the failure result
     emitter.label("__rt_fpc_maybe_phar_plain_x86");
-    emitter.instruction("jmp __rt_file_put_contents");                          // tail-call the ordinary filesystem writer
+    emitter.instruction("jmp __rt_file_put_contents_flagged");                  // tail-call the ordinary filesystem writer, forwarding the flags
 }

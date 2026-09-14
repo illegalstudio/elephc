@@ -301,3 +301,67 @@ echo ($free + 1.0) > $free ? "a" : "!";
     );
     assert_eq!(out, "ftpoa");
 }
+
+/// Issue #506: `mkdir()` takes PHP's `$permissions` and `$recursive`.
+///
+/// Both were absent: the arity was capped at one argument and the runtime hard-coded mode
+/// 0755. The fixture keeps the contrast the issue relies on — a missing parent WITHOUT
+/// `$recursive` still fails, exactly as in PHP, and creating an existing directory fails
+/// either way.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture, including the octal
+/// mode read back with `fileperms()`.
+#[test]
+fn test_mkdir_permissions_and_recursive() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+var_dump(mkdir("root"));
+var_dump(@mkdir("root/a/b"));
+var_dump(is_dir("root/a/b"));
+var_dump(mkdir("root/a/b", 0777, true));
+var_dump(is_dir("root/a"));
+var_dump(is_dir("root/a/b"));
+var_dump(@mkdir("root/a/b", 0777, true));
+var_dump(mkdir("root/x/y/z", 0700, true));
+printf("%o\n", fileperms("root/x/y/z") & 0777);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n\
+         bool(false)\nbool(true)\n700\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Issue #506: `file_put_contents()` takes PHP's `$flags`, honouring `FILE_APPEND` and
+/// `LOCK_EX`.
+///
+/// The two spellings reach different runtime helpers, so both are exercised: a LITERAL path
+/// is known at compile time and skips the phar gate, while a path in a variable goes through
+/// the dynamic `maybe_phar` entry point. `LOCK_EX` alone must still truncate.
+#[test]
+fn test_file_put_contents_flags() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = "log.txt";
+var_dump(file_put_contents($f, "a\n", 0));
+var_dump(file_put_contents($f, "b\n", 0));
+echo file_get_contents($f);
+var_dump(file_put_contents($f, "one\n"));
+var_dump(file_put_contents($f, "two\n", FILE_APPEND));
+var_dump(file_put_contents($f, "three\n", FILE_APPEND | LOCK_EX));
+echo file_get_contents($f);
+var_dump(file_put_contents($f, "last\n", LOCK_EX));
+echo file_get_contents($f);
+file_put_contents("literal.txt", "x\n");
+file_put_contents("literal.txt", "y\n", FILE_APPEND);
+echo file_get_contents("literal.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(2)\nint(2)\nb\nint(4)\nint(4)\nint(6)\none\ntwo\nthree\nint(5)\nlast\nx\ny\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

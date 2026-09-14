@@ -300,7 +300,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`link()`](./builtins/filesystem/link.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`linkinfo()`](./builtins/filesystem/linkinfo.md) | `(string $path): int` | `int` | ✓ | ✓ |
 | [`lstat()`](./builtins/filesystem/lstat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`mkdir()`](./builtins/filesystem/mkdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
+| [`mkdir()`](./builtins/filesystem/mkdir.md) | `(string $directory, int $permissions = 511, bool $recursive = false): bool` | `bool` | ✓ | ✓ |
 | [`pathinfo()`](./builtins/filesystem/pathinfo.md) | `(string $path, int $flags = 15): array` | `array` | ✓ | ✓ |
 | [`putenv()`](./builtins/filesystem/putenv.md) | `(string $assignment): bool` | `bool` | ✓ | ✓ |
 | [`readfile()`](./builtins/filesystem/readfile.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
@@ -329,7 +329,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`fgets()`](./builtins/io/fgets.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`file()`](./builtins/io/file.md) | `(string $filename, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`file_get_contents()`](./builtins/io/file_get_contents.md) | `(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed` | `mixed` | ✓ | ✓ |
-| [`file_put_contents()`](./builtins/io/file_put_contents.md) | `(string $filename, string $data): int` | `int` | ✓ | ✓ |
+| [`file_put_contents()`](./builtins/io/file_put_contents.md) | `(string $filename, string $data, int $flags = 0): int` | `int` | ✓ | ✓ |
 | [`flock()`](./builtins/io/flock.md) | `(resource $stream, int $operation, bool $would_block = null): bool` | `bool` | ✓ | ✓ |
 | [`fopen()`](./builtins/io/fopen.md) | `(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`fpassthru()`](./builtins/io/fpassthru.md) | `(resource $stream): int` | `int` | ✓ | ✓ |

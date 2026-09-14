@@ -9,29 +9,55 @@
 
 use super::*;
 
-/// Lowers `file_put_contents(path, data)` through the target-aware runtime writer.
+/// Lowers `file_put_contents(path, data, flags = 0)` through the target-aware runtime writer.
+///
+/// The optional `$flags` reaches `__rt_file_put_contents_flagged`, which honours `FILE_APPEND`
+/// and `LOCK_EX`. Without it the call keeps the original two-argument entry point, so every
+/// existing write lowers to exactly the instructions it did before (issue #506).
+///
+/// A phar destination rejects `$flags` rather than dropping it: a phar write replaces one entry
+/// in an archive that is rebuilt wholesale, so there is nothing for `FILE_APPEND` to append to
+/// and no descriptor for `LOCK_EX` to lock. Silently ignoring an append would corrupt data.
 pub(crate) fn lower_file_put_contents(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, "file_put_contents", 2)?;
+    super::super::ensure_arg_count_between(inst, "file_put_contents", 2, 3)?;
     let path = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
+    let flags = if inst.operands.len() > 2 {
+        Some(expect_operand(inst, 2)?)
+    } else {
+        None
+    };
     let path_literal = optional_const_string_operand(ctx, path)?;
     if let Some(path_literal) = path_literal.as_deref() {
         if path_literal.starts_with("phar://") {
+            if flags.is_some() {
+                return Err(CodegenIrError::unsupported(
+                    "file_put_contents() $flags on a phar:// destination (a phar entry is \
+                     rewritten whole, so FILE_APPEND and LOCK_EX have nothing to act on)"
+                        .to_string(),
+                ));
+            }
             return lower_literal_phar_file_put_contents(ctx, inst, path_literal, data);
         }
     }
-    let helper = if path_literal.is_none() {
-        publish_dynamic_phar_write_function_pointer(ctx);
-        "__rt_file_put_contents_maybe_phar"
-    } else {
-        "__rt_file_put_contents"
+    let helper = match (path_literal.is_none(), flags.is_some()) {
+        (true, true) => {
+            publish_dynamic_phar_write_function_pointer(ctx);
+            "__rt_file_put_contents_maybe_phar_flagged"
+        }
+        (true, false) => {
+            publish_dynamic_phar_write_function_pointer(ctx);
+            "__rt_file_put_contents_maybe_phar"
+        }
+        (false, true) => "__rt_file_put_contents_flagged",
+        (false, false) => "__rt_file_put_contents",
     };
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, helper)?,
-        Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, helper)?,
+        Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, flags, helper)?,
+        Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, flags, helper)?,
     }
     store_if_result(ctx, inst)
 }
