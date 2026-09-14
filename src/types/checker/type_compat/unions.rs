@@ -12,39 +12,53 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
+/// Flattens nested unions, drops duplicates, lets `Mixed` absorb everything, and applies
+/// PHP's `bool`/`false` subtype rule — `bool` already contains the literal `false`, so the
+/// two never coexist as separate members.
+///
+/// Free-standing because the inferred-return fold in
+/// `checker::functions::returns::wider_type` is an associated function with no `self` and
+/// must build its unions through the SAME normalizer. Hand-rolled member pushing there
+/// produced `false|string|bool`, whose redundant `False` made two structurally equal types
+/// compare unequal — and `PhpType`/`FunctionSig` equality is what callable-return metadata
+/// is keyed on.
+pub(crate) fn normalize_union_members(members: Vec<PhpType>) -> PhpType {
+    let mut flat = Vec::new();
+    for member in members {
+        match member {
+            PhpType::Union(inner) => flat.extend(inner),
+            PhpType::Mixed => return PhpType::Mixed,
+            other => flat.push(other),
+        }
+    }
+
+    let mut deduped: Vec<PhpType> = Vec::new();
+    for member in flat {
+        // `bool` already contains the literal `false` subtype. Keep `False` only when the
+        // declaration is specifically false-only (for example `int|false`).
+        if member == PhpType::False && deduped.iter().any(|existing| existing == &PhpType::Bool) {
+            continue;
+        }
+        if member == PhpType::Bool {
+            deduped.retain(|existing| existing != &PhpType::False);
+        }
+        if !deduped.iter().any(|existing| existing == &member) {
+            deduped.push(member);
+        }
+    }
+
+    if deduped.len() == 1 {
+        deduped.pop().expect("union member exists")
+    } else {
+        PhpType::Union(deduped)
+    }
+}
+
 impl Checker {
     /// Flattens nested unions, removes duplicates and `PhpType::Mixed` (which absorbs all),
     /// and returns a single `PhpType` or a `PhpType::Union` with deduped members.
     pub(crate) fn normalize_union_type(&self, members: Vec<PhpType>) -> PhpType {
-        let mut flat = Vec::new();
-        for member in members {
-            match member {
-                PhpType::Union(inner) => flat.extend(inner),
-                PhpType::Mixed => return PhpType::Mixed,
-                other => flat.push(other),
-            }
-        }
-
-        let mut deduped = Vec::new();
-        for member in flat {
-            // `bool` already contains the literal `false` subtype. Keep `False` only when the
-            // declaration is specifically false-only (for example `int|false`).
-            if member == PhpType::False && deduped.iter().any(|existing| existing == &PhpType::Bool) {
-                continue;
-            }
-            if member == PhpType::Bool {
-                deduped.retain(|existing| existing != &PhpType::False);
-            }
-            if !deduped.iter().any(|existing| existing == &member) {
-                deduped.push(member);
-            }
-        }
-
-        if deduped.len() == 1 {
-            deduped.pop().expect("union member exists")
-        } else {
-            PhpType::Union(deduped)
-        }
+        normalize_union_members(members)
     }
 
     /// Returns true if `expected` type can accept a value of `actual` type (i.e., the

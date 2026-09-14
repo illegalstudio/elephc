@@ -10,6 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Stmt, StmtKind};
+use crate::types::checker::type_compat::unions::normalize_union_members;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -34,19 +35,7 @@ pub(crate) struct ReturnInfo {
 /// `Mixed` already admits every value and is left alone; an existing union gains the member
 /// rather than nesting, so folding three or more returns pairwise stays flat.
 fn union_return_type(other: &PhpType, member: PhpType) -> PhpType {
-    match other {
-        PhpType::Mixed => PhpType::Mixed,
-        PhpType::Union(members) => {
-            if members.iter().any(|existing| *existing == member) {
-                PhpType::Union(members.clone())
-            } else {
-                let mut members = members.clone();
-                members.push(member);
-                PhpType::Union(members)
-            }
-        }
-        other => PhpType::Union(vec![other.clone(), member]),
-    }
+    normalize_union_members(vec![other.clone(), member])
 }
 
 /// Makes an inferred return type nullable, the way a declared `?T` hint resolves.
@@ -534,15 +523,9 @@ impl Checker {
             // That applied to the `Void` arm above as well — `null`, `"one"`, `"two"`
             // inferred plain `Str`, and the null arm came back as `""`.
             (PhpType::Mixed, _) | (_, PhpType::Mixed) => PhpType::Mixed,
-            (PhpType::Union(_), PhpType::Union(members)) => {
-                let mut widened = a.clone();
-                for member in members {
-                    widened = union_return_type(&widened, member.clone());
-                }
-                widened
+            (PhpType::Union(_), _) | (_, PhpType::Union(_)) => {
+                normalize_union_members(vec![a.clone(), b.clone()])
             }
-            (PhpType::Union(_), other) => union_return_type(a, other.clone()),
-            (other, PhpType::Union(_)) => union_return_type(b, other.clone()),
             (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
             (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,
             _ => PhpType::Mixed,

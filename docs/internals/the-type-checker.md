@@ -379,6 +379,48 @@ The same accumulation applies to instance-method and static-method parameters. C
 
 This information is then used when checking calls to that function.
 
+### Hint-less return inference
+
+A function with no return hint gets its signature from folding the types of its `return`
+statements pairwise through `Checker::wider_type`
+(`src/types/checker/functions/returns.rs`). The rule that matters there is **what may absorb
+what**, and it is ordered deliberately:
+
+| pair | result | why |
+|---|---|---|
+| `T`, `never` | `T` | a diverging path contributes nothing |
+| `T`, `null` | `T\|null` | `null` is a value, not a width |
+| `T`, `false` / `bool` | `T\|false` / `T\|bool` | same — a sentinel is not a width |
+| anything with `mixed` | `mixed` | `mixed` admits everything |
+| a union with anything | the normalized union | a union already carries its members |
+| `string`, other scalar | `string` | PHP's coercion order |
+| `float`, other scalar | `float` | PHP's coercion order |
+| otherwise | `mixed` | no honest narrower answer |
+
+**Sentinels are never absorbed by a width.** `string` swallowing `false` inferred plain
+`string`, so a function returning `false` on failure lowered that arm as a string and the
+caller saw `""` — `$r === false` was simply wrong. `float` did the same with `0.0` and `bool`
+was stringified to `"1"`. `int|false` escaped only because it fell through to `mixed`, which
+carries the value distinctly; that accident is why the defect first looked specific to the
+image builtins that reported it (issue #398).
+
+**A union is never absorbed either**, which is what makes the fold survive a *third* return.
+The fold is pairwise, so `false`, `"." . $ext`, `$ext` builds `string|false` from the first
+pair and then has to keep it against the third — before this, `string` ate it and the union
+held only for exactly two returns. The same flaw was live on the `null` arm.
+
+Unions are built through `normalize_union_members`
+(`src/types/checker/type_compat/unions.rs`), the same normalizer declared types use: it
+flattens nesting, lets `mixed` absorb, dedupes, and applies PHP's `bool`/`false` subtype rule
+so the two never coexist as separate members. Sharing it matters beyond tidiness —
+`PhpType` and `FunctionSig` compare structurally, and callable-return metadata is keyed on
+that equality, so a hand-rolled `string|false|bool` would stop matching the `string|bool` a
+declared spelling produces.
+
+The result is that a hint-less union return is byte-identical to writing the hint out, and
+`codegen_repr()` maps it to the boxed representation that carries the sentinel rather than
+coercing it into the other arm's zero value.
+
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 
 **File:** `src/types/checker/stmt_check/narrowing.rs`

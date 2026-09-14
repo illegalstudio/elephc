@@ -12,4 +12,4 @@
 mod declarations;
 mod object_types;
 mod pointers;
-mod unions;
+pub(crate) mod unions;

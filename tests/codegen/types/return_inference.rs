@@ -377,3 +377,53 @@ var_dump(three_null(2));
     );
     assert_eq!(out, "bool(true)\nbool(true)\nstring(3) \"two\"\nstring(3) \"two\"\n");
 }
+
+/// Issue #398 review follow-up: the inferred fold builds its unions through the SAME
+/// normalizer declared types use, so `bool` absorbs a redundant `false` member.
+///
+/// Hand-rolled member pushing produced `string|false|bool`, which is structurally unequal to
+/// the `string|bool` a declared spelling yields -- and `PhpType`/`FunctionSig` equality is
+/// what callable-return metadata is keyed on, so equivalent signatures would stop matching.
+#[test]
+fn test_inferred_union_return_normalizes_bool_over_false() {
+    let out = compile_and_run(
+        r#"<?php
+function mixed_bools(int $t) {
+    if ($t === 0) { return false; }
+    if ($t === 1) { return "s"; }
+    return true;
+}
+var_dump(mixed_bools(0) === false);
+var_dump(mixed_bools(1));
+var_dump(mixed_bools(2) === true);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nstring(1) \"s\"\nbool(true)\n");
+}
+
+/// Issue #398 review follow-up: merging two INDEPENDENTLY inferred unions keeps every member.
+///
+/// The other regressions only fold a scalar into a union, so the union-to-union branch went
+/// uncovered and a later change could drop or collapse one side unnoticed. `left()` infers
+/// `string|null` and `right()` infers `float|false`; each arm below observes a different one
+/// of the four members through the merged caller.
+#[test]
+fn test_inferred_union_return_merges_two_unions() {
+    let out = compile_and_run(
+        r#"<?php
+function left(int $t) { if ($t === 0) { return null; } return "L"; }
+function right(int $t) { if ($t === 0) { return false; } return 1.5; }
+function merge(int $t) {
+    if ($t === 0) { return left(0); }
+    if ($t === 1) { return right(0); }
+    if ($t === 2) { return left(1); }
+    return right(1);
+}
+var_dump(merge(0) === null);
+var_dump(merge(1) === false);
+var_dump(merge(2));
+var_dump(merge(3));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nstring(1) \"L\"\nfloat(1.5)\n");
+}
