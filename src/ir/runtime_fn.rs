@@ -402,6 +402,12 @@ pub enum RuntimeFnId {
     ElephcObjectPropCount,
     ElephcObjectPropName,
     ElephcObjectPropValue,
+    ElephcOpcacheRtBlacklistEntry,
+    ElephcOpcacheRtScriptField,
+    ElephcOpcacheRtScriptPath,
+    ElephcOpcacheRtReset,
+    ElephcOpcacheRtStat,
+    ElephcOpcacheRtSwap,
     ElephcPtrIsNull,
     ElephcPtrReadString,
     ElephcPtrWriteString,
@@ -1154,6 +1160,32 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            // The runtime script cache is process state: these read it and nothing else,
+            // so they must NOT be folded across an include that can move the counters.
+            RuntimeFnId::ElephcOpcacheRtScriptField | RuntimeFnId::ElephcOpcacheRtStat => {
+                crate::ir::Effects::READS_GLOBAL
+            }
+            // WRITES, unlike every other `rt_*` reader: it installs a directive on the
+            // live cache configuration and answers the value it replaced. Marking it a
+            // pure read would let the optimizer fold two `ini_set()` calls into one, or
+            // drop one whose result is discarded — which is the common spelling.
+            RuntimeFnId::ElephcOpcacheRtSwap => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            // Also a WRITE: it latches a restart on the process-wide cache. Its result is
+            // the once-then-false answer `opcache_reset()` reports, so a second call must
+            // not be folded into the first.
+            RuntimeFnId::ElephcOpcacheRtReset => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            // Same read, plus the owned PHP string copied out of the bridge's buffer.
+            RuntimeFnId::ElephcOpcacheRtScriptPath => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
+            // Identical shape: reads the bridge's loaded blacklist, allocates the copy.
+            RuntimeFnId::ElephcOpcacheRtBlacklistEntry => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
             // Re-boxing a property slot allocates the Mixed cell it hands back.
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
@@ -2337,6 +2369,12 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",
             RuntimeFnId::ElephcObjectPropValue => "__elephc_object_prop_value",
+            RuntimeFnId::ElephcOpcacheRtScriptField => "__elephc_opcache_rt_script_field",
+            RuntimeFnId::ElephcOpcacheRtScriptPath => "__elephc_opcache_rt_script_path",
+            RuntimeFnId::ElephcOpcacheRtBlacklistEntry => "__elephc_opcache_rt_blacklist_entry",
+            RuntimeFnId::ElephcOpcacheRtReset => "__elephc_opcache_rt_reset",
+            RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
+            RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",

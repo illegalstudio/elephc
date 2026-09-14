@@ -31,6 +31,23 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_encode_array_dynamic ---");
     emitter.label_global("__rt_json_encode_array_dynamic");
 
+    // -- hand a run-time promoted array to the object-form encoder --
+    // A statically `Array(...)` value can hold HASH storage at run time:
+    // `__rt_array_set_mixed_key` promotes the destination when a key does not fit the packed
+    // layout, and the static type does not move with it. Encoding that as a JSON array reads
+    // hash internals. The probe is the uniform heap-kind byte, the same one
+    // `__rt_array_edge_key` dispatches on; `__rt_json_encode_assoc` takes the container in x0
+    // and returns the slice in x1/x2 exactly as this entry does, so it is a tail jump — and it
+    // is the encoder that renders `[5 => 3]` the way PHP does, `{"5":3}` rather than `[3]`.
+    // The conditional branch skips OVER an unconditional one because AArch64 cannot name an
+    // external label in a conditional branch.
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
+    emitter.instruction("b.ne __rt_json_arr_dyn_packed");                       // packed storage encodes inline below
+    emitter.instruction("b __rt_json_encode_assoc");                            // hash storage is the object-form encoder's job
+    emitter.label("__rt_json_arr_dyn_packed");
+
     emitter.instruction("sub sp, sp, #112");                                    // allocate stack space for array metadata and element scratch values
     emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #96");                                    // establish the helper stack frame
@@ -285,6 +302,17 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_dynamic ---");
     emitter.label_global("__rt_json_encode_array_dynamic");
+
+    // -- hand a run-time promoted array to the object-form encoder --
+    // Same runtime-promotion probe as the AArch64 path; `__rt_json_encode_assoc` takes the
+    // container in RAX and returns rax/rdx exactly as this entry does. NOTE the register:
+    // every json encoder here carries the array in RAX, not rdi.
+    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load the uniform heap-kind header word
+    emitter.instruction("and r11, 0xff");                                       // isolate the low-byte heap kind
+    emitter.instruction("cmp r11, 3");                                          // kind 3 = associative hash storage
+    emitter.instruction("jne __rt_json_arr_dyn_packed");                        // packed storage encodes inline below
+    emitter.instruction("jmp __rt_json_encode_assoc");                          // hash storage is the object-form encoder's job
+    emitter.label("__rt_json_arr_dyn_packed");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-array scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for array metadata and concat-buffer cursors

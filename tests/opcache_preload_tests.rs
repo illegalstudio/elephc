@@ -159,6 +159,163 @@ fn run_binary(bin: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Writes `source` into `dir` and compiles it, asserting success. The preload-usage tests need
+/// their own program rather than `PROBE`, because what they check is what the ENTRY script can
+/// see — not what `opcache_get_status()` reports about it.
+fn compile_source(dir: &Path, stem: &str, source: &str, ini: &[String]) -> PathBuf {
+    let php = dir.join(format!("{}.php", stem));
+    fs::write(&php, source).unwrap();
+    let mut cmd = Command::new(elephc_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(dir);
+    cmd.arg(&php);
+    for assignment in ini {
+        cmd.arg("--ini").arg(assignment);
+    }
+    let output = cmd.output().expect("failed to spawn elephc");
+    assert!(
+        output.status.success(),
+        "elephc compile failed for {ini:?}:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    dir.join(stem)
+}
+
+/// The PHP source a preload file declares one of every kind in, plus a top-level side effect.
+const PRELOAD_LIB: &str = r#"<?php
+function preloaded_helper(): string { return "from preload"; }
+class PreloadedClass { public function hi(): string { return "hi from preload"; } }
+interface PreloadedInterface {}
+trait PreloadedTrait {}
+enum PreloadedEnum: string { case A = 'a'; }
+echo "PRELOAD FILE RAN\n";
+"#;
+
+/// The entry script asking what it can see, WITHOUT including the preload file.
+const PRELOAD_USER: &str = r#"<?php
+echo "function  ", var_export(function_exists('preloaded_helper'), true), "
+";
+echo "class     ", var_export(class_exists('PreloadedClass', false), true), "
+";
+echo "interface ", var_export(interface_exists('PreloadedInterface', false), true), "
+";
+echo "trait     ", var_export(trait_exists('PreloadedTrait', false), true), "
+";
+echo "enum      ", var_export(enum_exists('PreloadedEnum', false), true), "
+";
+echo "call      ", preloaded_helper(), "
+";
+echo "method    ", (new PreloadedClass)->hi(), "
+";
+"#;
+
+/// THE CAPABILITY: a preloaded file's declarations are available to the entry script without it
+/// including them, and the preload file's own top-level code runs FIRST.
+///
+/// Every line of the expected output is what reference PHP 8.5.6 printed for the same two files:
+/// `php -n -d opcache.enable=1 -d opcache.enable_cli=1 -d opcache.preload=lib.php user.php`.
+/// Before this, elephc resolved the directive and reported statistics about it but never
+/// compiled the file in, so `preloaded_helper()` was an unknown function and the build failed.
+#[test]
+fn preloaded_declarations_are_usable_without_including_the_file() {
+    let dir = make_test_dir("opcache_preload_usable");
+    let lib = dir.join("lib.php");
+    fs::write(&lib, PRELOAD_LIB).unwrap();
+    let bin = compile_source(
+        &dir,
+        "user",
+        PRELOAD_USER,
+        &[
+            "opcache.enable_cli=1".to_string(),
+            format!("opcache.preload={}", lib.display()),
+        ],
+    );
+
+    assert_eq!(
+        run_binary(&bin),
+        "PRELOAD FILE RAN\n\
+         function  true\n\
+         class     true\n\
+         interface true\n\
+         trait     true\n\
+         enum      true\n\
+         call      from preload\n\
+         method    hi from preload\n"
+    );
+}
+
+/// A preload file's own `require_once` preloads TRANSITIVELY: reference PHP reports both files in
+/// `preload_statistics.scripts` and makes both files' symbols available (VERIFIED on 8.5.6 with a
+/// preload file requiring one dependency). elephc gets this for free — the resolver inlines the
+/// preload file, and inlining it walks into its own includes.
+#[test]
+fn preloading_is_transitive_through_the_preload_files_own_requires() {
+    let dir = make_test_dir("opcache_preload_transitive");
+    fs::write(
+        dir.join("dep.php"),
+        "<?php\nfunction dep_helper(): string { return \"from dep\"; }\nclass DepClass {}\n",
+    )
+    .unwrap();
+    let lib = dir.join("lib.php");
+    fs::write(
+        &lib,
+        "<?php\nrequire_once __DIR__ . '/dep.php';\nfunction lib_helper(): int { return 1; }\n",
+    )
+    .unwrap();
+
+    let bin = compile_source(
+        &dir,
+        "user",
+        r#"<?php
+echo "dep_fn    ", var_export(function_exists('dep_helper'), true), "
+";
+echo "dep_class ", var_export(class_exists('DepClass', false), true), "
+";
+echo "lib_fn    ", var_export(function_exists('lib_helper'), true), "
+";
+echo "call      ", dep_helper(), "
+";
+"#,
+        &[
+            "opcache.enable_cli=1".to_string(),
+            format!("opcache.preload={}", lib.display()),
+        ],
+    );
+
+    assert_eq!(
+        run_binary(&bin),
+        "dep_fn    true\n\
+         dep_class true\n\
+         lib_fn    true\n\
+         call      from dep\n"
+    );
+}
+
+/// With the cache DISABLED — the CLI default — `opcache.preload` is not consulted at all, so the
+/// file is NOT compiled in and its symbols stay unknown. Reference PHP agrees: with
+/// `opcache.enable_cli=0` every `*_exists()` on a preload-file symbol answers `false` and the
+/// preload file's top-level code never runs (VERIFIED).
+#[test]
+fn a_disabled_cache_does_not_compile_the_preload_file_in() {
+    let dir = make_test_dir("opcache_preload_disabled_syms");
+    let lib = dir.join("lib.php");
+    fs::write(&lib, PRELOAD_LIB).unwrap();
+    let bin = compile_source(
+        &dir,
+        "user",
+        r#"<?php
+echo "function  ", var_export(function_exists('preloaded_helper'), true), "
+";
+echo "class     ", var_export(class_exists('PreloadedClass', false), true), "
+";
+"#,
+        &[format!("opcache.preload={}", lib.display())],
+    );
+
+    assert_eq!(run_binary(&bin), "function  false\nclass     false\n");
+}
+
 /// THE BASELINE: with the cache enabled but `opcache.preload` at its default (empty), the status
 /// array carries NO `preload_statistics` key and its top-level key count is the unchanged 9 —
 /// the same figure `opcache_restrict_api_tests` pins as `ARRAY9`. Reference PHP agrees: an
@@ -216,18 +373,135 @@ fn preloading_the_entry_file_emits_statistics_silently() {
     }
 }
 
-/// A preload file that RESOLVES but is OUTSIDE the compile-time script manifest is a WARNING,
-/// never an error: preloading a file this program never includes, requires or autoloads is a
-/// legitimate configuration that must not break a build. The statistics are still emitted, from
-/// the manifest. The membership test is made against the COMPLETE manifest (entry file +
-/// statically-resolved includes + autoloaded files), which `src/pipeline.rs` only knows after
-/// `autoload::run` — so this warning is emitted from the post-autoload site, not the injection
-/// site (see `opcache_prelude::bake_manifest`).
+/// Preloading inserts reference PHP's synthetic `$PRELOAD$` entry, and `num_cached_scripts`
+/// counts it.
+///
+/// VERIFIED on reference PHP 8.5.10, preloading a file that pulls in one dependency:
+///
+/// ```text
+/// scripts keys: preloader.php, $PRELOAD$, entry.php, lib.php
+/// $PRELOAD$  => full_path '$PRELOAD$', hits 0, memory_consumption 38488,
+///               last_used 'Thu Jan  1 01:00:00 1970', last_used_timestamp 0,
+///               timestamp 0, revalidate 0
+/// preload_statistics.memory_consumption = 38488      <- the SAME figure
+/// num_cached_scripts = 4                             <- three real scripts plus the marker
+/// ```
+///
+/// The key is NOT a path: a caller walking `scripts` meets it among real filenames, and
+/// `file_exists('$PRELOAD$')` is false. An earlier revision deliberately omitted it, on the
+/// grounds that an elephc binary allocates no shared-memory block for it to stand for. That
+/// argument did not survive what the surface already reports: `preload_statistics.memory_consumption`
+/// is already a synthetic figure over the same manifest, and `scripts` already reports the
+/// manifest as if it were a cache — the repo's own "the binary IS the cache" premise, under
+/// which the block the marker stands for is real here too.
+///
+/// Its POSITION is not asserted. Reference puts it second, which is hash insertion order rather
+/// than a contract, and elephc's `scripts` is manifest order — already a different order from
+/// reference's.
 #[test]
-fn preload_outside_manifest_warns_but_still_compiles() {
+fn preloading_inserts_the_synthetic_preload_entry() {
+    let dir = make_test_dir("opcache_preload_marker");
+    let lib = dir.join("lib.php");
+    fs::write(&lib, PRELOAD_LIB).unwrap();
+    let bin = compile_source(
+        &dir,
+        "app",
+        r#"<?php
+$s = opcache_get_status();
+$scripts = $s['scripts'];
+echo 'has_marker=', array_key_exists('$PRELOAD$', $scripts) ? '1' : '', "\n";
+$m = $scripts['$PRELOAD$'] ?? [];
+echo 'full_path=', $m['full_path'] ?? '', "\n";
+echo 'hits=', $m['hits'] ?? '', "\n";
+echo 'mem=', $m['memory_consumption'] ?? '', "\n";
+echo 'last_used_timestamp=', $m['last_used_timestamp'] ?? '', "\n";
+echo 'timestamp=', $m['timestamp'] ?? '', "\n";
+echo 'revalidate=', $m['revalidate'] ?? '', "\n";
+echo 'preload_mem=', $s['preload_statistics']['memory_consumption'], "\n";
+echo 'num_cached_scripts=', $s['opcache_statistics']['num_cached_scripts'], "\n";
+echo 'real_scripts=', count($scripts) - 1, "\n";
+"#,
+        &[
+            "opcache.enable_cli=1".to_string(),
+            format!("opcache.preload={}", lib.display()),
+        ],
+    );
+
+    let out = run_binary(&bin);
+    let line = |key: &str| -> String {
+        out.lines()
+            .find_map(|l| l.strip_prefix(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("missing `{key}=` in:\n{out}"))
+            .to_string()
+    };
+
+    assert_eq!(line("has_marker"), "1", "{out}");
+    assert_eq!(line("full_path"), "$PRELOAD$");
+    assert_eq!(line("hits"), "0");
+    // The marker's memory is the preload block's, to the byte.
+    assert_eq!(line("mem"), line("preload_mem"));
+    // Every clock is zero: it stands for a block, not a file there is anything to stat.
+    assert_eq!(line("last_used_timestamp"), "0");
+    assert_eq!(line("timestamp"), "0");
+    assert_eq!(line("revalidate"), "0");
+    // Counted, exactly once, on top of the real manifest entries.
+    let real: i64 = line("real_scripts").parse().unwrap();
+    assert_eq!(
+        line("num_cached_scripts"),
+        (real + 1).to_string(),
+        "the marker must be counted once:\n{out}"
+    );
+}
+
+/// WITHOUT preloading there is no marker, and the count is the manifest alone.
+///
+/// The companion to the test above: it is what fails if the entry is ever inserted
+/// unconditionally.
+#[test]
+fn without_preloading_there_is_no_synthetic_entry() {
+    let dir = make_test_dir("opcache_preload_no_marker");
+    let bin = compile_source(
+        &dir,
+        "app",
+        r#"<?php
+$s = opcache_get_status();
+echo 'has_marker=', array_key_exists('$PRELOAD$', $s['scripts']) ? '1' : '', "\n";
+echo 'num_cached_scripts=', $s['opcache_statistics']['num_cached_scripts'], "\n";
+echo 'count=', count($s['scripts']), "\n";
+echo 'preload=', array_key_exists('preload_statistics', $s) ? 'present' : 'absent', "\n";
+"#,
+        &["opcache.enable_cli=1".to_string()],
+    );
+
+    let out = run_binary(&bin);
+    assert!(out.contains("has_marker=\n"), "{out}");
+    assert!(out.contains("preload=absent\n"), "{out}");
+    assert!(out.contains("num_cached_scripts=1\n"), "{out}");
+    assert!(out.contains("count=1\n"), "{out}");
+}
+
+/// A preload file the entry script never mentions is COMPILED IN, silently, and its symbols
+/// become part of the binary — which is what preloading MEANS.
+///
+/// Reference PHP 8.5.6, VERIFIED: with `opcache.preload` naming a file that declares one of each
+/// kind, the entry script sees `function_exists`, `class_exists`, `interface_exists`,
+/// `trait_exists` and `enum_exists` all answer `true` without including it, and the preload
+/// file's own top-level output appears FIRST. elephc reaches the same place by injecting an
+/// implicit `require_once` ahead of the entry program, so the resolver inlines the file.
+///
+/// This test replaced one that pinned the opposite: elephc used to WARN that the file was "not in
+/// this binary's compile-time OPcache script manifest, so it is not compiled into the binary".
+/// That warning described a limitation, and the limitation is gone — the file is always a
+/// manifest member now, so the warning became unreachable and was removed with it.
+#[test]
+fn preload_outside_manifest_is_compiled_in_silently() {
     let dir = make_test_dir("opcache_preload_outside");
     let other = dir.join("other.php");
-    fs::write(&other, "<?php\n").unwrap();
+    fs::write(
+        &other,
+        "<?php\nfunction preloaded_only() { return 7; }\nclass PreloadedOnly {}\n",
+    )
+    .unwrap();
     let (err, bin) = compile(
         &dir,
         "app",
@@ -237,22 +511,29 @@ fn preload_outside_manifest_warns_but_still_compiles() {
         ],
     );
 
-    assert!(
-        err.contains("warning: opcache.preload:"),
-        "an out-of-manifest preload file must warn: {err:?}"
+    assert_eq!(
+        err, "",
+        "compiling a preload file in must diagnose nothing: {err:?}"
     );
-    assert!(
-        err.contains(&other.display().to_string()),
-        "the warning must name the resolved path: {err:?}"
-    );
-    assert!(
-        err.contains("script manifest"),
-        "the warning must say why: {err:?}"
-    );
-    // A warning only — the build produced a working binary with the statistics block.
     let out = run_binary(&bin);
     assert!(out.contains("count=10\n"), "{out}");
     assert!(out.contains("pcount=4\n"), "{out}");
+    // The preload file's own symbols are now part of the binary, beside the probe's own, and
+    // under their PHP names — the resolver renames a function it inlines out of an include to
+    // `__elephc_include_variant_<hash>_<name>`, which must never reach this list.
+    assert!(
+        out.contains("fns=preloaded_only,probe_helper\n"),
+        "the preloaded function must be reported, under its PHP name:\n{out}"
+    );
+    assert!(
+        out.contains("cls=PreloadedOnly,ProbeWidget,ProbeIface\n"),
+        "the preloaded class must be reported:\n{out}"
+    );
+    // And `scripts` carries the preload file, as reference's `preload_statistics.scripts` does.
+    assert!(
+        out.contains(&other.display().to_string()),
+        "the preload file must be a manifest member:\n{out}"
+    );
 }
 
 /// CACHE ENABLED + UNRESOLVABLE PATH: a hard COMPILE ERROR naming the directive and the path.

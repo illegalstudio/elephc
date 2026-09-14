@@ -7,6 +7,14 @@
 //!
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - This helper is chosen whenever the element type is not statically known (a `Mixed`-typed
+//!   array), so it has to handle EVERY element layout the array's own `value_type` tag can
+//!   carry — not only the two it originally did. Tag 1 (string pairs) and tag 7 (boxed Mixed)
+//!   are handled inline; tags 0 (int), 2 (float) and 3 (bool) TAIL-JUMP to
+//!   `__rt_implode_int` / `__rt_implode_float` / `__rt_implode_bool`, which render exactly
+//!   those layouts and share this helper's register contract. Before that dispatch existed, an int array was read as `(ptr, len)`
+//!   string pairs and each element dereferenced as a pointer — a segfault — and a bool array
+//!   rendered every element empty.
 //! - TWO independent invariants live in the boxed-Mixed element path, and both are pinned by
 //!   tests. Do not drop either when reworking this emitter:
 //!   1. OWNERSHIP (#601): `__rt_mixed_cast_string` persists string payloads into a fresh heap
@@ -41,6 +49,29 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: implode ---");
     emitter.label_global("__rt_implode");
+
+    // -- scalar element layouts: hand off to the renderer that already knows them --
+    // Done BEFORE the frame is established so these are plain tail jumps: the callee's own
+    // prologue runs against the caller's frame and its result lands in this helper's result
+    // registers, which are the same pair.
+    // The conditional branches skip OVER an unconditional one rather than targeting the
+    // renderer directly: on AArch64 a conditional branch cannot name an external label
+    // ("conditional branch requires assembler-local label"), and these renderers are global.
+    emitter.instruction("ldr x12, [x3, #-8]");                                  // load packed indexed-array metadata
+    emitter.instruction("lsr x12, x12, #8");                                    // move the value_type tag into the low bits
+    emitter.instruction("and x12, x12, #0x7f");                                 // isolate the element value_type tag
+    emitter.instruction("cmp x12, #0");                                         // tag 0 = raw int elements
+    emitter.instruction("b.ne __rt_implode_not_int");                           // not ints: fall through to the bool probe
+    emitter.instruction("b __rt_implode_int");                                  // `__rt_itoa` per element, same register contract
+    emitter.label("__rt_implode_not_int");
+    emitter.instruction("cmp x12, #3");                                         // tag 3 = raw bool elements
+    emitter.instruction("b.ne __rt_implode_not_bool");                          // not bools: fall through to the inline join
+    emitter.instruction("b __rt_implode_bool");                                 // PHP spells bools "1"/"", not "1"/"0"
+    emitter.label("__rt_implode_not_bool");
+    emitter.instruction("cmp x12, #2");                                         // tag 2 = raw float elements
+    emitter.instruction("b.ne __rt_implode_not_float");                         // not floats: fall through to the inline join
+    emitter.instruction("b __rt_implode_float");                                // `__rt_ftoa` per element, same register contract
+    emitter.label("__rt_implode_not_float");
 
     // -- set up stack frame (96 bytes) --
     emitter.instruction("sub sp, sp, #96");                                     // allocate 96 bytes on the stack
@@ -180,6 +211,29 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: implode ---");
     emitter.label_global("__rt_implode");
+
+    // -- scalar element layouts: hand off to the renderer that already knows them --
+    // Done BEFORE the frame is established so these are plain tail jumps: the callee's own
+    // prologue runs against the caller's frame and its result lands in this helper's result
+    // registers, which are the same pair.
+    // Shaped like the AArch64 dispatch — conditional over an unconditional jump — so both
+    // targets keep the same structure and neither depends on a conditional branch being
+    // able to name an external label.
+    emitter.instruction("mov r11, QWORD PTR [rdx - 8]");                        // load packed indexed-array metadata
+    emitter.instruction("shr r11, 8");                                          // move the value_type tag into the low bits
+    emitter.instruction("and r11, 0x7f");                                       // isolate the element value_type tag
+    emitter.instruction("cmp r11, 0");                                          // tag 0 = raw int elements
+    emitter.instruction("jne __rt_implode_not_int");                            // not ints: fall through to the bool probe
+    emitter.instruction("jmp __rt_implode_int");                                // `__rt_itoa` per element, same register contract
+    emitter.label("__rt_implode_not_int");
+    emitter.instruction("cmp r11, 3");                                          // tag 3 = raw bool elements
+    emitter.instruction("jne __rt_implode_not_bool");                           // not bools: fall through to the inline join
+    emitter.instruction("jmp __rt_implode_bool");                               // PHP spells bools "1"/"", not "1"/"0"
+    emitter.label("__rt_implode_not_bool");
+    emitter.instruction("cmp r11, 2");                                          // tag 2 = raw float elements
+    emitter.instruction("jne __rt_implode_not_float");                          // not floats: fall through to the inline join
+    emitter.instruction("jmp __rt_implode_float");                              // `__rt_ftoa` per element, same register contract
+    emitter.label("__rt_implode_not_float");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving implode spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for glue, array, and concat-buffer bookkeeping

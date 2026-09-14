@@ -82,11 +82,24 @@ pub fn inject_if_used(
     let mut declarations = crate::synthetic_class::internal_declarations(|| {
         let mut declarations: Program = Vec::new();
 
+        // Whether THIS binary gets an `ini_set()` that can install an override. The
+        // configuration literal below consults the override store only then: without such a
+        // wrapper no override can exist, and the store's helper is injected with the INI
+        // surface, so referencing it anyway would be an undefined function.
+        //
+        // Under `--web` the web prelude owns the `ini_set` name and emits it
+        // UNCONDITIONALLY (pay-for-use there comes from
+        // `prune_unreachable_prelude_functions`, not from a reference check), and its body
+        // runs the same opcache arms — so the flag is simply true.
+        let ini_set_injected = web
+            || (detect::program_references(&program, "ini_set")
+                && !detect::program_declares(&program, "ini_set"));
+
         if detect::program_references(&program, GET_CONFIGURATION_FN)
             && !detect::program_declares(&program, GET_CONFIGURATION_FN)
         {
             needs_env_helpers = true;
-            let configuration = configuration_expr(php_version, overrides);
+            let configuration = configuration_expr(php_version, overrides, ini_set_injected);
             declarations.push(if restricted {
                 build::restricted_get_configuration_decl(configuration, warning())
             } else {
@@ -204,8 +217,8 @@ pub fn inject_if_used(
         if !web {
             let ini_get_used = detect::program_references(&program, "ini_get")
                 && !detect::program_declares(&program, "ini_get");
-            let ini_set_used = detect::program_references(&program, "ini_set")
-                && !detect::program_declares(&program, "ini_set");
+            // Inside `if !web`, so the flag reduces to the CLI reference check.
+            let ini_set_used = ini_set_injected;
             let ini_get_all_used = detect::program_references(&program, "ini_get_all")
                 && !detect::program_declares(&program, "ini_get_all");
             if ini_get_used || ini_set_used || ini_get_all_used {

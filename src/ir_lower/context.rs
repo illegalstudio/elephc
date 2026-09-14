@@ -2429,6 +2429,28 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_borrowed_user_call_result(value.value) {
             return false;
         }
+        // A `Str` produced by a runtime helper is NOT an owning temporary. Many `__rt_*`
+        // string helpers write their result into the SHARED concat scratch buffer and hand
+        // back a pointer into it, and `Owned` cannot tell that apart from heap storage — the
+        // same caveat `finalize_value_ownership_metadata` states for ownership metadata,
+        // which was never applied to this predicate. The tail `matches!` below lists
+        // `Op::RuntimeCall` outright, so without this the answer is "owned" for all of them.
+        //
+        // Claiming ownership made a storing consumer MOVE the pointer in instead of acquiring
+        // it, and `Acquire` on a `Str` is exactly the `__rt_str_persist` that copies it to the
+        // heap. A static property then held a scratch pointer with the right LENGTH and the
+        // wrong bytes: `B::$s = strtoupper("x")` followed by any `str_repeat()` read back the
+        // repeat's bytes, silently, for all twelve unary-string builtins measured. Local,
+        // instance-property and array-element stores were already correct because they
+        // acquire unconditionally.
+        if matches!(php_type.codegen_repr(), PhpType::Str)
+            && matches!(
+                self.builder.value_defining_op(value.value),
+                Some(Op::RuntimeCall)
+            )
+        {
+            return false;
+        }
         if matches!(
             self.builder.value_defining_op(value.value),
             Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
@@ -2832,7 +2854,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 target.result_ownership(),
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh
             ),
-            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::UnaryString(_))) => true,
+            // These helpers return a pointer into the shared concat scratch buffer, not
+            // owned storage, so they fall to the `Str` rule in `value_is_owning_temporary`
+            // rather than short-circuiting to "owned" here. Consulting the declared
+            // ownership would not help: every one of them declares `Fresh`, which is the
+            // claim that is wrong.
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::UnaryString(_))) => false,
             Some(Immediate::Data(name_id)) if inst.op == Op::LanguageConstructCall => self
                 .data
                 .function_names

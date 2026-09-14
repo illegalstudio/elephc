@@ -36,7 +36,11 @@ impl EvalStatus {
 }
 
 /// Parse failures detected before lowering a runtime eval fragment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializable because a STORED parse failure is part of a cached script: the segment
+/// that failed to parse is replayed from the file cache exactly as it would be from memory,
+/// raising at its own position rather than at load time.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum EvalParseError {
     PhpOpenTag,
     InvalidUtf8,
