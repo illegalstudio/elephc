@@ -49,9 +49,34 @@ runtime-value case.
 
 This coercion is scoped to the arithmetic operators above. Unary negation (`-"5"`) and the
 bitwise operators (`"6" << 1`, `&`, `|`, `^`) still require a numeric or integer operand and
-reject `string` at compile time, and relational comparison (`< > <= >= <=>`) does **not** widen
-to string operands either — see
+reject `string` at compile time.
+
+### Relational comparison between two strings
+
+`<`, `<=`, `>` and `>=` accept **two string operands** and follow PHP's own ordering rule:
+when *both* sides are numeric strings they compare numerically, otherwise they compare
+byte-wise. That is not the same as `strcmp()`, which is always lexicographic:
+
+```php
+var_dump("10" > "9");        // true  — both numeric, so 10 > 9
+var_dump("10" < "9a");       // true  — "9a" is not numeric, so bytes: "1" < "9"
+var_dump("1e2" == "100");    // true  — exponent notation counts as numeric
+var_dump("1.5" <= "1.50");   // true  — numerically equal
+var_dump("0x1A" < "26");     // true  — hex is NOT numeric, so bytes: "0" < "2"
+
+$c = "5";
+if ($c >= '0' && $c <= '9') { echo "digit\n"; }   // the character-range idiom
+```
+
+Mixing a string with a *number* (`$s < 1`) is still rejected at compile time: PHP casts the
+number to a string when the string is non-numeric, and elephc does not implement that
+conversion — see
 [Known incompatibilities with PHP](types.md#known-incompatibilities-with-php).
+
+Two caveats inherited from elephc's numeric-string handling, which apply to `==` just as much
+as to the relational operators: an integer string beyond 2^53 loses precision because the
+numeric path compares through a double, and a string whose numeric prefix is followed by an
+embedded NUL (`"2\0"`) is treated as numeric where PHP treats it as a byte string.
 
 ## Comparison
 
