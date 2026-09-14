@@ -810,7 +810,10 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
-    if needs_runtime_ordering_compare(&lhs_ty) || needs_runtime_ordering_compare(&rhs_ty) {
+    if needs_runtime_ordering_compare(&lhs_ty)
+        || needs_runtime_ordering_compare(&rhs_ty)
+        || is_string_ordering_pair(&lhs_ty, &rhs_ty)
+    {
         emit_runtime_ordering_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
         return store_if_result(ctx, inst);
     }

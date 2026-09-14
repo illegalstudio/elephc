@@ -73,10 +73,28 @@ number to a string when the string is non-numeric, and elephc does not implement
 conversion — see
 [Known incompatibilities with PHP](types.md#known-incompatibilities-with-php).
 
-Two caveats inherited from elephc's numeric-string handling, which apply to `==` just as much
-as to the relational operators: an integer string beyond 2^53 loses precision because the
-numeric path compares through a double, and a string whose numeric prefix is followed by an
-embedded NUL (`"2\0"`) is treated as numeric where PHP treats it as a byte string.
+Two **integer** strings compare exactly, as `int`, not by rounding both through a `float`
+first. That is what makes a difference past 2^53 survive, and it applies to `==` as well:
+
+```php
+var_dump("9007199254740993" > "9007199254740992");    // true  — both round to the same float
+var_dump("9007199254740993" == "9007199254740992");   // false
+```
+
+Integer text too large for `int` follows PHP's own fallbacks rather than the float value.
+Two sides that overflowed the same way and round to the same float compare **by bytes**, and
+an in-range integer against an overflowed one is ordered by the overflow's sign alone:
+
+```php
+var_dump("99999999999999999999" > "100000000000000000000");   // true  — byte order decides
+var_dump("9223372036854775807" == "9223372036854775808");     // false — the right side overflowed
+```
+
+One inherited gap is left, and it is in the shared numeric scanner rather than in this rule:
+`is_numeric()` still reads a numeric prefix followed by an embedded NUL (`"2\0"`) as numeric,
+where PHP does not. Comparison is not affected — it measures the byte length itself, so
+`"2\0" > "10"` is `true` as in PHP — but `is_numeric("2\0")` answers `true` where PHP answers
+`false`.
 
 ## Comparison
 
