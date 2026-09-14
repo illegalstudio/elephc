@@ -1,11 +1,11 @@
 ---
-title: "mysqli_next_result() — internals"
+title: "mysqli_next_result() - internals"
 description: "Compiler internals for mysqli_next_result(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 140
 ---
 
-## `mysqli_next_result()` — internals
+## `mysqli_next_result()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_next_result(mixed $mysql): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

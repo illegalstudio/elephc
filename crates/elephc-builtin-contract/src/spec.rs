@@ -84,6 +84,12 @@ pub enum TypeSpec {
     Str,
     /// PHP `bool`.
     Bool,
+    /// PHP singleton `false`, distinct from the broader `bool` type.
+    False,
+    /// PHP singleton `null`, including an explicit null alternative in a union.
+    Null,
+    /// PHP union with all alternatives retained in the shared declaration.
+    Union(&'static [TypeSpec]),
     /// PHP `mixed` or a shape refined by a backend-specific checker.
     Mixed,
     /// PHP `array` (element shape left to the backend checker).

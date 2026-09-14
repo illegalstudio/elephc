@@ -14,6 +14,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     args: &[Expr],
+    capture_values: bool,
 ) -> Option<Vec<crate::ir::ValueId>> {
     if sig.variadic.is_some() {
         return None;
@@ -34,7 +35,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
-        operands.push(lower_arg_with_signature(ctx, sig, index, arg));
+        operands.push(lower_arg_with_signature_options(ctx, sig, index, arg, capture_values));
     }
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
@@ -126,6 +127,7 @@ pub(super) fn indexed_spread_source_type(
     let ty = match &expr.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
+        ExprKind::FunctionCall { name, .. } => call_return_type(ctx, name, &[]),
         _ => infer_expr_type_syntactic(expr),
     }
     .codegen_repr();

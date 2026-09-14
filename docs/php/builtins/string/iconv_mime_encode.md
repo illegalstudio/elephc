@@ -23,9 +23,9 @@ Encodes one header field as RFC 2047 encoded-words.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/iconv_mime_encode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/iconv_mime_encode.rs)).
+- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/iconv_mime_encode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/iconv_mime_encode.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

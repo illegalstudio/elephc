@@ -1,11 +1,11 @@
 ---
-title: "imagesetpixel() — internals"
+title: "imagesetpixel() - internals"
 description: "Compiler internals for imagesetpixel(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 528
 ---
 
-## `imagesetpixel()` — internals
+## `imagesetpixel()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagesetpixel(mixed $image, int $x, int $y, int $color): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

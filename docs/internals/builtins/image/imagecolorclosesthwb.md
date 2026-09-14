@@ -1,11 +1,11 @@
 ---
-title: "imagecolorclosesthwb() — internals"
+title: "imagecolorclosesthwb() - internals"
 description: "Compiler internals for imagecolorclosesthwb(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 468
 ---
 
-## `imagecolorclosesthwb()` — internals
+## `imagecolorclosesthwb()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolorclosesthwb(mixed $image, int $red, int $green, int $blue): in
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

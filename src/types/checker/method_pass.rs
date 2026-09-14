@@ -325,6 +325,16 @@ impl Checker {
             Some(widest)
         };
         let inferred_return = raw_inferred.clone().unwrap_or(PhpType::Void);
+        let inferred_php_array = return_infos
+            .iter()
+            .any(|return_info| return_info.ty.is_php_array())
+            && return_infos.iter().all(|return_info| {
+                return_info.ty.is_php_array()
+                    || matches!(
+                        return_info.ty,
+                        PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. }
+                    )
+            });
         let effective_return = if crate::types::checker::yield_validation::body_contains_yield(
             &method.body,
         ) {
@@ -391,8 +401,14 @@ impl Checker {
                             }
                         }
                     }
-                    if Self::is_generic_array_hint(&declared)
-                        && matches!(inferred_return, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    if Self::is_generic_array_hint(&declared) && inferred_php_array {
+                        PhpType::php_array()
+                    } else if Self::is_generic_array_hint(&declared)
+                        && (inferred_return.is_php_array()
+                            || matches!(
+                                inferred_return,
+                                PhpType::Array(_) | PhpType::AssocArray { .. }
+                            ))
                     {
                         inferred_return
                     } else {

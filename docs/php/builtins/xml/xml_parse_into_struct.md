@@ -2,7 +2,7 @@
 title: "xml_parse_into_struct()"
 description: "Parses a whole XML document into an array of tag structures and an index by tag name."
 sidebar:
-  order: 917
+  order: 978
 ---
 
 ## xml_parse_into_struct()
@@ -24,9 +24,9 @@ Parses a whole XML document into an array of tag structures and an index by tag 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xml_parse_into_struct.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xml_parse_into_struct.rs)).
+- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xml_parse_into_struct.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xml_parse_into_struct.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

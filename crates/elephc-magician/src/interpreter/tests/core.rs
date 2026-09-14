@@ -98,14 +98,12 @@ fn execute_program_catches_throwable_without_variable_inside_eval() {
     let mut values = FakeOps::default();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-    let released = values
-        .releases
-        .first()
-        .copied()
-        .expect("unbound catch should release the thrown object");
+    let released_objects: Vec<_> = values.releases.clone().into_iter()
+        .filter(|value| values.type_tag(*value) == Ok(EVAL_TAG_OBJECT))
+        .collect();
 
     assert_eq!(scope.visible_cell("caught"), None);
-    assert_eq!(values.type_tag(released), Ok(EVAL_TAG_OBJECT));
+    assert_eq!(released_objects.len(), 1, "the unbound throwable must be released exactly once");
     assert_eq!(values.get(result), FakeValue::Int(9));
 }
 /// Verifies eval `catch (Exception)` matches thrown exception objects.
@@ -254,14 +252,12 @@ fn execute_program_finally_return_overrides_uncaught_throw() {
     let mut values = FakeOps::default();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-    let released = values
-        .releases
-        .first()
-        .copied()
-        .expect("overridden throw should be released");
+    let released_objects: Vec<_> = values.releases.clone().into_iter()
+        .filter(|value| values.type_tag(*value) == Ok(EVAL_TAG_OBJECT))
+        .collect();
 
     assert_eq!(values.get(result), FakeValue::Int(2));
-    assert_eq!(values.type_tag(released), Ok(EVAL_TAG_OBJECT));
+    assert_eq!(released_objects.len(), 1, "the overridden throwable must be released exactly once");
 }
 /// Verifies eval `finally` runs before an uncaught throw leaves the fragment.
 #[test]

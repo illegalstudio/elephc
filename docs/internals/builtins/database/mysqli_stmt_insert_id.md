@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_insert_id() — internals"
+title: "mysqli_stmt_insert_id() - internals"
 description: "Compiler internals for mysqli_stmt_insert_id(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 170
 ---
 
-## `mysqli_stmt_insert_id()` — internals
+## `mysqli_stmt_insert_id()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_stmt_insert_id(mixed $statement): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

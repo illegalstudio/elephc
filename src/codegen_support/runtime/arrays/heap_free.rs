@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Heap helpers own allocator metadata, debug accounting, and free-list invariants used by all refcounted runtime values.
+//! - Enabled mbstring hooks retire native string identity leases before storage can be reused.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -27,9 +28,9 @@ use crate::codegen_support::platform::Arch;
 /// Input: `x0` = user pointer (as returned by `heap_alloc`)
 ///
 /// ABI: `x0` is callee-saved where needed; all other registers are scratch.
-pub fn emit_heap_free(emitter: &mut Emitter) {
+pub fn emit_heap_free(emitter: &mut Emitter, mbstring: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_heap_free_linux_x86_64(emitter);
+        emit_heap_free_linux_x86_64(emitter, mbstring);
         return;
     }
 
@@ -67,6 +68,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     // strings/arrays/hashes/descriptors that never held a handle, and it preserves
     // every register, so only x30 has to be saved around the branch.
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address across the handle release
+    if mbstring { emitter.instruction("bl __rt_mbstring_ini_forget"); }         // retire string identity before this allocation can be reused
     emitter.instruction("bl __rt_object_handle_release");                       // hand this block's PHP object handle back to the LIFO pool
     emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address
 
@@ -314,7 +316,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 ///
 /// Input: `rax` = user pointer
 /// Output: `rax` preserved through the free path; all other scratch registers are clobbered.
-fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
+fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, mbstring: bool) {
     let double_free_msg = "Fatal error: heap debug detected double free\n";
 
     emitter.blank();
@@ -343,7 +345,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the current heap kind word before deciding whether a zero refcount is stale or legitimately being freed
     emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word while isolating the ownership marker for the stale-free check
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker from the packed kind metadata
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // does this heap-range pointer still carry a live x86_64 heap marker?
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// does this heap-range pointer still carry a live x86_64 heap marker?
     emitter.instruction("je __rt_heap_free_debug_checked");                     // yes — a live marker means this is the first legitimate free path, even if refcount is already zero
     emitter.instruction("mov ecx, DWORD PTR [rax - 12]");                       // load the current live refcount before any x86_64 free-side mutations
     emitter.instruction("test ecx, ecx");                                       // does the header still look like a live heap block?
@@ -354,12 +356,13 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_heap_free_debug_checked");
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
 
     // -- return this block's PHP object handle to the pool before the storage goes --
     // Single release chokepoint for object identity, matching the AArch64 path: the
     // helper preserves every register including rax, so no spill is needed here.
+    if mbstring { emitter.instruction("call __rt_mbstring_ini_forget"); }       // retire string identity while the native payload is still live
     emitter.instruction("call __rt_object_handle_release");                     // hand this block's PHP object handle back to the LIFO pool
 
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer

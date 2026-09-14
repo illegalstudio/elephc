@@ -2,7 +2,7 @@
 title: "xmlwriter_start_element_ns()"
 description: "Starts a namespaced element."
 sidebar:
-  order: 960
+  order: 1021
 ---
 
 ## xmlwriter_start_element_ns()
@@ -24,9 +24,9 @@ Starts a namespaced element.
 ## Availability
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_element_ns.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_element_ns.rs)).
+- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_element_ns.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_element_ns.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -516,7 +516,8 @@ pub(super) fn eval_reflection_default_expr_to_string(default: &EvalExpr) -> Opti
         EvalExpr::Const(EvalConst::Bool(value)) => Some(value.to_string()),
         EvalExpr::Const(EvalConst::Int(value)) => Some(value.to_string()),
         EvalExpr::Const(EvalConst::Float(value)) => Some(value.to_string()),
-        EvalExpr::Const(EvalConst::String(value)) => Some(format!("'{value}'")),
+        EvalExpr::Const(EvalConst::String(value)) => Some(escaped_string_default(value.as_bytes())),
+        EvalExpr::Const(EvalConst::Bytes(value)) => Some(escaped_string_default(value)),
         EvalExpr::Unary {
             op: EvalUnaryOp::Plus,
             expr,
@@ -533,6 +534,33 @@ pub(super) fn eval_reflection_default_expr_to_string(default: &EvalExpr) -> Opti
         } => Some(format!("{class_name}::{constant}")),
         _ => None,
     }
+}
+
+/// Escapes retained string defaults using PHP Reflection's bytewise printable representation.
+fn escaped_string_default(value: &[u8]) -> String {
+    let mut result = String::from("'");
+    for &byte in value {
+        match byte {
+            b'\t' => result.push_str("\\t"), b'\n' => result.push_str("\\n"),
+            b'\r' => result.push_str("\\r"), 0x0b => result.push_str("\\v"),
+            0x0c => result.push_str("\\f"), 0x1b => result.push_str("\\e"),
+            b'\\' => result.push_str("\\\\"), 0x20..=0x7e => result.push(byte as char),
+            _ => result.push_str(&format!("\\x{byte:02X}")),
+        }
+    }
+    result.push('\'');
+    result
+}
+
+/// Preserves binary defaults and renders UTF-8 bytes with PHP Reflection's printable escapes.
+#[test]
+fn string_literal_bytes_survive_reflection_default_formatting() {
+    let binary = EvalExpr::Const(EvalConst::Bytes(b"\xff\0\t\n\r\x0b\x0c\x1b\x7f'a\\z".to_vec()));
+    let unicode = EvalExpr::Const(EvalConst::String("é".to_owned()));
+    assert_eq!(eval_reflection_default_expr_to_string(&binary).as_deref(),
+        Some("'\\xFF\\x00\\t\\n\\r\\v\\f\\e\\x7F'a\\\\z'"));
+    assert_eq!(eval_reflection_default_expr_to_string(&unicode).as_deref(),
+        Some("'\\xC3\\xA9'"));
 }
 
 /// Returns whether eval retained this property as virtual rather than backed.

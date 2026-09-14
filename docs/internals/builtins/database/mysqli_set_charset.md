@@ -1,11 +1,11 @@
 ---
-title: "mysqli_set_charset() — internals"
+title: "mysqli_set_charset() - internals"
 description: "Compiler internals for mysqli_set_charset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 155
 ---
 
-## `mysqli_set_charset()` — internals
+## `mysqli_set_charset()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_set_charset(mixed $mysql, string $charset): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

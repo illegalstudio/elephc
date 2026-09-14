@@ -1,16 +1,16 @@
 ---
-title: "is_a() — internals"
+title: "is_a() - internals"
 description: "Compiler internals for is_a(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 93
 ---
 
-## `is_a()` — internals
+## `is_a()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/is_a.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/is_a.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

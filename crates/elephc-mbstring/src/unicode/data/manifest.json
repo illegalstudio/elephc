@@ -1,0 +1,20 @@
+{
+  "unicode_version": "17.0.0",
+  "source": "https://www.unicode.org/Public/17.0.0/ucd/",
+  "inputs": {
+    "UnicodeData.txt": "2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c",
+    "SpecialCasing.txt": "efc25faf19de21b92c1194c111c932e03d2a5eaf18194e33f1156e96de4c9588",
+    "CaseFolding.txt": "ff8d8fefbf123574205085d6714c36149eb946d717a0c585c27f0f4ef58c4183",
+    "DerivedCoreProperties.txt": "24c7fed1195c482faaefd5c1e7eb821c5ee1fb6de07ecdbaa64b56a99da22c08",
+    "EastAsianWidth.txt": "ea7ce50f3444a050333448dffef1cadd9325af55cbb764b4a2280faf52170a33"
+  },
+  "outputs": {
+    "case_ignorable.bin": "58cfc6185b226312b830dd790ff0f2c95cdc577824c8fc5a8ecc2cadf3c1351f",
+    "cased.bin": "ca99d22880de04e172ece76918de7926f030431894eb089f3a8382788d84e440",
+    "fold.bin": "2e877ec308cb79a026e01ab5fccbf6a623546c71b262ac0f7dac9ad67b9ab4d4",
+    "lower.bin": "13985e2fb911d8f9b9054f6eaac0f25ad19266acfcdb8b82b18e3236b7fdb2e2",
+    "title.bin": "c5c95270ee0ae567f2c7c9f73a64bafeb9f76f5192bca9a2d1ac5ad4726f281e",
+    "upper.bin": "edffe7d95958d1741faf375033dd410c48a01f8974c563aba770f3573d6322fd",
+    "wide.bin": "2314d43333f4d2d41e4d08c8e6c530498cc4351f38d2fe63520eb0b731abca98"
+  }
+}

@@ -1,11 +1,11 @@
 ---
-title: "image_type_to_mime_type() — internals"
+title: "image_type_to_mime_type() - internals"
 description: "Compiler internals for image_type_to_mime_type(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 454
 ---
 
-## `image_type_to_mime_type()` — internals
+## `image_type_to_mime_type()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function image_type_to_mime_type(int $image_type): string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

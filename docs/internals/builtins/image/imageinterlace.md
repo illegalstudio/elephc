@@ -1,11 +1,11 @@
 ---
-title: "imageinterlace() — internals"
+title: "imageinterlace() - internals"
 description: "Compiler internals for imageinterlace(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 512
 ---
 
-## `imageinterlace()` — internals
+## `imageinterlace()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imageinterlace(mixed $image, ?bool $enable = null): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

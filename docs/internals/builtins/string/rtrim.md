@@ -1,16 +1,16 @@
 ---
-title: "rtrim() — internals"
+title: "rtrim() - internals"
 description: "Compiler internals for rtrim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 813
+  order: 874
 ---
 
-## `rtrim()` — internals
+## `rtrim()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/rtrim.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/rtrim.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function rtrim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string
+function rtrim(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string
 ```
 
 ## What the type checker enforces

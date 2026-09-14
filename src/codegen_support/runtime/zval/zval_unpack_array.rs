@@ -22,6 +22,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::arrays::hash_layout::NEXT_INDEX_OFFSET;
 
 /// zval_unpack_array: rebuild an elephc array from a zend_array.
 /// Input:  x0 / rax = zend_array pointer
@@ -176,6 +177,9 @@ pub fn emit_zval_unpack_array(emitter: &mut Emitter) {
     // -- hash done: return tag 5 (associative array) and the rebuilt hash --
     emitter.label("__rt_zval_unpack_array_hash_done");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the rebuilt hash pointer
+    emitter.instruction("ldr x9, [sp]");                                        // recover Zend's source header independently of the rebuilt entries
+    emitter.instruction("ldr x9, [x9, #40]");                                   // import the authoritative signed nNextFreeElement
+    emitter.instruction(&format!("str x9, [x1, #{NEXT_INDEX_OFFSET}]"));        // preserve deleted-key history for later native appends
     emitter.instruction("mov x0, #5");                                          // tag = 5 (associative array)
     emitter.instruction("b __rt_zval_unpack_array_epilogue");                   // join the shared return path
 
@@ -341,6 +345,9 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
     // -- hash done: return tag 5 (associative array) and the rebuilt hash --
     emitter.label("__rt_zval_unpack_array_hash_done");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the rebuilt hash pointer into the second return register
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // recover Zend's source header independently of live entries
+    emitter.instruction("mov rcx, QWORD PTR [rcx + 40]");                       // import the authoritative signed nNextFreeElement
+    emitter.instruction(&format!("mov QWORD PTR [rdx + {NEXT_INDEX_OFFSET}], rcx")); // preserve deleted-key history for later native appends
     emitter.instruction("mov eax, 5");                                          // tag = 5 (associative array)
     emitter.instruction("jmp __rt_zval_unpack_array_epilogue");                 // join the shared return path
 

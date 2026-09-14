@@ -1,11 +1,11 @@
 ---
-title: "session_unset() — internals"
+title: "session_unset() - internals"
 description: "Compiler internals for session_unset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 906
+  order: 967
 ---
 
-## `session_unset()` — internals
+## `session_unset()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_unset(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -27,7 +27,10 @@ impl ElephcEvalContext {
 
     /// Returns an eval dynamic constant value by case-sensitive PHP constant name.
     pub fn constant(&self, name: &str) -> Option<RuntimeCellHandle> {
-        self.constants.get(&normalize_constant_name(name)).copied()
+        self.constants
+            .get(&normalize_constant_name(name))
+            .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Defines a dynamic user function, failing if the name already exists.

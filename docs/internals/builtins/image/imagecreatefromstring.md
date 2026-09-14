@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefromstring() — internals"
+title: "imagecreatefromstring() - internals"
 description: "Compiler internals for imagecreatefromstring(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 490
 ---
 
-## `imagecreatefromstring()` — internals
+## `imagecreatefromstring()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecreatefromstring(string $data): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

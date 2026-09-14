@@ -1,11 +1,11 @@
 ---
-title: "cairo_matrix_init_scale() — internals"
+title: "cairo_matrix_init_scale() - internals"
 description: "Compiler internals for cairo_matrix_init_scale(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 414
 ---
 
-## `cairo_matrix_init_scale()` — internals
+## `cairo_matrix_init_scale()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_matrix_init_scale(float $sx, float $sy): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

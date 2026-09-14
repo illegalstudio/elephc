@@ -1,11 +1,11 @@
 ---
-title: "mysqli_rollback() — internals"
+title: "mysqli_rollback() - internals"
 description: "Compiler internals for mysqli_rollback(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 152
 ---
 
-## `mysqli_rollback()` — internals
+## `mysqli_rollback()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_rollback(mixed $mysql, int $flags = 0, ?string $name = null): bo
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

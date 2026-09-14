@@ -1,11 +1,11 @@
 ---
-title: "exif_read_data() — internals"
+title: "exif_read_data() - internals"
 description: "Compiler internals for exif_read_data(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 447
 ---
 
-## `exif_read_data()` — internals
+## `exif_read_data()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function exif_read_data(string $filename, ?string $required_sections = null, boo
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

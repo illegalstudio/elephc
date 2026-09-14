@@ -13,6 +13,8 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_exception_cleanup_frames` runtime helper.
 pub fn emit_exception_cleanup_frames(emitter: &mut Emitter) {
+    super::owned_values::emit(emitter);
+    super::deep_cleanup::emit(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_exception_cleanup_frames_linux_x86_64(emitter);
         return;
@@ -35,6 +37,8 @@ pub fn emit_exception_cleanup_frames(emitter: &mut Emitter) {
     emitter.instruction("cmp x20, x19");                                        // have we reached the activation record that should survive the catch?
     emitter.instruction("b.eq __rt_exception_cleanup_frames_done");             // stop once the surviving activation is on top
     emitter.instruction("cbz x20, __rt_exception_cleanup_frames_done");         // stop defensively if the stack unexpectedly bottoms out
+    emitter.instruction("ldr x11, [x20]");                                      // unlink the activation before a cleanup callback can reenter PHP unwinding
+    abi::emit_store_reg_to_symbol(emitter, "x11", "_exc_call_frame_top", 0);
     emitter.instruction("ldr x10, [x20, #8]");                                  // load the cleanup callback pointer for this activation
     emitter.instruction("ldr x11, [x20, #16]");                                 // load the saved frame pointer for this activation
     emitter.instruction("cbz x10, __rt_exception_cleanup_frames_next");         // skip callbacks for activations that have no cleanup work
@@ -76,6 +80,8 @@ fn emit_exception_cleanup_frames_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_exception_cleanup_frames_done");               // stop once the surviving activation is on top
     emitter.instruction("test r13, r13");                                       // has the cleanup stack unexpectedly bottomed out?
     emitter.instruction("je __rt_exception_cleanup_frames_done");               // stop defensively when no more activation records remain
+    emitter.instruction("mov r11, QWORD PTR [r13]");                            // unlink the activation before reentrant cleanup can inspect the chain
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_call_frame_top", 0);
     emitter.instruction("mov r10, QWORD PTR [r13 + 8]");                        // load the cleanup callback pointer for the current unwound activation
     emitter.instruction("mov r11, QWORD PTR [r13 + 16]");                       // load the saved frame pointer for the current unwound activation
     emitter.instruction("test r10, r10");                                       // does this activation record have cleanup work to run?

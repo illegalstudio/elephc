@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_easy_error() — internals"
+title: "__elephc_curl_easy_error() - internals"
 description: "Compiler internals for __elephc_curl_easy_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 981
+  order: 1042
 ---
 
-## `__elephc_curl_easy_error()` — internals
+## `__elephc_curl_easy_error()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_error.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_error.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,8 +48,8 @@ function __elephc_curl_easy_error(mixed $handle): string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

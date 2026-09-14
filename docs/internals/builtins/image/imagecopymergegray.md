@@ -1,11 +1,11 @@
 ---
-title: "imagecopymergegray() — internals"
+title: "imagecopymergegray() - internals"
 description: "Compiler internals for imagecopymergegray(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 482
 ---
 
-## `imagecopymergegray()` — internals
+## `imagecopymergegray()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecopymergegray(mixed $dst_image, mixed $src_image, int $dst_x, int 
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

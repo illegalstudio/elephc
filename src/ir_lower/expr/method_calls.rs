@@ -134,6 +134,7 @@ pub(super) fn lower_method_call(
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    guard_owning_method_call_arguments(ctx, &arg_values, expr.span);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
@@ -188,13 +189,12 @@ pub(super) fn lower_closure_bind_method(
             let call_args = &args[args.len().min(1)..];
             let arg_container =
                 lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span)?;
-            Some(ctx.emit_value(
-                Op::CallableDescriptorInvoke,
-                vec![bound.value, arg_container.value],
-                callable_profile_immediate(),
+            Some(emit_callable_descriptor_invoke(
+                ctx,
+                bound,
+                arg_container,
                 PhpType::Mixed,
-                Op::CallableDescriptorInvoke.default_effects(),
-                Some(expr.span),
+                expr.span,
             ))
         }
         _ => None,

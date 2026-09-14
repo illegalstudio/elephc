@@ -1477,12 +1477,11 @@ echo implode(',', $o->x);
     assert_eq!(out, "2;2;2,4");
 }
 
-/// Regression for issue #642: the separated container must be published back into the PROPERTY
-/// slot, on every supported target. Publishing is the whole fix — a split whose result is not
-/// written back leaves the loop iterating a container the property does not own, which is how
-/// the property ended up freed. The assertion is structural: inside the `prop_get_for_write`
-/// block the slot is read, the copy-on-write helper runs, and the result is stored back to that
-/// same slot, in that order. Run under `ELEPHC_TEST_TARGET` to cover the non-host architectures.
+/// Regression for issue #642: the separated boxed cell must be published back into the PROPERTY
+/// slot on every supported target. Exact PHP `array` declarations use a boxed packed-or-hash
+/// representation, so `PropGetForWrite` clones the Mixed cell before `IterStart` separates its
+/// payload. The clone must replace the property owner in slot-load, clone, release, store order.
+/// Run under `ELEPHC_TEST_TARGET` to cover the non-host architectures.
 #[test]
 fn test_regression_642_prop_get_for_write_publishes_split_into_property_slot() {
     let dir = make_cli_test_dir("elephc_prop_get_for_write_publish");
@@ -1508,29 +1507,35 @@ foreach ($o->x as &$v) { $v = $v * 2; }
         .expect("missing iter_start after prop_get_for_write");
     let body = &body[..end];
 
-    let (slot_load, slot_store) = match target().arch {
-        Arch::AArch64 => ("ldr x0, [x9, #8]", "str x0, [x9, #8]"),
+    let (slot_load, clone, release, slot_store) = match target().arch {
+        Arch::AArch64 => (
+            "ldr x0, [x9, #8]",
+            "bl __rt_mixed_clone",
+            "bl __rt_decref_mixed",
+            "str x0, [x9, #8]",
+        ),
         Arch::X86_64 => (
-            "mov rdi, QWORD PTR [r11 + 8]",
+            "mov rax, QWORD PTR [r11 + 8]",
+            "call __rt_mixed_clone",
+            "call __rt_decref_mixed",
             "mov QWORD PTR [r11 + 8], rax",
         ),
-    };
-    let call = match target().arch {
-        Arch::AArch64 => "bl __rt_array_ensure_unique",
-        Arch::X86_64 => "call __rt_array_ensure_unique",
     };
     let load_pos = body
         .find(slot_load)
         .unwrap_or_else(|| panic!("missing property slot load `{slot_load}` in:\n{body}"));
-    let call_pos = body
-        .find(call)
-        .unwrap_or_else(|| panic!("missing copy-on-write split `{call}` in:\n{body}"));
+    let clone_pos = body
+        .find(clone)
+        .unwrap_or_else(|| panic!("missing boxed-cell clone `{clone}` in:\n{body}"));
+    let release_pos = body
+        .find(release)
+        .unwrap_or_else(|| panic!("missing prior-cell release `{release}` in:\n{body}"));
     let store_pos = body
         .find(slot_store)
         .unwrap_or_else(|| panic!("missing slot republish `{slot_store}` in:\n{body}"));
     assert!(
-        load_pos < call_pos && call_pos < store_pos,
-        "expected slot load -> split -> slot republish, got:\n{body}"
+        load_pos < clone_pos && clone_pos < release_pos && release_pos < store_pos,
+        "expected slot load -> cell clone -> old release -> slot republish, got:\n{body}"
     );
 }
 
@@ -1731,7 +1736,9 @@ $keep = $o->x;
 }
 
 /// Regression for issue #642: a hash-valued property reached through a ref cell must use the hash
-/// split helper, proving the cell path is not hardwired to the indexed one.
+/// split helper, proving the cell path is not hardwired to the indexed one. The heap oracle uses
+/// direct writes as its baseline so both programs retain the same reference binding and final COW
+/// generations; any remaining delta belongs to the by-reference iterator rather than the split.
 #[test]
 fn test_regression_642_by_ref_foreach_reference_hash_property_shared_with_another_owner() {
     let setup = r#"<?php
@@ -1748,8 +1755,11 @@ echo $out;
     let by_ref = compile_and_run_with_heap_debug(&format!(
         "{setup}foreach ($o->x as &$v) {{ $v = $v * 2; }}\nunset($v);\n{dump}"
     ));
-    let baseline = compile_and_run_with_heap_debug(&format!("{setup}{dump}"));
+    let baseline = compile_and_run_with_heap_debug(&format!(
+        "{setup}$o->x['a'] = 2;\n$o->x['b'] = 4;\n{dump}"
+    ));
     assert_eq!(by_ref.stdout, "a=2;b=4;a=1;b=2;");
+    assert_eq!(baseline.stdout, by_ref.stdout);
     assert!(
         !by_ref.stderr.contains("bad refcount"),
         "the split must balance the property's own reference, got: {}",
@@ -1911,9 +1921,9 @@ echo implode(',', C::$x);",
 }
 
 /// Regression for issue #642: the reference-slot split must go THROUGH the ref cell on every
-/// supported target — dereference the cell to reach the container, then publish the separated
-/// container back at the cell's payload rather than into the property slot, which holds the cell
-/// pointer itself. Writing the container over the slot would destroy the reference binding.
+/// supported target. Exact PHP `array` declarations store a boxed Mixed cell behind the reference
+/// cell, so the lowering clones that box and publishes it at the reference-cell payload. Writing
+/// the new box over the property slot would destroy the reference binding.
 ///
 /// The assertion is structural so it can be run for a non-host architecture through
 /// `ELEPHC_TEST_TARGET` without an assembler for that target.
@@ -1943,20 +1953,22 @@ foreach ($o->x as &$v) { $v = $v * 2; }
         .expect("missing iter_start after prop_get_for_write");
     let body = &body[..end];
 
-    // Cell pointer out of the slot, container out of the cell, split, container back into the
-    // cell. The slot offset is 8 for the single property; the cell payload sits at offset 0.
-    let steps: [&str; 5] = match target().arch {
+    // Cell pointer out of the slot, Mixed box out of the cell, clone and old-owner release, then
+    // the new box back into the cell. The property slot offset is 8 and cell payload offset is 0.
+    let steps: [&str; 6] = match target().arch {
         Arch::AArch64 => [
             "ldr x0, [x9, #8]",
             "ldr x0, [x0]",
-            "bl __rt_array_ensure_unique",
+            "bl __rt_mixed_clone",
+            "bl __rt_decref_mixed",
             "ldr x10, [x9, #8]",
             "str x0, [x10]",
         ],
         Arch::X86_64 => [
-            "mov rdi, QWORD PTR [r11 + 8]",
-            "mov rdi, QWORD PTR [rdi]",
-            "call __rt_array_ensure_unique",
+            "mov rax, QWORD PTR [r11 + 8]",
+            "mov rax, QWORD PTR [rax]",
+            "call __rt_mixed_clone",
+            "call __rt_decref_mixed",
             "mov r10, QWORD PTR [r11 + 8]",
             "mov QWORD PTR [r10], rax",
         ],

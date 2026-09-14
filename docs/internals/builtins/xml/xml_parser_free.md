@@ -1,11 +1,11 @@
 ---
-title: "xml_parser_free() — internals"
+title: "xml_parser_free() - internals"
 description: "Compiler internals for xml_parser_free(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 920
+  order: 981
 ---
 
-## `xml_parser_free()` — internals
+## `xml_parser_free()` - internals
 
 ## Where it lives
 

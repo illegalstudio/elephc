@@ -110,7 +110,16 @@ pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("cmp x23, x19");                                        // have we visited every live child pointer slot?
     emitter.instruction("b.ge __rt_array_clone_shallow_done");                  // yes — refcounted fixups are complete
     emitter.instruction("ldr x0, [x24, x23, lsl #3]");                          // load the cloned child pointer from the copied payload
+    emitter.instruction("lsr x9, x22, #8");                                     // recover the array slot storage tag
+    emitter.instruction("and x9, x9, #0x7f");                                   // remove the persistent COW flag
+    emitter.instruction("cmp x9, #7");                                          // only boxed slots can contain PHP references
+    emitter.instruction("b.ne __rt_array_clone_shallow_retain_child");          // typed payloads retain their ordinary child
+    emitter.instruction("bl __rt_reference_array_copy");                        // detach orphan references and retain shared reference identities
+    emitter.instruction("str x0, [x24, x23, lsl #3]");                          // publish the cloned boxed slot owner
+    emitter.instruction("b __rt_array_clone_shallow_next_child");               // continue after fixing the boxed slot
+    emitter.label("__rt_array_clone_shallow_retain_child");
     emitter.instruction("bl __rt_incref");                                      // retain the shared child pointer for the cloned array owner
+    emitter.label("__rt_array_clone_shallow_next_child");
     emitter.instruction("add x23, x23, #1");                                    // advance to the next live child slot
     emitter.instruction("b __rt_array_clone_shallow_refs_loop");                // continue retaining shared child pointers
 
@@ -222,7 +231,19 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_array_clone_shallow_done");                   // finish once every live child pointer has been retained for the cloned owner
     emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // reload the cloned indexed-array pointer before addressing the current child slot
     emitter.instruction("mov rax, QWORD PTR [r8 + r10 * 8 + 24]");              // load the shallow-copied child pointer from the current cloned indexed-array slot
+    emitter.instruction("mov r9, r15");                                         // recover packed array slot metadata
+    emitter.instruction("shr r9, 8");                                           // move the value tag into the low bits
+    emitter.instruction("and r9, 0x7f");                                        // remove the persistent COW flag
+    emitter.instruction("cmp r9, 7");                                           // only boxed slots can contain PHP references
+    emitter.instruction("jne __rt_array_clone_shallow_retain_child");           // typed payloads retain their ordinary child
+    emitter.instruction("call __rt_reference_array_copy");                      // detach orphan references and retain shared identities
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // recover the copied slot index
+    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // recover the destination array payload
+    emitter.instruction("mov QWORD PTR [r8 + r10 * 8 + 24], rax");              // publish the cloned boxed slot owner
+    emitter.instruction("jmp __rt_array_clone_shallow_next_child");             // continue after fixing the boxed slot
+    emitter.label("__rt_array_clone_shallow_retain_child");
     emitter.instruction("call __rt_incref");                                    // retain the shared child pointer so the cloned indexed-array owner has its own reference
+    emitter.label("__rt_array_clone_shallow_next_child");
     emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // restore the child slot index after incref clobbered caller-saved registers
     emitter.instruction("add r10, 1");                                          // advance to the next live child-pointer slot in the cloned indexed-array payload
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // persist the next child slot index across the following retain call
@@ -274,6 +295,6 @@ mod tests {
         assert!(asm.contains("mov QWORD PTR [rbp - 56], 0\n"));
         assert!(asm.contains("call __rt_str_persist\n    mov r10, QWORD PTR [rbp - 56]\n"));
         assert!(asm.contains("mov r8, QWORD PTR [rbp - 48]\n    lea r11, [r8 + r11 + 24]\n"));
-        assert!(asm.contains("call __rt_incref\n    mov r10, QWORD PTR [rbp - 56]\n"));
+        assert!(asm.contains("call __rt_incref\n__rt_array_clone_shallow_next_child:\n    mov r10, QWORD PTR [rbp - 56]\n"));
     }
 }

@@ -56,6 +56,7 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     if let Some(result) = inst.result {
+        ctx.store_runtime_return_ownership(result);
         if ctx.value_php_type(result)? == PhpType::Void {
             abi::emit_load_int_immediate(
                 ctx.emitter,
@@ -221,6 +222,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         ref_temp_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes,
     })
 }
@@ -302,6 +304,7 @@ pub(super) fn materialize_static_method_call_args_with_refs(
         ref_temp_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes: 0,
     })
 }
@@ -359,7 +362,7 @@ pub(super) fn materialize_called_class_id(
 /// The planner reserves that slot for exactly the borrowed widening arguments, so the presence
 /// of a cleanup is the same decision as the incref and the two cannot drift: an incref with no
 /// cleanup would leak the clone, and a cleanup with no incref would release the caller's array.
-fn materialize_plain_call_arg(
+pub(super) fn materialize_plain_call_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     param_ty: &PhpType,

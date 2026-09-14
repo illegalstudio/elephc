@@ -1,16 +1,16 @@
 ---
-title: "strtotime() — internals"
+title: "strtotime() - internals"
 description: "Compiler internals for strtotime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 241
 ---
 
-## `strtotime()` — internals
+## `strtotime()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/strtotime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/strtotime.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

@@ -28,6 +28,7 @@
 //!   `3` prev. `crate::builtins::semantics::ArrayPointerOp::seek_mode` is the single source
 //!   of truth for that mapping and must stay in step with the dispatch below.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -120,9 +121,7 @@ fn emit_hash_walk_aarch64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
     emitter.instruction("cmn x9, #1");                                          // has the insertion-order chain run out?
     emitter.instruction(&format!("b.eq {}", invalid));                          // an exhausted chain has no entry at this ordinal
     emitter.instruction("mov x10, #64");                                        // x10 = hash entry stride in bytes
-    emitter.instruction("mul x10, x9, x10");                                    // byte offset of the current slot
-    emitter.instruction("add x10, x0, x10");                                    // advance from the hash base to the slot
-    emitter.instruction("add x10, x10, #40");                                   // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x10", "x0", "x9");
     emitter.instruction(&format!("cbz x1, {}_walk_done", prefix));              // ordinal 0 selects the current entry
     emitter.instruction("sub x1, x1, #1");                                      // consume one step of the requested ordinal
     emitter.instruction("ldr x9, [x10, #56]");                                  // x9 = next slot index from the insertion-order chain
@@ -140,10 +139,7 @@ fn emit_hash_walk_x86_64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
     emitter.label(&format!("{}_walk", prefix));
     emitter.instruction("cmp rax, -1");                                         // has the insertion-order chain run out?
     emitter.instruction(&format!("je {}", invalid));                            // an exhausted chain has no entry at this ordinal
-    emitter.instruction("mov r10, rax");                                        // copy the slot index before scaling it
-    emitter.instruction("shl r10, 6");                                          // convert the slot index into a 64-byte entry offset
-    emitter.instruction("add r10, rdi");                                        // advance from the hash base to the slot
-    emitter.instruction("add r10, 40");                                         // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "r10", "rdi", "rax");
     emitter.instruction("test rsi, rsi");                                       // is the requested ordinal exhausted?
     emitter.instruction(&format!("je {}_walk_done", prefix));                   // ordinal 0 selects the current entry
     emitter.instruction("sub rsi, 1");                                          // consume one step of the requested ordinal

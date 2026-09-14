@@ -25,6 +25,7 @@ pub(crate) struct EvalRefArgSlot {
     pub(crate) param_ty: PhpType,
     pub(crate) raw_offset: usize,
     pub(crate) original_offset: usize,
+    /// Whether this staging slot owns its raw heap value independently from the argument array.
     pub(crate) raw_refcounted_owned: bool,
 }
 
@@ -156,11 +157,20 @@ fn emit_aarch64_write_back_mixed_ref_arg(
     label_prefix: &str,
 ) {
     let done_label = format!("{}_ref_{}_done", label_prefix, slot.param_index);
+    let unchanged_label = format!("{}_unchanged", done_label);
     abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
     abi::emit_load_temporary_stack_slot(emitter, "x10", stack_offset + slot.raw_offset);
     emitter.instruction("cmp x9, x10");                                         // skip writeback when the native call kept the same Mixed cell
-    emitter.instruction(&format!("b.eq {}", done_label));                       // avoid self-copying and releasing the original cell payload
+    emitter.instruction(&format!("b.eq {}", unchanged_label));                  // avoid self-copying and releasing the original cell payload
     emit_aarch64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "x9", "x10");
+    if slot.raw_refcounted_owned {
+        emitter.instruction(&format!("b {}", done_label));                      // changed slots already transferred their native owner into the caller cell
+    }
+    emitter.label(&unchanged_label);
+    if slot.raw_refcounted_owned {
+        emitter.instruction("mov x0, x9");                                      // consume the unchanged staging owner while preserving the caller's owner
+        abi::emit_call_label(emitter, "__rt_decref_any");
+    }
     emitter.label(&done_label);
 }
 
@@ -172,11 +182,20 @@ fn emit_x86_64_write_back_mixed_ref_arg(
     label_prefix: &str,
 ) {
     let done_label = format!("{}_ref_{}_done_x", label_prefix, slot.param_index);
+    let unchanged_label = format!("{}_unchanged", done_label);
     abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
     abi::emit_load_temporary_stack_slot(emitter, "r11", stack_offset + slot.raw_offset);
     emitter.instruction("cmp r10, r11");                                        // skip writeback when the native call kept the same Mixed cell
-    emitter.instruction(&format!("je {}", done_label));                         // avoid self-copying and releasing the original cell payload
+    emitter.instruction(&format!("je {}", unchanged_label));                    // avoid self-copying and releasing the original cell payload
     emit_x86_64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "r10", "r11");
+    if slot.raw_refcounted_owned {
+        emitter.instruction(&format!("jmp {}", done_label));                    // changed slots already transferred their native owner into the caller cell
+    }
+    emitter.label(&unchanged_label);
+    if slot.raw_refcounted_owned {
+        emitter.instruction("mov rax, r10");                                    // consume the unchanged staging owner while preserving the caller's owner
+        abi::emit_call_label(emitter, "__rt_decref_any");
+    }
     emitter.label(&done_label);
 }
 

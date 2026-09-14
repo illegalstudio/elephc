@@ -18,6 +18,7 @@ use crate::codegen::abi;
 
 use super::context::FunctionContext;
 use super::frame;
+use super::return_ownership;
 use super::{CodegenIrError, Result};
 
 /// Lowers one EIR terminator.
@@ -31,7 +32,11 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                     frame::emit_main_epilogue(ctx);
                 }
             } else {
-                frame::emit_function_return_epilogue(ctx, None);
+                frame::emit_function_return_epilogue(
+                    ctx,
+                    None,
+                    return_ownership::ReturnOwnershipStatus::Static(true),
+                );
             }
             Ok(())
         }
@@ -43,10 +48,14 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 // than splitting a `Str`/`Float` declared return across the string/float regs.
                 let int_reg = abi::int_result_reg(ctx.emitter);
                 ctx.load_value_to_reg(*value, int_reg)?;
-                frame::emit_function_return_epilogue(ctx, None);
+                frame::emit_function_return_epilogue(
+                    ctx,
+                    None,
+                    return_ownership::ReturnOwnershipStatus::Static(false),
+                );
                 return Ok(());
             }
-            let skip_return_slot = frame::return_cleanup_skip_slot(ctx.function, *value);
+            let skip_return_slot = frame::return_cleanup_skip_slot(ctx, *value);
             let source_ty = ctx.load_value_to_result(*value)?;
             if ctx.is_main {
                 // The top-level script's return value is discarded (PHP only uses
@@ -63,7 +72,14 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             if ctx.function.return_php_type.codegen_repr() == PhpType::TaggedScalar {
                 super::lower_inst::coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
             }
-            frame::emit_function_return_epilogue(ctx, skip_return_slot);
+            let source_ownership =
+                return_ownership::classify_return_value(ctx, *value, skip_return_slot)?;
+            let return_ownership = return_ownership::normalize_loaded_return_representation(
+                ctx,
+                &source_ty,
+                source_ownership,
+            );
+            frame::emit_function_return_epilogue(ctx, skip_return_slot, return_ownership);
             Ok(())
         }
         Terminator::Unreachable => {
@@ -194,15 +210,15 @@ fn lower_switch(
         abi::emit_load_int_immediate(ctx.emitter, case_reg, case.value);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // compare switch scrutinee with the case value
                     &format!("cmp {}, {}", result_reg, case_reg)
-                );                                                              // compare switch scrutinee with the case value
+                );
                 ctx.emitter.instruction(&format!("b.eq {}", branch_label));     // branch to the matching switch case
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // compare switch scrutinee with the case value
                     &format!("cmp {}, {}", result_reg, case_reg)
-                );                                                              // compare switch scrutinee with the case value
+                );
                 ctx.emitter.instruction(&format!("je {}", branch_label));       // branch to the matching switch case
             }
         }
@@ -268,8 +284,9 @@ fn materialize_block_args(
         abi::emit_push_result_value(ctx.emitter, &ty);
         arg_types.push(ty);
     }
-    for (param, ty) in params.iter().zip(arg_types.iter()).rev() {
+    for ((param, arg), ty) in params.iter().zip(args.iter()).zip(arg_types.iter()).rev() {
         pop_result_value(ctx, ty);
+        return_ownership::normalize_loaded_block_argument(ctx, *param, *arg, ty)?;
         ctx.store_result_value(*param)?;
     }
     Ok(())
@@ -367,7 +384,8 @@ mod tests {
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::codegen::generate_user_asm_from_ir;
     use crate::ir::{
-        Builder, Function, IrHeapKind, IrType, Module, Op, Ownership, SwitchCase, Terminator,
+        Builder, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind, Module, Op,
+        Ownership, SwitchCase, Terminator,
     };
     use crate::types::PhpType;
 
@@ -426,6 +444,74 @@ mod tests {
         assert_ne!(case_edge, default_edge, "{asm}");
         assert!(branches_to(&asm, &case_edge), "{asm}");
         assert!(branches_to(&asm, &default_edge), "{asm}");
+    }
+
+    /// Verifies an inliner-shaped Mixed phi promotes only its borrowed incoming edge.
+    #[test]
+    fn mixed_phi_return_normalizes_incoming_ownership_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_mixed_phi_return_asm(target);
+            let function_start = asm
+                .find("mixed_phi_return_fixture")
+                .expect("fixture function label should be emitted");
+            let function_return = asm[function_start..]
+                .find("\n    ret\n")
+                .map(|offset| function_start + offset)
+                .expect("fixture function should return");
+            let function_asm = &asm[function_start..function_return];
+
+            assert_eq!(function_asm.matches("__rt_incref").count(), 1, "{name}: {function_asm}");
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(function_asm.contains("mov x15, #1"), "{name}: {function_asm}");
+                    assert!(!function_asm.contains("mov x15, xzr"), "{name}: {function_asm}");
+                }
+                Arch::X86_64 => {
+                    assert!(function_asm.contains("mov r11d, 1"), "{name}: {function_asm}");
+                    assert!(!function_asm.contains("xor r11d, r11d"), "{name}: {function_asm}");
+                }
+            }
+        }
+    }
+
+    /// Verifies reference-cell and global storage reads publish borrowed return ownership.
+    #[test]
+    fn storage_backed_mixed_returns_publish_borrowed_status_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_storage_backed_mixed_return_asm(target);
+            for function_name in ["ref_cell_return_fixture", "global_return_fixture"] {
+                let function_start = asm.find(function_name).expect("fixture label should be emitted");
+                let function_return = asm[function_start..]
+                    .find("\n    ret\n")
+                    .map(|offset| function_start + offset)
+                    .expect("fixture function should return");
+                let function_asm = &asm[function_start..function_return];
+                match target.arch {
+                    Arch::AArch64 => {
+                        assert!(function_asm.contains("mov x15, xzr"), "{name}: {function_asm}");
+                        assert!(!function_asm.contains("mov x15, #1"), "{name}: {function_asm}");
+                    }
+                    Arch::X86_64 => {
+                        assert!(function_asm.contains("xor r11d, r11d"), "{name}: {function_asm}");
+                        assert!(!function_asm.contains("mov r11d, 1"), "{name}: {function_asm}");
+                    }
+                }
+            }
+        }
     }
 
     /// Returns the one emitted assembly label named `<prefix>_<digits>`.
@@ -506,6 +592,189 @@ mod tests {
         module.add_function(function);
 
         generate_user_asm_from_ir(&module, false, false).expect("unreachable module should lower")
+    }
+
+    /// Builds a mixed-returning function whose phi joins a borrowed parameter and fresh cell.
+    fn generate_mixed_phi_return_asm(target: Target) -> String {
+        let mut module = Module::new(target);
+        let mut function = Function::new(
+            "mixed_phi_return_fixture".to_string(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        function.params.push(FunctionParam {
+            name: "fresh".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Bool,
+            by_ref: false,
+            variadic: false,
+        });
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: false,
+            variadic: false,
+        });
+        let fresh_slot = function.add_local(
+            Some("fresh".to_string()),
+            IrType::I64,
+            PhpType::Bool,
+            LocalKind::PhpLocal,
+        );
+        let value_slot = function.add_local(
+            Some("value".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            let borrowed = builder.create_named_block("borrowed", Vec::new());
+            let owned = builder.create_named_block("owned", Vec::new());
+            let merge = builder.create_named_block(
+                "merge",
+                vec![(IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)],
+            );
+            let merged = builder.function().block(merge).expect("merge block").params[0];
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let condition = builder.emit_load_local(fresh_slot, IrType::I64, PhpType::Bool);
+            builder.terminate(Terminator::CondBr {
+                cond: condition,
+                then_target: owned,
+                then_args: Vec::new(),
+                else_target: borrowed,
+                else_args: Vec::new(),
+            });
+            builder.position_at_end(borrowed);
+            let borrowed_value = builder.emit_load_local(
+                value_slot,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+            );
+            builder.terminate(Terminator::Br {
+                target: merge,
+                args: vec![borrowed_value],
+            });
+            builder.position_at_end(owned);
+            let scalar = builder.emit_const_i64(7);
+            let owned_value = builder
+                .emit(
+                    Op::MixedBox,
+                    vec![scalar],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .expect("mixed_box produces a value");
+            builder.terminate(Terminator::Br {
+                target: merge,
+                args: vec![owned_value],
+            });
+            builder.position_at_end(merge);
+            builder.terminate(Terminator::Return {
+                value: Some(merged),
+            });
+        }
+        module.add_function(function);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        generate_user_asm_from_ir(&module, false, false)
+            .expect("mixed phi return module should lower")
+    }
+
+    /// Builds Mixed-returning functions backed by a reference cell and global storage.
+    fn generate_storage_backed_mixed_return_asm(target: Target) -> String {
+        let mut module = Module::new(target);
+        let global_name = module.data.intern_global_name("borrowed_return_global");
+
+        let mut ref_cell = Function::new(
+            "ref_cell_return_fixture".to_string(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        ref_cell.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: true,
+            variadic: false,
+        });
+        let value_slot = ref_cell.add_local(
+            Some("value".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut ref_cell);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let value = builder
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(value_slot)),
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::MaybeOwned,
+                )
+                .expect("load_ref_cell produces a value");
+            builder.terminate(Terminator::Return { value: Some(value) });
+        }
+        module.add_function(ref_cell);
+
+        let mut global = Function::new(
+            "global_return_fixture".to_string(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        {
+            let mut builder = Builder::new(&mut global);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let value = builder
+                .emit(
+                    Op::LoadGlobal,
+                    Vec::new(),
+                    Some(Immediate::GlobalName(global_name)),
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::MaybeOwned,
+                )
+                .expect("load_global produces a value");
+            builder.terminate(Terminator::Return { value: Some(value) });
+        }
+        module.add_function(global);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        generate_user_asm_from_ir(&module, false, false)
+            .expect("storage-backed return module should lower")
     }
 
     /// Builds a minimal `br` fixture with one integer block argument.

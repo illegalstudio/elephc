@@ -1,11 +1,11 @@
 ---
-title: "mysqli_connect() — internals"
+title: "mysqli_connect() - internals"
 description: "Compiler internals for mysqli_connect(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 104
 ---
 
-## `mysqli_connect()` — internals
+## `mysqli_connect()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_connect(?string $hostname = null, ?string $username = null, ?str
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

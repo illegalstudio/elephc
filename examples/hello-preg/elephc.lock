@@ -4,7 +4,7 @@ schema = 1
 [[package]]
 name = "pcre2"
 version = "10.47"
-recipe = 2
+recipe = 3
 dependencies = []
 provides = ["pcre2"]
 

@@ -206,6 +206,56 @@ impl<'f> Builder<'f> {
         }
     }
 
+    /// Retypes cleanup-only local loads to the slot's final widened storage representation.
+    ///
+    /// Lowering can emit an owned load plus `Release` before a later source-order store widens
+    /// that local's frame slot. The load exists only to release the slot occupant, so retaining
+    /// its earlier logical type would make codegen convert the final storage before releasing it.
+    /// Ordinary PHP reads are excluded by requiring exactly one use, an instruction-level
+    /// `Release`, with no use from a terminator or block edge.
+    pub fn repair_owned_local_cleanup_load_types(&mut self) {
+        let repairs = self
+            .func
+            .values
+            .iter()
+            .enumerate()
+            .filter_map(|(raw, value)| {
+                if value.ownership != Ownership::Owned {
+                    return None;
+                }
+                let ValueDef::Instruction { inst, .. } = value.def else {
+                    return None;
+                };
+                let instruction = self.func.instructions.get(inst.as_raw() as usize)?;
+                if !matches!(
+                    instruction.op,
+                    Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell
+                ) {
+                    return None;
+                }
+                let Some(Immediate::LocalSlot(slot)) = instruction.immediate else {
+                    return None;
+                };
+                let local = self.func.locals.get(slot.as_raw() as usize)?;
+                if value.ir_type == local.ir_type && value.php_type == local.php_type {
+                    return None;
+                }
+                let value_id = ValueId::from_raw(raw as u32);
+                value_is_used_only_by_release(&self.func, value_id)
+                    .then(|| (value_id, inst, local.ir_type, local.php_type.clone()))
+            })
+            .collect::<Vec<_>>();
+
+        for (value_id, inst_id, ir_type, php_type) in repairs {
+            let value = &mut self.func.values[value_id.as_raw() as usize];
+            value.ir_type = ir_type;
+            value.php_type = php_type.clone();
+            let instruction = &mut self.func.instructions[inst_id.as_raw() as usize];
+            instruction.result_type = ir_type;
+            instruction.result_php_type = php_type;
+        }
+    }
+
     /// Neutralizes deferred releases for concrete local loads that stayed borrowed.
     ///
     /// Lowering cannot know whether a later source-order store will widen a local's
@@ -259,6 +309,86 @@ impl<'f> Builder<'f> {
             inst.operands.clear();
             inst.immediate = None;
             inst.effects = Op::Nop.default_effects();
+        }
+    }
+
+    /// Neutralizes exception guards for provisional local owners that stayed borrowed.
+    ///
+    /// Concrete container loads are treated as possible owners until every store has fixed the
+    /// slot representation. If the slot remains concrete, the frame still owns that value and an
+    /// unwind guard would consume the frame's reference. Guard-chain anchors are rewired before
+    /// the matching guard and unguard operations are erased.
+    pub fn prune_borrowed_local_load_guard_ops(&mut self) {
+        let mut prune = Vec::new();
+        for (index, inst) in self.func.instructions.iter().enumerate() {
+            if inst.immediate
+                != Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
+                ))
+            {
+                continue;
+            }
+            let (Some(source), Some(_anchor), Some(token)) = (
+                inst.operands.first().copied(),
+                inst.operands.get(1).copied(),
+                inst.result,
+            ) else {
+                continue;
+            };
+            let Some(value) = self.func.values.get(source.as_raw() as usize) else {
+                continue;
+            };
+            if value.ownership == Ownership::Owned {
+                continue;
+            }
+            let ValueDef::Instruction { inst: source_inst, .. } = value.def else {
+                continue;
+            };
+            let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+                continue;
+            }
+            let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {
+                continue;
+            };
+            let Some(local) = self.func.locals.get(slot.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::StaticLocal)
+                || !local_load_release_is_deferred_candidate(&value.php_type)
+                || local_load_requires_owned_mixed_unbox(&local.php_type, &value.php_type)
+                || !guard_token_has_only_chain_uses(self.func, token)
+            {
+                continue;
+            }
+            prune.push((index, token));
+        }
+
+        for (guard_index, token) in prune {
+            let Some(anchor) = self.func.instructions[guard_index].operands.get(1).copied() else {
+                continue;
+            };
+            for inst in &mut self.func.instructions {
+                if inst.immediate
+                    == Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
+                    ))
+                    && inst.operands.get(1).copied() == Some(token)
+                {
+                    inst.operands[1] = anchor;
+                }
+                if inst.immediate
+                    == Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::ExceptionUnguardOwned,
+                    ))
+                    && inst.operands.first().copied() == Some(token)
+                {
+                    neutralize_instruction(inst);
+                }
+            }
+            neutralize_instruction(&mut self.func.instructions[guard_index]);
         }
     }
 
@@ -621,6 +751,105 @@ fn local_load_requires_owned_mixed_unbox(storage_type: &PhpType, result_type: &P
                 | PhpType::Object(_)
                 | PhpType::Iterable
         )
+}
+
+/// Returns true when a guard token is used only by its unguard or as the next guard anchor.
+fn guard_token_has_only_chain_uses(function: &Function, token: ValueId) -> bool {
+    for instruction in &function.instructions {
+        for (operand_index, operand) in instruction.operands.iter().enumerate() {
+            if *operand != token {
+                continue;
+            }
+            let allowed = match instruction.immediate {
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionUnguardOwned,
+                )) => operand_index == 0,
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
+                )) => operand_index == 1,
+                _ => false,
+            };
+            if !allowed {
+                return false;
+            }
+        }
+    }
+    !function.blocks.iter().any(|block| {
+        block
+            .terminator
+            .as_ref()
+            .is_some_and(|terminator| terminator_uses_value(terminator, token))
+    })
+}
+
+/// Rewrites one deferred ownership operation to a side-effect-free placeholder.
+fn neutralize_instruction(instruction: &mut Instruction) {
+    instruction.op = Op::Nop;
+    instruction.operands.clear();
+    instruction.immediate = None;
+    instruction.effects = Op::Nop.default_effects();
+}
+
+/// Returns true when one SSA value has exactly one use and that use is a `Release` operand.
+fn value_is_used_only_by_release(function: &Function, value: ValueId) -> bool {
+    let mut release_uses = 0usize;
+    for instruction in &function.instructions {
+        for operand in &instruction.operands {
+            if *operand != value {
+                continue;
+            }
+            if instruction.op != Op::Release {
+                return false;
+            }
+            release_uses += 1;
+            if release_uses > 1 {
+                return false;
+            }
+        }
+    }
+    if function.blocks.iter().any(|block| {
+        block
+            .terminator
+            .as_ref()
+            .is_some_and(|terminator| terminator_uses_value(terminator, value))
+    }) {
+        return false;
+    }
+    release_uses == 1
+}
+
+/// Checks every SSA use carried by one control-flow terminator, including phi-like edge args.
+fn terminator_uses_value(terminator: &Terminator, value: ValueId) -> bool {
+    match terminator {
+        Terminator::Br { args, .. } => args.contains(&value),
+        Terminator::CondBr {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => *cond == value || then_args.contains(&value) || else_args.contains(&value),
+        Terminator::Switch {
+            scrutinee,
+            cases,
+            default_args,
+            ..
+        } => {
+            *scrutinee == value
+                || cases.iter().any(|case| case.args.contains(&value))
+                || default_args.contains(&value)
+        }
+        Terminator::Return { value: returned } => returned == &Some(value),
+        Terminator::Throw { value: thrown } => *thrown == value,
+        Terminator::GeneratorSuspend {
+            key,
+            value: yielded,
+            resume_args,
+            ..
+        } => {
+            *key == Some(value) || *yielded == Some(value) || resume_args.contains(&value)
+        }
+        Terminator::Fatal { .. } | Terminator::Unreachable => false,
+    }
 }
 
 /// Returns true when a local storage shape can represent PHP null as a zero pointer.

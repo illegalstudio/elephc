@@ -10,6 +10,16 @@
 
 use super::*;
 
+/// Keeps guarded union writes within the original contract and isolates contracts between function frames.
+#[test]
+fn test_guarded_union_assignment_preserves_declared_boundaries() {
+    for source in [
+        "<?php function update(array $fields): void { if (is_array($fields)) { $fields = mb_split(',', 'a,b'); } } update([]);",
+        "<?php function update(array|false $fields): void { if (is_array($fields)) { $fields = 'wrong'; } } update([]);",
+        "<?php function update(array $fields): void { $fields = mb_split(',', 'a,b'); } $fields = mb_split(',', 'a,b'); if (is_array($fields)) { update($fields); }",
+    ] { expect_error(source, "cannot reassign $fields"); }
+}
+
 /// Verifies the literal `false` parameter type rejects `true` rather than widening to bool.
 #[test]
 fn test_literal_false_parameter_rejects_true() {

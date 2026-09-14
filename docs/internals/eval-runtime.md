@@ -166,6 +166,15 @@ and mutate the same `Mixed` cells used by native code. Array writes still pass
 through the normal copy-on-write helpers, and object/class operations reuse
 generated metadata when the bridge shape is supported.
 
+`RuntimeCellHandle` also carries Rust-only provenance. A handle returned from
+durable context, scope, constant, property, or class storage is borrowed; a
+handle created by a constructor, copy, retain, or ownership-transferring result
+API is owned. This marker never crosses the C ABI. Raw argument and mutable
+reference slots contain contiguous `RuntimeCell *` values, and FFI entrypoints
+reconstruct raw pointers with owned provenance by default. APIs that transfer
+one owner to Magician keep that default; FFI entrypoints receiving caller-owned
+inputs explicitly convert the reconstructed handle to borrowed provenance.
+
 Runtime string contexts that encounter an eval-declared object use
 `__elephc_eval_string_context`. The bridge returns the same `ElephcEvalResult`
 value-or-throwable shape as method calls: successful strings are persisted while
@@ -173,11 +182,22 @@ the formatter copies them, and escaped `__toString()` exceptions enter the nativ
 `__rt_throw_current` path so surrounding compiled `try`/`catch` blocks remain
 authoritative.
 
-Scope setters retain the value stored in the context; getters return values
-with the ownership expected by their EIR result. Normal returns, runtime
+Scope setters retain the value stored in the context; getters expose borrowed
+handles. An expression consumer that requires an owned PHP value copies that
+borrowed cell through the shared scope-copy helper. Arrays retain their cursor
+and alias side metadata while receiving an independent copy-on-write cell;
+objects and resources preserve their PHP identity. Normal returns, runtime
 fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.
+
+Expression operands and call arguments use owner ledgers. They evaluate in PHP
+source order, pin each temporary before later side effects can replace its
+source storage, preserve named, spread, and by-reference targets through
+binding, and release only owned entries after invocation or failure cleanup. A
+borrowed result is promoted before its supplying ledger is released. Pointer
+identity is used only to preserve related side metadata, never to infer whether
+a value is owned.
 
 Builtin lookup is also shared at the contract boundary. Magician joins its
 implementation hooks to the same `BuiltinId` used by the compiler. For compatible
@@ -188,6 +208,13 @@ fail closed. The compiler emits target-aware wrappers for macOS ARM64, Linux ARM
 and Linux x86_64. By-reference/lvalue, callable, reflection, resource,
 eval-declaration, and partial-signature behavior remains on an explicit Magician
 adapter with a catalog-audited reason.
+
+Direct builtin calls pass their lexical scope through the existing registry
+values hook. This lets callable adapters such as `call_user_func*`, array
+callback builtins, and `preg_replace_callback` resolve `self`, `parent`, and
+`static` with the caller's method scope after common argument binding. Callable
+dispatch with already materialized values deliberately omits that scope, so a
+nested callback does not inherit unrelated source-call resolution state.
 
 Eval array reads use a dedicated owned shared-cell mode. Unlike an ordinary
 PHP array read, which detaches a boxed zval to preserve value semantics, the

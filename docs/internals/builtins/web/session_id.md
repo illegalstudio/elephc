@@ -1,11 +1,11 @@
 ---
-title: "session_id() — internals"
+title: "session_id() - internals"
 description: "Compiler internals for session_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 895
+  order: 956
 ---
 
-## `session_id()` — internals
+## `session_id()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_id(?string $id = null): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "imageconvolution() — internals"
+title: "imageconvolution() - internals"
 description: "Compiler internals for imageconvolution(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 479
 ---
 
-## `imageconvolution()` — internals
+## `imageconvolution()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imageconvolution(mixed $image, array $matrix, float $divisor, float $of
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

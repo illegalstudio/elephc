@@ -1,11 +1,11 @@
 ---
-title: "imagecropauto() — internals"
+title: "imagecropauto() - internals"
 description: "Compiler internals for imagecropauto(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 495
 ---
 
-## `imagecropauto()` — internals
+## `imagecropauto()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecropauto(mixed $image, int $mode = IMG_CROP_DEFAULT, float $thresh
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

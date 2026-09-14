@@ -74,6 +74,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save key_lo
     emitter.instruction("str x2, [sp, #16]");                                   // save key_hi
     emitter.instruction("str x3, [sp, #40]");                                   // save whether this read should emit PHP offset warnings
+    emitter.instruction("bl __rt_mixed_deref");                                 // read the current array held by any reference wrapper
+    emitter.instruction("str x0, [sp, #0]");                                    // save the concrete receiver for later dispatch
 
     emitter.instruction("cbz x0, __rt_mixed_array_get_null_container");         // null Mixed pointers behave as PHP null receivers
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
@@ -378,6 +380,10 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save key_lo
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save key_hi
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save whether this read should emit PHP offset warnings
+    emitter.instruction("mov rax, rdi");                                        // pass the possibly referenced receiver
+    emitter.instruction("call __rt_mixed_deref");                               // read the current array held by any reference wrapper
+    emitter.instruction("mov rdi, rax");                                        // restore the concrete receiver argument
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the concrete receiver for later dispatch
 
     emitter.instruction("test rdi, rdi");                                       // null Mixed → null
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null Mixed pointers behave as PHP null receivers

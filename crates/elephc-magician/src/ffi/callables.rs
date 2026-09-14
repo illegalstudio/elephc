@@ -70,7 +70,7 @@ unsafe fn eval_is_callable_inner(
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_is_callable(
         context,
-        RuntimeCellHandle::from_raw(callback),
+        RuntimeCellHandle::from_raw(callback).borrowed(),
         &mut values,
     ) {
         Ok(callable) => i32::from(callable),
@@ -103,8 +103,8 @@ unsafe fn eval_callable_call_array_inner(
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_callable_call_array_outcome(
         context,
-        RuntimeCellHandle::from_raw(callback),
-        RuntimeCellHandle::from_raw(arg_array),
+        RuntimeCellHandle::from_raw(callback).borrowed(),
+        RuntimeCellHandle::from_raw(arg_array).borrowed(),
         &mut values,
     ) {
         Ok(outcome) => write_outcome(outcome, out).code(),

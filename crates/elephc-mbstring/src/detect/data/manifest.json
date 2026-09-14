@@ -1,0 +1,10 @@
+{
+  "php_version": "8.5.10",
+  "source": "https://raw.githubusercontent.com/php/php-src/php-8.5.10/ext/mbstring/common_codepoints.txt",
+  "source_sha256": "75fae52a0bc589edac4ee4338f638c7e022724fc398331e44b93438942fdb0b1",
+  "license": "PHP-3.01",
+  "common": {
+    "file": "common.bin",
+    "sha256": "ff14b8c5de447f354a5f86d877d5753b91794c8724b3341e118b17c0f60763e1"
+  }
+}

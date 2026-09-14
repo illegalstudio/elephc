@@ -1,11 +1,11 @@
 ---
-title: "session_module_name() — internals"
+title: "session_module_name() - internals"
 description: "Compiler internals for session_module_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 896
+  order: 957
 ---
 
-## `session_module_name()` — internals
+## `session_module_name()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_module_name(?string $module = null): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

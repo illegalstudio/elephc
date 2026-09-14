@@ -224,6 +224,7 @@ def build_inventory() -> dict[str, Any]:
     ]
     eval_only_records = [
         record for record in exported if not (record.get("aot") or {}).get("supported")
+        and (record.get("eval") or {}).get("supported")
     ]
     home_map = docs_extract.build_home_file_map(REPO)
     all_aot_names = [record["name"] for record in registry_records + resident_records]
@@ -358,7 +359,8 @@ def build_inventory() -> dict[str, Any]:
                 record["name"]
                 for record in exported
                 if bool(record.get("eval_only"))
-                == bool((record.get("aot") or {}).get("supported"))
+                != (not bool((record.get("aot") or {}).get("supported"))
+                    and bool((record.get("eval") or {}).get("supported")))
             ),
         },
     }

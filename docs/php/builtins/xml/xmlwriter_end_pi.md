@@ -2,7 +2,7 @@
 title: "xmlwriter_end_pi()"
 description: "Ends the current processing instruction."
 sidebar:
-  order: 942
+  order: 1003
 ---
 
 ## xmlwriter_end_pi()
@@ -21,9 +21,9 @@ Ends the current processing instruction.
 ## Availability
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_pi.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_pi.rs)).
+- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_pi.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_pi.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

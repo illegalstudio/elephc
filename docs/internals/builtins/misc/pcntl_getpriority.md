@@ -1,16 +1,16 @@
 ---
-title: "pcntl_getpriority() — internals"
+title: "pcntl_getpriority() - internals"
 description: "Compiler internals for pcntl_getpriority(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 629
 ---
 
-## `pcntl_getpriority()` — internals
+## `pcntl_getpriority()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_getpriority.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_getpriority.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

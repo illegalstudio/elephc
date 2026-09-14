@@ -331,10 +331,10 @@ pub(super) fn apply_loop_storage_contracts(
             ctx.set_local_type(&name, target_ty);
             continue;
         }
-        let source = ctx.load_local(&name, span);
         let target_repr = target_ty.codegen_repr();
         match (&source_ty, &target_repr) {
             (PhpType::Array(_), PhpType::AssocArray { .. }) => {
+                let source = ctx.load_local(&name, span);
                 let converted = ctx.emit_value(
                     Op::ArrayToHash,
                     vec![source.value],
@@ -348,6 +348,7 @@ pub(super) fn apply_loop_storage_contracts(
             (PhpType::Array(_), PhpType::Array(target_element))
                 if target_element.codegen_repr() == PhpType::Mixed =>
             {
+                let source = ctx.load_local(&name, span);
                 let converted = ctx.emit_value(
                     Op::ArrayToMixed,
                     vec![source.value],
@@ -365,6 +366,7 @@ pub(super) fn apply_loop_storage_contracts(
                     ..
                 },
             ) if target_value.codegen_repr() == PhpType::Mixed => {
+                let source = ctx.load_local(&name, span);
                 let converted = ctx.emit_value(
                     Op::HashToMixed,
                     vec![source.value],
@@ -376,6 +378,7 @@ pub(super) fn apply_loop_storage_contracts(
                 ctx.store_mutated_local(&name, converted, target_ty, span);
             }
             (_, PhpType::Mixed) => {
+                let source = ctx.load_local(&name, span);
                 let converted = ctx.box_value_as_mixed(source, target_ty.clone(), span);
                 ctx.store_local(&name, converted, target_ty, span);
             }
@@ -384,6 +387,8 @@ pub(super) fn apply_loop_storage_contracts(
             // local against an `Array(Mixed)` contract, or a non-container local). Re-declaring
             // the type here would leave the slot holding a hash while every later read is typed
             // `array<mixed>`, so the write-site promotion reads storage it has already released.
+            // Avoid loading it as well: unboxing a concrete container from Mixed frame storage
+            // acquires an owner even when the unused load appears borrowed in EIR.
             // Leave the local alone and let its own assignment path convert it, mirroring the
             // heap-kind guard the pre-fixed-point widening applied before promoting.
             _ => {}

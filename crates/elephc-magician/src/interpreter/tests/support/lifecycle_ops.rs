@@ -13,14 +13,22 @@ impl FakeOps {
     /// Records fake releases without freeing handles needed for assertions.
     pub(super) fn runtime_release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         self.releases.push(value);
+        if let Some(owners) = self.cell_owners.get_mut(&(value.as_ptr() as usize)) {
+            *owners = owners.saturating_sub(1);
+        }
         Ok(())
     }
-    /// Returns the same fake handle because fake cells do not refcount.
+    /// Returns an owned fake lease while preserving cell identity.
     pub(super) fn runtime_retain(
         &mut self,
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Ok(value)
+        self.retains.push(value);
+        *self
+            .cell_owners
+            .entry(value.as_ptr() as usize)
+            .or_default() += 1;
+        Ok(value.owned())
     }
     /// Records fake PHP warnings without writing to stderr.
     pub(super) fn runtime_warning(&mut self, message: &str) -> Result<(), EvalStatus> {

@@ -1,11 +1,11 @@
 ---
-title: "session_encode() — internals"
+title: "session_encode() - internals"
 description: "Compiler internals for session_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 892
+  order: 953
 ---
 
-## `session_encode()` — internals
+## `session_encode()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_encode(): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

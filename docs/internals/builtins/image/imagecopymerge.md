@@ -1,11 +1,11 @@
 ---
-title: "imagecopymerge() — internals"
+title: "imagecopymerge() - internals"
 description: "Compiler internals for imagecopymerge(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 481
 ---
 
-## `imagecopymerge()` — internals
+## `imagecopymerge()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecopymerge(mixed $dst_image, mixed $src_image, int $dst_x, int $dst
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

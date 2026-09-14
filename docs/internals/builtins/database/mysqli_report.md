@@ -1,11 +1,11 @@
 ---
-title: "mysqli_report() — internals"
+title: "mysqli_report() - internals"
 description: "Compiler internals for mysqli_report(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 151
 ---
 
-## `mysqli_report()` — internals
+## `mysqli_report()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_report(int $flags): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

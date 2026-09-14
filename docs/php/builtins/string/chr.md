@@ -21,9 +21,9 @@ Returns a one-character string from the given byte code point.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/chr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/chr.rs)).
+- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/chr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/chr.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

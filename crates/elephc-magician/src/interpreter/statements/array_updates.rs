@@ -50,15 +50,17 @@ pub(super) fn eval_static_property_inc_dec_result(
 }
 
 /// Releases one eval-owned value after running an eval-declared dynamic destructor if needed.
-pub(super) fn eval_release_value(
+pub(in crate::interpreter) fn eval_release_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     value: RuntimeCellHandle,
 ) -> Result<(), EvalStatus> {
-    if let Some(identity) = values.final_object_identity_for_release(value)? {
-        eval_dynamic_destructor_for_release(identity, value, context, values)?;
-    }
-    values.release(value)
+    let destructor = match values.final_object_identity_for_release(value)? {
+        Some(identity) => eval_dynamic_destructor_for_release(identity, value, context, values),
+        None => Ok(()),
+    };
+    let release = values.release(value);
+    destructor.and(release)
 }
 
 /// Calls a dynamic eval `__destruct()` hook immediately before the runtime frees the object.
@@ -126,7 +128,7 @@ pub(super) fn eval_array_unset_element_stmt(
             if let Some(array) =
                 eval_array_unset_target_result(array, index, context, scope, values)?
             {
-                for replaced in set_scope_cell(context, scope, name.clone(), array, ownership)? {
+                for replaced in set_scope_cell(context, scope, name.clone(), array, ownership, values)? {
                     values.release(replaced)?;
                 }
             }
@@ -216,8 +218,14 @@ pub(super) fn eval_array_unset_target_result(
     if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
         return Err(EvalStatus::UnsupportedConstruct);
     }
-    let index = eval_array_set_index(index, context, scope, values)?;
-    eval_array_without_key_result(array, index, values).map(Some)
+    let index = eval_owned_unset_index(index, context, scope, values)?;
+    let rebuilt = eval_array_without_key_result(array, index, values);
+    let cleanup = values.release(index);
+    match (rebuilt, cleanup) {
+        (Ok(result), Err(status)) => { let _ = values.release(result); Err(status) }
+        (Ok(result), Ok(())) => Ok(Some(result)),
+        (Err(status), _) => Err(status),
+    }
 }
 
 /// Executes `unset($object[$key])` through `ArrayAccess::offsetUnset()`.
@@ -240,29 +248,39 @@ pub(super) fn eval_array_access_unset_result(
     Ok(())
 }
 
-/// Rebuilds an array without the strict-equal key requested by `unset($array[$key])`.
+/// Rebuilds an unset array with preserved keys, append history, and balanced temporary ownership.
 pub(super) fn eval_array_without_key_result(
     array: RuntimeCellHandle,
     index: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let tag = values.type_tag(array)?;
-    let mut result = if tag == EVAL_TAG_ASSOC {
-        values.assoc_new(len.saturating_sub(1))?
-    } else {
-        values.array_new(len.saturating_sub(1))?
-    };
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let equal = values.compare(EvalBinOp::StrictEq, key, index)?;
-        if values.truthy(equal)? {
-            continue;
+    let mut result = values.assoc_new(len.saturating_sub(1))?;
+    let rebuilt = (|| {
+        for position in 0..len {
+            let key = values.array_iter_key(array, position)?;
+            let copied = (|| {
+                let equal = values.compare(EvalBinOp::StrictEq, key, index)?;
+                let skipped = values.truthy(equal);
+                let cleanup = values.release(equal);
+                let skipped = skipped?;
+                cleanup?;
+                if skipped { return Ok(()); }
+                let value = values.array_get(array, key)?;
+                let inserted = values.array_set(result, key, value);
+                let cleanup = values.release(value);
+                result = inserted?;
+                cleanup
+            })();
+            let cleanup = values.release(key);
+            copied?;
+            cleanup?;
         }
-        let value = values.array_get(array, key)?;
-        result = values.array_set(result, key, value)?;
-    }
-    Ok(result)
+        values.array_copy_index_history(array, result)?;
+        Ok(result)
+    })();
+    if rebuilt.is_err() { let _ = values.release(result); }
+    rebuilt
 }
 
 /// Executes `$var[] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.
@@ -320,10 +338,8 @@ pub(super) fn eval_non_object_array_append_var_stmt(
     } else {
         values.array_new(1)?
     };
-    let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
-    let array = values.array_set(array, index, value)?;
-    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
+    let array = eval_array_append_value(array, value, context, scope, values)?;
+    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership, values)? {
         values.release(replaced)?;
     }
     Ok(())
@@ -386,7 +402,7 @@ pub(super) fn eval_non_object_array_set_var_stmt(
     let value = eval_expr(value, context, scope, values)?;
     let array = eval_array_set_target_for_index(array, index, values)?;
     let array = values.array_set(array, index, value)?;
-    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
+    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership, values)? {
         values.release(replaced)?;
     }
     Ok(())
@@ -422,9 +438,7 @@ pub(super) fn eval_property_array_append_result(
     } else {
         values.array_new(1)?
     };
-    let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
-    let array = values.array_set(array, index, value)?;
+    let array = eval_array_append_value(array, value, context, scope, values)?;
     eval_property_set_result(object, property, array, context, values)
 }
 
@@ -511,9 +525,7 @@ pub(super) fn eval_static_property_array_append_result(
     } else {
         values.array_new(1)?
     };
-    let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
-    let array = values.array_set(array, index, value)?;
+    let array = eval_array_append_value(array, value, context, scope, values)?;
     eval_static_property_set_result(class_name, property, array, context, values)
 }
 

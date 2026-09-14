@@ -1,11 +1,11 @@
 ---
-title: "mysqli_ping() — internals"
+title: "mysqli_ping() - internals"
 description: "Compiler internals for mysqli_ping(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 144
 ---
 
-## `mysqli_ping()` — internals
+## `mysqli_ping()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_ping(mixed $mysql): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

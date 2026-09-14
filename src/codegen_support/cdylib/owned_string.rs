@@ -61,6 +61,7 @@ pub(super) fn emit_owned_string_export(
     invalid_error: (&str, usize),
     allocation_error: (&str, usize),
     runtime_error: (&str, usize),
+    startup: Option<&str>,
 ) {
     let suffix = label_suffix(&export.c_name);
     let internal = function_symbol(&export.name);
@@ -94,6 +95,7 @@ pub(super) fn emit_owned_string_export(
     boundary::emit_enter_boundary(emitter, layout.concat_offset, &suffix);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
 
+    super::emit_startup_check(emitter, startup, &labels.runtime);
     emit_boundary_push(emitter, &labels.escaped, layout.handler_base);
     boundary::emit_call_body(emitter, export, &layout.param_offsets, &internal);
     emit_save_result(emitter, &layout);

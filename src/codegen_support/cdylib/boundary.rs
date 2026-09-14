@@ -42,6 +42,7 @@ pub(super) fn emit_scalar_export(
     invalid_error: (&str, usize),
     allocation_error: (&str, usize),
     runtime_error: (&str, usize),
+    startup: Option<&str>,
 ) {
     let internal = function_symbol(&export.name);
     let exported = target.extern_symbol(&export.c_name);
@@ -73,6 +74,7 @@ pub(super) fn emit_scalar_export(
             invalid_error,
             allocation_error,
             runtime_error,
+            startup,
         ),
         Arch::X86_64 => emit_scalar_export_x86_64(
             emitter,
@@ -88,6 +90,7 @@ pub(super) fn emit_scalar_export(
             invalid_error,
             allocation_error,
             runtime_error,
+            startup,
         ),
     }
 }
@@ -416,6 +419,7 @@ fn emit_scalar_export_aarch64(
     invalid_error: (&str, usize),
     allocation_error: (&str, usize),
     runtime_error: (&str, usize),
+    startup: Option<&str>,
 ) {
     abi::emit_frame_prologue(emitter, layout.frame_size);
     emit_save_scalar_c_inputs(emitter, export, layout);
@@ -427,6 +431,7 @@ fn emit_scalar_export_aarch64(
     emit_validate_string_inputs(emitter, export, &layout.param_offsets, invalid, suffix);
     emit_enter_boundary(emitter, layout.concat_offset, suffix);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
+    super::emit_startup_check(emitter, startup, runtime);
     emit_boundary_push_aarch64(emitter, escaped, layout.handler_base);
     emit_call_body(emitter, export, &layout.param_offsets, internal);
     emit_save_scalar_result(emitter, &export.sig.return_type, layout.result_offset);
@@ -495,6 +500,7 @@ fn emit_scalar_export_x86_64(
     invalid_error: (&str, usize),
     allocation_error: (&str, usize),
     runtime_error: (&str, usize),
+    startup: Option<&str>,
 ) {
     abi::emit_frame_prologue(emitter, layout.frame_size);
     emit_save_scalar_c_inputs(emitter, export, layout);
@@ -506,6 +512,7 @@ fn emit_scalar_export_x86_64(
     emit_validate_string_inputs(emitter, export, &layout.param_offsets, invalid, suffix);
     emit_enter_boundary(emitter, layout.concat_offset, suffix);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
+    super::emit_startup_check(emitter, startup, runtime);
     emit_boundary_push_x86_64(emitter, escaped, layout.handler_base);
     emit_call_body(emitter, export, &layout.param_offsets, internal);
     emit_save_scalar_result(emitter, &export.sig.return_type, layout.result_offset);

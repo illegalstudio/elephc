@@ -1,11 +1,11 @@
 ---
-title: "imagearc() — internals"
+title: "imagearc() - internals"
 description: "Compiler internals for imagearc(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 459
 ---
 
-## `imagearc()` — internals
+## `imagearc()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagearc(mixed $image, int $center_x, int $center_y, int $width, int $h
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

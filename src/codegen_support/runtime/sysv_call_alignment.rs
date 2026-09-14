@@ -51,16 +51,12 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     //    8 bytes off. Every callee here is hand-written assembly that touches only integer
     //    registers, so nothing observes it. The fix is a `sub rsp, 8` / `add rsp, 8` pair
     //    around each call, which is why these are cheap but not free: several are hot leaves.
-    ("__rt_strtolower", "frameless: calls __rt_strcopy, integer-only assembly"),
     ("__rt_hash_key_hash", "frameless: calls __rt_hash_fnv1a, integer-only assembly"),
     ("__rt_hash_key_eq", "frameless: calls __rt_str_eq, integer-only assembly"),
     ("__rt_array_rand", "frameless: calls __rt_random_uniform, integer-only assembly"),
     ("__rt_mixed_is_empty", "frameless: calls __rt_mixed_unbox, integer-only assembly"),
-    // __rt_report_uncaught_exception deliberately has NO entry here: it lives in
-    // NOT_STATICALLY_ANALYZABLE (its `and rsp, -16` realigns every call and defeats the
-    // walker), and a second entry in this list would silently absorb a real violation if
-    // the realignment were ever removed — analyze() drops `misaligned` findings for
-    // unanalyzable helpers, so this list must never double-cover one.
+    // Explicit `and rsp, -16` alignment is modeled, including fatal and INI hooks.
+    // Those helpers remain subject to the ordinary call-site checks.
     (
         "__rt_incref",
         "frameless: calls __rt_heap_debug_check_live, and only in --heap-debug builds. \
@@ -150,20 +146,6 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
         "__rt_vsprintf",
         "two paths reach one instruction with different frames (-72 / -88)",
     ),
-    ("__rt_closure_bind", "realigns explicitly with `and rsp, -16`"),
-    (
-        "__elephc_eval_fatal",
-        "realigns explicitly with `and rsp, -16` before flushing output and exiting. The \
-         call is aligned by construction, but the walk cannot express an absolute stack \
-         alignment as an offset from the helper entry",
-    ),
-    (
-        "__rt_report_uncaught_exception",
-        "realigns explicitly with `and rsp, -16` before draining the output buffers. The \
-         walk tracks rsp as an exact offset from the entry, and a hard realignment has no \
-         such offset — but it is also the one construct that cannot BE misaligned: the \
-         following `call` runs on a 16-byte boundary by construction, whatever the path in",
-    ),
     (
         "__rt_fiber_switch",
         "loads `rsp` from the target Fiber or main-thread context before restoring saved \
@@ -176,10 +158,6 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
     ),
     (
         "__rt_gc_collect_cycles",
-        "shares a tail between the framed body and a frameless early-out",
-    ),
-    (
-        "__rt_mb_strlen",
         "shares a tail between the framed body and a frameless early-out",
     ),
 ];
@@ -342,6 +320,10 @@ fn walk(
                 match (mnemonic, literal) {
                     ("sub", Some(n)) => work.push((index + 1, offset - n)),
                     ("add", Some(n)) => work.push((index + 1, offset + n)),
+                    ("and", Some(-16)) => {
+                        // Entry rsp is 8 modulo 16, so alignment has an exact relative delta.
+                        work.push((index + 1, offset - (8 + offset).rem_euclid(16)));
+                    }
                     ("mov", _) if rest == "rbp" => work.push((index + 1, -8)),
                     ("lea", _)
                         if rest.starts_with("[rbp - ") && rest.ends_with(']') =>
@@ -480,6 +462,25 @@ fn analyze(function: &Function) -> Analysis {
     misaligned.sort_by_key(|(line, _, _)| *line);
     misaligned.dedup_by_key(|(line, _, _)| *line);
     Analysis { unanalyzable: None, misaligned }
+}
+
+/// Audits aligned calls and still rejects a later misaligned call after explicit alignment.
+#[test]
+fn explicit_stack_alignment_preserves_subsequent_call_checks() {
+    for padding in [0, 8, 16, 24] {
+        let function = Function {
+            name: "fixture".into(),
+            body: [
+                "fixture:".to_string(), format!("sub rsp, {padding}"),
+                "and rsp, -16".into(), "call aligned".into(),
+                "sub rsp, 8".into(), "call misaligned".into(), "ret".into(),
+            ].into_iter().enumerate().collect(),
+        };
+        let analysis = analyze(&function);
+        assert!(analysis.unanalyzable.is_none(), "{padding}: {:?}", analysis.unanalyzable);
+        assert_eq!(analysis.misaligned.len(), 1, "{padding}: {:?}", analysis.misaligned);
+        assert_eq!(analysis.misaligned[0].1, "misaligned");
+    }
 }
 
 /// Renders the `linux-x86_64` runtime for one feature set.

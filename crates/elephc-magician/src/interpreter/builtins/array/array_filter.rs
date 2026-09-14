@@ -28,13 +28,28 @@ pub(in crate::interpreter) fn eval_array_filter_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_filter` array builtin.
 pub(in crate::interpreter) fn eval_array_filter_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [array] => eval_array_filter_result(*array, None, None, context, values),
-        [array, callback] => eval_array_filter_result(*array, Some(*callback), None, context, values),
-        [array, callback, mode] => eval_array_filter_result(*array, Some(*callback), Some(*mode), context, values),
+        [array] => eval_array_filter_result_from_scope(*array, None, None, lexical_scope, context, values),
+        [array, callback] => eval_array_filter_result_from_scope(
+            *array,
+            Some(*callback),
+            None,
+            lexical_scope,
+            context,
+            values,
+        ),
+        [array, callback, mode] => eval_array_filter_result_from_scope(
+            *array,
+            Some(*callback),
+            Some(*mode),
+            lexical_scope,
+            context,
+            values,
+        ),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -78,17 +93,6 @@ pub(in crate::interpreter) fn eval_builtin_array_filter(
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
-}
-
-/// Filters eval array entries through PHP truthiness or a callable callback.
-pub(in crate::interpreter) fn eval_array_filter_result(
-    array: RuntimeCellHandle,
-    callback: Option<RuntimeCellHandle>,
-    mode: Option<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_array_filter_result_from_scope(array, callback, mode, None, context, values)
 }
 
 /// Filters eval array entries with optional lexical scope for callback names.

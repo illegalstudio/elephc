@@ -1,11 +1,11 @@
 ---
-title: "session_register_shutdown() — internals"
+title: "session_register_shutdown() - internals"
 description: "Compiler internals for session_register_shutdown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 899
+  order: 960
 ---
 
-## `session_register_shutdown()` — internals
+## `session_register_shutdown()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_register_shutdown(): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

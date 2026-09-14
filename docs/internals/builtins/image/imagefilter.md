@@ -1,11 +1,11 @@
 ---
-title: "imagefilter() — internals"
+title: "imagefilter() - internals"
 description: "Compiler internals for imagefilter(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 505
 ---
 
-## `imagefilter()` — internals
+## `imagefilter()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagefilter(mixed $image, int $filter, int $arg1 = 0, int $arg2 = 0, in
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

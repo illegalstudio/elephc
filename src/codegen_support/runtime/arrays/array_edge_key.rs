@@ -8,6 +8,7 @@
 //! Key details:
 //! - The key is boxed through `__rt_mixed_from_value` (tail call); empty containers yield a boxed null.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
@@ -62,9 +63,7 @@ pub fn emit_array_edge_key(emitter: &mut Emitter) {
     emitter.instruction("cmn x11, #1");                                         // is the selected slot empty (index == -1)?
     emitter.instruction("b.eq __rt_array_edge_key_null");                       // empty hashes have no key
     emitter.instruction("mov x12, #64");                                        // hash entry stride in bytes
-    emitter.instruction("mul x12, x11, x12");                                   // byte offset of the selected slot
-    emitter.instruction("add x12, x0, x12");                                    // advance from the hash base to the slot
-    emitter.instruction("add x12, x12, #40");                                   // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x12", "x0", "x11");
     emitter.instruction("ldr x13, [x12, #16]");                                 // x13 = key_len (-1 marks an integer key)
     emitter.instruction("ldr x14, [x12, #8]");                                  // x14 = key payload (integer value or string pointer)
     emitter.instruction("cmn x13, #1");                                         // is the entry keyed by an integer?
@@ -137,10 +136,7 @@ fn emit_array_edge_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_edge_key_hash_slot");
     emitter.instruction("cmp r11, -1");                                         // is the selected slot empty (index == -1)?
     emitter.instruction("je __rt_array_edge_key_null");                         // empty hashes have no key
-    emitter.instruction("mov rcx, r11");                                        // copy the slot index before scaling it
-    emitter.instruction("shl rcx, 6");                                          // convert the slot index into a 64-byte entry offset
-    emitter.instruction("add rcx, rdi");                                        // advance from the hash base to the slot
-    emitter.instruction("add rcx, 40");                                         // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "rcx", "rdi", "r11");
     emitter.instruction("mov r8, QWORD PTR [rcx + 16]");                        // r8 = key_len (-1 marks an integer key)
     emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                         // r9 = key payload (integer value or string pointer)
     emitter.instruction("cmp r8, -1");                                          // is the entry keyed by an integer?

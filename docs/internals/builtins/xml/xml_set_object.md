@@ -1,11 +1,11 @@
 ---
-title: "xml_set_object() — internals"
+title: "xml_set_object() - internals"
 description: "Compiler internals for xml_set_object(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 929
+  order: 990
 ---
 
-## `xml_set_object()` — internals
+## `xml_set_object()` - internals
 
 ## Where it lives
 

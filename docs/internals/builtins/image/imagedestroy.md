@@ -1,11 +1,11 @@
 ---
-title: "imagedestroy() — internals"
+title: "imagedestroy() - internals"
 description: "Compiler internals for imagedestroy(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 497
 ---
 
-## `imagedestroy()` — internals
+## `imagedestroy()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagedestroy(mixed $image): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -215,6 +215,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
 
     ctx.emitter.label(&done_label);
+    retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
 }
@@ -271,10 +272,24 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a_dynamic(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&invalid_label);
+    retire_eval_metadata_operand_boxes(
+        ctx,
+        &[
+            (object, EVAL_TEMP_CELL_OFFSET),
+            (target, EVAL_CODE_PTR_OFFSET),
+        ],
+    )?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     abi::emit_call_label(ctx.emitter, "__rt_instanceof_invalid_target");
 
     ctx.emitter.label(&done_label);
+    retire_eval_metadata_operand_boxes(
+        ctx,
+        &[
+            (object, EVAL_TEMP_CELL_OFFSET),
+            (target, EVAL_CODE_PTR_OFFSET),
+        ],
+    )?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
 }

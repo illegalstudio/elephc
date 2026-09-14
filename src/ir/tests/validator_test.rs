@@ -105,3 +105,57 @@ fn use_not_dominated_fails() {
         Err(ValidationError::UseNotDominated { .. })
     ));
 }
+
+/// Rejects non-owning scalar inputs and malformed result storage for exception capture guards.
+#[test]
+fn exception_owned_guard_validates_heap_and_token_shapes() {
+    use crate::ir::{Effects, Immediate, Op, Ownership, RuntimeCallTarget};
+    for (heap, result_type, result_php_type, valid) in [
+        (true, IrType::I64, PhpType::Int, true),
+        (false, IrType::I64, PhpType::Int, false),
+        (true, IrType::F64, PhpType::Float, false),
+        (true, IrType::I64, PhpType::Bool, false),
+    ] {
+        let mut function = Function::new("guard".into(), IrType::Void, PhpType::Void);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let scalar = builder.emit_const_i64(7);
+        let value = if heap {
+            builder.emit(Op::MixedBox, vec![scalar], None, IrType::Heap(crate::ir::IrHeapKind::Mixed),
+                PhpType::Mixed, Ownership::Owned).unwrap()
+        } else { scalar };
+        let anchor = builder.emit_const_i64(0);
+        builder.emit_with_effects(Op::RuntimeCall, vec![value, anchor],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionGuardOwned)),
+            result_type, result_php_type, Ownership::NonHeap, Effects::WRITES_GLOBAL, None);
+        builder.terminate(Terminator::Return { value: None });
+        assert_eq!(validate_function(&function).is_ok(), valid, "{function:?}");
+    }
+}
+
+/// Rejects unboxed packed arrays and runtime targets without dynamic-argument support.
+#[test]
+fn packed_runtime_calls_validate_argument_storage() {
+    use crate::ir::{Effects, Immediate, IrHeapKind, Op, Ownership, RuntimeArgumentLayout, RuntimeCallTarget, RuntimeFnId};
+    for (element, target, valid) in [
+        (PhpType::Mixed, RuntimeFnId::MbStrlen, true),
+        (PhpType::Int, RuntimeFnId::MbStrlen, false),
+        (PhpType::Mixed, RuntimeFnId::Count, false),
+    ] {
+        let mut function = Function::new("packed".into(), IrType::Void, PhpType::Void);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let array = builder.emit(Op::ArrayNew, vec![], Some(Immediate::Capacity(0)),
+            IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(element)), Ownership::Owned).unwrap();
+        builder.emit_with_effects(Op::RuntimeCall, vec![array],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                target, arguments: RuntimeArgumentLayout::IndexedArray, strict_php: false, strict_types: Some(false),
+            })), IrType::I64, PhpType::Int, Ownership::NonHeap, Effects::all(), None);
+        builder.terminate(Terminator::Return { value: None });
+        assert_eq!(validate_function(&function).is_ok(), valid, "{function:?}");
+    }
+}

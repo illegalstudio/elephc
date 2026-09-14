@@ -1,17 +1,17 @@
 ---
-title: "get_class_vars() — internals"
+title: "get_class_vars() - internals"
 description: "Compiler internals for get_class_vars(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 86
 ---
 
-## `get_class_vars()` — internals
+## `get_class_vars()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Lowering**: unavailable for this backend.
+- **Function symbol**: none.
 
 
 ## Semantic descriptor
@@ -28,7 +28,7 @@ _No compiled lowering: this surface is intentionally eval-only._
 function get_class_vars(mixed $class): mixed
 ```
 
-## What the type checker enforces
+## Signature constraints
 
 - **Arity**: takes exactly 1 argument.
 

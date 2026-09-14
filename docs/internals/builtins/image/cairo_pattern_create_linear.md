@@ -1,11 +1,11 @@
 ---
-title: "cairo_pattern_create_linear() — internals"
+title: "cairo_pattern_create_linear() - internals"
 description: "Compiler internals for cairo_pattern_create_linear(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 424
 ---
 
-## `cairo_pattern_create_linear()` — internals
+## `cairo_pattern_create_linear()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_pattern_create_linear(float $x0, float $y0, float $x1, float $y1)
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

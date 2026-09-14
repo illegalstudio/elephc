@@ -1,11 +1,11 @@
 ---
-title: "iptcembed() — internals"
+title: "iptcembed() - internals"
 description: "Compiler internals for iptcembed(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 537
 ---
 
-## `iptcembed()` — internals
+## `iptcembed()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function iptcembed(string $iptcdata, string $jpeg_file_name, int $spool = 0): mi
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

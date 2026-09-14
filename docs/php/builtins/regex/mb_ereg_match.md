@@ -1,6 +1,6 @@
 ---
 title: "mb_ereg_match()"
-description: "Tests whether a regex pattern matches the beginning of a string (multibyte)."
+description: "Tests a raw multibyte regex at the string start using the current regex encoding and options."
 sidebar:
   order: 729
 ---
@@ -8,14 +8,14 @@ sidebar:
 ## mb_ereg_match()
 
 ```php
-function mb_ereg_match(string $pattern, string $subject, ?string $options = null): bool
+function mb_ereg_match(string $pattern, string $string, ?string $options = null): bool
 ```
 
-Tests whether a regex pattern matches the beginning of a string (multibyte).
+Tests a raw multibyte regex at the string start using the current regex encoding and options.
 
 **Parameters**:
 - `$pattern` (`string`)
-- `$subject` (`string`)
+- `$string` (`string`)
 - `$options` (`?string`), default `null`, optional
 
 **Returns**: `bool`
@@ -23,9 +23,9 @@ Tests whether a regex pattern matches the beginning of a string (multibyte).
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/mb_ereg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/mb_ereg_match.rs)).
+- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_match.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

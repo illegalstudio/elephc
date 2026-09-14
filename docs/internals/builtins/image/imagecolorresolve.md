@@ -1,11 +1,11 @@
 ---
-title: "imagecolorresolve() — internals"
+title: "imagecolorresolve() - internals"
 description: "Compiler internals for imagecolorresolve(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 473
 ---
 
-## `imagecolorresolve()` — internals
+## `imagecolorresolve()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolorresolve(mixed $image, int $red, int $green, int $blue): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

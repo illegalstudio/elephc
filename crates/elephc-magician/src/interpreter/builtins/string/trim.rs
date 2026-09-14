@@ -35,7 +35,7 @@ pub(in crate::interpreter) fn eval_trim_result(
     super::trim::eval_trim_like_named_result("trim", value, mask, values)
 }
 
-pub(in crate::interpreter) const PHP_DEFAULT_TRIM_MASK: &[u8] = b" \n\r\t\x0B\x0C\0";
+pub(in crate::interpreter) const PHP_DEFAULT_TRIM_MASK: &[u8] = b" \n\r\t\x0B\0";
 
 /// Evaluates one named PHP trim-family builtin.
 pub(in crate::interpreter) fn eval_builtin_trim_like_named(

@@ -1,11 +1,11 @@
 ---
-title: "_elephc_img_output() — internals"
+title: "_elephc_img_output() - internals"
 description: "Compiler internals for _elephc_img_output(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1061
+  order: 1123
 ---
 
-## `_elephc_img_output()` — internals
+## `_elephc_img_output()` - internals
 
 ## Where it lives
 
@@ -38,8 +38,8 @@ function _elephc_img_output(int $handle, int $fmt, ?string $file, int $quality):
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

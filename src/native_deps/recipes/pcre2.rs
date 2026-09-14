@@ -2,7 +2,7 @@
 //! Builds static PCRE2 10.47 libraries and the Elephc-owned opaque ABI shim.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for PCRE2 recipe revision 2.
+//! - `crate::native_deps::recipe::CuratedRecipes` for PCRE2 recipe revision 3.
 //!
 //! Key details:
 //! - Uses explicit static/PIC/8-bit/Unicode flags and only the two required Make targets.
@@ -103,6 +103,10 @@ mod tests {
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_compile"));
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_exec"));
         assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_free"));
+        assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_mime_compile"));
+        assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_mime_match"));
+        assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_mime_free"));
+        assert!(SHIM_SOURCE.contains("elephc_pcre2_v1_error_message"));
         assert!(!SHIM_SOURCE.contains("extern regex_t"));
     }
 }

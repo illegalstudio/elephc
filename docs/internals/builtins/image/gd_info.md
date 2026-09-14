@@ -1,11 +1,11 @@
 ---
-title: "gd_info() — internals"
+title: "gd_info() - internals"
 description: "Compiler internals for gd_info(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 450
 ---
 
-## `gd_info()` — internals
+## `gd_info()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function gd_info(): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

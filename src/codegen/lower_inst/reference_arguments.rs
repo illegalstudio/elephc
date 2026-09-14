@@ -96,6 +96,7 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         ref_temp_cells,
         cleanup_slots: Vec::new(),
         cleanup_bytes: 0,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes: 0,
     })
 }
@@ -109,6 +110,51 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     param_types: &[PhpType],
     ref_params: &[bool],
     lifetime: RefArgCellLifetime,
+) -> Result<CallArgMaterialization> {
+    materialize_method_call_args_with_receiver_reg_and_refs_options(
+        ctx,
+        receiver_reg,
+        receiver_ty,
+        operands,
+        param_types,
+        ref_params,
+        lifetime,
+        false,
+    )
+}
+
+/// Loads dynamic-constructor arguments and guards any caller-owned conversion temporaries.
+pub(super) fn materialize_dynamic_constructor_call_args_with_receiver_reg_and_refs(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    receiver_ty: &PhpType,
+    operands: &[ValueId],
+    param_types: &[PhpType],
+    ref_params: &[bool],
+    lifetime: RefArgCellLifetime,
+) -> Result<CallArgMaterialization> {
+    materialize_method_call_args_with_receiver_reg_and_refs_options(
+        ctx,
+        receiver_reg,
+        receiver_ty,
+        operands,
+        param_types,
+        ref_params,
+        lifetime,
+        true,
+    )
+}
+
+/// Loads receiver-register method arguments with optional guarded conversion cleanup.
+fn materialize_method_call_args_with_receiver_reg_and_refs_options(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    receiver_ty: &PhpType,
+    operands: &[ValueId],
+    param_types: &[PhpType],
+    ref_params: &[bool],
+    lifetime: RefArgCellLifetime,
+    guard_conversion_temporaries: bool,
 ) -> Result<CallArgMaterialization> {
     if operands.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
@@ -157,6 +203,19 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     }
     let mut no_writebacks: Vec<RefArgWriteback> = Vec::new();
     emit_ref_arg_cell_block(ctx, &mut no_writebacks, &mut ref_temp_cells)?;
+    let cleanup_slots = if guard_conversion_temporaries {
+        plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?
+    } else {
+        Vec::new()
+    };
+    let cleanup_guard_bytes = callable_guards::reserve_argument_temp_guards(
+        ctx.emitter,
+        cleanup_slots.len(),
+    );
+    let cleanup_bytes = cleanup_slots.len() * 16;
+    if cleanup_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
+    }
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -179,13 +238,38 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
                 arg_temp_bytes,
                 &ref_writebacks,
                 &ref_temp_cells,
-                0,
+                cleanup_bytes + cleanup_guard_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
-            ctx.load_value_to_result(*value)?;
-            let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            let cleanup = cleanup_slots
+                .iter()
+                .find(|cleanup| cleanup.param_index == param_index);
+            let push_ty = materialize_plain_call_arg(
+                ctx,
+                *value,
+                param_ty,
+                cleanup,
+                arg_temp_bytes,
+            )?;
+            if let Some(cleanup) = cleanup {
+                let cleanup_index = cleanup_slots
+                    .iter()
+                    .position(|candidate| candidate.param_index == param_index)
+                    .expect("planned call argument cleanup has an index");
+                callable_guards::register_argument_temp_guard(
+                    ctx.emitter,
+                    arg_temp_bytes,
+                    cleanup_bytes,
+                    cleanup.offset,
+                    cleanup_index,
+                );
+                abi::emit_load_temporary_stack_slot(
+                    ctx.emitter,
+                    abi::int_result_reg(ctx.emitter),
+                    arg_temp_bytes + cleanup.offset,
+                );
+            }
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
@@ -194,8 +278,9 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
-        cleanup_slots: Vec::new(),
-        cleanup_bytes: 0,
+        cleanup_slots,
+        cleanup_bytes,
+        cleanup_guard_bytes,
         borrowed_stack_arg_bytes: 0,
     })
 }

@@ -1555,9 +1555,9 @@ fn reload_saved_iterator_receiver_at_offset(
             ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", offset));     // reload iterator receiver from below preserved key state
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // reload iterator receiver from below preserved key state
                 &format!("mov rdi, QWORD PTR [rsp + {}]", offset)
-            );                                                                  // reload iterator receiver from below preserved key state
+            );
         }
     }
 }
@@ -1651,6 +1651,7 @@ fn emit_descriptor_apply_callback_invocation(
             descriptor_reg,
             arg_container,
             "iterator_apply",
+            false,
             false,
         )?;
     } else {

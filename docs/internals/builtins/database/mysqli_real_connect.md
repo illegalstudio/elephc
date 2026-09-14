@@ -1,11 +1,11 @@
 ---
-title: "mysqli_real_connect() — internals"
+title: "mysqli_real_connect() - internals"
 description: "Compiler internals for mysqli_real_connect(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 147
 ---
 
-## `mysqli_real_connect()` — internals
+## `mysqli_real_connect()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_real_connect(mixed $mysql, ?string $hostname = null, ?string $us
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

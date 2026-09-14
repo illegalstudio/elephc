@@ -203,7 +203,7 @@ const PCRE2_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 2_792_969,
         body_limit: 32 * 1024 * 1024,
     },
-    recipe_revision: 2,
+    recipe_revision: 3,
     dependencies: &[],
     supported_targets: TARGETS,
     ordered_link_outputs: PCRE2_ARCHIVES,
@@ -307,6 +307,22 @@ const CURL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: CURL_HEADERS,
     provides: &["curl"],
 }];
+const ONIGURUMA_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: elephc_builtin_contract::mbstring_abi::regex::ONIGURUMA_VERSION,
+    source: SourceArchive {
+        https_url: "https://github.com/kkos/oniguruma/releases/download/v6.9.10/onig-6.9.10.tar.gz",
+        sha256: "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05",
+        exact_size: 979_159,
+        body_limit: 16 * 1024 * 1024,
+    },
+    recipe_revision: 3,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: &["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"],
+    retained_headers: &["include/oniguruma.h", "include/oniggnu.h", "include/elephc_oniguruma.h"],
+    provides: &["oniguruma"],
+}];
+
 /// The XML parser behind the `elephc_xml` bridge (`xml_*` push parser, XMLWriter). The first
 /// catalog source published only as `.tar.xz`, which is why the archive format is explicit.
 /// Built with the platform's iconv and without zlib, ICU, Python, readline, or dynamic modules,
@@ -356,6 +372,11 @@ const PACKAGES: &[PackageSpec] = &[
         name: "curl",
         default_version: "8.21.0",
         versions: CURL_VERSIONS,
+    },
+    PackageSpec {
+        name: "oniguruma",
+        default_version: elephc_builtin_contract::mbstring_abi::regex::ONIGURUMA_VERSION,
+        versions: ONIGURUMA_VERSIONS,
     },
     PackageSpec {
         name: "libxml2",
@@ -413,11 +434,26 @@ pub fn known_names() -> String {
 mod tests {
     use super::*;
 
+    /// Pins the reviewed mbregex source, all target identities, and dependency-safe static archive order.
+    #[test]
+    fn oniguruma_catalog_snapshot_is_exact() {
+        let entry = version("oniguruma", None).expect("catalogued Oniguruma");
+        assert_eq!(entry.version, "6.9.10");
+        assert_eq!(entry.source.exact_size, 979_159);
+        assert_eq!(entry.source.sha256, "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05");
+        assert_eq!(entry.recipe_revision, 3);
+        assert_eq!(entry.supported_targets, TARGETS);
+        assert_eq!(entry.ordered_link_outputs, ["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"]);
+        assert_eq!(entry.retained_headers, ["include/oniguruma.h", "include/oniggnu.h", "include/elephc_oniguruma.h"]);
+        assert!(entry.dependencies.is_empty());
+    }
+
     /// Verifies the official PCRE2 source identity and immutable archive order.
     #[test]
     fn pcre2_catalog_snapshot_is_exact() {
         let version = version("pcre2", None).expect("catalogue entry");
         assert_eq!(version.version, "10.47");
+        assert_eq!(version.recipe_revision, 3);
         assert_eq!(version.source.exact_size, 2_792_969);
         assert_eq!(version.source.sha256, "c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16");
         assert_eq!(version.ordered_link_outputs, PCRE2_ARCHIVES);
@@ -467,10 +503,10 @@ mod tests {
     /// Verifies unknown package and version inputs fail closed.
     #[test]
     fn catalog_rejects_unknown_selection() {
-        assert!(package("libfoo")
-            .unwrap_err()
-            .to_string()
-            .contains("known packages: pcre2, zlib, openssl, nghttp2, libssh2, curl, libxml2"));
+        assert_eq!(
+            package("libfoo").unwrap_err().to_string(),
+            "native catalog error: unknown native package 'libfoo'; known packages: pcre2, zlib, openssl, nghttp2, libssh2, curl, oniguruma, libxml2"
+        );
         assert!(version("pcre2", Some("10.46")).is_err());
     }
 

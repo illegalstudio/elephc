@@ -285,6 +285,14 @@ impl Checker {
                         if contextual_callbacks.contains(&param_idx) {
                             continue;
                         }
+                        if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
+                            // Forming the output reference requires dynamic storage before later
+                            // source arguments can pass that same variable to a mutating call.
+                            if let Some(name) = output_variable(arg) {
+                                env.insert(name.clone(), PhpType::Mixed);
+                            }
+                            continue;
+                        }
                         if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
                             || pcntl_output_type(builtin_name, arg, idx).is_some()
                             || xml_struct_output_type(builtin_name, arg, idx).is_some()
@@ -315,6 +323,11 @@ impl Checker {
                     }
                 }
                 for (idx, arg) in expanded_args.iter().enumerate() {
+                    if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Mixed);
+                        }
+                    }
                     if let Some(output_ty) = pcntl_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), output_ty);

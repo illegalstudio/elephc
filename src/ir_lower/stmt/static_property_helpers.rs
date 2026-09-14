@@ -80,7 +80,7 @@ pub(super) fn static_property_type(
         .static_properties
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+        .map(|(_, property_ty)| property_storage_type(property_ty))
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
@@ -113,7 +113,16 @@ pub(super) fn object_property_type(
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
         .visible_property(property)
-        .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.codegen_repr()))
+        .map(|(_, (_, property_ty))| property_storage_type(property_ty))
+}
+
+/// Preserves the boxed packed-or-hash contract for declared PHP array properties.
+fn property_storage_type(property_ty: &PhpType) -> PhpType {
+    if property_ty.is_php_array() {
+        property_ty.clone()
+    } else {
+        normalize_value_php_type(property_ty.codegen_repr())
+    }
 }
 
 /// Returns true when a property type uses concrete indexed-array storage.

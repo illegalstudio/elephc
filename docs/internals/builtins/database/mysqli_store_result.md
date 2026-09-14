@@ -1,11 +1,11 @@
 ---
-title: "mysqli_store_result() — internals"
+title: "mysqli_store_result() - internals"
 description: "Compiler internals for mysqli_store_result(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 177
 ---
 
-## `mysqli_store_result()` — internals
+## `mysqli_store_result()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_store_result(mixed $mysql, int $mode = 0): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

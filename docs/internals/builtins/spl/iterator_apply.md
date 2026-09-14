@@ -1,16 +1,16 @@
 ---
-title: "iterator_apply() — internals"
+title: "iterator_apply() - internals"
 description: "Compiler internals for iterator_apply(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 735
 ---
 
-## `iterator_apply()` — internals
+## `iterator_apply()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/iterator_apply.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_apply.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

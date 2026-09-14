@@ -1,11 +1,11 @@
 ---
-title: "imagecolorclosestalpha() — internals"
+title: "imagecolorclosestalpha() - internals"
 description: "Compiler internals for imagecolorclosestalpha(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 467
 ---
 
-## `imagecolorclosestalpha()` — internals
+## `imagecolorclosestalpha()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolorclosestalpha(mixed $image, int $red, int $green, int $blue, i
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

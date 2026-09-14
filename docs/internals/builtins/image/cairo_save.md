@@ -1,11 +1,11 @@
 ---
-title: "cairo_save() — internals"
+title: "cairo_save() - internals"
 description: "Compiler internals for cairo_save(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 431
 ---
 
-## `cairo_save()` — internals
+## `cairo_save()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_save(mixed $context): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

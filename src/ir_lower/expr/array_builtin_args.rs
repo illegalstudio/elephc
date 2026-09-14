@@ -79,6 +79,9 @@ pub(super) fn lower_builtin_call_args(
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
     let lowered = match argument_lowering {
+        crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues => {
+            lower_builtin_args_preserving_values(ctx, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::Count => {
             lower_count_args(ctx, sig, args)
         }
@@ -278,6 +281,30 @@ pub(super) fn lower_positional_builtin_args_with_signature(
             }
         })
         .collect()
+}
+
+/// Uses shared argument planning without converting values before a runtime-owned parameter parser.
+///
+/// The storage signature retains names, defaults, arity, and reference modes. Mixed value slots
+/// suppress scalar binding without changing the authoritative PHP signature or argument order.
+fn lower_builtin_args_preserving_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else {
+        return lower_args(ctx, args);
+    };
+    let mut storage = sig.clone();
+    for (index, (_, ty)) in storage.params.iter_mut().enumerate() {
+        if !storage.ref_params.get(index).copied().unwrap_or(false) {
+            *ty = PhpType::Mixed;
+        }
+    }
+    ctx.begin_argument_guard_scope();
+    let operands = lower_args_with_signature_options(ctx, Some(&storage), args, true, true);
+    ctx.end_argument_guard_scope();
+    operands
 }
 
 /// Preserves a boxed nullable name while reusing shared named and spread argument planning.

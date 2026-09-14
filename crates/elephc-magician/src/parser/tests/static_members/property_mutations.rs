@@ -55,7 +55,7 @@ fn parse_fragment_accepts_static_property_unset() {
         &[EvalStmt::UnsetStaticProperty {
             class_name: "EvalStaticBox".to_string(),
             property: "count".to_string(),
-        }]
+        }, EvalStmt::GcCollect]
     );
 }
 
@@ -75,6 +75,7 @@ fn parse_fragment_accepts_dynamic_static_property_unset() {
                 class_name: EvalExpr::LoadVar("class".to_string()),
                 property: EvalExpr::LoadVar("name".to_string()),
             },
+            EvalStmt::GcCollect,
         ]
     );
 }
@@ -101,6 +102,7 @@ fn parse_fragment_accepts_static_property_array_unset() {
                 },
                 index: EvalExpr::Const(EvalConst::Int(1)),
             },
+            EvalStmt::GcCollect,
         ]
     );
 }

@@ -210,6 +210,15 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::RuntimeCall(target) => {
             let _ = write!(out, " runtime.{}", target.as_eir());
+            if let crate::ir::RuntimeCallTarget::ProfiledFunction { target, strict_types, arguments, .. } = target {
+                if *arguments == crate::ir::RuntimeArgumentLayout::IndexedArray {
+                    let _ = write!(out, " arguments=indexed-array");
+                }
+                if target.uses_mbstring_runtime() {
+                    let mode = match strict_types { Some(true) => "1", Some(false) => "0", None => "caller" };
+                    let _ = write!(out, " strict_types={mode}");
+                }
+            }
         }
         Immediate::ExternRef(id) => {
             let _ = write!(out, " extern#{}", id);

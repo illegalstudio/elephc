@@ -1,11 +1,11 @@
 ---
-title: "_imagick_pack2() — internals"
+title: "_imagick_pack2() - internals"
 description: "Compiler internals for _imagick_pack2(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1071
+  order: 1133
 ---
 
-## `_imagick_pack2()` — internals
+## `_imagick_pack2()` - internals
 
 ## Where it lives
 
@@ -38,8 +38,8 @@ function _imagick_pack2(int $hi, int $lo): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

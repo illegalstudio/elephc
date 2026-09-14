@@ -1,11 +1,11 @@
 ---
-title: "imageellipse() — internals"
+title: "imageellipse() - internals"
 description: "Compiler internals for imageellipse(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 498
 ---
 
-## `imageellipse()` — internals
+## `imageellipse()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imageellipse(mixed $image, int $center_x, int $center_y, int $width, in
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

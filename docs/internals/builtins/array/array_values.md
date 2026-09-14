@@ -1,16 +1,16 @@
 ---
-title: "array_values() — internals"
+title: "array_values() - internals"
 description: "Compiler internals for array_values(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 45
 ---
 
-## `array_values()` — internals
+## `array_values()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_values.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_values.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

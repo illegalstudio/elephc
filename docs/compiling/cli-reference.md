@@ -453,7 +453,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `eval`, `regex`, `curl`, `mysqli`, `web` | — | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic when static detection cannot see a call. `--with-iconv` and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-xml` force-links the XML bridge and injects the `XMLParser`/`XMLWriter` prelude; the bridge's parser is the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected xml use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `eval`, `regex`, `curl`, `mysqli`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic when static detection cannot see a call. `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-xml` force-links the XML bridge and injects the `XMLParser`/`XMLWriter` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -705,22 +705,57 @@ for the full mechanism, including which files implement each shape.
 ## INI directives
 
 An AOT binary has no `php.ini` to read at startup: its INI surface is compiled
-in. elephc therefore splits PHP's `-d` into two mechanisms — one at compile time
-and one at run time.
+in. elephc provides compile-time overrides through `--ini` and OPcache runtime
+overrides through environment variables.
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--ini KEY=VALUE` / `--ini=KEY=VALUE` | any `opcache.*` directive | — | Compile-time override of one INI directive. Repeatable; last wins for a repeated key. Splits on the FIRST `=`, so a value may itself contain `=`. An unknown key is accepted and ignored. |
+| `--ini KEY=VALUE` / `--ini=KEY=VALUE` | OPcache settings, mbstring startup settings, core encoding and query defaults | none | Compile-time override of one INI directive. Repeatable; last wins for a repeated key. Splits on the first `=`, so a value may itself contain `=`. An unknown key is accepted and ignored. |
 | `--strict-opcache` | — | off | Throw a `RuntimeException` when `opcache_invalidate($file, true)` targets code compiled into this binary, instead of reporting the success reference PHP reports. Off, the default is byte-identical to reference PHP. See [`--strict-opcache`](../php/opcache.md#--strict-opcache). |
 
 ```bash
 elephc --ini opcache.enable_cli=1 --ini opcache.jit=tracing app.php
 ```
 
-`--ini` is the exact analogue of `php -d`: it moves both `ini_get()` (the raw
+For OPcache, `--ini` moves both `ini_get()` (the raw
 INI string, reported verbatim) and `opcache_get_configuration()['directives']`
 (the normalized typed value), and a value that does not parse for the
 directive's type is ignored, leaving the compiled-in default.
+
+Programs using mbstring, including opaque eval, also apply `mbstring.*` startup
+settings through the shared engine. `default_charset`, `internal_encoding`,
+`input_encoding`, and `output_encoding` supply its inherited encoding defaults.
+Empty individual encodings inherit `default_charset`; an empty charset falls
+back to UTF-8. Each web request starts from the compiled configuration, so PHP
+setting-function calls in one request do not change the next request's defaults.
+
+```bash
+elephc native add pcre2
+elephc --ini default_charset=8bit --ini mbstring.strict_detection=1 app.php
+```
+
+The contract-owned default mbstring MIME expression needs no native package.
+Custom MIME expressions inside opaque eval require `--with-mbstring` and the
+managed PCRE2 package. This dependency does not enable `preg_*` in opaque eval.
+Programs without mbstring or eval do not acquire this dependency from an unused
+override. Startup diagnostics currently use the runtime stderr path.
+
+Configured static and shared libraries install mbstring settings through
+`elephc_init()` or lazily before their first exported PHP call. Repeated
+initialization preserves subsequent PHP setting changes. Initialization failures
+return `ELEPHC_STATUS_RUNTIME_FAILURE` through the library status API; scalar
+exports return zero and owned-string exports leave their outputs null/zero.
+The host can inspect `elephc_last_error()` and remains running.
+
+Public `ini_get`, `ini_set`, `ini_restore`, and `ini_get_all` route mbstring
+settings through the shared engine in AOT and eval. Startup also retains
+`arg_separator.input`, `max_input_vars`, `max_input_nesting_level`, and
+`display_errors` for `mb_parse_str`; public INI calls expose these values and
+respect each directive's access policy. Invalid negative input limits or an
+empty separator fall back to their defaults; quantity syntax warnings retain
+PHP's parsed fallback value. Runtime mutation of Core response defaults and raw
+encoding inheritance remains incomplete. The environment overrides below remain
+specific to the documented OPcache keys.
 
 ### Runtime overrides: `ELEPHC_INI_*`
 

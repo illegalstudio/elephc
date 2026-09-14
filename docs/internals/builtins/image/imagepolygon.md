@@ -1,11 +1,11 @@
 ---
-title: "imagepolygon() — internals"
+title: "imagepolygon() - internals"
 description: "Compiler internals for imagepolygon(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 521
 ---
 
-## `imagepolygon()` — internals
+## `imagepolygon()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagepolygon(mixed $image, array $points, int $color): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

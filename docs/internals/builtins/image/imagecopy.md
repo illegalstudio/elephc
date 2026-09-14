@@ -1,11 +1,11 @@
 ---
-title: "imagecopy() — internals"
+title: "imagecopy() - internals"
 description: "Compiler internals for imagecopy(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 480
 ---
 
-## `imagecopy()` — internals
+## `imagecopy()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecopy(mixed $dst_image, mixed $src_image, int $dst_x, int $dst_y, i
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "xml_parse() — internals"
+title: "xml_parse() - internals"
 description: "Compiler internals for xml_parse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 916
+  order: 977
 ---
 
-## `xml_parse()` — internals
+## `xml_parse()` - internals
 
 ## Where it lives
 

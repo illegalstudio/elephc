@@ -12,29 +12,7 @@ use super::*;
 
 /// Emits x86_64 concat, comparison, and spaceship wrappers.
 pub(super) fn emit_x86_64_compare(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_value_concat");
-    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for right operand and left string pair
-    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
-    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_string input
-    emitter.instruction("call __rt_mixed_cast_string");                         // cast the left boxed operand to a PHP string pair
-    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the left string pointer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the left string length
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for string casting
-    emitter.instruction("call __rt_mixed_cast_string");                         // cast the right boxed operand to a PHP string pair
-    emitter.instruction("mov rdi, rax");                                        // move the right string pointer into concat's right pointer register
-    emitter.instruction("mov rsi, rdx");                                        // move the right string length into concat's right length register
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the left string pointer for concat
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the left string length for concat
-    emitter.instruction("call __rt_concat");                                    // concatenate the two PHP string pairs
-    emitter.instruction("mov rdi, rax");                                        // move the concat string pointer into mixed value_lo
-    emitter.instruction("mov rsi, rdx");                                        // move the concat string length into mixed value_hi
-    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string for boxing the concat result
-    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the concatenated string
-    emitter.instruction("add rsp, 32");                                         // release the concat wrapper slots
-    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
-    emitter.instruction("ret");                                                 // return the boxed concat result to Rust
+    super::concat::emit(emitter);
 
     label_c_global(emitter, "__elephc_eval_value_compare");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across comparison helpers

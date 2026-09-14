@@ -1,11 +1,11 @@
 ---
-title: "session_gc() — internals"
+title: "session_gc() - internals"
 description: "Compiler internals for session_gc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 893
+  order: 954
 ---
 
-## `session_gc()` — internals
+## `session_gc()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_gc(): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

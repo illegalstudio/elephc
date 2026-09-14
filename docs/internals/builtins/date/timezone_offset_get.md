@@ -1,11 +1,11 @@
 ---
-title: "timezone_offset_get() — internals"
+title: "timezone_offset_get() - internals"
 description: "Compiler internals for timezone_offset_get(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 248
 ---
 
-## `timezone_offset_get()` — internals
+## `timezone_offset_get()` - internals
 
 ## Where it lives
 

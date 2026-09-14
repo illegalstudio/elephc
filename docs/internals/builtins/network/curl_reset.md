@@ -1,11 +1,11 @@
 ---
-title: "curl_reset() — internals"
+title: "curl_reset() - internals"
 description: "Compiler internals for curl_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 685
 ---
 
-## `curl_reset()` — internals
+## `curl_reset()` - internals
 
 ## Where it lives
 

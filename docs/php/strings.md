@@ -156,10 +156,69 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 
 ## Built-in string functions
 
+`mb_parse_str($string, &$result)` decodes a URL-encoded query into the output
+array, including nested keys and repeated `[]` entries. AOT and `eval()` use the
+same encoding detection, substitution settings, and Core INI query limits.
+The example in `examples/mbstring/main.php` parses a product search and tags.
+
+The current AOT output adapter accepts local variables and managed aliases.
+By-reference function parameters, property-backed references, dynamic output
+unpacking, and generic callable wrappers still require additional adapters.
+PHP error-handler routing and shared indexed-array root promotion also remain
+incomplete; the complete mbstring extension is still in development.
+
+Programs using mbstring retain response MIME metadata when `header()` accepts a
+header, including in CLI builds. Output buffering and `print_r(..., true)` keep
+headers mutable until nonempty bytes reach the final output destination. Startup
+`default_mimetype` and `default_charset` settings initialize the response defaults.
+`mb_output_handler($string, $status)` converts buffer phases using the shared
+internal/output encodings, MIME selection, and substitution settings. Direct,
+named, unpacked, and callable calls work in AOT and `eval()`. Use
+`ob_start("mb_output_handler")` to convert buffered output automatically, as in
+`examples/mbstring/main.php`. Programs using mbstring or opaque eval require the
+managed `pcre2` package for MIME selection, including with default INI settings.
+
+Runtime mutation of the Core response settings remains incomplete. Eval handler
+registrations currently retain their callback until the owning eval context is
+destroyed; releasing that registration when its individual buffer closes remains
+part of the output-buffer lifecycle work. PHP error-handler routing and web
+transport verification also remain open.
+
 | Function | Signature | Description |
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
-| `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
+| `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count through the shared mbstring engine, covering all 79 PHP encoding names and their aliases. An omitted or `null` encoding uses the request internal encoding, initially UTF-8. Invalid names throw `\\ValueError` with the original name in the message. AOT and eval share the same codec behavior and deprecated-encoding lookup cache |
+| `mb_strwidth()` | `mb_strwidth($str, $encoding = null): int` | Counts East Asian wide/fullwidth characters as two display columns and other characters as one |
+| `mb_strtoupper()` / `mb_strtolower()` | `mb_strtoupper($str, $encoding = null): string` | Unicode case conversion, including expanding mappings and contextual Greek sigma |
+| `mb_convert_case()` | `mb_convert_case($str, $mode, $encoding = null): string` | Applies `MB_CASE_UPPER`, `LOWER`, `TITLE`, or `FOLD`, including all four `_SIMPLE` variants |
+| `mb_ucfirst()` / `mb_lcfirst()` | `mb_ucfirst($str, $encoding = null): string` | Changes the first character using Unicode title case or lowercase |
+| `mb_strimwidth()` | `mb_strimwidth($str, $start, $width, $trim_marker = "", $encoding = null): string` | Trims by display columns and includes the marker in the width budget; offsets count characters |
+| `mb_substr()` | `mb_substr($string, $start, $length = null, $encoding = null): string` | Select characters by signed start and nullable length |
+| `mb_str_split()` | `mb_str_split($string, $length = 1, $encoding = null): array` | Split into indexed strings of at most the requested character count; empty input returns an empty array |
+| `mb_list_encodings()` | `mb_list_encodings(): array` | List all canonical encoding names in PHP order; returned arrays can be copied and changed independently |
+| `mb_encoding_aliases()` | `mb_encoding_aliases($encoding): array` | List aliases in PHP catalog order; invalid encoding names throw ValueError |
+| `mb_preferred_mime_name()` | `mb_preferred_mime_name($encoding): string\|false` | Return the preferred MIME name, or warn and return false when none exists |
+| `mb_strcut()` | `mb_strcut($string, $start, $length = null, $encoding = null): string` | Select whole encoded characters within byte boundaries |
+| `mb_scrub()` | `mb_scrub($string, $encoding = null): string` | Replace malformed units with the current substitution setting |
+| `mb_trim()` | `mb_trim($string, $characters = null, $encoding = null): string` | Trim Unicode whitespace or an explicit character set from both ends |
+| `mb_ltrim()` | `mb_ltrim($string, $characters = null, $encoding = null): string` | Trim Unicode whitespace or an explicit set from the beginning |
+| `mb_rtrim()` | `mb_rtrim($string, $characters = null, $encoding = null): string` | Trim Unicode whitespace or an explicit set from the end |
+| `mb_str_pad()` | `mb_str_pad($string, $length, $pad_string = " ", $pad_type = 1, $encoding = null): string` | Pad to a character count using STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH |
+| `mb_convert_kana()` | `mb_convert_kana($string, $mode = "KV", $encoding = null): string` | Convert Japanese width and kana; defaults to KV |
+| `mb_substr_count()` | `mb_substr_count($haystack, $needle, $encoding = null): int` | Count non-overlapping encoded substring occurrences |
+| `mb_ord()` | `mb_ord($string, $encoding = null): int\|false` | Read the first Unicode codepoint; an empty string throws ValueError |
+| `mb_chr()` | `mb_chr($codepoint, $encoding = null): string\|false` | Encode a Unicode codepoint; unrepresentable values return false |
+| `mb_strpos()` | `mb_strpos($haystack, $needle, $offset = 0, $encoding = null): int\|false` | Find the first character position |
+| `mb_stripos()` | `mb_stripos($haystack, $needle, $offset = 0, $encoding = null): int\|false` | Find the first character position using simple case folding |
+| `mb_strrpos()` | `mb_strrpos($haystack, $needle, $offset = 0, $encoding = null): int\|false` | Find the last character position |
+| `mb_strripos()` | `mb_strripos($haystack, $needle, $offset = 0, $encoding = null): int\|false` | Find the last character position using simple case folding |
+| `mb_strstr()` | `mb_strstr($haystack, $needle, $before_needle = false, $encoding = null): string\|false` | Select text before or from the first matching substring |
+| `mb_stristr()` | `mb_stristr($haystack, $needle, $before_needle = false, $encoding = null): string\|false` | Select text around the first case-insensitive substring match |
+| `mb_strrchr()` | `mb_strrchr($haystack, $needle, $before_needle = false, $encoding = null): string\|false` | Select text around the last matching substring |
+| `mb_strrichr()` | `mb_strrichr($haystack, $needle, $before_needle = false, $encoding = null): string\|false` | Select text around the last case-insensitive substring match |
+| `mb_language()` | `mb_language($language = null): string\|bool` | Get the current language, or set it and return true |
+| `mb_internal_encoding()` | `mb_internal_encoding($encoding = null): string\|bool` | Get the default text encoding, or set it and return true |
+| `mb_http_output()` | `mb_http_output($encoding = null): string\|bool` | Get or set the encoding selected for HTTP output conversion |
 | `iconv_strlen()` | `iconv_strlen($str, $encoding = null): int\|false` | Character count through the platform `iconv`. See [iconv](./iconv.md) for the whole extension |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract a substring. Negative `$start` counts from the end; a negative `$len` omits that many trailing bytes from the selected suffix, matching PHP |
 | `strpos()` | `strpos($haystack, $needle, $offset = 0): int\|false` | Find first occurrence at or after `$offset`. A negative `$offset` counts from the end; one outside the haystack raises `ValueError`. Returns `false` if not found |

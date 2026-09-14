@@ -14,7 +14,9 @@ use crate::ir::ResourceCleanupKind;
 pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module) {
     let features = lowered_runtime_features(module);
     module.required_runtime_features.regex |= features.regex;
-    module.required_runtime_features.mb_strlen |= features.mb_strlen;
+    module.required_runtime_features.mbstring |= features.mbstring;
+    module.required_runtime_features.mbregex |= features.mbregex;
+    module.required_runtime_features.mbstring_mime |= features.mbstring_mime;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
     module.required_runtime_features.pdo_udf |= features.pdo_udf;
@@ -34,6 +36,13 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
 pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
     for function in all_lowered_functions(module) {
+        features.mbstring |= function_references_callable_runtime(module, function, is_mbstring_callable_name);
+        features.mbregex |= function_references_callable_runtime(module, function, is_mbregex_callable_name);
+        features.mbstring_mime |= function_references_callable_runtime(
+            module,
+            function,
+            is_mbstring_mime_callable_name,
+        );
         if function_contains_eval_scope_state(function) {
             features.eval_scope = true;
         }
@@ -45,7 +54,9 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 Op::RuntimeCall => {
                     if let Some(target) = typed_builtin_target(inst) {
                         features.regex |= target.uses_regex_runtime();
-                        features.mb_strlen |= target.uses_mb_strlen_runtime();
+                        features.mbstring |= target.uses_mbstring_runtime();
+                        features.mbregex |= target.uses_mbregex_runtime();
+                        features.mbstring_mime |= target.uses_mbstring_mime_runtime();
                         features.phar_archive |= target.publishes_phar_symbols()
                             && function_belongs_to_phar_archive_helper_class(function);
                         features.descriptor_invoker |=
@@ -395,4 +406,60 @@ pub(super) fn eval_literal_static_method_supported_by_module(
         return false;
     };
     crate::eval_aot::static_function_signature_supported(signature, args)
+}
+
+/// Finds a semantic runtime family in callable instructions without enabling unrelated callbacks.
+fn function_references_callable_runtime(module: &Module, function: &Function, accepts: fn(&str) -> bool) -> bool {
+    let names = std::cell::OnceCell::new();
+    function.instructions.iter().any(|inst| {
+        if inst.op == Op::FirstClassCallableNew {
+            let data = match inst.immediate {
+                Some(Immediate::Data(data) | Immediate::ProfiledData { data, .. }) => data,
+                _ => return false,
+            };
+            return module.data.strings.get(data.as_raw() as usize)
+                .is_some_and(|name| accepts(name));
+        }
+        let index = match inst.op {
+            Op::NormalizeCallable | Op::CallablePtr | Op::ExprCall | Op::CallableDescriptorInvoke => 0,
+            Op::RuntimeCall => match typed_builtin_target(inst)
+                .and_then(|target| target.string_callback_operand_index()) {
+                    Some(index) => index,
+                    None => return false,
+                },
+            _ => return false,
+        };
+        let Some(value) = inst.operands.get(index) else { return false; };
+        let names = names.get_or_init(||
+            crate::codegen::callable_reachability::CallableReachabilityAnalysis::new(module, function));
+        names.candidates(*value).is_some_and(|names|
+            names.iter().any(|name| accepts(name)))
+    })
+}
+
+/// Resolves a callable name through the semantic registry to its optional runtime family.
+fn is_mbstring_callable_name(name: &str) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        matches!(def.spec.semantics.runtime_functions,
+            crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                if target.uses_mbstring_runtime())
+    })
+}
+
+/// Resolves matching callables through their typed operation instead of a second PHP-name inventory.
+fn is_mbregex_callable_name(name: &str) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        matches!(def.spec.semantics.runtime_functions,
+            crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                if target.uses_mbregex_runtime())
+    })
+}
+
+/// Resolves output-handler callables through the typed MIME-provider operation.
+fn is_mbstring_mime_callable_name(name: &str) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        matches!(def.spec.semantics.runtime_functions,
+            crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                if target.uses_mbstring_mime_runtime())
+    })
 }

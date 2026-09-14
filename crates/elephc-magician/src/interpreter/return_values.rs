@@ -24,14 +24,17 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
     match control {
         EvalControl::None => eval_declared_implicit_return_value(return_type, values),
         EvalControl::ReturnVoid => eval_declared_void_return_value(return_type, values),
-        EvalControl::Return(result) => eval_declared_explicit_return_value(
-            return_type,
-            return_owner,
-            called_class_name,
-            result,
-            context,
-            values,
-        ),
+        EvalControl::Return(value) => {
+            let result = eval_declared_explicit_return_value(
+                return_type,
+                return_owner,
+                called_class_name,
+                value,
+                context,
+                values,
+            );
+            finish_declared_return_value(value, result, context, values)
+        }
         EvalControl::Throw(result) => {
             context.set_pending_throw(result);
             Err(EvalStatus::UncaughtThrowable)
@@ -49,27 +52,43 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Some(return_type) = return_type else {
-        return Ok(value);
-    };
-    if eval_declared_return_type_is_void(return_type) {
-        return if values.type_tag(value)? == EVAL_TAG_NULL {
-            Ok(value)
-        } else {
-            Err(EvalStatus::RuntimeFatal)
+    let result = (|| {
+        let Some(return_type) = return_type else {
+            return Ok(value);
         };
+        if eval_declared_return_type_is_void(return_type) {
+            return if values.type_tag(value)? == EVAL_TAG_NULL {
+                Ok(value)
+            } else {
+                Err(EvalStatus::RuntimeFatal)
+            };
+        }
+        if eval_declared_return_type_is_never(return_type) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        eval_declared_return_value(
+            return_type, return_owner, called_class_name, value, context, values,
+        )
+    })();
+    finish_declared_return_value(value, result, context, values)
+}
+
+/// Consumes an owned return cell when type validation rejects it or replaces it with a coerced value.
+fn finish_declared_return_value(
+    original: RuntimeCellHandle,
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !matches!(&result, Ok(value) if *value == original) {
+        if let Err(status) = eval_release_value(context, values, original) {
+            if let Ok(coerced) = result {
+                eval_release_value(context, values, coerced)?;
+            }
+            return Err(status);
+        }
     }
-    if eval_declared_return_type_is_never(return_type) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    eval_declared_return_value(
-        return_type,
-        return_owner,
-        called_class_name,
-        value,
-        context,
-        values,
-    )
+    result
 }
 
 /// Materializes an implicit return according to the declared return type.

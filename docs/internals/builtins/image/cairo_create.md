@@ -1,11 +1,11 @@
 ---
-title: "cairo_create() — internals"
+title: "cairo_create() - internals"
 description: "Compiler internals for cairo_create(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 401
 ---
 
-## `cairo_create()` — internals
+## `cairo_create()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_create(mixed $surface): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

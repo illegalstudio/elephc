@@ -1,11 +1,11 @@
 ---
-title: "imagefilledrectangle() — internals"
+title: "imagefilledrectangle() - internals"
 description: "Compiler internals for imagefilledrectangle(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 503
 ---
 
-## `imagefilledrectangle()` — internals
+## `imagefilledrectangle()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagefilledrectangle(mixed $image, int $x1, int $y1, int $x2, int $y2, 
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

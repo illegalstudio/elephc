@@ -340,6 +340,8 @@ fn emit_mixed_property_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save name_ptr
     emitter.instruction("str x2, [sp, #16]");                                   // save name_len
 
+    emitter.instruction("bl __rt_mixed_deref");                                 // resolve the current object behind a persistent reference
+    emitter.instruction("str x0, [sp, #0]");                                    // retain the concrete receiver for property lookup
     emitter.instruction("cbz x0, __rt_mixed_property_get_null");                // null Mixed → null result
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
     emitter.instruction("cmp x9, #6");                                          // tag = 6 (object)?
@@ -390,6 +392,8 @@ fn emit_mixed_property_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save name_len
     emitter.instruction("str x3, [sp, #24]");                                   // save value_mixed_ptr
 
+    emitter.instruction("bl __rt_mixed_deref");                                 // resolve the current object behind a persistent reference
+    emitter.instruction("str x0, [sp, #0]");                                    // retain the concrete receiver for property lookup
     emitter.instruction("cbz x0, __rt_mixed_property_set_done");                // null Mixed → silently drop the write
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
     emitter.instruction("cmp x9, #6");                                          // tag = 6 (object)?
@@ -585,6 +589,10 @@ fn emit_mixed_property_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save name_ptr
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save name_len
 
+    emitter.instruction("mov rax, rdi");                                        // pass the possibly referenced object receiver
+    emitter.instruction("call __rt_mixed_deref");                               // resolve its current object before property lookup
+    emitter.instruction("mov rdi, rax");                                        // restore the concrete receiver argument
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // retain the concrete receiver for later property access
     emitter.instruction("test rdi, rdi");                                       // null Mixed → null result
     emitter.instruction("je __rt_mixed_property_get_null");                     // branch on the current JSON object encoder condition
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load tag from mixed[0]
@@ -635,6 +643,10 @@ fn emit_mixed_property_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save name_len
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save value_mixed_ptr
 
+    emitter.instruction("mov rax, rdi");                                        // pass the possibly referenced object receiver
+    emitter.instruction("call __rt_mixed_deref");                               // resolve its current object before property lookup
+    emitter.instruction("mov rdi, rax");                                        // restore the concrete receiver argument
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // retain the concrete receiver for later property access
     emitter.instruction("test rdi, rdi");                                       // null Mixed → drop write
     emitter.instruction("je __rt_mixed_property_set_done");                     // branch on the current JSON object encoder condition
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load tag from mixed[0]

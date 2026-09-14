@@ -30,6 +30,7 @@ pub(super) fn emit_aarch64_install_dynamic_object_destructor_hook(emitter: &mut 
     abi::emit_symbol_address(emitter, "x9", "_elephc_eval_dynamic_object_destruct_fn");
     emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for object destruction
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
+    emit_install_object_owner_hooks(emitter);
 }
 
 /// Emits the x86_64 wrapper that boxes a borrowed raw object pointer for Rust eval.
@@ -53,4 +54,58 @@ pub(super) fn emit_x86_64_install_dynamic_object_destructor_hook(emitter: &mut E
     abi::emit_symbol_address(emitter, "r10", "_elephc_eval_dynamic_object_destruct_fn");
     emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for object destruction
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
+    emit_install_object_owner_hooks(emitter);
+}
+
+/// Installs C callbacks for GC-visible closure receiver edges and final object release.
+fn emit_install_object_owner_hooks(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_object_owner_hooks");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_elephc_eval_object_gc_child_fn");
+            emitter.instruction("str x0, [x9]");                                // store the child enumeration callback
+            abi::emit_symbol_address(emitter, "x9", "_elephc_eval_object_release_fn");
+            emitter.instruction("str x1, [x9]");                                // store the final ownership release callback
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r10", "_elephc_eval_object_gc_child_fn");
+            emitter.instruction("mov QWORD PTR [r10], rdi");                    // store the child enumeration callback
+            abi::emit_symbol_address(emitter, "r10", "_elephc_eval_object_release_fn");
+            emitter.instruction("mov QWORD PTR [r10], rsi");                    // store the final ownership release callback
+        }
+    }
+    emitter.instruction("ret");                                                 // return after installing both optional callbacks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// C callback installers retain symbol mangling and both hooks on every target.
+    #[test]
+    fn eval_object_owner_installer_has_all_target_c_abi_symbols() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = crate::codegen_support::platform::Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            match target.arch {
+                Arch::AArch64 => {
+                    emit_aarch64_install_dynamic_object_destructor_hook(&mut emitter)
+                }
+                Arch::X86_64 => {
+                    emit_x86_64_install_dynamic_object_destructor_hook(&mut emitter)
+                }
+            }
+            let output = emitter.output();
+            let symbol = target.extern_symbol("__elephc_eval_install_object_owner_hooks");
+            assert_eq!(output.matches(&format!("{symbol}:")).count(), 1, "{name}");
+            assert!(output.contains("_elephc_eval_object_gc_child_fn"), "{name}");
+            assert!(output.contains("_elephc_eval_object_release_fn"), "{name}");
+        }
+    }
 }

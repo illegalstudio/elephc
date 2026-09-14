@@ -1,11 +1,11 @@
 ---
-title: "date_create_immutable() — internals"
+title: "date_create_immutable() - internals"
 description: "Compiler internals for date_create_immutable(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 192
 ---
 
-## `date_create_immutable()` — internals
+## `date_create_immutable()` - internals
 
 ## Where it lives
 

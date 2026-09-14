@@ -1,11 +1,11 @@
 ---
-title: "imagesy() — internals"
+title: "imagesy() - internals"
 description: "Compiler internals for imagesy(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 533
 ---
 
-## `imagesy()` — internals
+## `imagesy()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagesy(mixed $image): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

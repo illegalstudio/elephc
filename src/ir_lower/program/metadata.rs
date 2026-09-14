@@ -69,6 +69,16 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         .collect();
     module.required_runtime_features =
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
+    // Callable descriptors can introduce bridge calls only during assembly emission.
+    // Retain their checker requirements alongside calls already present in EIR.
+    module.required_runtime_features.mbstring = check_result.required_libraries
+        .iter().any(|library| library == "elephc_mbstring");
+    let features = module.required_runtime_features;
+    if features.mbstring || features.mbregex || features.eval_bridge {
+        // Library callers need the same default MIME provider and request initialization as CLI.
+        // The CLI backend replaces these defaults when explicit startup overrides are supplied.
+        module.mbstring_startup = Some(vec![b"UTF-8".to_vec(); 3]);
+    }
 }
 
 /// Normalizes class method metadata to the ABI contracts emitted in EIR.
@@ -285,4 +295,3 @@ pub(super) fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<S
         _ => false,
     }
 }
-

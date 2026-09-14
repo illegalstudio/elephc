@@ -1,11 +1,11 @@
 ---
-title: "imagepng() — internals"
+title: "imagepng() - internals"
 description: "Compiler internals for imagepng(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 520
 ---
 
-## `imagepng()` — internals
+## `imagepng()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagepng(mixed $image, ?string $file = null, int $quality = -1, int $fi
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

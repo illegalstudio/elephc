@@ -63,6 +63,20 @@ pub fn resolve_for_compilation(
     resolve_for_compilation_with(source, target, requirements, &cache, &SystemToolchains)
 }
 
+/// Resolves against an explicit cache without changing the process environment or materializing packages.
+/// Uses the current target toolchain and the same receipt/integrity checks as ordinary compilation.
+pub fn resolve_for_compilation_in_cache(
+    source: &Path,
+    target: Target,
+    requirements: &[NativeRequirement],
+    cache_root: &Path,
+) -> Result<Vec<ResolvedNativePackage>, NativeError> {
+    if requirements.is_empty() { return Ok(Vec::new()); }
+    let cwd = std::env::current_dir().map_err(|error| NativeError::io("read current directory", Path::new("."), error))?;
+    let cache = CacheLayout::from_values(&cwd, Some(cache_root.as_os_str()), None, None)?;
+    resolve_for_compilation_with(source, target, requirements, &cache, &SystemToolchains)
+}
+
 /// Names the PHP-visible surface a managed package serves, for the "<feature> support requires
 /// managed native package <name>" diagnostics: `pcre2` backs the regex builtins and `libxml2`
 /// the xml/xmlwriter extensions. A package without a surface of its own (the curl chain, zlib)

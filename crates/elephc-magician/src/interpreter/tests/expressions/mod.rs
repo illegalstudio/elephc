@@ -12,4 +12,6 @@ mod classes_traits;
 mod interface_contracts;
 mod method_contracts;
 mod scalars_objects;
+mod constructor_ownership;
+mod method_ownership;
 mod visibility;

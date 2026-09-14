@@ -1,11 +1,11 @@
 ---
-title: "imagerotate() — internals"
+title: "imagerotate() - internals"
 description: "Compiler internals for imagerotate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 524
 ---
 
-## `imagerotate()` — internals
+## `imagerotate()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagerotate(mixed $image, float $angle, int $background_color, int $ign
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

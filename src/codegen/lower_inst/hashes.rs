@@ -581,8 +581,8 @@ fn lower_hash_append_aarch64(
     ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve temporary slots for the hash pointer and computed append key
     ctx.load_value_to_reg(hash, "x0")?;
     ctx.emitter.instruction("str x0, [sp, #0]");                                // preserve the hash pointer across value materialization
-    emit_hash_append_key_scan_aarch64(ctx);
-    ctx.emitter.instruction("str x11, [sp, #8]");                               // preserve the next PHP integer append key
+    abi::emit_call_label(ctx.emitter, "__rt_hash_next_index");
+    ctx.emitter.instruction("str x0, [sp, #8]");                                // preserve the checked next index before acquiring a value owner
     materialize_hash_value_aarch64(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("ldr x0, [sp, #0]");                                // pass the hash pointer to hash_set
     ctx.emitter.instruction("ldr x1, [sp, #8]");                                // pass the computed integer append key
@@ -623,8 +623,8 @@ fn lower_hash_append_x86_64(
     ctx.emitter.instruction("sub rsp, 32");                                     // reserve aligned slots for the hash pointer and computed append key
     ctx.load_value_to_reg(hash, "rdi")?;
     ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");                        // preserve the hash pointer across value materialization
-    emit_hash_append_key_scan_x86_64(ctx);
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r11");                    // preserve the next PHP integer append key
+    abi::emit_call_label(ctx.emitter, "__rt_hash_next_index");
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // preserve the checked next index before acquiring a value owner
     materialize_hash_value_x86_64(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // pass the hash pointer to hash_set
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // pass the computed integer append key
@@ -633,81 +633,6 @@ fn lower_hash_append_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_hash_set");
     ctx.emitter.instruction("add rsp, 32");                                     // release append temporaries
     Ok(())
-}
-
-/// Computes the next PHP integer append key for the hash pointer in `x0`.
-fn emit_hash_append_key_scan_aarch64(ctx: &mut FunctionContext<'_>) {
-    let loop_label = ctx.next_label("hash_append_key_loop");
-    let update_label = ctx.next_label("hash_append_key_update");
-    let next_label = ctx.next_label("hash_append_key_next");
-    let done_label = ctx.next_label("hash_append_key_done");
-
-    ctx.emitter.instruction("ldr x10, [x0, #8]");                               // load hash capacity from the header
-    ctx.emitter.instruction("mov x9, #0");                                      // start scanning at hash slot zero
-    ctx.emitter.instruction("mov x11, #0");                                     // default append key when no integer keys exist
-    ctx.emitter.instruction("mov x12, #0");                                     // track whether any integer key has been seen
-    ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x9, x10");                                     // stop once every allocated hash slot has been checked
-    ctx.emitter.instruction(&format!("b.ge {}", done_label));                   // finish scanning when the slot index reaches capacity
-    ctx.emitter.instruction("mov x13, #64");                                    // each hash entry occupies 64 bytes
-    ctx.emitter.instruction("mul x14, x9, x13");                                // compute byte offset for the current hash slot
-    ctx.emitter.instruction("add x14, x0, x14");                                // add the slot offset to the hash base
-    ctx.emitter.instruction("add x14, x14, #40");                               // skip the 40-byte hash header to the current entry
-    ctx.emitter.instruction("ldr x15, [x14]");                                  // read the occupied flag for this entry
-    ctx.emitter.instruction("cmp x15, #1");                                     // only occupied entries can contribute integer keys
-    ctx.emitter.instruction(&format!("b.ne {}", next_label));                   // skip empty entries
-    ctx.emitter.instruction("ldr x15, [x14, #16]");                             // load key_hi to distinguish integer from string keys
-    ctx.emitter.instruction("cmn x15, #1");                                     // integer keys use key_hi = -1
-    ctx.emitter.instruction(&format!("b.ne {}", next_label));                   // skip string-keyed entries
-    ctx.emitter.instruction("ldr x15, [x14, #8]");                              // load the integer key low word
-    ctx.emitter.instruction("add x15, x15, #1");                                // candidate append key is existing integer key plus one
-    ctx.emitter.instruction(&format!("cbz x12, {}", update_label));             // first integer key always seeds the append key
-    ctx.emitter.instruction("cmp x15, x11");                                    // compare the candidate with the best key so far
-    ctx.emitter.instruction(&format!("b.le {}", next_label));                   // keep the existing best key when it is larger
-    ctx.emitter.label(&update_label);
-    ctx.emitter.instruction("mov x11, x15");                                    // keep the largest observed integer key plus one
-    ctx.emitter.instruction("mov x12, #1");                                     // remember that at least one integer key was found
-    ctx.emitter.label(&next_label);
-    ctx.emitter.instruction("add x9, x9, #1");                                  // advance to the next hash slot
-    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning hash slots
-    ctx.emitter.label(&done_label);
-}
-
-/// Computes the next PHP integer append key for the hash pointer in `rdi`.
-fn emit_hash_append_key_scan_x86_64(ctx: &mut FunctionContext<'_>) {
-    let loop_label = ctx.next_label("hash_append_key_loop");
-    let update_label = ctx.next_label("hash_append_key_update");
-    let next_label = ctx.next_label("hash_append_key_next");
-    let done_label = ctx.next_label("hash_append_key_done");
-
-    ctx.emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                    // load hash capacity from the header
-    ctx.emitter.instruction("xor r9, r9");                                      // start scanning at hash slot zero
-    ctx.emitter.instruction("xor r11, r11");                                    // default append key when no integer keys exist
-    ctx.emitter.instruction("xor r8, r8");                                      // track whether any integer key has been seen
-    ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp r9, r10");                                     // stop once every allocated hash slot has been checked
-    ctx.emitter.instruction(&format!("jge {}", done_label));                    // finish scanning when the slot index reaches capacity
-    ctx.emitter.instruction("mov rcx, r9");                                     // copy the slot index before scaling it
-    ctx.emitter.instruction("imul rcx, 64");                                    // compute byte offset for the current hash slot
-    ctx.emitter.instruction("lea rax, [rdi + rcx + 40]");                       // compute the current entry address after the hash header
-    ctx.emitter.instruction("cmp QWORD PTR [rax], 1");                          // only occupied entries can contribute integer keys
-    ctx.emitter.instruction(&format!("jne {}", next_label));                    // skip empty entries
-    ctx.emitter.instruction("mov rdx, QWORD PTR [rax + 16]");                   // load key_hi to distinguish integer from string keys
-    ctx.emitter.instruction("cmp rdx, -1");                                     // integer keys use key_hi = -1
-    ctx.emitter.instruction(&format!("jne {}", next_label));                    // skip string-keyed entries
-    ctx.emitter.instruction("mov rcx, QWORD PTR [rax + 8]");                    // load the integer key low word
-    ctx.emitter.instruction("add rcx, 1");                                      // candidate append key is existing integer key plus one
-    ctx.emitter.instruction("test r8, r8");                                     // has any integer key already seeded the append key?
-    ctx.emitter.instruction(&format!("jz {}", update_label));                   // first integer key always seeds the append key
-    ctx.emitter.instruction("cmp rcx, r11");                                    // compare the candidate with the best key so far
-    ctx.emitter.instruction(&format!("jle {}", next_label));                    // keep the existing best key when it is larger
-    ctx.emitter.label(&update_label);
-    ctx.emitter.instruction("mov r11, rcx");                                    // keep the largest observed integer key plus one
-    ctx.emitter.instruction("mov r8, 1");                                       // remember that at least one integer key was found
-    ctx.emitter.label(&next_label);
-    ctx.emitter.instruction("add r9, 1");                                       // advance to the next hash slot
-    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning hash slots
-    ctx.emitter.label(&done_label);
 }
 
 /// Materializes an EIR value as a normalized hash key for AArch64.

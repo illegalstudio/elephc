@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_start_element() — internals"
+title: "xmlwriter_start_element() - internals"
 description: "Compiler internals for xmlwriter_start_element(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 959
+  order: 1020
 ---
 
-## `xmlwriter_start_element()` — internals
+## `xmlwriter_start_element()` - internals
 
 ## Where it lives
 

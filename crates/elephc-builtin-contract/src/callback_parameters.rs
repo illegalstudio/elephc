@@ -38,6 +38,7 @@ const CALLBACK_PARAMETERS: &[CallbackParameters] = &[
     callback_parameters("call_user_func", CALLBACK),
     callback_parameters("call_user_func_array", CALLBACK),
     callback_parameters("iterator_apply", CALLBACK),
+    callback_parameters("mb_ereg_replace_callback", CALLBACK),
     callback_parameters("ob_start", CALLBACK),
     callback_parameters("pcntl_signal", HANDLER),
     callback_parameters("preg_replace_callback", CALLBACK),

@@ -2,7 +2,7 @@
 title: "xmlwriter_set_indent_string()"
 description: "Sets the string used for one indentation level."
 sidebar:
-  order: 949
+  order: 1010
 ---
 
 ## xmlwriter_set_indent_string()
@@ -22,9 +22,9 @@ Sets the string used for one indentation level.
 ## Availability
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_set_indent_string.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_set_indent_string.rs)).
+- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_set_indent_string.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_set_indent_string.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

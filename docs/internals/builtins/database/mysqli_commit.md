@@ -1,11 +1,11 @@
 ---
-title: "mysqli_commit() — internals"
+title: "mysqli_commit() - internals"
 description: "Compiler internals for mysqli_commit(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 103
 ---
 
-## `mysqli_commit()` — internals
+## `mysqli_commit()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_commit(mixed $mysql, int $flags = 0, ?string $name = null): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

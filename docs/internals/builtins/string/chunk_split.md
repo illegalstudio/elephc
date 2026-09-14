@@ -1,16 +1,16 @@
 ---
-title: "chunk_split() — internals"
+title: "chunk_split() - internals"
 description: "Compiler internals for chunk_split(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 759
 ---
 
-## `chunk_split()` — internals
+## `chunk_split()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/chunk_split.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/chunk_split.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function chunk_split(string $string, int $length = 76, string $separator = '\r\n'): string
+function chunk_split(string $string, int $length = 76, string $separator = "\r\n"): string
 ```
 
 ## What the type checker enforces

@@ -13,6 +13,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime_features::RuntimeFeatures;
 use crate::codegen_support::runtime::UNCAUGHT_EXIT_STATUS;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
@@ -25,21 +26,32 @@ fn x86_64_mixed_heap_kind_instruction() -> String {
 }
 
 /// Emits every eval value wrapper required by `libelephc-magician`.
-pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
+pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.blank();
     emitter.comment("--- runtime: eval bridge value wrappers ---");
     match emitter.target.arch {
-        Arch::AArch64 => emit_aarch64_wrappers(emitter),
-        Arch::X86_64 => emit_x86_64_wrappers(emitter),
+        Arch::AArch64 => emit_aarch64_wrappers(emitter, features),
+        Arch::X86_64 => emit_x86_64_wrappers(emitter, features),
     }
+    lifecycle::emit(emitter);
+    output::emit(emitter);
+    array_next_index::emit(emitter);
+    if features.mbstring || features.eval_bridge { string_literal::emit(emitter); }
 }
 
 
 mod aarch64_values_classes;
 mod aarch64_arrays;
+mod array_iter_value;
+pub(crate) mod array_next_index;
+mod reference_values;
+mod lifecycle;
+mod output;
+pub(crate) mod string_literal;
 mod aarch64_casts;
 mod aarch64_numeric;
 mod aarch64_compare;
+mod concat;
 mod aarch64_output;
 mod x86_64_values_classes;
 mod x86_64_arrays;
@@ -58,6 +70,7 @@ mod aarch64_clone;
 mod x86_64_clone;
 mod clone_rejections;
 mod runtime_builtin_dispatch;
+mod mbstring;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;
@@ -107,25 +120,29 @@ use clone_rejections::*;
 use runtime_builtin_dispatch::*;
 
 /// Emits ARM64 C-ABI wrappers around the internal mixed value helpers.
-fn emit_aarch64_wrappers(emitter: &mut Emitter) {
+fn emit_aarch64_wrappers(emitter: &mut Emitter, features: RuntimeFeatures) {
     emit_aarch64_values_classes(emitter);
     emit_aarch64_arrays(emitter);
+    array_iter_value::emit(emitter);
+    reference_values::emit(emitter);
     emit_aarch64_casts(emitter);
     emit_aarch64_numeric(emitter);
     emit_aarch64_compare(emitter);
     emit_aarch64_output(emitter);
-    emit_aarch64_runtime_builtin_dispatch(emitter);
+    emit_aarch64_runtime_builtin_dispatch(emitter, features);
 }
 
 /// Emits Linux x86_64 C-ABI wrappers around the internal mixed value helpers.
-fn emit_x86_64_wrappers(emitter: &mut Emitter) {
+fn emit_x86_64_wrappers(emitter: &mut Emitter, features: RuntimeFeatures) {
     emit_x86_64_values_classes(emitter);
     emit_x86_64_arrays(emitter);
+    array_iter_value::emit(emitter);
+    reference_values::emit(emitter);
     emit_x86_64_casts(emitter);
     emit_x86_64_numeric(emitter);
     emit_x86_64_compare(emitter);
     emit_x86_64_output(emitter);
-    emit_x86_64_runtime_builtin_dispatch(emitter);
+    emit_x86_64_runtime_builtin_dispatch(emitter, features);
 }
 
 /// Emits a global label with platform C-symbol mangling.
@@ -142,7 +159,7 @@ mod tests {
     /// Emits the whole eval bridge for one target and returns the assembly text.
     fn emit_for(target: Target) -> String {
         let mut emitter = Emitter::new(target);
-        emit_eval_bridge_runtime(&mut emitter);
+        emit_eval_bridge_runtime(&mut emitter, RuntimeFeatures::all());
         emitter.output()
     }
 

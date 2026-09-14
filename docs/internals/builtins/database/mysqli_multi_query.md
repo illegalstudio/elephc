@@ -1,11 +1,11 @@
 ---
-title: "mysqli_multi_query() — internals"
+title: "mysqli_multi_query() - internals"
 description: "Compiler internals for mysqli_multi_query(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 139
 ---
 
-## `mysqli_multi_query()` — internals
+## `mysqli_multi_query()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_multi_query(mixed $mysql, string $query): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

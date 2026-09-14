@@ -9,21 +9,13 @@
 
 use super::*;
 
-/// Lowers named arguments in source order, then returns operands in signature order.
-pub(super) fn lower_named_args_with_signature(
-    ctx: &mut LoweringContext<'_, '_>,
-    sig: &FunctionSig,
-    args: &[Expr],
-) -> Vec<crate::ir::ValueId> {
-    lower_named_args_with_signature_options(ctx, sig, args, false)
-}
-
 /// Lowers named arguments with caller-selected trailing-default preservation.
 pub(super) fn lower_named_args_with_signature_options(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     args: &[Expr],
     trim_trailing_defaults: bool,
+    capture_values: bool,
 ) -> Vec<crate::ir::ValueId> {
     let call_span = args
         .first()
@@ -48,18 +40,19 @@ pub(super) fn lower_named_args_with_signature_options(
             sig,
             &plan,
             &assoc_spread_sources,
+            capture_values,
         ) {
             return operands;
         }
-        if let Some(operands) = lower_dynamic_named_spread_variadic_args(ctx, sig, &plan) {
+        if let Some(operands) = lower_dynamic_named_spread_variadic_args(ctx, sig, &plan, capture_values) {
             return operands;
         }
         let normalized = plan.normalized_args();
         return lower_args(ctx, &normalized);
     }
     let mut source_values = Vec::with_capacity(plan.source_args.len());
-    for source_arg in &plan.source_args {
-        source_values.push(lower_call_source_arg(ctx, source_arg));
+    for (index, source_arg) in plan.source_args.iter().enumerate() {
+        source_values.push(lower_planned_source_arg(ctx, sig, &plan, index, source_arg, capture_values));
     }
 
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
@@ -87,6 +80,7 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     plan: &crate::types::call_args::CallArgPlan,
+    capture_values: bool,
 ) -> Option<Vec<crate::ir::ValueId>> {
     if sig.variadic.is_none() || !plan.prefix_has_dynamic_named_spread {
         return None;
@@ -112,7 +106,7 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
         if matches!(source_arg.kind, ExprKind::Spread(_)) {
             return None;
         }
-        source_values[source_index] = Some(lower_call_source_arg(ctx, source_arg));
+        source_values[source_index] = Some(lower_planned_source_arg(ctx, sig, plan, source_index, source_arg, capture_values));
     }
     emit_dynamic_named_prefix_duplicate_guards(ctx, sig, plan, &prefix_temp, first_named_pos);
 
@@ -244,8 +238,16 @@ pub(super) fn lower_named_args_with_spread_plan(
     sig: &FunctionSig,
     plan: &crate::types::call_args::CallArgPlan,
     assoc_spread_sources: &[bool],
+    capture_values: bool,
 ) -> Option<Vec<crate::ir::ValueId>> {
-    lower_named_args_with_spread_plan_hinted(ctx, sig, plan, assoc_spread_sources, &mut |_, _, _| None)
+    lower_named_args_with_spread_plan_impl(
+        ctx,
+        sig,
+        plan,
+        assoc_spread_sources,
+        capture_values,
+        &mut |_, _, _| None,
+    )
 }
 
 /// `lower_named_args_with_spread_plan` with a per-source override: `hinted` sees each
@@ -258,6 +260,18 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
     sig: &FunctionSig,
     plan: &crate::types::call_args::CallArgPlan,
     assoc_spread_sources: &[bool],
+    hinted: &mut dyn FnMut(&mut LoweringContext<'_, '_>, usize, &Expr) -> Option<crate::ir::ValueId>,
+) -> Option<Vec<crate::ir::ValueId>> {
+    lower_named_args_with_spread_plan_impl(ctx, sig, plan, assoc_spread_sources, false, hinted)
+}
+
+/// Applies optional per-parameter hints while preserving caller-selected value capture.
+fn lower_named_args_with_spread_plan_impl(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    assoc_spread_sources: &[bool],
+    capture_values: bool,
     hinted: &mut dyn FnMut(&mut LoweringContext<'_, '_>, usize, &Expr) -> Option<crate::ir::ValueId>,
 ) -> Option<Vec<crate::ir::ValueId>> {
     if assoc_spread_sources.iter().any(|is_assoc| *is_assoc) {
@@ -293,9 +307,28 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
             .find(|source| source.source_index() == source_index)
             .and_then(|source| Some((source.param_idx()?, source.expr())));
         let value = match planned {
-            Some((param_idx, expr)) => hinted(ctx, param_idx, expr)
-                .unwrap_or_else(|| lower_call_source_arg(ctx, source_arg)),
-            None => lower_call_source_arg(ctx, source_arg),
+            Some((param_idx, expr)) => {
+                if let Some(value) = hinted(ctx, param_idx, expr) {
+                    value
+                } else {
+                    lower_planned_source_arg(
+                        ctx,
+                        sig,
+                        plan,
+                        source_index,
+                        source_arg,
+                        capture_values,
+                    )
+                }
+            }
+            None => lower_planned_source_arg(
+                ctx,
+                sig,
+                plan,
+                source_index,
+                source_arg,
+                capture_values,
+            ),
         };
         source_values[source_index] = Some(value);
     }
@@ -385,4 +418,26 @@ pub(super) fn lower_named_args_with_spread_plan_hinted(
         operands.push(tail.value);
     }
     Some(operands)
+}
+
+/// Captures a planned source value while preserving the original lvalue for reference parameters.
+fn lower_planned_source_arg(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    source_index: usize,
+    arg: &Expr,
+    capture_values: bool,
+) -> ValueId {
+    let parameter = plan.source_values.iter().find(|source| source.source_index() == source_index)
+        .and_then(|source| source.param_idx());
+    let by_ref = parameter.is_some_and(|index| sig.ref_params.get(index).copied().unwrap_or(false));
+    if capture_values && by_ref {
+        promote_captured_reference_argument(ctx, arg);
+    }
+    let value = lower_call_source_arg(ctx, arg);
+    if capture_values && !by_ref {
+        let lowered = lowered_value_from_id(ctx, value);
+        capture_call_argument_value(ctx, lowered, parameter.unwrap_or(sig.params.len() + source_index), arg.span).value
+    } else { value }
 }

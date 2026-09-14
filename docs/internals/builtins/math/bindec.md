@@ -1,16 +1,16 @@
 ---
-title: "bindec() — internals"
+title: "bindec() - internals"
 description: "Compiler internals for bindec(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 565
 ---
 
-## `bindec()` — internals
+## `bindec()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bindec.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bindec.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,7 +48,7 @@ function bindec(string $binary_string): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

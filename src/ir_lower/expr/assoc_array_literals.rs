@@ -11,6 +11,13 @@ use super::*;
 
 /// Lowers an associative array literal.
 pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr) -> LoweredValue {
+    lower_assoc_array_literal_with_guard(ctx, pairs, expr, false)
+}
+
+/// Protects a callback's partially built argument hash until invocation consumes its ownership.
+pub(super) fn lower_assoc_array_literal_with_guard(
+    ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr, guarded: bool,
+) -> LoweredValue {
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
@@ -19,10 +26,12 @@ pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    if guarded { guard_descriptor_container(ctx, hash, expr.span); }
     for (key, value) in pairs {
         let key = lower_expr(ctx, key);
         let value = lower_expr(ctx, value);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
+        if guarded { ctx.refresh_argument_array_guard(hash, expr.span); }
     }
     hash
 }
@@ -93,6 +102,10 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
 ) -> PhpType {
     match &value.kind {
         ExprKind::Null => PhpType::Mixed,
+        ExprKind::Ternary { .. } => {
+            // Use the actual branch-merge representation before choosing hash storage.
+            ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
+        }
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
@@ -109,7 +122,7 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
                 .cloned()
                 .unwrap_or_else(|| infer_expr_type_syntactic(value)),
         ),
-        ExprKind::FunctionCall { name, .. } => {
+        ExprKind::FunctionCall { name, args } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
@@ -117,7 +130,9 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
             }
-            ir_array_storage_type(infer_expr_type_syntactic(value))
+            registry_builtin_result_type(ctx, canonical, args, &[], value.span)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
@@ -270,4 +285,3 @@ pub(super) fn nullsafe_method_call_expr_type_for_ir(
 pub(crate) fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
-

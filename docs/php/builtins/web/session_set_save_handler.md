@@ -2,7 +2,7 @@
 title: "session_set_save_handler()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 903
+  order: 964
 ---
 
 ## session_set_save_handler()
@@ -31,7 +31,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

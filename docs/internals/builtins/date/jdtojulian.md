@@ -1,11 +1,11 @@
 ---
-title: "jdtojulian() — internals"
+title: "jdtojulian() - internals"
 description: "Compiler internals for jdtojulian(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 232
 ---
 
-## `jdtojulian()` — internals
+## `jdtojulian()` - internals
 
 ## Where it lives
 

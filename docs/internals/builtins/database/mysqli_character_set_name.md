@@ -1,11 +1,11 @@
 ---
-title: "mysqli_character_set_name() — internals"
+title: "mysqli_character_set_name() - internals"
 description: "Compiler internals for mysqli_character_set_name(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 101
 ---
 
-## `mysqli_character_set_name()` — internals
+## `mysqli_character_set_name()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_character_set_name(mixed $mysql): string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -10,16 +10,50 @@
 //!   PHP-visible cursor of their own.
 
 use super::*;
+use crate::errors::EvalStatus;
+use crate::interpreter::RuntimeValueOps;
 
 impl ElephcEvalContext {
-    /// Retains the foreign owner metadata needed to invoke one exported PCNTL handler callable.
+    /// Pins one foreign callable cell and the context metadata needed to invoke it.
     pub(crate) fn retain_pcntl_foreign_callable(
         &mut self,
         callback: RuntimeCellHandle,
         owner: pcntl_runtime::EvalPcntlContextLease,
-    ) {
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<(), EvalStatus> {
+        let identity = callback.as_ptr() as usize;
+        if self.pcntl_foreign_callables.contains_key(&identity) {
+            return Ok(());
+        }
+        let retained = values.retain(callback)?;
         self.pcntl_foreign_callables
-            .insert(callback.as_ptr() as usize, owner);
+            .insert(identity, (retained, owner));
+        Ok(())
+    }
+
+    /// Propagates foreign callable metadata to an independently copied PHP value.
+    pub(crate) fn copy_pcntl_foreign_callable(
+        &mut self,
+        source: RuntimeCellHandle,
+        target: RuntimeCellHandle,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<(), EvalStatus> {
+        let source = source.as_ptr() as usize;
+        let target_identity = target.as_ptr() as usize;
+        if source == target_identity || self.pcntl_foreign_callables.contains_key(&target_identity) {
+            return Ok(());
+        }
+        let Some(owner) = self
+            .pcntl_foreign_callables
+            .get(&source)
+            .map(|(_, owner)| owner.clone())
+        else {
+            return Ok(());
+        };
+        let retained = values.retain(target)?;
+        self.pcntl_foreign_callables
+            .insert(target_identity, (retained, owner));
+        Ok(())
     }
 
     /// Returns the retained owner lease for a PCNTL callable exported into this context.
@@ -29,6 +63,18 @@ impl ElephcEvalContext {
     ) -> Option<&pcntl_runtime::EvalPcntlContextLease> {
         self.pcntl_foreign_callables
             .get(&(callback.as_ptr() as usize))
+            .map(|(_, owner)| owner)
+    }
+
+    /// Releases every cell pin before dropping its foreign context lease.
+    pub(crate) fn release_pcntl_foreign_callables(
+        &mut self,
+        values: &mut impl RuntimeValueOps,
+    ) {
+        for (_, (callback, owner)) in std::mem::take(&mut self.pcntl_foreign_callables) {
+            let _ = values.release(callback);
+            drop(owner);
+        }
     }
 
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
@@ -46,6 +92,7 @@ impl ElephcEvalContext {
         self.static_locals
             .get(&(function_name.to_string(), name.to_string()))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores one static local cell and returns any replaced distinct cell.
@@ -66,6 +113,7 @@ impl ElephcEvalContext {
         self.static_properties
             .get(&(normalize_class_name(class_name), name.to_string()))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores one eval static property cell and returns any replaced distinct cell.
@@ -107,6 +155,7 @@ impl ElephcEvalContext {
         self.class_constants
             .get(&(normalize_class_name(class_name), name.to_string()))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores one eval class constant cell and returns any replaced distinct cell.

@@ -71,10 +71,12 @@ fn property_fetch_for_write_applies(
     }
     let property_ty =
         property_get_result_type(ctx, object_value.value, property, Op::PropGet, expr);
-    if !matches!(
-        normalize_value_php_type(property_ty).codegen_repr(),
-        PhpType::Array(_) | PhpType::AssocArray { .. }
-    ) {
+    if !property_ty.is_php_array()
+        && !matches!(
+            normalize_value_php_type(property_ty).codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
+    {
         return false;
     }
     // The backend has no plain-read fallback for this borrowed op. Mirror its slot
@@ -115,10 +117,11 @@ fn property_is_splittable_container_slot(
     };
     let slot_ty = runtime_property_type_override(ctx, normalized, property)
         .unwrap_or_else(|| declared_ty.clone());
-    matches!(
-        slot_ty.codegen_repr(),
-        PhpType::Array(_) | PhpType::AssocArray { .. }
-    )
+    slot_ty.is_php_array()
+        || matches!(
+            slot_ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
 }
 
 /// Returns whether an object expression names storage that keeps the receiver alive for the loop.

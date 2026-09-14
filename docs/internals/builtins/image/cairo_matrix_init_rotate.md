@@ -1,11 +1,11 @@
 ---
-title: "cairo_matrix_init_rotate() — internals"
+title: "cairo_matrix_init_rotate() - internals"
 description: "Compiler internals for cairo_matrix_init_rotate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 413
 ---
 
-## `cairo_matrix_init_rotate()` — internals
+## `cairo_matrix_init_rotate()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_matrix_init_rotate(float $radians): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

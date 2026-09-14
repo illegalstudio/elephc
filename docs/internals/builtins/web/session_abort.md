@@ -1,11 +1,11 @@
 ---
-title: "session_abort() — internals"
+title: "session_abort() - internals"
 description: "Compiler internals for session_abort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 885
+  order: 946
 ---
 
-## `session_abort()` — internals
+## `session_abort()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_abort(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

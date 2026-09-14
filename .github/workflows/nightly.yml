@@ -209,7 +209,7 @@ jobs:
       # list is guarded by `every_bridge_crate_is_in_the_build_lists`; a bridge
       # missing here ships a compiler that refuses the flag it advertises.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
 
       - name: Strip binary
         run: strip target/release/elephc
@@ -222,11 +222,18 @@ jobs:
       # not fold at compile time, with a linker error. A nightly has no formula,
       # so deriving the shipping list from the build output removes the second
       # list instead of adding a third.
+      - name: Copy mbstring data notices
+        run: |
+          mkdir -p target/release/mbstring-notices
+          cp crates/elephc-mbstring/NOTICE.md target/release/mbstring-notices/
+          cp crates/elephc-mbstring/src/unicode/data/LICENSE-UNICODE target/release/mbstring-notices/
+          cp crates/elephc-mbstring/src/detect/data/LICENSE-PHP target/release/mbstring-notices/
+
       - name: Create tarball
         run: |
           cd target/release
           TARBALL="elephc-nightly-${{ matrix.target }}.tar.gz"
-          tar czf "$TARBALL" elephc libelephc_*.a
+          tar czf "$TARBALL" elephc libelephc_*.a mbstring-notices
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else
@@ -293,18 +300,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
 
-      # The probe native-adds curl in its empty WORKDIR before
-      # --with-curl, and libxml2 before --with-xml, then compile-probes the
-      # packed archives. This cache is the default root that add writes
-      # (`~/.cache/elephc/native`), keyed like curl-codegen-tests (plus the
-      # libxml2 lock and recipe) so a warm runner skips the from-source
-      # openssl/libcurl/libxml2 rebuild. The compiler itself stays
-      # fail-closed for real projects.
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib/libxml2
+      # The probe prepares curl, Oniguruma, PCRE2, and libxml2 in its empty
+      # WORKDIR before force-enabling their packed bridges. This cache is the
+      # default root that native add writes (`~/.cache/elephc/native`), so a
+      # warm runner skips the from-source native rebuilds.
+      - name: Cache managed native curl, mbstring, and XML dependencies
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
-          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/oniguruma.rs', 'src/native_deps/recipes/oniguruma_shim.c', 'src/native_deps/recipes/oniguruma_shim.h', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             verify-native-${{ matrix.target }}-
 

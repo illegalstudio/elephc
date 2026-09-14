@@ -329,6 +329,15 @@ fn owned_parameter_slots(
     stored_slots: &HashSet<LocalSlotId>,
     ever_ref_cell_slots: &HashSet<LocalSlotId>,
 ) -> HashSet<LocalSlotId> {
+    let eval_can_replace_parameters = function
+        .locals
+        .iter()
+        .any(|local| {
+            matches!(
+                local.kind,
+                crate::ir::LocalKind::EvalScope | crate::ir::LocalKind::EvalGlobalScope
+            )
+        });
     function
         .params
         .iter()
@@ -345,7 +354,8 @@ fn owned_parameter_slots(
                 && param.php_type.codegen_repr() != PhpType::Mixed;
             (stored_slots.contains(&slot)
                 || ever_ref_cell_slots.contains(&slot)
-                || prologue_boxes_owned_mixed)
+                || prologue_boxes_owned_mixed
+                || eval_can_replace_parameters)
                 .then_some(slot)
         })
         .collect()

@@ -12,7 +12,7 @@
 /// wrapper-dispatch scan starts its `://` search at.
 ///
 /// PHP requires `n > 1` in `php_stream_locate_url_wrapper`: a single-letter scheme
-/// is a Windows drive letter, never a wrapper. Measured against reference PHP —
+/// is a Windows drive letter, never a wrapper. Measured against reference PHP -
 /// `stream_wrapper_register("f", "W")` returns true and `f` appears in
 /// `stream_get_wrappers()`, but `f://x` never reaches the wrapper. Starting the scan
 /// here is what enforces it: a `://` at index 0 or 1 is simply never found.
@@ -38,9 +38,13 @@ mod fputcsv;
 mod fread;
 mod fwrite;
 mod http_response;
+mod response_metadata;
 mod php_input;
 mod stdout_write;
 mod ob_buffer;
+mod ob_pop;
+mod ob_process;
+mod ob_eval_handler;
 mod ob_handler;
 mod ob_status;
 mod phar_read;

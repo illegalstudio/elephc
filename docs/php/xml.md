@@ -265,8 +265,9 @@ leaked block and byte totals), not guarantees.
   protected method pair, and private or protected method names bound through
   `xml_set_object()` are all rejected; PHP accepts them.
 - A handler declared with more required parameters than its event supplies is
-  a compile error for a closure literal and an uncatchable runtime fatal for a
-  dynamically named handler; PHP throws `ArgumentCountError`.
+  a compile error for a closure literal. A dynamically named handler throws a
+  catchable `ArgumentCountError` like PHP, but its message names
+  `call_user_func_array()` instead of the handler and argument counts.
 - `xml_parser_set_option()` does not emit PHP's `E_WARNING` for a value of the
   wrong type or an out-of-range `XML_OPTION_SKIP_TAGSTART`.
 - `XMLWriter::openUri()` reports failures through the stream layer's own

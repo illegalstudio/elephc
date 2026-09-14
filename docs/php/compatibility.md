@@ -5,84 +5,84 @@ sidebar:
   order: 21
 ---
 
-<!-- GENERATED FILE — do not edit by hand. -->
+<!-- GENERATED FILE - do not edit by hand. -->
 <!-- Regenerate with: python3 scripts/docs/gen_php_comparison.py -->
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **883 / 2169** (41%), classes **142 / 329** (43%), constants **1094 / 3180** (34%).
+Overall coverage: functions **944 / 2169** (44%), classes **142 / 329** (43%), constants **1103 / 3180** (35%).
 
 ## Coverage by PHP module
 
-Each cell counts the PHP-visible symbols a compiled elephc program has, against the symbols the module exposes in the baseline build. Any compile-time route counts once (registry builtin, injected prelude, name-resolver rewrite); symbols that exist only inside `eval()` are listed separately below. `—` marks a kind the module does not have.
+Each cell counts the PHP-visible symbols a compiled elephc program has, against the symbols the module exposes in the baseline build. Any compile-time route counts once (registry builtin, injected prelude, name-resolver rewrite); symbols that exist only inside `eval()` are listed separately below. `-` marks a kind the module does not have.
 
 | PHP module | Functions | Classes | Constants |
 |---|---|---|---|
-| [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | — |
-| `bz2` | 0 / 10 · 0% | — | — |
-| [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | — | 21 / 21 · 100% |
+| [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | - |
+| `bz2` | 0 / 10 · 0% | - | - |
+| [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | - | 21 / 21 · 100% |
 | `core` | 29 / 62 · 47% | 21 / 40 · 52% | 34 / 89 · 38% |
-| `ctype` | 4 / 11 · 36% | — | — |
+| `ctype` | 4 / 11 · 36% | - | - |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
-| `dba` | 0 / 15 · 0% | 0 / 1 · 0% | — |
+| `dba` | 0 / 15 · 0% | 0 / 1 · 0% | - |
 | `dom` | 0 / 2 · 0% | 0 / 50 · 0% | 0 / 61 · 0% |
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
-| [`exif`](./image.md#functions) | 4 / 4 · 100% | — | 1 / 1 · 100% |
-| `ffi` | — | 0 / 5 · 0% | — |
+| [`exif`](./image.md#functions) | 4 / 4 · 100% | - | 1 / 1 · 100% |
+| `ffi` | - | 0 / 5 · 0% | - |
 | `fileinfo` | 0 / 6 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
 | `filter` | 0 / 7 · 0% | 0 / 2 · 0% | 0 / 56 · 0% |
 | `ftp` | 0 / 36 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
 | [`gd`](./image.md#functions) | 83 / 106 · 78% | 1 / 2 · 50% | 67 / 89 · 75% |
-| `gettext` | 0 / 10 · 0% | — | — |
+| `gettext` | 0 / 10 · 0% | - | - |
 | `gmp` | 0 / 51 · 0% | 0 / 1 · 0% | 0 / 9 · 0% |
 | `hash` | 9 / 20 · 45% | 1 / 1 · 100% | 0 / 40 · 0% |
-| [`iconv`](./iconv.md#functions) | 10 / 10 · 100% | — | 4 / 4 · 100% |
+| [`iconv`](./iconv.md#functions) | 10 / 10 · 100% | - | 4 / 4 · 100% |
 | `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 0 / 170 · 0% |
 | `json` | 5 / 5 · 100% | 2 / 2 · 100% | 27 / 29 · 93% |
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
 | `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 0 / 28 · 0% |
-| `mbstring` | 2 / 65 · 3% | — | 0 / 9 · 0% |
+| `mbstring` | 63 / 65 · 97% | - | 9 / 9 · 100% |
 | [`mysqli`](./mysqli.md#functions) | 84 / 106 · 79% | 4 / 6 · 67% | 52 / 110 · 47% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
 | `openssl` | 4 / 64 · 6% | 0 / 3 · 0% | 3 / 70 · 4% |
 | [`pcntl`](./pcntl.md#functions) | 28 / 28 · 100% | 1 / 1 · 100% | 0 / 129 · 0% |
-| [`pcre`](./regex.md#functions) | 5 / 11 · 45% | — | 7 / 19 · 37% |
-| [`pdo`](./pdo.md#functions) | 1 / 1 · 100% | 4 / 4 · 100% | — |
-| [`pdo_dblib`](./pdo.md#functions) | — | 1 / 1 · 100% | — |
-| [`pdo_firebird`](./pdo.md#functions) | — | 1 / 1 · 100% | — |
-| [`pdo_mysql`](./pdo.md#functions) | — | 1 / 1 · 100% | — |
-| [`pdo_odbc`](./pdo.md#functions) | — | 1 / 1 · 100% | 0 / 1 · 0% |
-| [`pdo_pgsql`](./pdo.md#functions) | — | 1 / 1 · 100% | — |
-| [`pdo_sqlite`](./pdo.md#functions) | — | 1 / 1 · 100% | — |
+| [`pcre`](./regex.md#functions) | 5 / 11 · 45% | - | 7 / 19 · 37% |
+| [`pdo`](./pdo.md#functions) | 1 / 1 · 100% | 4 / 4 · 100% | - |
+| [`pdo_dblib`](./pdo.md#functions) | - | 1 / 1 · 100% | - |
+| [`pdo_firebird`](./pdo.md#functions) | - | 1 / 1 · 100% | - |
+| [`pdo_mysql`](./pdo.md#functions) | - | 1 / 1 · 100% | - |
+| [`pdo_odbc`](./pdo.md#functions) | - | 1 / 1 · 100% | 0 / 1 · 0% |
+| [`pdo_pgsql`](./pdo.md#functions) | - | 1 / 1 · 100% | - |
+| [`pdo_sqlite`](./pdo.md#functions) | - | 1 / 1 · 100% | - |
 | `pgsql` | 0 / 123 · 0% | 0 / 3 · 0% | 0 / 76 · 0% |
-| `phar` | — | 3 / 4 · 75% | — |
-| [`posix`](./pcntl.md#functions) | 2 / 41 · 5% | — | 0 / 43 · 0% |
+| `phar` | - | 3 / 4 · 75% | - |
+| [`posix`](./pcntl.md#functions) | 2 / 41 · 5% | - | 0 / 43 · 0% |
 | `random` | 3 / 9 · 33% | 0 / 11 · 0% | 0 / 2 · 0% |
-| `readline` | 1 / 13 · 8% | — | 0 / 1 · 0% |
-| `reflection` | — | 16 / 26 · 62% | — |
+| `readline` | 1 / 13 · 8% | - | 0 / 1 · 0% |
+| `reflection` | - | 16 / 26 · 62% | - |
 | [`session`](./sessions.md#functions) | 23 / 23 · 100% | 4 / 4 · 100% | 3 / 3 · 100% |
-| `shmop` | 0 / 6 · 0% | 0 / 1 · 0% | — |
-| `simplexml` | 0 / 3 · 0% | 0 / 2 · 0% | — |
+| `shmop` | 0 / 6 · 0% | 0 / 1 · 0% | - |
+| `simplexml` | 0 / 3 · 0% | 0 / 2 · 0% | - |
 | `snmp` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 21 · 0% |
 | `soap` | 0 / 2 · 0% | 0 / 8 · 0% | 0 / 81 · 0% |
 | `sockets` | 0 / 37 · 0% | 0 / 2 · 0% | 0 / 243 · 0% |
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
-| [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | — |
-| `sqlite3` | — | 0 / 4 · 0% | 0 / 12 · 0% |
+| [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
+| `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
 | `standard` | 381 / 545 · 70% | 2 / 6 · 33% | 155 / 400 · 39% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
-| `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | — |
-| `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | — |
+| `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
+| `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
 | `tidy` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 161 · 0% |
 | `tokenizer` | 0 / 2 · 0% | 0 / 1 · 0% | 0 / 154 · 0% |
-| `uri` | — | 0 / 9 · 0% | — |
+| `uri` | - | 0 / 9 · 0% | - |
 | [`xml`](./xml.md#functions) | 22 / 22 · 100% | 1 / 1 · 100% | 28 / 28 · 100% |
-| `xmlreader` | — | 0 / 1 · 0% | — |
-| [`xmlwriter`](./xml.md#functions) | 42 / 42 · 100% | 1 / 1 · 100% | — |
-| `xsl` | — | 0 / 1 · 0% | 0 / 14 · 0% |
-| [`zend opcache`](./opcache.md#functions) | 8 / 8 · 100% | — | — |
-| `zip` | 0 / 10 · 0% | 0 / 1 · 0% | — |
+| `xmlreader` | - | 0 / 1 · 0% | - |
+| [`xmlwriter`](./xml.md#functions) | 42 / 42 · 100% | 1 / 1 · 100% | - |
+| `xsl` | - | 0 / 1 · 0% | 0 / 14 · 0% |
+| [`zend opcache`](./opcache.md#functions) | 8 / 8 · 100% | - | - |
+| `zip` | 0 / 10 · 0% | 0 / 1 · 0% | - |
 | `zlib` | 4 / 30 · 13% | 0 / 2 · 0% | 0 / 27 · 0% |
 
 The counts above are what a compiled program has. Code run through `eval()` sees a different set in these modules (compiled / eval()):

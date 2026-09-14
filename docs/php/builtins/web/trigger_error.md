@@ -2,7 +2,7 @@
 title: "trigger_error()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 910
+  order: 971
 ---
 
 ## trigger_error()
@@ -24,7 +24,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

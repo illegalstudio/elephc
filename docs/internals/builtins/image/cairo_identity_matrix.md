@@ -1,11 +1,11 @@
 ---
-title: "cairo_identity_matrix() — internals"
+title: "cairo_identity_matrix() - internals"
 description: "Compiler internals for cairo_identity_matrix(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 406
 ---
 
-## `cairo_identity_matrix()` — internals
+## `cairo_identity_matrix()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_identity_matrix(mixed $context): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

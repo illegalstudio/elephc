@@ -372,21 +372,39 @@ fn lower_new_dynamic_generic(
     let mut operands = vec![name_value.value];
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
-    if uses_runtime_arg_container {
+    let arg_container = if uses_runtime_arg_container {
         let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
             .expect("dynamic constructor arguments always have a runtime container form");
         operands.push(arg_container.value);
+        let owns_arguments = ctx.value_is_owning_temporary(arg_container);
+        if owns_arguments && !ctx.has_call_argument_guard(arg_container.value) {
+            guard_descriptor_container(ctx, arg_container, expr.span);
+        }
+        Some((arg_container, owns_arguments))
     } else {
         operands.extend(lower_args(ctx, args));
-    }
-    ctx.emit_value(
+        None
+    };
+    let result = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
         uses_runtime_arg_container.then_some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
-    )
+    );
+    if let Some((arg_container, true)) = arg_container {
+        let guard_result = ctx.value_is_owning_temporary(result);
+        if guard_result {
+            guard_descriptor_container(ctx, result, expr.span);
+        }
+        ctx.unguard_call_argument(arg_container.value, expr.span);
+        crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(expr.span));
+        if guard_result {
+            ctx.unguard_call_argument(result.value, expr.span);
+        }
+    }
+    result
 }
 
 /// Lowers dynamic object construction.

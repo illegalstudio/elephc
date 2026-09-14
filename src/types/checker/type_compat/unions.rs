@@ -55,6 +55,11 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        if Self::is_generic_array_hint(expected) {
+            if let PhpType::Union(members) = actual {
+                return members.iter().all(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }));
+            }
+        }
         match expected {
             PhpType::Mixed => true,
             PhpType::Bool if matches!(actual, PhpType::False) => true,
@@ -357,6 +362,11 @@ impl Checker {
     ) -> PhpType {
         if !Self::is_generic_array_hint(declared_ty) {
             return declared_ty.clone();
+        }
+        if let PhpType::Union(members) = actual_ty {
+            if members.iter().all(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })) {
+                return actual_ty.clone();
+            }
         }
         match actual_ty {
             PhpType::Array(element)

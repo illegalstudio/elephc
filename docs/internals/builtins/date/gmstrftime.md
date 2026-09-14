@@ -1,11 +1,11 @@
 ---
-title: "gmstrftime() — internals"
+title: "gmstrftime() - internals"
 description: "Compiler internals for gmstrftime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 223
 ---
 
-## `gmstrftime()` — internals
+## `gmstrftime()` - internals
 
 ## Where it lives
 

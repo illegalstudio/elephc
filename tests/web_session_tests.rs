@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use elephc_builtin_contract::mbstring_abi::ini::{catalog as mbstring_ini, core as core_ini};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -2058,19 +2059,17 @@ fn session_custom_handler_lazy_update_timestamp() {
 ///      `array|false`; the probe narrows with `is_array()` before counting,
 ///      and the return type HINT is deliberately omitted in the prelude so
 ///      ordinary union return inference handles the exits.
-///    - The default (`null`) extension yields BOTH blocks — 33 `session.*`
-///      followed by 54 `opcache.*` = 87 total on the 8.5 default — with the
-///      `session.*` entries byte-identical and appearing FIRST
-///      (`isset($all['session.gc_maxlifetime'])` stays true, first key is
-///      `session.name`). `'core'` maps to that same unfiltered surface,
-///      reproducing php-src's rule that Core's `module_number` is 0 so the
-///      per-module filter is skipped for it.
-///    - KEY ORDER: the `session.*` block keeps its REGISTRATION order
-///      (unchanged, byte for byte), and the `opcache.*` block is now SORTED
-///      ASCENDING, matching reference `ini_get_all`. The pin walks the
-///      opcache keys with `strcmp` (`S`) and pins the last key
-///      (`opcache.validate_timestamps`). `opcache_get_configuration()`
-///      keeps registration order and is unaffected.
+///    - The default (`null`) extension yields Core and mbstring catalog rows
+///      together with 33 `session.*` and 54 `opcache.*` rows. The expected
+///      count derives its shared contribution from the contract catalogs.
+///      `'core'` maps to that same unfiltered surface, reproducing php-src's
+///      rule that Core's `module_number` is 0 so the per-module filter is
+///      skipped for it. The explicit `mbstring` filter returns its catalog.
+///    - KEY ORDER: the combined result is sorted ascending across every
+///      catalog. The pin walks all keys with `strcmp` (`S`) and checks the
+///      catalog-derived first key plus the final session key. The filtered
+///      session and opcache surfaces retain their own established ordering.
+///      `opcache_get_configuration()` keeps registration order and is unaffected.
 ///    - Each detail entry is `['global_value' => v, 'local_value' => v,
 ///      'access' => n]` where `n` is `7` for a normal session directive
 ///      (`session.name`), `2` (PHP_INI_PERDIR) for an `upload_progress.*`
@@ -2110,8 +2109,9 @@ $sess = ini_get_all('session');
 $all = ini_get_all();
 $zend = ini_get_all('zend opcache');
 $cased = ini_get_all('Zend OPcache');
-if (is_array($json) && is_array($sess) && is_array($all) && is_array($zend)) {
-    $parts[] = ($foo === false ? 'F' : 'X') . ':' . count($json) . ':' . count($sess) . ':' . count($all) . ':' . (isset($all['session.gc_maxlifetime']) ? 'Y' : 'N');
+$mbstring = ini_get_all('mbstring');
+if (is_array($json) && is_array($sess) && is_array($all) && is_array($zend) && is_array($mbstring)) {
+    $parts[] = ($foo === false ? 'F' : 'X') . ':' . count($json) . ':' . count($sess) . ':' . count($all) . ':' . (isset($all['session.gc_maxlifetime']) ? 'Y' : 'N') . ':' . count($mbstring);
     $name_entry = $sess['session.name'];
     $parts[] = $name_entry['global_value'] . '|' . $name_entry['local_value'] . '|' . $name_entry['access'];
     $upload_entry = $sess['session.upload_progress.enabled'];
@@ -2137,11 +2137,15 @@ echo implode('#', $parts);"#;
     let _ = child.kill();
     let _ = child.wait();
 
-    let expected = "1440,PHPSESSID,,files,nocache,180,0,/,,,,1,,1,1,,1,100,32,4,,php,\
-#1440>9999#XF#F:0:33:87:Y#PHPSESSID|PHPSESSID|7#2\
-#54:F:session.name:opcache.validate_timestamps:S";
+    let shared_count = core_ini::DIRECTIVES.len() + mbstring_ini::DIRECTIVES.len();
+    let all_count = 33 + 54 + shared_count;
+    let first_shared_key = core_ini::DIRECTIVES.iter().chain(mbstring_ini::DIRECTIVES.iter())
+        .map(|directive| directive.name).min().expect("shared INI catalog");
+    let expected = format!("1440,PHPSESSID,,files,nocache,180,0,/,,,,1,,1,1,,1,100,32,4,,php,\
+#1440>9999#XF#F:0:33:{all_count}:Y:{}#PHPSESSID|PHPSESSID|7#2\
+#54:F:{first_shared_key}:session.use_trans_sid:S", mbstring_ini::DIRECTIVES.len());
     assert!(
-        response.ends_with(expected),
+        response.ends_with(expected.as_str()),
         "session ini surface pin mismatch (INI-dispatcher refactor changed \
          observable behavior): {response:?}\nexpected suffix: {expected:?}"
     );

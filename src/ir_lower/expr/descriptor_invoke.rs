@@ -89,6 +89,7 @@ pub(super) fn lower_dynamic_call_user_func_array(
     }
     let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
     let callback = lower_expr(ctx, callback_expr);
+    guard_owned_descriptor_callback(ctx, callback, expr.span);
     let arg_array = lower_descriptor_invoker_arg_array_for_call_user_func_array(
         ctx,
         arg_array_expr,
@@ -190,6 +191,9 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
     arg_array: &Expr,
     sig: Option<&FunctionSig>,
 ) -> Option<LoweredValue> {
+    if let ExprKind::ArrayLiteralAssoc(pairs) = &arg_array.kind {
+        return Some(lower_assoc_array_literal_with_guard(ctx, pairs, arg_array, true));
+    }
     let ExprKind::ArrayLiteral(items) = &arg_array.kind else {
         return None;
     };
@@ -209,6 +213,7 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
         Op::ArrayNew.default_effects(),
         Some(arg_array.span),
     );
+    guard_descriptor_container(ctx, array, arg_array.span);
     for (index, item) in items.iter().enumerate() {
         let value = if let Some(var_name) = invoker_ref_arg_variable(ctx, sig, index, item) {
             lower_invoker_ref_arg_marker(ctx, var_name, item.span)
@@ -223,6 +228,7 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
+        ctx.refresh_argument_array_guard(array, item.span);
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, item.span);
     }
     Some(array)
@@ -316,6 +322,7 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     sig: Option<&FunctionSig>,
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    guard_owned_descriptor_callback(ctx, callback, expr.span);
     let arg_container = lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span)?;
     let result_type = sig
         .map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
@@ -329,7 +336,16 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     ))
 }
 
-/// Emits a descriptor invoke and releases an owned argument container after the call.
+/// Protects an owned callback before argument evaluation can throw or replace its source property.
+pub(super) fn guard_owned_descriptor_callback(
+    ctx: &mut LoweringContext<'_, '_>, callback: LoweredValue, span: Span,
+) {
+    if ctx.value_is_owning_temporary(callback) && !ctx.has_call_argument_guard(callback.value) {
+        guard_descriptor_container(ctx, callback, span);
+    }
+}
+
+/// Invokes a descriptor and consumes callback/argument owners while protecting its result from cleanup throws.
 pub(super) fn emit_callable_descriptor_invoke(
     ctx: &mut LoweringContext<'_, '_>,
     callback: LoweredValue,
@@ -337,6 +353,12 @@ pub(super) fn emit_callable_descriptor_invoke(
     result_type: PhpType,
     span: Span,
 ) -> LoweredValue {
+    let owns_callback = ctx.value_is_owning_temporary(callback);
+    guard_owned_descriptor_callback(ctx, callback, span);
+    let owns_arguments = ctx.value_is_owning_temporary(arg_container);
+    if owns_arguments && !ctx.has_call_argument_guard(arg_container.value) {
+        guard_descriptor_container(ctx, arg_container, span);
+    }
     let result = ctx.emit_value(
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value],
@@ -345,8 +367,20 @@ pub(super) fn emit_callable_descriptor_invoke(
         Op::CallableDescriptorInvoke.default_effects(),
         Some(span),
     );
-    if ctx.value_is_owning_temporary(arg_container) {
+    let guard_result = (owns_arguments || owns_callback) && ctx.value_is_owning_temporary(result);
+    if guard_result {
+        guard_descriptor_container(ctx, result, span);
+    }
+    if owns_arguments {
+        ctx.unguard_call_argument(arg_container.value, span);
         crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
+    }
+    if owns_callback {
+        ctx.unguard_call_argument(callback.value, span);
+        crate::ir_lower::ownership::release_if_owned(ctx, callback, Some(span));
+    }
+    if guard_result {
+        ctx.unguard_call_argument(result.value, span);
     }
     result
 }

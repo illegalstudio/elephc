@@ -1,16 +1,16 @@
 ---
-title: "ctype_digit() — internals"
+title: "ctype_digit() - internals"
 description: "Compiler internals for ctype_digit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 855
+  order: 916
 ---
 
-## `ctype_digit()` — internals
+## `ctype_digit()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ctype_digit.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_digit.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

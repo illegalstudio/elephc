@@ -2,7 +2,7 @@
 title: "printf()"
 description: "Outputs a formatted string."
 sidebar:
-  order: 808
+  order: 869
 ---
 
 ## printf()
@@ -15,16 +15,16 @@ Outputs a formatted string.
 
 **Parameters**:
 - `$format` (`string`)
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `...$values` - variadic: collects excess arguments into `$values`.
 
 **Returns**: `int`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/formatting/printf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/printf.rs)).
+- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/formatting/printf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/printf.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

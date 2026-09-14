@@ -1,11 +1,11 @@
 ---
-title: "date_parse_from_format() — internals"
+title: "date_parse_from_format() - internals"
 description: "Compiler internals for date_parse_from_format(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 206
 ---
 
-## `date_parse_from_format()` — internals
+## `date_parse_from_format()` - internals
 
 ## Where it lives
 

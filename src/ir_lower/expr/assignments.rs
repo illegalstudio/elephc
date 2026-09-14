@@ -65,6 +65,7 @@ pub(super) fn lower_assignment_expr(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
+        let lowered = crate::ir_lower::ownership::copy_assignment_value(ctx, lowered, Some(expr.span));
         // For static locals and ref-bound locals, keep the declared type to
         // avoid widening Int→Mixed. The codegen narrows Mixed→Int when the slot
         // is Int-typed. Without this, ref cells would hold Mixed boxes instead
@@ -338,4 +339,3 @@ pub(super) fn lower_inc_dec(
         ctx.load_local(name, Some(expr.span))
     }
 }
-

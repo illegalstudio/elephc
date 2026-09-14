@@ -12,6 +12,10 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 mod array_literals;
+mod call_argument_owners;
+
+use call_argument_owners::*;
+pub(crate) mod array_references;
 pub mod builtin_metadata;
 mod builtin_interfaces;
 mod builtins;
@@ -22,11 +26,13 @@ mod dynamic_functions;
 mod expressions;
 mod include_exec;
 mod libc_shims;
+mod operands;
 mod reflection;
 mod return_type_compat;
 mod return_values;
 mod runtime_ops;
 mod scope_cells;
+mod persistent_references;
 mod statements;
 #[cfg(not(test))]
 mod output_handlers;
@@ -53,6 +59,7 @@ use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
 use array_literals::*;
+use array_references::eval_owned_reference_target_value;
 use builtin_interfaces::*;
 use builtins::*;
 use constant_eval::*;
@@ -67,6 +74,7 @@ use dynamic_functions::*;
 use expressions::*;
 use include_exec::*;
 use libc_shims::*;
+use operands::*;
 use reflection::*;
 use return_type_compat::*;
 use return_values::*;
@@ -75,10 +83,13 @@ use runtime_ops::*;
 #[cfg(not(test))]
 pub(crate) use pcntl_escape::value_contains_foreign_pcntl_callable;
 use scope_cells::*;
+use persistent_references::*;
 #[cfg(not(test))]
 pub(crate) use statements::eval_dynamic_destructor_for_object_cell;
 #[cfg(not(test))]
 pub(crate) use output_handlers::eval_ob_handler_callback;
+#[cfg(not(test))]
+pub(crate) use output_handlers::release_ob_handler_callbacks;
 use statements::*;
 use throwables::*;
 use std::ffi::{CStr, CString};
@@ -207,8 +218,10 @@ pub fn execute_context_function_call_array_outcome(
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let evaluated_args = eval_array_call_arg_values(arg_array, context, values)?;
-    match eval_callable_with_call_array_args(name, evaluated_args, context, values) {
+    let result = with_array_call_arguments(arg_array, context, values, |evaluated_args, context, values| {
+        eval_callable_with_call_array_args(name, evaluated_args, context, values)
+    });
+    match result {
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()

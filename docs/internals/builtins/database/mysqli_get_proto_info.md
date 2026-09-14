@@ -1,11 +1,11 @@
 ---
-title: "mysqli_get_proto_info() — internals"
+title: "mysqli_get_proto_info() - internals"
 description: "Compiler internals for mysqli_get_proto_info(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 132
 ---
 
-## `mysqli_get_proto_info()` — internals
+## `mysqli_get_proto_info()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_get_proto_info(mixed $mysql): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

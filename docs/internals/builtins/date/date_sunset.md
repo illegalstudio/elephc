@@ -1,11 +1,11 @@
 ---
-title: "date_sunset() — internals"
+title: "date_sunset() - internals"
 description: "Compiler internals for date_sunset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 210
 ---
 
-## `date_sunset()` — internals
+## `date_sunset()` - internals
 
 ## Where it lives
 

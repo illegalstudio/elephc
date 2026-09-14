@@ -8,6 +8,7 @@
 //! Key details:
 //! - Indexed arrays are always lists; hashes are walked through the insertion-order chain; boxed mixed cells are unwrapped once.
 
+use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
@@ -43,9 +44,7 @@ pub fn emit_array_is_list(emitter: &mut Emitter) {
     emitter.instruction("cmn x11, #1");                                         // has the insertion chain reached its end (slot == -1)?
     emitter.instruction("b.eq __rt_array_is_list_one");                         // all keys matched 0..n-1 in order, including the empty hash
     emitter.instruction("mov x12, #64");                                        // hash entry stride in bytes
-    emitter.instruction("mul x12, x11, x12");                                   // byte offset of the current slot
-    emitter.instruction("add x12, x0, x12");                                    // advance from the hash base to the slot
-    emitter.instruction("add x12, x12, #40");                                   // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x12", "x0", "x11");
     emitter.instruction("ldr x13, [x12, #16]");                                 // x13 = key_len (-1 marks an integer key)
     emitter.instruction("cmn x13, #1");                                         // is this entry keyed by an integer?
     emitter.instruction("b.ne __rt_array_is_list_zero");                        // a string key cannot appear in a list
@@ -94,10 +93,7 @@ fn emit_array_is_list_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_is_list_loop");
     emitter.instruction("cmp r11, -1");                                         // has the insertion chain reached its end?
     emitter.instruction("je __rt_array_is_list_one");                           // all keys matched 0..n-1 in order, including the empty hash
-    emitter.instruction("mov rcx, r11");                                        // copy the slot index before scaling it
-    emitter.instruction("shl rcx, 6");                                          // convert the slot index into a 64-byte entry offset
-    emitter.instruction("add rcx, rdi");                                        // advance from the hash base to the slot
-    emitter.instruction("add rcx, 40");                                         // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "rcx", "rdi", "r11");
     emitter.instruction("mov r8, QWORD PTR [rcx + 16]");                        // r8 = key_len (-1 marks an integer key)
     emitter.instruction("cmp r8, -1");                                          // is this entry keyed by an integer?
     emitter.instruction("jne __rt_array_is_list_zero");                         // a string key cannot appear in a list

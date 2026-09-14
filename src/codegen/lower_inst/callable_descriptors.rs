@@ -23,7 +23,11 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
         let invoker_label = descriptor
             .sig
             .as_ref()
-            .map(|sig| emit_runtime_callable_invoker_inline(ctx, sig, &[]));
+            .map(|sig| {
+                if descriptor.kind == callable_descriptor::CALLABLE_DESC_KIND_BUILTIN {
+                    runtime_wrappers::emit_runtime_builtin_invoker_inline(ctx, &target, sig)
+                } else { emit_runtime_callable_invoker_inline(ctx, sig, &[]) }
+            });
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &descriptor.entry_label,
@@ -205,4 +209,3 @@ pub(super) fn emit_instance_method_first_class_callable(
     crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter);
     Ok(true)
 }
-

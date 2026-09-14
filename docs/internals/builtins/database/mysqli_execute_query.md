@@ -1,11 +1,11 @@
 ---
-title: "mysqli_execute_query() — internals"
+title: "mysqli_execute_query() - internals"
 description: "Compiler internals for mysqli_execute_query(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 113
 ---
 
-## `mysqli_execute_query()` — internals
+## `mysqli_execute_query()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_execute_query(mixed $mysql, string $query, ?array $params = null
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "imagerectangle() — internals"
+title: "imagerectangle() - internals"
 description: "Compiler internals for imagerectangle(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 522
 ---
 
-## `imagerectangle()` — internals
+## `imagerectangle()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagerectangle(mixed $image, int $x1, int $y1, int $x2, int $y2, int $c
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

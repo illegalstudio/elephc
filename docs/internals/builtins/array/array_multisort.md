@@ -1,16 +1,16 @@
 ---
-title: "array_multisort() — internals"
+title: "array_multisort() - internals"
 description: "Compiler internals for array_multisort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 26
 ---
 
-## `array_multisort()` — internals
+## `array_multisort()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_multisort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_multisort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,7 +49,7 @@ function array_multisort(array $array1, int $array2): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_fill_rule() — internals"
+title: "cairo_set_fill_rule() - internals"
 description: "Compiler internals for cairo_set_fill_rule(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 433
 ---
 
-## `cairo_set_fill_rule()` — internals
+## `cairo_set_fill_rule()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_set_fill_rule(mixed $context, int $fillRule): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

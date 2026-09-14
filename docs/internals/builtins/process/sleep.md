@@ -1,16 +1,16 @@
 ---
-title: "sleep() — internals"
+title: "sleep() - internals"
 description: "Compiler internals for sleep(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 726
 ---
 
-## `sleep()` — internals
+## `sleep()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/sleep.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/sleep.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,16 +1,16 @@
 ---
-title: "is_link() — internals"
+title: "is_link() - internals"
 description: "Compiler internals for is_link(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 280
 ---
 
-## `is_link()` — internals
+## `is_link()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/is_link.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_link.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

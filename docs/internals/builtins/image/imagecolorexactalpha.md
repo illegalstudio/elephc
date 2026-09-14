@@ -1,11 +1,11 @@
 ---
-title: "imagecolorexactalpha() — internals"
+title: "imagecolorexactalpha() - internals"
 description: "Compiler internals for imagecolorexactalpha(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 471
 ---
 
-## `imagecolorexactalpha()` — internals
+## `imagecolorexactalpha()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolorexactalpha(mixed $image, int $red, int $green, int $blue, int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

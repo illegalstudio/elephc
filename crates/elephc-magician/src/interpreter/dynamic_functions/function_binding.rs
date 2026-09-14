@@ -72,6 +72,32 @@ fn bind_evaluated_native_function_args_with_mode(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
+    let mut staged = BoundNativeFunctionArgs {
+        values: Vec::new(), ref_slots: Vec::new(), owners: Vec::new(),
+    };
+    let result = bind_native_function_into(
+        function, evaluated_args, by_ref_mode, context, values, &mut staged,
+    );
+    match result {
+        Ok(()) => Ok(staged),
+        Err(status) => {
+            let _ = cleanup_native_function_ref_args(&staged, values);
+            let _ = release_native_argument_owners(staged.owners, values);
+            Err(status)
+        }
+    }
+}
+
+/// Binds borrowed inputs while registering each newly allocated cell in the call's cleanup ledger.
+fn bind_native_function_into(
+    function: &NativeFunction,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    staged: &mut BoundNativeFunctionArgs,
+) -> Result<(), EvalStatus> {
+    if !function.bridge_supported() { return Err(EvalStatus::RuntimeFatal); }
     if native_function_variadic_index(function).is_some() {
         return bind_evaluated_native_variadic_function_args(
             function,
@@ -79,6 +105,7 @@ fn bind_evaluated_native_function_args_with_mode(
             by_ref_mode,
             context,
             values,
+            staged,
         );
     }
     let mut bound_args = vec![None; function.param_count()];
@@ -124,8 +151,10 @@ fn bind_evaluated_native_function_args_with_mode(
         let Some(default) = function.param_default(position) else {
             return Err(EvalStatus::RuntimeFatal);
         };
+        let value = materialize_native_callable_default(default, context, values)?;
+        staged.owners.push(value);
         *bound = Some(BoundMethodArg {
-            value: materialize_native_callable_default(default, context, values)?,
+            value,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
         });
@@ -135,8 +164,8 @@ fn bind_evaluated_native_function_args_with_mode(
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or(EvalStatus::RuntimeFatal)?;
-    apply_native_function_arg_types(function, None, &mut bound_args, context, values)?;
-    stage_native_function_invoker_args(function, None, bound_args, by_ref_mode, values)
+    apply_native_function_arg_types(function, None, &mut bound_args, context, values, &mut staged.owners)?;
+    stage_native_function_invoker_args(function, None, bound_args, by_ref_mode, values, staged)
 }
 
 /// Binds a native AOT variadic function while keeping the raw invoker argument layout.
@@ -146,7 +175,8 @@ fn bind_evaluated_native_variadic_function_args(
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<BoundNativeFunctionArgs, EvalStatus> {
+    staged: &mut BoundNativeFunctionArgs,
+) -> Result<(), EvalStatus> {
     let variadic_index = native_function_variadic_index(function).ok_or(EvalStatus::RuntimeFatal)?;
     let has_param_names = function.param_names().len() == function.param_count();
     let mut regular_args = vec![None; variadic_index];
@@ -208,8 +238,10 @@ fn bind_evaluated_native_variadic_function_args(
         let Some(default) = function.param_default(position) else {
             return Err(EvalStatus::RuntimeFatal);
         };
+        let value = materialize_native_callable_default(default, context, values)?;
+        staged.owners.push(value);
         *bound = Some(BoundMethodArg {
-            value: materialize_native_callable_default(default, context, values)?,
+            value,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
         });
@@ -226,6 +258,7 @@ fn bind_evaluated_native_variadic_function_args(
         &mut bound_args,
         context,
         values,
+        &mut staged.owners,
     )?;
     stage_native_function_invoker_args(
         function,
@@ -233,16 +266,18 @@ fn bind_evaluated_native_variadic_function_args(
         bound_args,
         by_ref_mode,
         values,
+        staged,
     )
 }
 
-/// Applies registered native AOT function parameter types after argument binding.
+/// Applies parameter types and publishes by-reference entry coercions before invocation.
 fn apply_native_function_arg_types(
     function: &NativeFunction,
     variadic_index: Option<usize>,
     bound_args: &mut [BoundMethodArg],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
+    owners: &mut Vec<RuntimeCellHandle>,
 ) -> Result<(), EvalStatus> {
     for (position, bound_arg) in bound_args.iter_mut().enumerate() {
         let param_index = if variadic_index.is_some_and(|index| position >= index) {
@@ -253,7 +288,16 @@ fn apply_native_function_arg_types(
         let Some(param_type) = function.param_type(param_index) else {
             continue;
         };
-        bound_arg.value = eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
+        let value = eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
+        if value != bound_arg.value {
+            owners.push(value);
+            if function.param_by_ref(param_index) {
+                if let Some(target) = bound_arg.ref_target.as_ref() {
+                    write_back_method_ref_target(target, value, context, values)?;
+                }
+            }
+        }
+        bound_arg.value = value;
     }
     Ok(())
 }
@@ -344,104 +388,6 @@ fn native_function_parameter_ref_target(
     }
 }
 
-/// Converts bound values into descriptor-invoker arguments, staging by-reference slots.
-fn stage_native_function_invoker_args(
-    function: &NativeFunction,
-    variadic_index: Option<usize>,
-    bound_args: Vec<BoundMethodArg>,
-    by_ref_mode: EvalByRefBindingMode<'_>,
-    values: &mut impl RuntimeValueOps,
-) -> Result<BoundNativeFunctionArgs, EvalStatus> {
-    let mut invoker_values = Vec::with_capacity(bound_args.len());
-    let mut ref_slots = Vec::new();
-    for (position, bound_arg) in bound_args.into_iter().enumerate() {
-        let param_index = if variadic_index.is_some_and(|index| position >= index) {
-            variadic_index.ok_or(EvalStatus::RuntimeFatal)?
-        } else {
-            position
-        };
-        if !function.param_by_ref(param_index) {
-            invoker_values.push(bound_arg.value);
-            continue;
-        }
-        let target = match (bound_arg.ref_target, by_ref_mode) {
-            (Some(target), _) => Some(target),
-            (None, EvalByRefBindingMode::WarnByValue { .. }) => None,
-            (None, EvalByRefBindingMode::RequireTarget) => return Err(EvalStatus::RuntimeFatal),
-        };
-        if let Some(raw_ref_kind) = native_function_raw_ref_kind(function.param_type(param_index)) {
-            match raw_ref_kind {
-                NativeFunctionRawRefKind::Scalar { tag } => {
-                    let original = values.raw_value_word(bound_arg.value)?;
-                    let mut slot = Box::new(original);
-                    let marker =
-                        values.invoker_raw_ref_cell(slot.as_mut() as *mut u64 as *mut c_void, tag)?;
-                    invoker_values.push(marker);
-                    ref_slots.push(BoundNativeFunctionRefSlot::RawWord {
-                        tag,
-                        original,
-                        slot,
-                        target,
-                    });
-                }
-                NativeFunctionRawRefKind::String => {
-                    let original_ptr = values.raw_value_word(bound_arg.value)?;
-                    let original_len = values.raw_value_high_word(bound_arg.value)?;
-                    let retained = values.retain_raw_string_words(original_ptr, original_len)?;
-                    let mut slot = Box::new([retained.0, retained.1]);
-                    let marker = values.invoker_raw_ref_cell(
-                        slot.as_mut() as *mut [u64; 2] as *mut c_void,
-                        EVAL_TAG_STRING,
-                    )?;
-                    invoker_values.push(marker);
-                    ref_slots.push(BoundNativeFunctionRefSlot::RawString {
-                        original: [retained.0, retained.1],
-                        slot,
-                        target,
-                    });
-                }
-                NativeFunctionRawRefKind::OwnedHeap => {
-                    let source_tag = values.type_tag(bound_arg.value)?;
-                    let original = values.raw_value_word(bound_arg.value)?;
-                    let retained = values.retain_raw_heap_word(original)?;
-                    let mut slot = Box::new(retained);
-                    let marker = values.invoker_raw_ref_cell(
-                        slot.as_mut() as *mut u64 as *mut c_void,
-                        source_tag,
-                    )?;
-                    invoker_values.push(marker);
-                    ref_slots.push(BoundNativeFunctionRefSlot::OwnedRawWord {
-                        original,
-                        slot,
-                        target,
-                    });
-                }
-            }
-            continue;
-        }
-        let original = bound_arg.value;
-        let retained = values.retain(original)?;
-        let mut slot = Box::new(retained);
-        let marker = match values.invoker_ref_cell(slot.as_mut() as *mut RuntimeCellHandle) {
-            Ok(marker) => marker,
-            Err(status) => {
-                values.release(retained)?;
-                return Err(status);
-            }
-        };
-        invoker_values.push(marker);
-        ref_slots.push(BoundNativeFunctionRefSlot::Mixed {
-            original,
-            slot,
-            target,
-        });
-    }
-    Ok(BoundNativeFunctionArgs {
-        values: invoker_values,
-        ref_slots,
-    })
-}
-
 /// Returns the PHP parameter name used in by-reference warning diagnostics.
 fn native_function_param_warning_name(function: &NativeFunction, param_index: usize) -> String {
     function
@@ -450,37 +396,6 @@ fn native_function_param_warning_name(function: &NativeFunction, param_index: us
         .filter(|name| !name.is_empty())
         .cloned()
         .unwrap_or_else(|| format!("arg{}", param_index + 1))
-}
-
-/// Describes native function by-reference parameters that can use typed raw slots.
-enum NativeFunctionRawRefKind {
-    Scalar { tag: u64 },
-    String,
-    OwnedHeap,
-}
-
-/// Returns the raw-slot strategy for one supported by-reference parameter.
-fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Option<NativeFunctionRawRefKind> {
-    let param_type = param_type?;
-    if param_type.allows_null()
-        || param_type.is_intersection()
-        || param_type.variants().len() != 1
-    {
-        return None;
-    }
-    match param_type.variants().first()? {
-        EvalParameterTypeVariant::Array
-        | EvalParameterTypeVariant::Class(_)
-        | EvalParameterTypeVariant::Iterable
-        | EvalParameterTypeVariant::Object => Some(NativeFunctionRawRefKind::OwnedHeap),
-        EvalParameterTypeVariant::Bool => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_BOOL }),
-        EvalParameterTypeVariant::Float => {
-            Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_FLOAT })
-        }
-        EvalParameterTypeVariant::Int => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_INT }),
-        EvalParameterTypeVariant::String => Some(NativeFunctionRawRefKind::String),
-        _ => None,
-    }
 }
 
 /// Returns the variadic parameter index for a native AOT function, if registered.

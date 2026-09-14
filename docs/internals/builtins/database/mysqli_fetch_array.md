@@ -1,11 +1,11 @@
 ---
-title: "mysqli_fetch_array() — internals"
+title: "mysqli_fetch_array() - internals"
 description: "Compiler internals for mysqli_fetch_array(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 115
 ---
 
-## `mysqli_fetch_array()` — internals
+## `mysqli_fetch_array()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_fetch_array(mixed $result, int $mode = 3): ?array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

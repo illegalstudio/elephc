@@ -2,7 +2,7 @@
 title: "xmlwriter_start_cdata()"
 description: "Starts a CDATA section."
 sidebar:
-  order: 952
+  order: 1013
 ---
 
 ## xmlwriter_start_cdata()
@@ -21,9 +21,9 @@ Starts a CDATA section.
 ## Availability
 
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_cdata.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_cdata.rs)).
+- **`eval()` (magician interpreter)**: supported - declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_cdata.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_cdata.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet - check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

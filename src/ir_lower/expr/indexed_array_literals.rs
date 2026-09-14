@@ -313,6 +313,7 @@ pub(super) fn lower_indexed_array_spread_into_array(
         Op::ArrayPush.default_effects(),
         Some(span),
     );
+    ctx.refresh_argument_array_guard(array, span);
     crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, container_elem_ty, value, span);
     let one = emit_i64_at_span(ctx, 1, span);
     let next = ctx.emit_value(
@@ -400,6 +401,10 @@ pub(super) fn array_literal_element_type_for_ir(
 ) -> PhpType {
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
+        ExprKind::Ternary { .. } => {
+            // Keep array element ownership consistent with the lowered branch result.
+            ir_array_storage_type(materialized_expr_type_for_merge(ctx, item))
+        }
         ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
             // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
             // bare-`array`-returning method) contributes no element constraint, so widen its
@@ -424,7 +429,7 @@ pub(super) fn array_literal_element_type_for_ir(
                 .cloned()
                 .unwrap_or_else(|| infer_expr_type_syntactic(item)),
         ),
-        ExprKind::FunctionCall { name, .. } => {
+        ExprKind::FunctionCall { name, args } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
@@ -432,7 +437,9 @@ pub(super) fn array_literal_element_type_for_ir(
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
             }
-            ir_array_storage_type(infer_expr_type_syntactic(item))
+            registry_builtin_result_type(ctx, canonical, args, &[], item.span)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }
         // Calls must use declared EIR return metadata rather than the syntactic `Int` fallback,
         // or an object result is cast into an incorrectly stamped scalar array.
@@ -490,4 +497,3 @@ pub(crate) fn ir_array_storage_type(php_type: PhpType) -> PhpType {
 pub(crate) fn merge_ir_indexed_element_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
-

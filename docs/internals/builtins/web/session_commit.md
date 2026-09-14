@@ -1,11 +1,11 @@
 ---
-title: "session_commit() — internals"
+title: "session_commit() - internals"
 description: "Compiler internals for session_commit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 888
+  order: 949
 ---
 
-## `session_commit()` — internals
+## `session_commit()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_commit(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

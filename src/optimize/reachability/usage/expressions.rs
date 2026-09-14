@@ -1009,6 +1009,7 @@ mod tests {
         "call_user_func",
         "call_user_func_array",
         "iterator_apply",
+        "mb_ereg_replace_callback",
         "ob_start",
         "pcntl_signal",
         "preg_replace_callback",

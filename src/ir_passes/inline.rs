@@ -285,6 +285,20 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
     if callee_has_by_value_container_param(callee) {
         return false;
     }
+    // A real PHP frame owns a lifetime-tracked by-value parameter before a source-level
+    // assignment releases and replaces it. The inliner binds that slot as a borrow instead,
+    // so transplanting the same write would release the caller's value and leave the new
+    // owner in a cleanup-excluded slot. Keep the call boundary until the splice can reproduce
+    // the parameter-prologue retain and path-sensitive return transfer.
+    if callee_mutates_lifetime_tracked_parameter(callee) {
+        return false;
+    }
+    // A directly returned non-parameter local transfers its frame-owned value at the real
+    // return boundary. The current splice marks the slot cleanup-excluded, but its continuation
+    // parameter cannot distinguish that owner from a borrowed directly returned parameter.
+    if callee_returns_lifetime_tracked_non_parameter_slot(callee) {
+        return false;
+    }
     if has_exception_handlers(callee) {
         return false;
     }
@@ -504,6 +518,13 @@ fn site_is_inlinable(callee: &Function, has_result: bool) -> bool {
     }
     if has_result && !saw_value {
         return false; // result consumed but callee returns void
+    }
+    if !has_result
+        && Ownership::php_type_needs_lifetime_tracking(&callee.return_php_type.codegen_repr())
+    {
+        // Dropping a scalar return is harmless. Dropping a lifetime-tracked return while
+        // translating it to a zero-argument branch would abandon the callee's result owner.
+        return false;
     }
     true
 }
@@ -1172,4 +1193,44 @@ fn callee_has_by_value_container_param(callee: &Function) -> bool {
                 crate::types::PhpType::Array(_) | crate::types::PhpType::AssocArray { .. }
             )
     })
+}
+
+/// Returns whether a callee writes a lifetime-tracked by-value parameter slot.
+fn callee_mutates_lifetime_tracked_parameter(callee: &Function) -> bool {
+    let parameter_slots = callee_param_slots(callee);
+    callee.instructions.iter().any(|instruction| {
+        if instruction.op != Op::StoreLocal {
+            return false;
+        }
+        let Some(Immediate::LocalSlot(slot)) = instruction.immediate else {
+            return false;
+        };
+        parameter_slots.contains(&slot)
+            && callee
+                .locals
+                .get(slot.as_raw() as usize)
+                .is_some_and(|local| {
+                    Ownership::php_type_needs_lifetime_tracking(
+                        &local.php_type.codegen_repr(),
+                    )
+                })
+    })
+}
+
+/// Returns whether a callee directly returns an owned lifetime-tracked local.
+fn callee_returns_lifetime_tracked_non_parameter_slot(callee: &Function) -> bool {
+    let parameter_slots = callee_param_slots(callee);
+    callee_directly_returned_slots(callee)
+        .into_iter()
+        .filter(|slot| !parameter_slots.contains(slot))
+        .any(|slot| {
+            callee
+                .locals
+                .get(slot.as_raw() as usize)
+                .is_some_and(|local| {
+                    Ownership::php_type_needs_lifetime_tracking(
+                        &local.php_type.codegen_repr(),
+                    )
+                })
+        })
 }

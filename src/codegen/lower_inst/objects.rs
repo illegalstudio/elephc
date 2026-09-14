@@ -39,6 +39,7 @@ use super::{
     emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
+    materialize_dynamic_constructor_call_args_with_receiver_reg_and_refs,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
     emit_runtime_callable_invoker_inline, property_values, store_if_result,
     store_method_call_result,
@@ -287,10 +288,10 @@ fn lower_dynamic_prop_unset(
             abi::emit_store_to_address(ctx.emitter, "x0", object_reg, hash_offset);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // load the dynamic-property hash pointer from the receiver
                 "mov rdi, QWORD PTR [{} + {}]",
                 object_reg, hash_offset
-            ));                                                                 // load the dynamic-property hash pointer from the receiver
+            ));
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");

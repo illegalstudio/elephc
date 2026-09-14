@@ -1,11 +1,11 @@
 ---
-title: "mysqli_fetch_row() — internals"
+title: "mysqli_fetch_row() - internals"
 description: "Compiler internals for mysqli_fetch_row(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 123
 ---
 
-## `mysqli_fetch_row()` — internals
+## `mysqli_fetch_row()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_fetch_row(mixed $result): ?array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

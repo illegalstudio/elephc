@@ -1,11 +1,11 @@
 ---
-title: "cairo_matrix_multiply() — internals"
+title: "cairo_matrix_multiply() - internals"
 description: "Compiler internals for cairo_matrix_multiply(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 416
 ---
 
-## `cairo_matrix_multiply()` — internals
+## `cairo_matrix_multiply()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_matrix_multiply(mixed $m1, mixed $m2): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

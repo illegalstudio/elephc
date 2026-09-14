@@ -533,10 +533,10 @@ fn parse_prelude_param(raw: &str, function: &str) -> PreludeParam {
 /// Returns whether a prelude's declared PHP type is the contract's neutral type.
 ///
 /// `TypeSpec` spells the scalars, `array`, `callable`, `ptr` and `?T` exactly, so each of
-/// those must match the declaration; it has no object or union vocabulary, so a class-typed
-/// or union surface is `Mixed` in the catalog and the prelude is free to declare
-/// `CurlHandle`, `mixed` or a union for it. The check is therefore compatibility, not
-/// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared with a
+/// those must match the declaration. Explicit union contracts compare their alternatives
+/// independently of declaration order. Legacy class-typed and union surfaces may still use
+/// `Mixed`; the prelude may declare `CurlHandle`, `mixed`, or a union for those contracts.
+/// A `Mixed` contract must NOT be declared with a
 /// spelling the catalog can express (a scalar, `array`, `callable` or `ptr`), because that
 /// spelling is precisely what the catalog deliberately did not say. A leading `?` is stripped
 /// and a `Nullable` contract compares its inner type: nullability is also carried by the
@@ -548,6 +548,13 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Float => "float",
         TypeSpec::Str => "string",
         TypeSpec::Bool => "bool",
+        TypeSpec::False => "false",
+        TypeSpec::Null => "null",
+        TypeSpec::Union(members) => {
+            let alternatives: Vec<_> = declared.split('|').map(str::trim).collect();
+            return members.len() == alternatives.len() && members.iter().all(|member|
+                alternatives.iter().any(|alternative| php_type_matches(*member, alternative)));
+        },
         TypeSpec::Void => "void",
         // Neither is a PHP scalar, and neither is `Mixed`'s open surface: `Ptr` is elephc's
         // own `ptr` type and `Callable` is the owned descriptor `callable` lowers to. Both
@@ -796,6 +803,7 @@ fn dump_prelude_contract_seed_on_request() {
     };
     use crate::parser::ast::{Expr, Stmt, StmtKind, TypeExpr};
 
+    /// Serializes a parsed PHP type into the seed catalog spelling.
     fn type_text(ty: &TypeExpr) -> String {
         match ty {
             TypeExpr::Int => "int".to_string(),
@@ -817,9 +825,11 @@ fn dump_prelude_contract_seed_on_request() {
             }
         }
     }
+    /// Serializes one parsed default expression for the catalog seed.
     fn default_text(expr: &Expr) -> String {
         crate::synthetic_class::print::print_expr(expr)
     }
+    /// Collects function signatures recursively from the injected prelude statements.
     fn collect(stmts: &[Stmt], prelude: &str, out: &mut Vec<serde_json::Value>) {
         for stmt in stmts {
             match &stmt.kind {

@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_line_join() — internals"
+title: "cairo_set_line_join() - internals"
 description: "Compiler internals for cairo_set_line_join(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 435
 ---
 
-## `cairo_set_line_join()` — internals
+## `cairo_set_line_join()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_set_line_join(mixed $context, int $lineJoin): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

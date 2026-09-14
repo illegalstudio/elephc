@@ -233,39 +233,39 @@ fn test_trim_mask() {
     assert_eq!(out, "hello");
 }
 
-/// Verifies default trim masks include form-feed bytes on both sides.
+/// Verifies default trim masks remove vertical tabs but preserve form-feed bytes.
 #[test]
-fn test_trim_default_mask_includes_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . trim("\f value \f") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_trim_default_mask_preserves_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . trim("\x0b\x0c value \x0c\x0b") . "]";"#);
+    assert_eq!(out, "[\x0c value \x0c]");
 }
 
-/// Verifies default ltrim masks include leading form-feed bytes.
+/// Verifies default ltrim masks remove a leading vertical tab but preserve form feed.
 #[test]
-fn test_ltrim_default_mask_includes_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . ltrim("\f value") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_ltrim_default_mask_preserves_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . ltrim("\x0b\x0c value") . "]";"#);
+    assert_eq!(out, "[\x0c value]");
 }
 
-/// Verifies default rtrim masks include trailing form-feed bytes.
+/// Verifies default rtrim masks remove a trailing vertical tab but preserve form feed.
 #[test]
-fn test_rtrim_default_mask_includes_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . rtrim("value \f") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_rtrim_default_mask_preserves_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . rtrim("value \x0c\x0b") . "]";"#);
+    assert_eq!(out, "[value \x0c]");
 }
 
 /// Verifies explicit trim masks remain exact and do not strip form-feed unless requested.
 #[test]
 fn test_trim_explicit_mask_keeps_form_feed_when_omitted() {
-    let out = compile_and_run(r#"<?php echo "[" . trim("\f value \f", " ") . "]";"#);
+    let out = compile_and_run(r#"<?php echo "[" . trim("\x0c value \x0c", " ") . "]";"#);
     assert_eq!(out, "[\x0c value \x0c]");
 }
 
-/// Verifies `chop()` behaves as PHP's alias for `rtrim()` and strips form-feed by default.
+/// Verifies `chop()` behaves as PHP's alias for `rtrim()` for its default vertical-tab mask.
 #[test]
-fn test_chop_alias_trims_default_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . chop("value\f") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_chop_alias_preserves_default_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . chop("value\x0c\x0b") . "]";"#);
+    assert_eq!(out, "[value\x0c]");
 }
 
 /// Verifies `chop()` participates in case-insensitive namespaced builtin fallback.
@@ -274,7 +274,7 @@ fn test_chop_case_insensitive_namespaced_builtin() {
     let out = compile_and_run(
         r#"<?php
 namespace Demo;
-echo ChOp("value\f");
+echo ChOp("value\x0b");
 "#,
     );
     assert_eq!(out, "value");

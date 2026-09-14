@@ -80,8 +80,20 @@ pub(super) fn eval_sync_globals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncGlobal
             })
         })
         .collect::<Vec<_>>();
-    push_eval_process_superglobal(&mut globals, "argc", PhpType::Int);
-    push_eval_process_superglobal(&mut globals, "argv", PhpType::Array(Box::new(PhpType::Str)));
+    // Main reuses its local eval scope as the global scope. Avoid replacing its
+    // borrowed process-argument entries with redundant owned global cells.
+    let main_scope_locals = if ctx.is_main {
+        eval_sync_locals(ctx)
+    } else {
+        Vec::new()
+    };
+    push_eval_process_superglobal(&mut globals, &main_scope_locals, "argc", PhpType::Int);
+    push_eval_process_superglobal(
+        &mut globals,
+        &main_scope_locals,
+        "argv",
+        PhpType::Array(Box::new(PhpType::Str)),
+    );
     globals
 }
 
@@ -96,9 +108,16 @@ pub(super) fn filter_eval_sync_globals_by_name(
         .collect()
 }
 
-/// Adds a process superglobal to eval global sync unless normal globals already include it.
-pub(super) fn push_eval_process_superglobal(globals: &mut Vec<EvalSyncGlobal>, name: &str, ty: PhpType) {
-    if globals.iter().any(|global| global.name == name) {
+/// Adds a process superglobal unless the effective main scope already synchronizes it.
+pub(super) fn push_eval_process_superglobal(
+    globals: &mut Vec<EvalSyncGlobal>,
+    main_scope_locals: &[EvalSyncLocal],
+    name: &str,
+    ty: PhpType,
+) {
+    if globals.iter().any(|global| global.name == name)
+        || main_scope_locals.iter().any(|local| local.name == name)
+    {
         return;
     }
     globals.push(EvalSyncGlobal {

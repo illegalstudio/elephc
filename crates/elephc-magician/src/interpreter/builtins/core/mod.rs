@@ -85,18 +85,28 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
 pub(in crate::interpreter) fn eval_core_values_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
-        "call_user_func" => {
-            eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)
-        }
+        "call_user_func" => eval_call_user_func_with_values_from_scope(
+            evaluated_args.to_vec(),
+            lexical_scope,
+            context,
+            values,
+        ),
         "call_user_func_array" => {
             let [callback, arg_array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_call_user_func_array_with_values(*callback, *arg_array, context, values)
+            eval_call_user_func_array_with_values_from_scope(
+                *callback,
+                *arg_array,
+                lexical_scope,
+                context,
+                values,
+            )
         }
         "constant" => eval_constant_result(evaluated_args, context, values),
         "define" => eval_define_result(evaluated_args, context, values),

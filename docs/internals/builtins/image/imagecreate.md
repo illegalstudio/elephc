@@ -1,11 +1,11 @@
 ---
-title: "imagecreate() — internals"
+title: "imagecreate() - internals"
 description: "Compiler internals for imagecreate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 485
 ---
 
-## `imagecreate()` — internals
+## `imagecreate()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecreate(int $width, int $height): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

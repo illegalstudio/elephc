@@ -25,15 +25,15 @@ builtin! {
     ),
 }
 
-/// Validates the first argument is an indexed array for an `array_push` call.
+/// Validates the first argument is an array for an `array_push` call.
 ///
 /// Arity (exactly 2 args) is pre-validated by `check_arity`. Both arguments are inferred
-/// to produce any side effects; the first must be an indexed array or the call is rejected.
-/// Returns `Void` — matching the legacy checker behavior.
+/// to produce any side effects; the first must use an indexed-array representation or the
+/// boxed `array` property representation. Returns `Void`, matching the legacy checker behavior.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let _val_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if let PhpType::Array(_) = arr_ty {
+    if matches!(&arr_ty, PhpType::Array(_)) || arr_ty.is_php_array() {
         Ok(PhpType::Void)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))

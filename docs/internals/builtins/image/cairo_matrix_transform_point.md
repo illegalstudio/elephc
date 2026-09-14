@@ -1,11 +1,11 @@
 ---
-title: "cairo_matrix_transform_point() — internals"
+title: "cairo_matrix_transform_point() - internals"
 description: "Compiler internals for cairo_matrix_transform_point(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 417
 ---
 
-## `cairo_matrix_transform_point()` — internals
+## `cairo_matrix_transform_point()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_matrix_transform_point(mixed $matrix, float $x, float $y): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

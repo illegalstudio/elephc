@@ -1,11 +1,11 @@
 ---
-title: "imageaffine() — internals"
+title: "imageaffine() - internals"
 description: "Compiler internals for imageaffine(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 455
 ---
 
-## `imageaffine()` — internals
+## `imageaffine()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imageaffine(mixed $image, array $affine, ?array $clip = null): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

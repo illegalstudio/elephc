@@ -1,11 +1,11 @@
 ---
-title: "ini_get() — internals"
+title: "ini_get() - internals"
 description: "Compiler internals for ini_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 882
+  order: 943
 ---
 
-## `ini_get()` — internals
+## `ini_get()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function ini_get(string $option): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

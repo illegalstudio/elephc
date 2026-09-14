@@ -377,6 +377,7 @@ fn set_fixture_linked_extensions(libraries: &[String]) {
             "elephc_pdo" => Some("PDO"),
             "elephc_crypto" => Some("hash"),
             "elephc_bcmath" => Some("bcmath"),
+            "elephc_mbstring" => Some("mbstring"),
             "elephc_phar" => Some("Phar"),
             "elephc_image" => Some("gd"),
             "elephc_web" => Some("session"),

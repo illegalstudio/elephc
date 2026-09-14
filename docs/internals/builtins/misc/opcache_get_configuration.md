@@ -1,11 +1,11 @@
 ---
-title: "opcache_get_configuration() — internals"
+title: "opcache_get_configuration() - internals"
 description: "Compiler internals for opcache_get_configuration(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 613
 ---
 
-## `opcache_get_configuration()` — internals
+## `opcache_get_configuration()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function opcache_get_configuration(): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

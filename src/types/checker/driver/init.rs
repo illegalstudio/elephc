@@ -117,6 +117,7 @@ impl Checker {
             statement_position_expr: None,
             body_contains_eval: false,
             mixed_storage_locals: HashSet::new(),
+            guarded_union_types: HashMap::new(),
             mixed_storage_store_sites: HashMap::new(),
             binding_decision_warnings: HashMap::new(),
             retired_mixed_storage_store_sites: HashSet::new(),

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Dynamic constructor conversion owners stay guarded until each normal cleanup consumes it.
 
 use super::*;
 
@@ -251,7 +252,14 @@ pub(super) fn emit_call_arg_temp_cleanups(
         return Ok(());
     }
     let result_alias = call_result_can_alias_mixed_temp(ctx, result)?;
-    for cleanup in &call_args.cleanup_slots {
+    for (cleanup_index, cleanup) in call_args.cleanup_slots.iter().enumerate() {
+        if call_args.cleanup_guard_bytes > 0 {
+            callable_guards::remove_argument_temp_guard(
+                ctx.emitter,
+                call_args.cleanup_bytes,
+                cleanup_index,
+            );
+        }
         abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
@@ -270,6 +278,7 @@ pub(super) fn emit_call_arg_temp_cleanups(
         }
     }
     abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_guard_bytes);
     Ok(())
 }
 
@@ -350,4 +359,3 @@ pub(super) fn emit_loaded_assoc_array_to_mixed(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
 }
-

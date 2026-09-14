@@ -1,11 +1,11 @@
 ---
-title: "date_timestamp_get() — internals"
+title: "date_timestamp_get() - internals"
 description: "Compiler internals for date_timestamp_get(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 212
 ---
 
-## `date_timestamp_get()` — internals
+## `date_timestamp_get()` - internals
 
 ## Where it lives
 

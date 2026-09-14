@@ -1,11 +1,11 @@
 ---
-title: "date_offset_get() — internals"
+title: "date_offset_get() - internals"
 description: "Compiler internals for date_offset_get(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 204
 ---
 
-## `date_offset_get()` — internals
+## `date_offset_get()` - internals
 
 ## Where it lives
 

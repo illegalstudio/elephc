@@ -13,6 +13,7 @@ use super::externs::*;
 use super::tags::{bitwise_op_tag, compare_op_tag};
 use super::ElephcRuntimeOps;
 use elephc_builtin_contract::{RuntimeBuiltinId, RuntimeBuiltinStatus};
+use elephc_builtin_contract::output_abi::OutputAction;
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
 use crate::interpreter::RuntimeValueOps;
@@ -23,6 +24,7 @@ mod construction_raw;
 mod lifecycle_scalars;
 mod native_results;
 mod numeric_string;
+mod output;
 mod reflection;
 
 use collection_calls::impl_collection_call_ops;
@@ -39,7 +41,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         id: RuntimeBuiltinId,
         args: &[RuntimeCellHandle],
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-        if !id.supports_arity(args.len()) {
+        if !id.supports_arity(args.len()) && !RuntimeBuiltinId::MBSTRING.contains(&id) {
             return Ok(None);
         }
         let raw_args = args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
@@ -59,6 +61,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
             Some(RuntimeBuiltinStatus::PendingThrowable) => Err(EvalStatus::UncaughtThrowable),
             Some(RuntimeBuiltinStatus::RuntimeFatal) | None => Err(EvalStatus::RuntimeFatal),
         }
+    }
+
+    /// Takes the owned Throwable box transferred by the generated runtime boundary.
+    fn take_pending_runtime_throwable(&mut self) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(self.take_pending_native_throwable())
     }
 
     impl_collection_call_ops!();

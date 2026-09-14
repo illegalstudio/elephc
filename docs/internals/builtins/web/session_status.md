@@ -1,11 +1,11 @@
 ---
-title: "session_status() — internals"
+title: "session_status() - internals"
 description: "Compiler internals for session_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 905
+  order: 966
 ---
 
-## `session_status()` — internals
+## `session_status()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_status(): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

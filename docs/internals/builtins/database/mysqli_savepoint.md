@@ -1,11 +1,11 @@
 ---
-title: "mysqli_savepoint() — internals"
+title: "mysqli_savepoint() - internals"
 description: "Compiler internals for mysqli_savepoint(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 153
 ---
 
-## `mysqli_savepoint()` — internals
+## `mysqli_savepoint()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_savepoint(mixed $mysql, string $name): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

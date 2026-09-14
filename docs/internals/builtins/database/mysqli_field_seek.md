@@ -1,11 +1,11 @@
 ---
-title: "mysqli_field_seek() — internals"
+title: "mysqli_field_seek() - internals"
 description: "Compiler internals for mysqli_field_seek(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 125
 ---
 
-## `mysqli_field_seek()` — internals
+## `mysqli_field_seek()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_field_seek(mixed $result, int $index): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

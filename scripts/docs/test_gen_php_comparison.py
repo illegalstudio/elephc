@@ -295,7 +295,7 @@ class RenderTests(unittest.TestCase):
         # standard: functions 2 of 3, classes 1 of 2, constants 1 of 2; pcre: functions 0 of 1,
         # no classes, constants 1 of 1.
         self.assertIn("| `standard` | 2 / 3 · 67% | 1 / 2 · 50% | 1 / 2 · 50% |", first)
-        self.assertIn("| `pcre` | 0 / 1 · 0% | — | 1 / 1 · 100% |", first)
+        self.assertIn("| `pcre` | 0 / 1 · 0% | - | 1 / 1 · 100% |", first)
         self.assertIn("functions **2 / 4**", first)
         self.assertIn("classes **1 / 2**", first)
         self.assertIn("constants **2 / 3**", first)

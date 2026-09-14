@@ -3,3 +3,4 @@ schema = 1
 
 [native.dependencies]
 pcre2 = "10.47"
+oniguruma = "6.9.10"

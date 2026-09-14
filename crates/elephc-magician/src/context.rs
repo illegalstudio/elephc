@@ -11,6 +11,7 @@
 //! - No Rust-owned layout is promised across the C ABI.
 
 mod alias_metadata;
+mod array_references;
 mod class_metadata;
 mod classes_aliases;
 mod classlike_objects;

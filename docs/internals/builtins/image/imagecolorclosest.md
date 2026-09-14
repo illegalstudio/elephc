@@ -1,11 +1,11 @@
 ---
-title: "imagecolorclosest() — internals"
+title: "imagecolorclosest() - internals"
 description: "Compiler internals for imagecolorclosest(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 466
 ---
 
-## `imagecolorclosest()` — internals
+## `imagecolorclosest()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolorclosest(mixed $image, int $red, int $green, int $blue): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "image_type_to_extension() — internals"
+title: "image_type_to_extension() - internals"
 description: "Compiler internals for image_type_to_extension(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 453
 ---
 
-## `image_type_to_extension()` — internals
+## `image_type_to_extension()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function image_type_to_extension(int $image_type, bool $include_dot = true): mix
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

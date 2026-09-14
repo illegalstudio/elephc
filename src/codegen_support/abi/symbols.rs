@@ -110,6 +110,15 @@ pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
         emit_extern_symbol_address(emitter, dest, symbol);
         return;
     }
+    emit_local_symbol_address(emitter, dest, symbol);
+}
+
+/// Materializes an assembler-local symbol address without using an interposable GOT entry.
+///
+/// Internal code labels live in the current assembly unit, so their address remains directly
+/// PC-relative in PIC output. This is distinct from [`emit_symbol_address`], whose PIC mode must
+/// use the GOT for global data that another object or dynamic loader may interpose.
+pub fn emit_local_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.adrp(dest, &format!("{}", symbol)); // load the page of the requested symbol storage

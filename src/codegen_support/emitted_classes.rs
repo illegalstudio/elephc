@@ -43,8 +43,7 @@ pub(super) fn collect_emitted_class_names(
     //
     // The membership test is the class-id symbol table in `runtime::data::user`: a helper
     // stamps `[obj+0]` from a `_*_class_id` symbol, so a throwable without one has no
-    // unreferenced producer. That rules out ArgumentCountError (elephc rejects a bad builtin
-    // arity at compile time, where reference PHP throws at runtime), AssertionError
+    // unreferenced producer. That rules out AssertionError
     // (`assert()` is not implemented) and UnhandledMatchError (an unmatched `match` ends in
     // `Terminator::Fatal`, not a throw — a real gap against reference PHP, and closing it
     // will give the class the EIR reference it currently lacks).
@@ -70,6 +69,7 @@ pub(super) fn collect_emitted_class_names(
         "Throwable",
         "Error",
         "TypeError",
+        "ArgumentCountError",
         "ValueError",
         "ArithmeticError",
         "DivisionByZeroError",

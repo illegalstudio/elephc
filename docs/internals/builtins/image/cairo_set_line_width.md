@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_line_width() — internals"
+title: "cairo_set_line_width() - internals"
 description: "Compiler internals for cairo_set_line_width(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 436
 ---
 
-## `cairo_set_line_width()` — internals
+## `cairo_set_line_width()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_set_line_width(mixed $context, float $width): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

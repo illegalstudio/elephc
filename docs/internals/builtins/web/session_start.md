@@ -1,11 +1,11 @@
 ---
-title: "session_start() — internals"
+title: "session_start() - internals"
 description: "Compiler internals for session_start(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 904
+  order: 965
 ---
 
-## `session_start()` — internals
+## `session_start()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_start(mixed $options = []): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

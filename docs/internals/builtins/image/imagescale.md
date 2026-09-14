@@ -1,11 +1,11 @@
 ---
-title: "imagescale() — internals"
+title: "imagescale() - internals"
 description: "Compiler internals for imagescale(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 526
 ---
 
-## `imagescale()` — internals
+## `imagescale()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagescale(mixed $image, int $width, int $height = -1, int $mode = IMG_
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

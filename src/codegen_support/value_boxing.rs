@@ -312,3 +312,52 @@ fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
+
+    /// Runtime array boxing keeps the borrowed payload live across kind discovery on every target.
+    #[test]
+    fn runtime_array_boxing_preserves_payload_and_maps_storage_kind_on_all_targets() {
+        for target in [
+            Target::new(Platform::Linux, Arch::X86_64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_box_iterable_as_mixed(&mut emitter);
+            let asm = emitter.output();
+            let (save, probe, map, restore, box_value) = match target.arch {
+                Arch::AArch64 => (
+                    "str x0, [sp, #-16]!",
+                    "bl __rt_heap_kind",
+                    "add x9, x9, #2",
+                    "ldr x1, [sp], #16",
+                    "bl __rt_mixed_from_value",
+                ),
+                Arch::X86_64 => (
+                    "mov QWORD PTR [rsp], rax",
+                    "call __rt_heap_kind",
+                    "add r10, 2",
+                    "mov rdi, QWORD PTR [rsp]",
+                    "call __rt_mixed_from_value",
+                ),
+            };
+            let positions = [save, probe, map, restore, box_value]
+                .map(|needle| asm.find(needle).unwrap_or_else(|| panic!("{target:?}: {asm}")));
+
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "{target:?}: {asm}"
+            );
+            assert!(
+                !asm.contains("decref"),
+                "{target:?}: boxing must retain the borrowed payload"
+            );
+        }
+    }
+}

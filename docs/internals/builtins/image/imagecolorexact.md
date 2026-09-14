@@ -1,11 +1,11 @@
 ---
-title: "imagecolorexact() — internals"
+title: "imagecolorexact() - internals"
 description: "Compiler internals for imagecolorexact(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 470
 ---
 
-## `imagecolorexact()` — internals
+## `imagecolorexact()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolorexact(mixed $image, int $red, int $green, int $blue): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

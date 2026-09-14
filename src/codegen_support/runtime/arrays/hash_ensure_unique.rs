@@ -7,9 +7,11 @@
 //!
 //! Key details:
 //! - COW helpers must clone shared storage before mutation while leaving unique arrays and hashes untouched.
+//! - Internal lifetime pins count for reachability but are excluded from logical PHP ownership.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use super::hash_layout::PINS_OFFSET;
 
 /// hash_ensure_unique: split a shared hash table before mutation.
 /// Null hashes and the in-band null-container sentinel that missed reads materialize
@@ -38,7 +40,9 @@ pub fn emit_hash_ensure_unique(emitter: &mut Emitter) {
 
     // -- only shared hashes need to be cloned --
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current hash refcount from the uniform header
-    emitter.instruction("cmp w9, #1");                                          // is there more than one owner of this hash?
+    emitter.instruction(&format!("ldr x10, [x0, #{PINS_OFFSET}]"));             // count the internal roots that do not own a PHP value
+    emitter.instruction("sub x9, x9, x10");                                     // exclude lifetime pins from copy-on-write ownership
+    emitter.instruction("cmp x9, #1");                                          // is there more than one logical PHP owner of this hash?
     emitter.instruction("b.ls __rt_hash_ensure_unique_done");                   // refcount <= 1 means the hash can be mutated in place
 
     // -- clone the shared hash and release this mutator's old owner slot --
@@ -77,7 +81,8 @@ fn emit_hash_ensure_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdi, r10");                                        // does the associative array carry the in-band null-container sentinel?
     emitter.instruction("je __rt_hash_ensure_unique_done");                     // sentinel-null hashes from missed reads have no header to split
     emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // load the current associative-array refcount from the uniform heap header
-    emitter.instruction("cmp r10d, 1");                                         // does the associative array have more than one logical owner?
+    emitter.instruction(&format!("sub r10, QWORD PTR [rdi + {PINS_OFFSET}]"));  // exclude lifetime pins from copy-on-write ownership
+    emitter.instruction("cmp r10, 1");                                          // does the associative array have more than one logical PHP owner?
     emitter.instruction("jbe __rt_hash_ensure_unique_done");                    // refcount <= 1 means the associative array can be mutated in place
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving copy-on-write spill space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved shared associative-array pointer

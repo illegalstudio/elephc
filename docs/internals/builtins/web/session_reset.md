@@ -1,11 +1,11 @@
 ---
-title: "session_reset() — internals"
+title: "session_reset() - internals"
 description: "Compiler internals for session_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 900
+  order: 961
 ---
 
-## `session_reset()` — internals
+## `session_reset()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function session_reset(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

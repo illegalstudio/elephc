@@ -41,6 +41,8 @@ mod eir_constant_propagation;
 mod eir_licm;
 #[path = "optimizer/effects_v2.rs"]
 mod effects_v2;
+#[path = "optimizer/mbstring.rs"]
+mod mbstring;
 #[path = "optimizer/identity_arithmetic.rs"]
 mod identity_arithmetic;
 #[path = "optimizer/peephole.rs"]

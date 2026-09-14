@@ -33,7 +33,7 @@ return $box->read(name: "A", name: "B");"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
-/// Verifies defaults before required eval method parameters do not make earlier slots optional.
+/// Verifies defaults before required eval method parameters raise a catchable argument error.
 #[test]
 fn execute_program_rejects_eval_method_default_before_required_omission() {
     let program = parse_fragment(
@@ -43,16 +43,24 @@ fn execute_program_rejects_eval_method_default_before_required_omission() {
     }
 }
 $box = new EvalRequiredAfterDefaultBox();
-return $box->read(right: "B");"#,
+try {
+    $box->read(right: "B");
+} catch (Throwable $error) {
+    return get_class($error);
+}
+return "missed";"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("default before required parameter should remain required");
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("catch default before required parameter omission");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("ArgumentCountError".to_string())
+    );
 }
 
 /// Verifies eval-declared method scalar type hints coerce weak scalar arguments.

@@ -56,6 +56,8 @@ pub enum UnsupportedReason {
     EvalImplementationPending,
     /// Reflection behavior currently exists only for eval-declared/runtime objects.
     EvalOnlyReflection,
+    /// Shared engine and host ABI exist, but caller-reference adapters are not yet integrated.
+    ReferenceAdaptersPending,
 }
 
 /// Expected support for one contract/backend pair.
@@ -142,6 +144,9 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Returns the expected Magician route for one shared contract.
 pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
+    if runtime_builtin_id(contract.id) == Some(RuntimeBuiltinId::SharedIni) {
+        return BackendSupport::Implemented(BackendImplementation::Registry);
+    }
     if contract.internal {
         return BackendSupport::Unsupported(UnsupportedReason::InternalCompilerSurface);
     }
@@ -351,6 +356,7 @@ mod tests {
         let mut eval_registry = 0;
         let mut eval_internal = 0;
         let mut eval_pending = 0;
+        let mut reference_pending = 0;
         let mut aot_registry = 0;
         let mut aot_external = 0;
         let mut aot_unsupported = 0;
@@ -366,6 +372,9 @@ mod tests {
                 BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending) => {
                     eval_pending += 1;
                 }
+                BackendSupport::Unsupported(UnsupportedReason::ReferenceAdaptersPending) => {
+                    reference_pending += 1;
+                }
                 other => panic!("unexpected eval support for {}: {other:?}", contract.name),
             }
             match aot_support(contract) {
@@ -373,7 +382,7 @@ mod tests {
                     aot_registry += 1;
                 }
                 BackendSupport::Implemented(_) => aot_external += 1,
-                BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection) => {
+                BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection | UnsupportedReason::ReferenceAdaptersPending) => {
                     aot_unsupported += 1;
                 }
                 other => panic!("unexpected AOT support for {}: {other:?}", contract.name),
@@ -383,21 +392,22 @@ mod tests {
         // The thirty-four prelude-provided `curl_*` contracts are published only
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
+        // The shared INI helper is internal but participates in both runtime registries.
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 583 + curl_surface);
+        assert_eq!(eval_registry, 645 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
         assert_eq!(eval_internal, 99);
         // 31 registry builtins awaiting eval homes, plus the 326 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 357);
-        // Main's BCMath registry adds fourteen AOT contracts; this branch also
-        // promotes get_object_vars from an external surface into the registry and
-        // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
-        // internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
-        // builtins (`xml_parse_into_struct` plus the nine handler setters).
-        assert_eq!(aot_registry, 629);
+        assert_eq!(reference_pending, 0);
+        // Registry-backed functions include the sixty-four AOT mbstring contracts,
+        // fourteen BCMath functions, ten iconv functions, thirty-five PCNTL functions,
+        // forty-three internal `__elephc_curl_*` entry points, and the ten `ext/xml`
+        // registry builtins (`xml_parse_into_struct` plus the nine handler setters).
+        assert_eq!(aot_registry, 691);
         // Ten constructs/dedicated-syntax/hash surfaces, the 397 prelude-provided and
         // name-resolver-rewritten contracts (54 of them the xml prelude), and the curl
         // prelude when published.
@@ -447,9 +457,9 @@ mod tests {
         }
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(shared_runtime, 19);
+        assert_eq!(shared_runtime, 83);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 562 + curl_surface);
+        assert_eq!(interpreter_adapter, 560 + curl_surface);
         assert_eq!(unsupported, 456);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),

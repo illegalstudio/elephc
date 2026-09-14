@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefromgif() — internals"
+title: "imagecreatefromgif() - internals"
 description: "Compiler internals for imagecreatefromgif(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 487
 ---
 
-## `imagecreatefromgif()` — internals
+## `imagecreatefromgif()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecreatefromgif(string $filename): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

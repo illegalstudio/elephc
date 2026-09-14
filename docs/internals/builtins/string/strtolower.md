@@ -1,16 +1,16 @@
 ---
-title: "strtolower() — internals"
+title: "strtolower() - internals"
 description: "Compiler internals for strtolower(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 838
+  order: 899
 ---
 
-## `strtolower()` — internals
+## `strtolower()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strtolower.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strtolower.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

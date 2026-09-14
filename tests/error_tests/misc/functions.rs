@@ -263,6 +263,26 @@ fn test_error_named_arguments_reject_positional_after_spread() {
     );
 }
 
+/// Verifies a property with PHP's unrestricted `array` declaration remains a valid spread
+/// source after the checker preserves its indexed-or-associative storage contract.
+#[test]
+fn test_declared_array_property_is_valid_spread_source() {
+    expect_no_error(
+        r#"<?php
+function collect_args(...$args): void {}
+class SpreadTarget { public function __construct(...$args) {} }
+class SpreadHolder {
+    public array $args = [];
+    public function run(): void {
+        collect_args(...$this->args);
+        $class = SpreadTarget::class;
+        new $class(...$this->args);
+    }
+}
+"#,
+    );
+}
+
 /// Verifies that spread arguments cannot follow named arguments in a call.
 #[test]
 fn test_error_named_arguments_reject_spread_after_named() {

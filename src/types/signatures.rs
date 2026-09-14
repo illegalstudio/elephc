@@ -42,11 +42,14 @@ pub struct FunctionSig {
 impl FunctionSig {
     /// Returns whether the CALLEE's frame owns a reference to by-value parameter `index`.
     ///
-    /// True exactly when the parameter is by-value and its CODEGEN REPR is an array or an
-    /// associative array — which is precisely the set `privatize_container_param` re-binds to an
-    /// owning shadow slot on function entry, giving PHP its by-value array semantics.
+    /// True exactly when the parameter is by-value and is either an exact PHP `array` or has an
+    /// array/hash codegen representation. This is precisely the set `privatize_container_param`
+    /// re-binds to an owning shadow slot on function entry, giving PHP its by-value array
+    /// semantics.
     ///
-    /// The repr matters, not the surface type: `iterable` keeps its own runtime shape (a raw heap
+    /// Exact PHP `array` is a surface-type exception: its codegen representation is a boxed Mixed
+    /// cell, so `is_php_array()` decides privatization rather than `codegen_repr()`. For other
+    /// surface types the representation decides. `iterable` keeps its own runtime shape (a raw heap
     /// pointer dispatched on the heap-kind tag), so an `iterable` parameter is NOT privatized and
     /// the callee can still hand its argument's payload straight back. The caller must keep its
     /// pass-through alias guard for those, or it frees a value the result still points at.
@@ -59,10 +62,11 @@ impl FunctionSig {
             return false;
         }
         self.params.get(index).is_some_and(|(_, php_type)| {
-            matches!(
-                php_type.codegen_repr(),
-                PhpType::Array(_) | PhpType::AssocArray { .. }
-            )
+            php_type.is_php_array()
+                || matches!(
+                    php_type.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                )
         })
     }
 }

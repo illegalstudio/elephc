@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_start_pi() — internals"
+title: "xmlwriter_start_pi() - internals"
 description: "Compiler internals for xmlwriter_start_pi(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 961
+  order: 1022
 ---
 
-## `xmlwriter_start_pi()` — internals
+## `xmlwriter_start_pi()` - internals
 
 ## Where it lives
 

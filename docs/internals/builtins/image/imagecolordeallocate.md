@@ -1,11 +1,11 @@
 ---
-title: "imagecolordeallocate() — internals"
+title: "imagecolordeallocate() - internals"
 description: "Compiler internals for imagecolordeallocate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 469
 ---
 
-## `imagecolordeallocate()` — internals
+## `imagecolordeallocate()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolordeallocate(mixed $image, int $color): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

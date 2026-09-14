@@ -2,9 +2,9 @@
 
 We generate two trees:
 
-- ``docs/php/builtins/<slug>.md`` — user-facing reference (what does this
+- ``docs/php/builtins/<slug>.md`` - user-facing reference (what does this
   function do, what does it return, examples).
-- ``docs/internals/builtins/<slug>.md`` — compiler-internals reference
+- ``docs/internals/builtins/<slug>.md`` - compiler-internals reference
   (which descriptor lowers it, which typed EIR target it emits, what the type
   checker says about its arity, and where backend dispatch begins).
 
@@ -34,19 +34,18 @@ sidebar:
 ---"""
 
 INTERNALS_TEMPLATE = """---
-title: "{name}() — internals"
+title: "{name}() - internals"
 description: "{short_description}"
 sidebar:
   order: {order}
 ---
 
-## `{name}()` — internals
+## `{name}()` - internals
 
 ## Where it lives
 
 - **Signature**: [`{sig_file}`]({sig_url})
-- **Lowering**: [`{codegen_file}`:{codegen_line}]({codegen_url}){checker_clause}
-- **Function symbol**: `{codegen_function}()`
+{lowering_declaration}
 {codegen_notes}
 
 ## Semantic descriptor
@@ -63,7 +62,7 @@ sidebar:
 {signature}
 ```
 
-## What the type checker enforces
+## {checker_heading}
 
 {checker_notes}
 
@@ -86,7 +85,7 @@ def _short_description(b: dict) -> str:
     name = b["name"]
     if name.startswith("__elephc_"):
         return f"Internal compiler helper: {name}."
-    return f"{name}() — {area.lower()} builtin supported by Elephc."
+    return f"{name}() - {area.lower()} builtin supported by Elephc."
 
 
 def _internals_short_description(b: dict) -> str:
@@ -133,7 +132,7 @@ def _parameters_section(b: dict) -> str:
         lines.append(line)
     v = b["sig"].get("variadic")
     if v:
-        lines.append(f"- `...${v}` — variadic: collects excess arguments into `${v}`.")
+        lines.append(f"- `...${v}` - variadic: collects excess arguments into `${v}`.")
     return "\n".join(lines)
 
 
@@ -143,7 +142,7 @@ def _return_section(b: dict) -> str:
 
 def _examples_section(b: dict) -> str:
     if not b.get("examples"):
-        return "_No examples yet — check `examples/` and `showcases/` for usage patterns._"
+        return "_No examples yet - check `examples/` and `showcases/` for usage patterns._"
     blocks = ["**Examples**:"]
     for ex in b["examples"]:
         blocks.append(ex)
@@ -192,7 +191,10 @@ def _runtime_helpers_section(b: dict) -> str:
         elif route == "dedicated-syntax":
             lines.append("_Lowered through a dedicated AST/EIR syntax node._")
         elif route == "none":
-            lines.append("_No compiled lowering: this surface is intentionally eval-only._")
+            if (b.get("eval") or {}).get("supported"):
+                lines.append("_No compiled lowering: this surface is intentionally eval-only._")
+            else:
+                lines.append("_No compiled lowering is available for this contract._")
         else:
             lines.append("_No registry-backed typed runtime target applies._")
     if helpers:
@@ -241,7 +243,7 @@ def _semantic_descriptor_section(b: dict) -> str:
 
 
 def _github_url(repo_root: Path, file_path: str) -> str:
-    """Build a GitHub permalink for a file (assuming `main` branch — adjust as needed)."""
+    """Build a GitHub permalink for a file (assuming `main` branch - adjust as needed)."""
     rel = file_path
     return f"https://github.com/illegalstudio/elephc/blob/main/{rel}"
 
@@ -292,7 +294,7 @@ def _availability_section(b: dict) -> str:
         reason = aot.get("unsupported_reason")
         suffix = f" (`{reason}`)" if reason else ""
         lines.append(
-            "- **Compiled (AOT)**: not available — compiled programs cannot "
+            "- **Compiled (AOT)**: not available - compiled programs cannot "
             f"call this builtin{suffix}."
         )
     else:
@@ -317,7 +319,7 @@ def _availability_section(b: dict) -> str:
         if aot.get("signature_override_reason"):
             lines.append(
                 "- **AOT signature compatibility**: "
-                f"`{aot['signature_override_reason']}` — compiled code accepts the "
+                f"`{aot['signature_override_reason']}` - compiled code accepts the "
                 "signature shown above; eval may expose the broader canonical signature."
             )
             eval_support = b.get("eval") or {}
@@ -332,7 +334,7 @@ def _availability_section(b: dict) -> str:
         if kind == "registry":
             home = ev.get("home_file") or ""
             lines.append(
-                "- **`eval()` (magician interpreter)**: supported — declarative "
+                "- **`eval()` (magician interpreter)**: supported - declarative "
                 f"interpreter builtin ([`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home}))."
             )
         elif kind == "date-alias":
@@ -348,7 +350,7 @@ def _availability_section(b: dict) -> str:
         )
     if b.get("is_extension"):
         lines.append(
-            "- **Strict PHP mode**: hidden — this builtin is an elephc extension "
+            "- **Strict PHP mode**: hidden - this builtin is an elephc extension "
             "with no PHP equivalent, so programs compiled with "
             "[`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) "
             "treat the name as nonexistent, in compiled code and inside eval'd code."
@@ -361,7 +363,7 @@ def _eval_internals_section(b: dict) -> str:
     ev = b.get("eval") or {}
     if not ev.get("supported"):
         return (
-            "_Not callable from eval'd code — the magician interpreter has no "
+            "_Not callable from eval'd code - the magician interpreter has no "
             "entry for this builtin._"
         )
     if ev.get("kind") == "date-alias":
@@ -412,9 +414,9 @@ def _eval_internals_section(b: dict) -> str:
 def _internals_link(b: dict) -> str:
     """Cross-link to the internals page for this builtin.
 
-    Internals pages are emitted for every catalog builtin — including
+    Internals pages are emitted for every catalog builtin - including
     constructs with no AOT lowering (aot kind none / language-construct /
-    dedicated-syntax) — so the link always resolves. It is built relative to
+    dedicated-syntax) - so the link always resolves. It is built relative to
     the current user-page path (docs/php/builtins/<area>/<name>.md) → the
     internals page lives at docs/internals/builtins/<area>/<name>.md.
     """
@@ -474,7 +476,7 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
     sig_file = sig_file or "src/types/signatures.rs"
     codegen_file = b["lowering"].get("codegen_file")
     codegen_line = b["lowering"].get("codegen_line")
-    codegen_function = b["lowering"].get("codegen_function") or "(none — type-checker only)"
+    codegen_function = b["lowering"].get("codegen_function") or "(none - type-checker only)"
     notes = b["lowering"].get("notes") or []
     helpers = b["lowering"].get("runtime_helpers", [])
 
@@ -489,6 +491,14 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
     if codegen_file:
         checker_clause = f" (`{codegen_function}`)"
 
+    if (b.get("aot") or {}).get("supported") is False:
+        lowering_declaration = "- **Lowering**: unavailable for this backend.\n- **Function symbol**: none."
+    else:
+        lowering_declaration = (
+            f"- **Lowering**: [`{codegen_file or '(not lowered)'}`:{codegen_line or 0}]({codegen_url}){checker_clause}\n"
+            f"- **Function symbol**: `{codegen_function}()`"
+        )
+
     codegen_notes = ""
     if notes:
         codegen_notes = "\n\n### Lowering notes\n\n" + "\n".join(f"- {n}" for n in notes)
@@ -499,7 +509,7 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
         see_also_section = "\n" + "\n".join(f"- `{n}()`" for n in see_also)
 
     if b.get("is_internal"):
-        user_link = "- _No user-facing reference — this is a compiler internal helper._"
+        user_link = "- _No user-facing reference - this is a compiler internal helper._"
     elif b["name"].startswith("__elephc_"):
         user_link = (
             f"- [User reference for `{b['name']}()`](../../../php/builtins/_internal/{slug(b['name'])}.md)"
@@ -514,6 +524,7 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
         order=order,
         slug=slug(b["name"]),
         user_link=user_link,
+        lowering_declaration=lowering_declaration,
         sig_file=sig_file,
         sig_url=sig_url,
         codegen_file=codegen_file or "(not lowered)",
@@ -525,6 +536,7 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
         semantic_descriptor_section=_semantic_descriptor_section(b),
         runtime_helpers_section=_runtime_helpers_section(b),
         signature=_signature_line(b),
+        checker_heading="What the type checker enforces" if (b.get("aot") or {}).get("supported", True) else "Signature constraints",
         checker_notes=_checker_notes(b),
         eval_section=_eval_internals_section(b),
         see_also_section=see_also_section,
@@ -533,7 +545,7 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
 
 def _checker_notes(b: dict) -> str:
     """Best-effort notes about what the type checker enforces. Pulled from
-    check_builtin() arms in src/types/checker/builtins/*.rs — for now we
+    check_builtin() arms in src/types/checker/builtins/*.rs - for now we
     just embed the arity information we know."""
     params = b["sig"]["params"]
     required = sum(1 for p in params if not p.get("optional"))
@@ -586,8 +598,8 @@ def _index_table_rows(builtins: list[dict], link_prefix: str = ".") -> list[str]
             link = f"{link_prefix}/_internal/{slug(b['name'])}.md"
         else:
             link = f"{link_prefix}/{area_folder}/{slug(b['name'])}.md"
-        aot = "✓" if (b.get("aot") or {}).get("supported", not b.get("eval_only")) else "—"
-        ev = "✓" if (b.get("eval") or {}).get("supported") else "—"
+        aot = "✓" if (b.get("aot") or {}).get("supported", not b.get("eval_only")) else "-"
+        ev = "✓" if (b.get("eval") or {}).get("supported") else "-"
         rows.append(
             f"| [`{b['name']}()`]({link}) | `{sig}` | `{b['sig']['return_type']}` "
             f"| {aot} | {ev} |"

@@ -40,8 +40,11 @@
 //!   so no EIR call names it.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::RuntimeFeatures;
+
+const CLEANUP: Scope = Scope { arm: 16, x86: 32 };
 
 /// mixed_free_deep: free a mixed cell and release its owned child payload.
 /// Input: x0 = mixed cell pointer
@@ -58,13 +61,14 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     emitter.instruction("cbz x0, __rt_mixed_free_deep_done");                   // skip null mixed cells immediately
 
-    emitter.instruction("sub sp, sp, #32");                                     // allocate a small frame to preserve the mixed pointer
+    emitter.instruction("sub sp, sp, #48");                                     // allocate a small frame to preserve the mixed pointer
 
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
 
-    emitter.instruction("add x29, sp, #16");                                    // set up the new frame pointer
+    emitter.instruction("add x29, sp, #32");                                    // set up the new frame pointer
 
     emitter.instruction("str x0, [sp, #0]");                                    // save the mixed pointer across child release
+    CLEANUP.begin(emitter);
 
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed runtime value_tag
 
@@ -95,7 +99,7 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.label("__rt_mixed_free_deep_value_any");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed heap child pointer
 
-    emitter.instruction("bl __rt_decref_any");                                  // release the boxed child through the uniform dispatcher
+    CLEANUP.call(emitter, "__rt_decref_any", false);                            // release the boxed child through the uniform dispatcher
 
     emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed cell storage after releasing the child
 
@@ -103,7 +107,7 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.label("__rt_mixed_free_deep_callable");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed callable descriptor pointer
 
-    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the callable descriptor owned by the mixed cell
+    CLEANUP.call(emitter, "__rt_callable_descriptor_release", false);           // release the callable descriptor owned by the mixed cell
 
     emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed cell storage after releasing the descriptor
 
@@ -237,12 +241,14 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the mixed pointer after child release
 
     emitter.instruction("bl __rt_heap_free");                                   // free the mixed cell storage itself
+    CLEANUP.finish(emitter);
 
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
 
-    emitter.instruction("add sp, sp, #32");                                     // deallocate the mixed-free frame
+    emitter.instruction("add sp, sp, #48");                                     // deallocate the mixed-free frame
 
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_mixed_free_deep_done");
     emitter.instruction("ret");                                                 // return to caller
 
@@ -265,9 +271,10 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved mixed pointer
 
-    emitter.instruction("sub rsp, 16");                                         // reserve local storage for the mixed pointer across nested helper calls
+    emitter.instruction("sub rsp, 32");                                         // reserve local storage for the mixed pointer across nested helper calls
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the mixed pointer across any nested child release helper call
+    CLEANUP.begin(emitter);
 
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the boxed runtime value tag to decide whether the child owns heap storage
 
@@ -298,7 +305,7 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.label("__rt_mixed_free_deep_value_any");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed string pointer from the mixed payload before releasing it
 
-    emitter.instruction("call __rt_decref_any");                                // release the boxed heap-backed child through the uniform x86_64 dispatcher before freeing the mixed box
+    CLEANUP.call(emitter, "__rt_decref_any", false);                            // release the boxed heap-backed child through the uniform x86_64 dispatcher before freeing the mixed box
 
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box storage itself after the boxed heap-backed child has been released
 
@@ -306,7 +313,7 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.label("__rt_mixed_free_deep_callable");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed callable descriptor pointer from the mixed payload
 
-    emitter.instruction("call __rt_callable_descriptor_release");               // release the callable descriptor owned by the mixed cell
+    CLEANUP.call(emitter, "__rt_callable_descriptor_release", false);           // release the callable descriptor owned by the mixed cell
 
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box storage itself after the descriptor has been released
 
@@ -437,11 +444,13 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the mixed pointer after the optional child release helper call
 
     emitter.instruction("call __rt_heap_free");                                 // release the mixed box storage itself through the shared x86_64 heap wrapper
+    CLEANUP.finish(emitter);
 
-    emitter.instruction("add rsp, 16");                                         // release the spill slot reserved for the mixed pointer
+    emitter.instruction("add rsp, 32");                                         // release the spill slot reserved for the mixed pointer
 
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
 
+    crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_mixed_free_deep_done");
     emitter.instruction("ret");                                                 // return to the caller after releasing the mixed box and its optional string child
 

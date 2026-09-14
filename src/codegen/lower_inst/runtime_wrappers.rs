@@ -15,15 +15,32 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
-    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
-        return label;
-    }
+    emit_runtime_callable_invoker_with_operation_inline(ctx, sig, captures, None)
+}
+
+/// Adds the shared PHP arity boundary to mbstring builtin descriptor invokers.
+pub(super) fn emit_runtime_builtin_invoker_inline(ctx: &mut FunctionContext<'_>, name: &str, sig: &FunctionSig) -> String {
+    let operation = crate::builtins::registry::lookup(name).and_then(|definition| {
+        if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(target) = definition.spec.semantics.runtime_functions {
+            target.mbstring_operation()
+        } else { None }
+    });
+    emit_runtime_callable_invoker_with_operation_inline(ctx, sig, &[], operation)
+}
+
+/// Emits a descriptor adapter, caching its signature together with the diagnostic operation.
+fn emit_runtime_callable_invoker_with_operation_inline(
+    ctx: &mut FunctionContext<'_>, sig: &FunctionSig, captures: &[(String, PhpType, bool)],
+    operation: Option<elephc_builtin_contract::RuntimeBuiltinId>,
+) -> String {
+    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures, operation) { return label; }
     let label = ctx.next_global_label("callable_invoker");
     let done_label = ctx.next_label("callable_invoker_done");
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
         label: &label,
         sig,
         captures,
+        mbstring_operation: operation,
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
     // enclosing function back before continuing it, or its tail lands in there.
@@ -32,8 +49,7 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
-    ctx.shared
-        .cache_runtime_callable_invoker(sig, captures, &label);
+    ctx.shared.cache_runtime_callable_invoker(sig, captures, operation, &label);
     label
 }
 
@@ -174,7 +190,7 @@ fn build_runtime_call_wrapper_function(
                 builder: &mut builder,
                 strict_php,
             };
-            Some(crate::builtins::semantics::lower_registry_call(
+            let result = crate::builtins::semantics::lower_registry_call(
                 &mut lowering,
                 def,
                 &operands,
@@ -187,19 +203,73 @@ fn build_runtime_call_wrapper_function(
                     name, error,
                 ))
             })?
-            .value)
+            .value;
+            let ownership = wrapper_result_ownership(
+                def.spec.semantics.result_ownership,
+                &return_php_type,
+                name,
+            )?;
+            builder.set_value_ownership(result, ownership);
+            Some(result)
         }
-        RuntimeCallWrapperKind::Extern => builder.emit(
-            Op::ExternCall,
-            operands,
-            Some(Immediate::Data(data)),
-            wrapper_return_ir_type(&return_php_type),
-            return_php_type.clone(),
-            Ownership::for_php_type(&return_php_type),
-        ),
+        RuntimeCallWrapperKind::Extern => {
+            let result = builder.emit(
+                Op::ExternCall,
+                operands,
+                Some(Immediate::Data(data)),
+                wrapper_return_ir_type(&return_php_type),
+                return_php_type.clone(),
+                if Ownership::php_type_needs_lifetime_tracking(&return_php_type) {
+                    Ownership::Borrowed
+                } else {
+                    Ownership::NonHeap
+                },
+            );
+            result
+        }
     };
     builder.terminate(Terminator::Return { value: result });
     Ok(function)
+}
+
+/// Maps a builtin's shared ownership contract onto its synthetic wrapper result.
+fn wrapper_result_ownership(
+    contract: crate::builtins::semantics::BuiltinResultOwnership,
+    return_ty: &PhpType,
+    name: &str,
+) -> Result<Ownership> {
+    use crate::builtins::semantics::BuiltinResultOwnership;
+    if !Ownership::php_type_needs_lifetime_tracking(return_ty) {
+        return Ok(Ownership::NonHeap);
+    }
+    match contract {
+        BuiltinResultOwnership::Fresh => Ok(Ownership::Owned),
+        BuiltinResultOwnership::Borrowed | BuiltinResultOwnership::Aliases(_) => {
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::MayAliasArguments
+            if return_ty.codegen_repr() == PhpType::Str =>
+        {
+            // String wrapper returns are persisted before the native C boundary,
+            // so aliasing and fresh scratch paths share one borrowed EIR convention.
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::MayAliasArguments => {
+            Err(CodegenIrError::invalid_module(format!(
+                "callable wrapper {} needs a runtime marker for path-dependent ownership of {:?}",
+                name, return_ty
+            )))
+        }
+        BuiltinResultOwnership::Independent if return_ty.codegen_repr() == PhpType::Str => {
+            Ok(Ownership::Borrowed)
+        }
+        BuiltinResultOwnership::Independent | BuiltinResultOwnership::NonHeap => {
+            Err(CodegenIrError::invalid_module(format!(
+                "callable wrapper {} has ambiguous {:?} ownership for {:?}",
+                name, contract, return_ty
+            )))
+        }
+    }
 }
 
 /// EIR construction adapter used by synthetic builtin callable wrappers.
@@ -255,7 +325,9 @@ impl crate::builtins::semantics::BuiltinLoweringContext
             crate::ir::RuntimeCallTarget::Function(target) => {
                 crate::ir::RuntimeCallTarget::ProfiledFunction {
                     target,
+                    arguments: crate::ir::RuntimeArgumentLayout::Values,
                     strict_php: self.strict_php,
+                    strict_types: None,
                 }
             }
             target => target,

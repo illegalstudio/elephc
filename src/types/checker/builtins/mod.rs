@@ -158,7 +158,14 @@ impl Checker {
         // validation, and result typing. Only compiler-resident language
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
-            crate::builtins::registry::check_arity(name, args.len(), span)?;
+            // A spread expression is not one PHP argument. Value-preserving runtimes
+            // validate the expanded count after every supplied expression has executed.
+            let preserves_dynamic_arity = def.spec.semantics.argument_lowering
+                == crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+                && args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
+            if !preserves_dynamic_arity {
+                crate::builtins::registry::check_arity(name, args.len(), span)?;
+            }
             if !catalog::builtin_is_available_for_target(name, self.target) {
                 return Err(CompileError::new(
                     span,

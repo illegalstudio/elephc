@@ -1,11 +1,11 @@
 ---
-title: "_imagick_parse_color() — internals"
+title: "_imagick_parse_color() - internals"
 description: "Compiler internals for _imagick_parse_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1072
+  order: 1134
 ---
 
-## `_imagick_parse_color()` — internals
+## `_imagick_parse_color()` - internals
 
 ## Where it lives
 
@@ -38,8 +38,8 @@ function _imagick_parse_color(string $c): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

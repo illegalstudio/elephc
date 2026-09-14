@@ -670,7 +670,8 @@ impl Op {
             ReleaseLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP
             }
-            ReleaseLocalSlot => E::READS_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            // Retiring the slot can invoke an arbitrary PHP destructor after clearing its owner.
+            ReleaseLocalSlot => E::all(),
             LoadGlobal
             | LoadStaticProperty
             | StaticPropInitialized
@@ -741,10 +742,13 @@ impl Op {
             }
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
-            ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
+            ArraySet | HashSet | HashUnset | ArrayPush | OffsetUnset | PropSet
             | PropUnset | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            HashAppend | MixedArrayAppend => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW
+                    | E::MAY_FATAL | E::REFCOUNT_OP
+            }
             // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
             // checks its load factor and may grow/rehash the table before it even knows whether
             // the key is already present.

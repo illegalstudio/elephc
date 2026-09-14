@@ -1,11 +1,11 @@
 ---
-title: "imagefilledellipse() — internals"
+title: "imagefilledellipse() - internals"
 description: "Compiler internals for imagefilledellipse(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 501
 ---
 
-## `imagefilledellipse()` — internals
+## `imagefilledellipse()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagefilledellipse(mixed $image, int $center_x, int $center_y, int $wid
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

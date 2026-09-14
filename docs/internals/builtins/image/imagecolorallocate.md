@@ -1,11 +1,11 @@
 ---
-title: "imagecolorallocate() — internals"
+title: "imagecolorallocate() - internals"
 description: "Compiler internals for imagecolorallocate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 463
 ---
 
-## `imagecolorallocate()` — internals
+## `imagecolorallocate()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecolorallocate(mixed $image, int $red, int $green, int $blue): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

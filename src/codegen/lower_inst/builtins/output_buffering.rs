@@ -575,21 +575,34 @@ fn box_int_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
     }
 }
 
-/// Boxes the raw associative-array hash pointer in the integer result register
-/// into a `Mixed` cell (runtime tag 5), mirroring `getdate`/`localtime`/`stat`.
+/// Consumes the owned status hash in the result register and transfers a sole Mixed associative box.
 fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #16");                         // stage the transferred hash and returned box independently
+            ctx.emitter.instruction("str x0, [sp]");                            // retain the original owned hash across boxing
             ctx.emitter.instruction("mov x1, x0");                              // Mixed payload low word = hash pointer
             ctx.emitter.instruction("mov x2, #0");                              // associative-array payloads do not use the high word
             ctx.emitter.instruction("mov x0, #5");                              // runtime tag 5 = associative array
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // preserve the returned box while consuming the extra hash owner
+            ctx.emitter.instruction("ldr x0, [sp]");                            // transfer the original hash retain to cleanup
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // return the sole boxed owner of the status hash
+            ctx.emitter.instruction("add sp, sp, #16");                         // remove temporary ownership staging
         }
         Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve aligned staging for the raw hash and returned box
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // retain the transferred hash during Mixed construction
             ctx.emitter.instruction("mov rdi, rax");                            // Mixed payload low word = hash pointer
             ctx.emitter.instruction("xor esi, esi");                            // associative-array payloads do not use the high word
             ctx.emitter.instruction("mov rax, 5");                              // runtime tag 5 = associative array
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // preserve the box across raw-owner cleanup
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // consume the original hash retain after boxing retained it
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // transfer the sole status-result owner
+            ctx.emitter.instruction("add rsp, 16");                             // release the aligned ownership staging
         }
     }
 }

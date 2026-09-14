@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_source() — internals"
+title: "cairo_set_source() - internals"
 description: "Compiler internals for cairo_set_source(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 438
 ---
 
-## `cairo_set_source()` — internals
+## `cairo_set_source()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_set_source(mixed $context, mixed $pattern): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

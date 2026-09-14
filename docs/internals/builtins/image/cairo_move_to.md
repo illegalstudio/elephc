@@ -1,11 +1,11 @@
 ---
-title: "cairo_move_to() — internals"
+title: "cairo_move_to() - internals"
 description: "Compiler internals for cairo_move_to(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 418
 ---
 
-## `cairo_move_to()` — internals
+## `cairo_move_to()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function cairo_move_to(mixed $context, float $x, float $y): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -61,6 +61,7 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    guard_descriptor_container(ctx, array, span);
     let mut positional_index = 0usize;
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
@@ -81,6 +82,7 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
+        ctx.refresh_argument_array_guard(array, arg.span);
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
         positional_index += 1;
     }
@@ -201,4 +203,3 @@ pub(super) fn lower_invoker_ref_arg_marker(
         Some(span),
     )
 }
-

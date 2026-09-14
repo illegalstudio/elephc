@@ -109,19 +109,10 @@ while IFS=$'\t' read -r kind name archives; do
     # resolves a managed native package and `mysqli` links the `pdo` archive
     # already covered by its own line.
     #
-    # `curl` and `xml` are the packed-archive capabilities that also need a
-    # managed catalog package. `libelephc_curl.a` is the PHP ext/curl bridge
-    # and `libelephc_xml.a` the ext/xml + ext/xmlwriter bridge whose parser
-    # is libxml2 itself; both must be compile-probed — skipping them the way
-    # `regex` is skipped would stop proving the archive links — but
-    # `--with-curl` fail-closes until the empty WORKDIR has `elephc native
-    # add curl` (pinned libcurl + openssl/zlib/nghttp2/libssh2), and
-    # `--with-xml` until it has `elephc native add libxml2` (pinned libxml2
-    # 2.15.3 plus the Elephc-owned shim). Those are real user workflows, so
-    # this probe adds the catalog package first, then compiles once. A
-    # truncated or wrong-arch archive still fails that single compile. Both
-    # adds write the same WORKDIR manifest, which is exactly how a project
-    # using curl and xml together looks.
+    # Some packed bridges need managed native packages when force-enabled.
+    # Prepare curl's dependency chain, mbstring's Oniguruma and optional MIME
+    # providers, and XML's libxml2 provider before their probes.
+    # Each bridge must still compile and link once its requirements are present.
     #
     # The check ends at the link. Producing the executable is what proves the
     # archive was packed and usable, and it is the whole of what packaging can
@@ -137,14 +128,24 @@ while IFS=$'\t' read -r kind name archives; do
 
     CHECKED=$((CHECKED + 1))
     rm -f probe
-    if [ "$name" = "curl" ]; then
-        echo "  ...   $kind $name: adding managed native package curl before --with-curl"
-        if ! "$ELEPHC" native add curl >native-add.log 2>&1; then
-            fail "$kind $name: native add curl failed"
+    native_packages=""
+    case "$name" in
+        curl) native_packages="curl" ;;
+        mbstring) native_packages="oniguruma pcre2" ;;
+    esac
+    native_ready=true
+    for native_package in $native_packages; do
+        echo "  ...   $kind $name: adding managed native package $native_package before --with-$name"
+        if ! "$ELEPHC" native add "$native_package" >native-add.log 2>&1; then
+            fail "$kind $name: native add $native_package failed"
             sed 's/^/          /' native-add.log
-            continue
+            native_ready=false
+            break
         fi
         sed 's/^/          /' native-add.log
+    done
+    if [ "$native_ready" = false ]; then
+        continue
     fi
     if [ "$name" = "xml" ]; then
         echo "  ...   $kind $name: adding managed native package libxml2 before --with-xml"

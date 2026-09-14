@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefromtga() — internals"
+title: "imagecreatefromtga() - internals"
 description: "Compiler internals for imagecreatefromtga(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 491
 ---
 
-## `imagecreatefromtga()` — internals
+## `imagecreatefromtga()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagecreatefromtga(string $filename): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

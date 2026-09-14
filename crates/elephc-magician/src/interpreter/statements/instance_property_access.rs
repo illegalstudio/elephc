@@ -16,6 +16,17 @@ pub(in crate::interpreter) fn eval_property_get_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_property_get_result_with_ownership(object, property_name, context, values, None)
+}
+
+/// Reads a property while optionally retaining reference-backed values for a native caller.
+pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    owned: Option<&mut Vec<RuntimeCellHandle>>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
     };
@@ -143,7 +154,10 @@ pub(in crate::interpreter) fn eval_property_get_result(
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
     {
-        return eval_reference_target_value(&target, context, values);
+        return match owned {
+                Some(owners) => eval_owned_reference_target_value(&target, context, values, owners),
+                None => eval_reference_target_value(&target, context, values),
+            };
     }
     values.property_get(object, &storage_property_name)
 }
@@ -164,16 +178,23 @@ pub(in crate::interpreter) fn eval_property_set_result(
         if let Some((declaring_class, _, write_visibility, is_static)) =
             eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?
         {
-            if !is_static
-                && validate_eval_member_access(&declaring_class, write_visibility, context).is_err()
-            {
-                return eval_throw_property_access_error(
+            if !is_static {
+                if validate_eval_member_access(&declaring_class, write_visibility, context).is_err() {
+                    return eval_throw_property_access_error(
+                        &declaring_class,
+                        property_name,
+                        write_visibility,
+                        context,
+                        values,
+                    );
+                }
+                validate_eval_native_array_property_assignment(
                     &declaring_class,
                     property_name,
-                    write_visibility,
+                    value,
                     context,
                     values,
-                );
+                )?;
             }
         }
         return values.property_set(object, property_name, value);
@@ -294,6 +315,13 @@ pub(in crate::interpreter) fn eval_property_set_result(
                         values,
                     );
                 }
+                validate_eval_native_array_property_assignment(
+                    &declaring_class,
+                    property_name,
+                    value,
+                    context,
+                    values,
+                )?;
                 return eval_with_native_bridge_scope(&declaring_class, context, || {
                     values.property_set(object, property_name, value)
                 });
@@ -338,6 +366,37 @@ pub(in crate::interpreter) fn eval_property_set_result(
     values.property_set(object, &storage_property_name, value)?;
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
+}
+
+/// Enforces an AOT array property contract before the native setter can fail closed.
+pub(super) fn validate_eval_native_array_property_assignment(
+    declaring_class: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(property_type) = context.native_property_type(declaring_class, property_name) else {
+        return Ok(());
+    };
+    let requires_array = !property_type.allows_null()
+        && !property_type.is_intersection()
+        && !property_type.variants().is_empty()
+        && property_type
+            .variants()
+            .iter()
+            .all(|variant| matches!(variant, EvalParameterTypeVariant::Array));
+    if !requires_array || matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Ok(());
+    }
+    eval_throw_type_error(
+        &format!(
+            "Cannot assign value to property {}::{} of type array",
+            declaring_class, property_name
+        ),
+        context,
+        values,
+    )
 }
 
 /// Binds one eval object property to a by-reference source parameter.
@@ -464,7 +523,7 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             context.replace_execution_scope(previous_scope);
             result
         }
-        EvalReferenceTarget::Cell { cell } => Ok(*cell),
+        EvalReferenceTarget::Cell { cell } => Ok(cell.borrowed()),
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
             eval_invoker_slot_ref_target_value(*slot, *source_tag, values)
         }

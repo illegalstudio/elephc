@@ -1,0 +1,100 @@
+int(0)
+bool(false)
+bool(true)
+array(2) {
+  [0]=>
+  int(4)
+  [1]=>
+  int(2)
+}
+array(5) {
+  [0]=>
+  string(2) "ab"
+  [1]=>
+  string(2) "ab"
+  [2]=>
+  string(0) ""
+  ["empty"]=>
+  bool(false)
+  ["word"]=>
+  string(2) "ab"
+}
+int(6)
+bool(true)
+array(5) {
+  [0]=>
+  string(2) "ab"
+  [1]=>
+  string(2) "ab"
+  [2]=>
+  string(0) ""
+  ["empty"]=>
+  bool(false)
+  ["word"]=>
+  string(2) "ab"
+}
+bool(true)
+int(7)
+array(5) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(0) ""
+  ["empty"]=>
+  bool(false)
+  ["word"]=>
+  string(1) "a"
+}
+array(5) {
+  [0]=>
+  string(2) "ab"
+  [1]=>
+  string(2) "ab"
+  [2]=>
+  string(0) ""
+  ["empty"]=>
+  bool(false)
+  ["word"]=>
+  string(2) "ab"
+}
+array(5) {
+  [0]=>
+  string(2) "ab"
+  [1]=>
+  string(2) "ab"
+  [2]=>
+  string(0) ""
+  ["empty"]=>
+  bool(false)
+  ["word"]=>
+  string(2) "ab"
+}
+bool(false)
+bool(false)
+bool(true)
+array(2) {
+  [0]=>
+  int(8)
+  [1]=>
+  int(2)
+}
+int(10)
+array(3) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(0) ""
+  ["empty"]=>
+  bool(false)
+}
+array(3) {
+  [0]=>
+  string(0) ""
+  [1]=>
+  string(0) ""
+  ["empty"]=>
+  bool(false)
+}
+int(1)

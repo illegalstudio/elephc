@@ -28,14 +28,24 @@ pub(super) fn eval_reflection_class_new_instance_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let direct_new_instance = method_name.eq_ignore_ascii_case("newInstance");
-    let constructor_args = if direct_new_instance {
-        eval_reflection_constructor_by_value_args(evaluated_args)
-    } else if method_name.eq_ignore_ascii_case("newInstanceArgs") {
-        eval_reflection_class_new_instance_args(evaluated_args, context, values)?
-    } else {
-        return Ok(None);
-    };
+    if method_name.eq_ignore_ascii_case("newInstanceArgs") {
+        let array = eval_reflection_class_new_instance_args(evaluated_args)?;
+        return with_optional_array_call_arguments(array, context, values, |arguments, context, values| {
+            eval_reflection_class_construct(identity, arguments, context, values)
+        });
+    }
+    if !method_name.eq_ignore_ascii_case("newInstance") { return Ok(None); }
+    let arguments = eval_reflection_constructor_by_value_args(evaluated_args);
+    eval_reflection_class_construct(identity, arguments, context, values)
+}
+
+/// Creates a reflected instance after the invocation boundary has retained its argument owners.
+fn eval_reflection_class_construct(
+    identity: u64,
+    constructor_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
@@ -117,14 +127,12 @@ pub(super) fn eval_reflection_constructor_by_value_args(
         .collect()
 }
 
-/// Expands the single `ReflectionClass::newInstanceArgs()` array argument.
+/// Binds the ReflectionClass argument-array handle before owned constructor expansion.
 pub(super) fn eval_reflection_class_new_instance_args(
     evaluated_args: Vec<EvaluatedCallArg>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("args")], evaluated_args)?;
-    eval_array_call_arg_values(args[0], context, values)
+    Ok(args[0])
 }
 
 /// Runs ReflectionClass construction with only public constructor visibility.
@@ -266,7 +274,8 @@ pub(super) fn eval_reflection_attribute_arg_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match arg {
-        EvalAttributeArg::String(value) => values.string(value),
+        EvalAttributeArg::String(value) => values.string_literal(value),
+        EvalAttributeArg::Bytes(value) => values.string_literal_bytes(value),
         EvalAttributeArg::Int(value) => values.int(*value),
         EvalAttributeArg::Float(bits) => values.float(f64::from_bits(*bits)),
         EvalAttributeArg::Bool(value) => values.bool_value(*value),

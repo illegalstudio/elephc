@@ -13,7 +13,7 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits `__rt_gc_note_child_ref`, which records one heap-to-heap incoming edge for
 /// cycle-aware GC. Skips null pointers, out-of-range pointers, freed blocks, and
-/// non-refcounted kinds (strings/raw buffers). For valid refcounted array/hash/object
+/// non-refcounted kinds (strings/raw buffers). For valid array/hash/object/Mixed
 /// children, bumps the transient incoming-edge counter stored in the high 32 bits of
 /// the child block's kind word.
 ///
@@ -53,7 +53,7 @@ pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
     emitter.instruction("and x13, x12, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_note_child_ref_done");                    // strings/raw buffers do not participate in cycle accounting
-    emitter.instruction("cmp x13, #4");                                         // is this within the array/hash/object range?
+    emitter.instruction("cmp x13, #5");                                         // include boxed Mixed children and persistent reference cells in edge counts
     emitter.instruction("b.hi __rt_gc_note_child_ref_done");                    // ignore unknown/raw heap kinds
 
     // -- bump the transient incoming-edge counter stored in the high 32 bits of the kind word --

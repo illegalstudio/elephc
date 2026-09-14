@@ -158,7 +158,7 @@ pub(crate) fn contextual_callback_arg_positions(builtin_name: &str) -> &'static 
         "array_map" => &[0],
         "array_all" | "array_any" | "array_filter" | "array_find" | "array_reduce"
         | "array_walk" | "array_walk_recursive" | "preg_replace_callback" | "uasort"
-        | "uksort" | "usort" => &[1],
+        | "uksort" | "usort" | "mb_ereg_replace_callback" => &[1],
         "array_udiff" | "array_uintersect" => &[2],
         // The xml handler setters type an unannotated handler closure from the SAX event it
         // receives (`crate::builtins::xml::handler_setters`); `xml_set_element_handler()`

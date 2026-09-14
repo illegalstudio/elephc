@@ -1,11 +1,11 @@
 ---
-title: "imagebmp() — internals"
+title: "imagebmp() - internals"
 description: "Compiler internals for imagebmp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 460
 ---
 
-## `imagebmp()` — internals
+## `imagebmp()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imagebmp(mixed $image, ?string $file = null, bool $compressed = true): 
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

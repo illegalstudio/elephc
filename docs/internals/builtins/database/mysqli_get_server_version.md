@@ -1,11 +1,11 @@
 ---
-title: "mysqli_get_server_version() — internals"
+title: "mysqli_get_server_version() - internals"
 description: "Compiler internals for mysqli_get_server_version(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 134
 ---
 
-## `mysqli_get_server_version()` — internals
+## `mysqli_get_server_version()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function mysqli_get_server_version(mixed $mysql): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

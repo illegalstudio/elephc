@@ -85,7 +85,12 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
         let mut ref_params: Vec<bool> = Vec::with_capacity(total);
 
         for p in spec.params {
-            params.push((p.name.to_string(), type_spec_to_php(&p.ty)));
+            let ty = if matches!(spec.semantics.argument_lowering,
+                crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues)
+            {
+                crate::builtins::convert::type_spec_to_php_preserving_null(&p.ty)
+            } else { type_spec_to_php(&p.ty) };
+            params.push((p.name.to_string(), ty));
             defaults.push(p.default.as_ref().map(default_spec_to_expr));
             ref_params.push(p.by_ref);
         }
@@ -154,14 +159,29 @@ pub fn lookup(name: &str) -> Option<&'static BuiltinDef> {
 
 /// Looks up the AOT binding for a boxed-runtime builtin without PHP-name dispatch.
 ///
-/// The map is derived from the same shared contract ID used by Magician. Duplicate
-/// runtime IDs or an ABI ID without exactly one AOT binding are hard invariants.
+/// The map is derived from the same shared contract ID used by Magician. Implemented
+/// registry contracts must have exactly one binding; unsupported contracts have none.
 pub fn lookup_runtime_builtin(id: RuntimeBuiltinId) -> &'static BuiltinDef {
     let name = runtime_builtin_registry()
         .get(&id)
         .copied()
         .unwrap_or_else(|| panic!("runtime builtin ID {} has no AOT binding", id.as_u32()));
     lookup(name).expect("runtime builtin registry must point to an AOT binding")
+}
+
+/// Enumerates runtime identities with validated AOT bindings in stable ABI order.
+/// Engine operations whose frontend adapters are explicitly unsupported remain unavailable.
+pub fn runtime_builtin_ids() -> impl Iterator<Item = RuntimeBuiltinId> {
+    let registry = runtime_builtin_registry();
+    RuntimeBuiltinId::ALL.into_iter().filter(move |id| registry.contains_key(id))
+}
+
+/// Enumerates typed AOT bindings whose eval adapters are also available for boxed dispatch.
+pub fn eval_runtime_builtin_ids() -> impl Iterator<Item = RuntimeBuiltinId> {
+    runtime_builtin_ids().filter(|id| {
+        let contract = elephc_builtin_contract::lookup_id(id.builtin_id()).expect("validated runtime contract");
+        matches!(elephc_builtin_contract::eval_support(contract), BackendSupport::Implemented(_))
+    })
 }
 
 /// Builds the typed runtime-to-AOT join from shared contract identities.
@@ -179,10 +199,14 @@ fn runtime_builtin_registry() -> &'static HashMap<RuntimeBuiltinId, &'static str
             );
         }
         for runtime_id in RuntimeBuiltinId::ALL {
-            assert!(
-                by_runtime_id.contains_key(&runtime_id),
-                "runtime builtin ID {} has no AOT binding",
-                runtime_id.as_u32()
+            let contract = elephc_builtin_contract::lookup_id(runtime_id.builtin_id())
+                .expect("runtime builtin must have a shared contract");
+            let expected = matches!(aot_support(contract),
+                BackendSupport::Implemented(BackendImplementation::Registry));
+            assert_eq!(
+                by_runtime_id.contains_key(&runtime_id), expected,
+                "runtime builtin ID {} must agree with its declared AOT support",
+                runtime_id.as_u32(),
             );
         }
         by_runtime_id
@@ -1043,13 +1067,60 @@ mod tests {
         }
     }
 
-    /// Verifies every versioned boxed-runtime ID joins to exactly one canonical AOT binding.
+    /// Verifies runtime IDs have exactly the canonical binding required by their support contract.
     #[test]
     fn runtime_builtin_ids_join_to_aot_contracts() {
         for runtime_id in RuntimeBuiltinId::ALL {
+            let contract = elephc_builtin_contract::lookup_id(runtime_id.builtin_id()).unwrap();
+            if !matches!(aot_support(contract), BackendSupport::Implemented(BackendImplementation::Registry)) {
+                assert!(lookup(contract.name).is_none(), "{} must remain unavailable", contract.name);
+                assert!(!runtime_builtin_ids().any(|id| id == runtime_id));
+                continue;
+            }
             let def = lookup_runtime_builtin(runtime_id);
             assert_eq!(def.spec.id(), runtime_id.builtin_id());
             assert_eq!(def.spec.runtime_builtin_id(), Some(runtime_id));
         }
     }
+    /// Verifies direct and first-class mbstring signatures retain nullable encoding storage.
+    #[test]
+    fn mbstring_signatures_preserve_nullable_encodings() {
+        for id in runtime_builtin_ids().filter(|id| id.is_mbstring()) {
+            let contract = elephc_builtin_contract::lookup_id(id.builtin_id()).unwrap();
+            let definition = lookup(contract.name).unwrap();
+            let callable = first_class_callable_sig(contract.name).unwrap();
+            for (index, parameter) in contract.params.iter().enumerate() {
+                if let elephc_builtin_contract::TypeSpec::Nullable(inner) = parameter.ty {
+                    let expected = PhpType::Union(vec![type_spec_to_php(inner), PhpType::Void]);
+                    assert_eq!(definition.params[index].1, expected, "{} ${}", contract.name, parameter.name);
+                    assert_eq!(callable.params[index].1, expected, "{} ${}", contract.name, parameter.name);
+                }
+            }
+        }
+    }
+
+    /// Verifies neutral mbstring union results reach declarations, callables, and EIR fallbacks.
+    #[test]
+    fn mbstring_union_results_remain_shared() {
+        for (name, expected) in [
+            ("mb_ord", PhpType::Union(vec![PhpType::Int, PhpType::False])),
+            ("mb_chr", PhpType::Union(vec![PhpType::Str, PhpType::False])),
+            ("mb_internal_encoding", PhpType::Union(vec![PhpType::Str, PhpType::Bool])),
+            ("mb_regex_encoding", PhpType::Union(vec![PhpType::Str, PhpType::Bool])),
+        ] {
+            let definition = lookup(name).unwrap();
+            assert_eq!(definition.return_type, expected, "{name}");
+            assert_eq!(first_class_callable_sig(name).unwrap().return_type, expected, "{name}");
+            let operation = definition.spec.runtime_builtin_id().unwrap();
+            let target = match operation {
+                RuntimeBuiltinId::MbOrd => crate::ir::RuntimeFnId::MbOrd,
+                RuntimeBuiltinId::MbChr => crate::ir::RuntimeFnId::MbChr,
+                RuntimeBuiltinId::MbInternalEncoding => crate::ir::RuntimeFnId::MbInternalEncoding,
+                RuntimeBuiltinId::MbRegexEncoding => crate::ir::RuntimeFnId::MbRegexEncoding,
+                _ => unreachable!(),
+            };
+            assert_eq!(target.fallback_result_type(&[], &definition.return_type), expected, "{name}");
+        }
+    }
+
 }

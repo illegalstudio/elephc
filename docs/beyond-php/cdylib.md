@@ -36,6 +36,10 @@ drives it through the public functions.
 `--emit staticlib` produces `lib<name>.a` plus the same generated header and
 public ABI. It is linked into the final host executable instead of loaded with
 `dlopen`, and uses direct final-link relocations instead of PIC/GOT references.
+The archive contains the generated user and runtime objects. The consuming
+host must link any required Elephc bridges, managed native packages, and system
+libraries separately, after this archive. A shared-library build resolves those
+dependencies itself.
 
 ## Exporting functions
 
@@ -129,6 +133,15 @@ Call `elephc_init()` after loading the library and `elephc_shutdown()` before
 unloading it. `elephc_abi_version()` must match `ELEPHC_ABI_VERSION` from the
 header. Initialization also arms the call-stack overflow guard for host-entered
 PHP calls. `elephc_free(NULL)` is safe.
+
+For a library built with mbstring startup INI overrides, `elephc_init()` installs
+the settings. The first exported PHP call also initializes them if the host
+has not called `elephc_init()`. Repeated initialization preserves changes made
+by exported functions, such as `mb_internal_encoding()`. A startup failure
+returns `ELEPHC_STATUS_RUNTIME_FAILURE` from initialization or a string export;
+a scalar export returns zero and records that status. String outputs remain
+`NULL` with zero length. `elephc_last_error()` supplies the boundary diagnostic,
+and the host process remains running.
 
 ABI version 3 adds recovery for the pre-existing scalar signatures and the
 `elephc_last_status()` query. A successful scalar or owned-string call records

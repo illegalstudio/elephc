@@ -51,7 +51,8 @@ pub(in crate::interpreter) fn bind_method_scope_args(
     params: &[String],
     parameter_is_by_ref: &[bool],
     bound_args: &[BoundMethodArg],
-) {
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     for (position, (name, bound_arg)) in params.iter().zip(bound_args.iter()).enumerate() {
         if parameter_is_by_ref.get(position).copied().unwrap_or(false) {
             method_scope.set_reference(
@@ -64,10 +65,17 @@ pub(in crate::interpreter) fn bind_method_scope_args(
                 method_scope.set_reference_target(name.clone(), target);
             }
         } else {
-            method_scope.set(name.clone(), bound_arg.value, ScopeCellOwnership::Borrowed);
+            let value = if values.is_reference(bound_arg.value)? {
+                values.copy_value(bound_arg.value)?
+            } else {
+                bound_arg.value
+            };
+            let ownership = if value == bound_arg.value { ScopeCellOwnership::Borrowed } else { ScopeCellOwnership::Owned };
+            method_scope.set(name.clone(), value, ownership);
         }
     }
     alias_duplicate_method_ref_args(method_scope, params, bound_args);
+    Ok(())
 }
 
 /// Creates local aliases when two by-reference method parameters point at the same caller variable.
@@ -253,12 +261,15 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             let Some(scope) = (unsafe { scope.as_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
+            if visible_scope_cell(context, scope, name) == Some(value) { return Ok(()); }
+            let value = values.retain(value)?;
             for replaced in set_scope_cell(
                 context,
                 scope,
                 name.clone(),
                 value,
-                ScopeCellOwnership::Borrowed,
+                ScopeCellOwnership::Owned,
+                values,
             )? {
                 values.release(replaced)?;
             }
@@ -310,7 +321,13 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             context,
             values,
         ),
-        EvalReferenceTarget::Cell { .. } => Ok(()),
+        EvalReferenceTarget::Cell { cell } => {
+            if *cell != value && values.is_reference(*cell)? {
+                let previous = values.reference_replace(*cell, value)?;
+                eval_release_value(context, values, previous)?;
+            }
+            Ok(())
+        },
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
             write_back_invoker_slot_ref_target(*slot, *source_tag, value, values)
         }
@@ -337,7 +354,9 @@ pub(super) fn eval_invoker_slot_ref_target_value(
             values.raw_word_value(source_tag, word)
         }
         EVAL_TAG_MIXED => {
-            let value = unsafe { *(slot as *const RuntimeCellHandle) };
+            let value = RuntimeCellHandle::from_raw(unsafe {
+                *(slot as *const *mut crate::value::RuntimeCell)
+            });
             values.retain(value)
         }
         _ => Err(EvalStatus::RuntimeFatal),
@@ -366,9 +385,9 @@ pub(super) fn write_back_invoker_slot_ref_target(
         EVAL_TAG_MIXED => {
             let retained = values.retain(value)?;
             let replaced = unsafe {
-                let slot = slot as *mut RuntimeCellHandle;
-                let replaced = *slot;
-                *slot = retained;
+                let slot = slot as *mut *mut crate::value::RuntimeCell;
+                let replaced = RuntimeCellHandle::from_raw(*slot);
+                *slot = retained.as_ptr();
                 replaced
             };
             values.release(replaced)
@@ -442,7 +461,7 @@ pub(super) fn write_back_method_array_element_ref_target(
         eval_new_array_for_index(index, values)?
     };
     let array = values.array_set(array, index, value)?;
-    for replaced in set_scope_cell(context, scope, array_name.to_string(), array, ownership)? {
+    for replaced in set_scope_cell(context, scope, array_name.to_string(), array, ownership, values)? {
         values.release(replaced)?;
     }
     Ok(())

@@ -46,6 +46,15 @@ pub(crate) struct RuntimeStaticMethodCallableCase {
 pub(crate) fn runtime_builtin_wrapper_supported(
     name: &str,
     source_arg_ty: Option<&PhpType>,
+    features: crate::codegen_support::runtime_features::RuntimeFeatures,
+) -> bool {
+    runtime_builtin_wrapper_supported_at_arity(name, source_arg_ty, features, None)
+}
+
+/// Selects a typed wrapper with the callback's known argument count when the caller can prove it.
+pub(crate) fn runtime_builtin_wrapper_supported_at_arity(
+    name: &str, source_arg_ty: Option<&PhpType>,
+    features: crate::codegen_support::runtime_features::RuntimeFeatures, arity: Option<usize>,
 ) -> bool {
     let name = crate::names::php_symbol_key(name.trim_start_matches('\\'));
     let Some(def) = crate::builtins::registry::lookup(&name) else {
@@ -56,7 +65,8 @@ pub(crate) fn runtime_builtin_wrapper_supported(
             accepts(source_arg_ty)
         }
         crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {
-            target.callable_accepts(source_arg_ty)
+            (!target.uses_mbstring_runtime() || features.mbstring || features.eval_bridge)
+                && target.callable_accepts_arity(source_arg_ty, arity)
         }
         crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => false,
     }

@@ -6,7 +6,8 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - String values are persisted (independent copies) and heap values retained, so the result owns its payloads.
+//! - String values are persisted and heap values, including callable descriptors, are retained.
+//! - Inline nullable scalars contribute their per-slot tag rather than the array storage marker.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -40,6 +41,9 @@ pub fn emit_array_to_hash(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x0, #16]");                                  // load the element size (stride) from the header
     emitter.instruction("str x11, [sp, #40]");                                  // save the element stride
     emitter.instruction("mov x1, x10");                                         // value_type for the new hash header
+    emitter.instruction("cmp x10, #11");                                        // nullable scalar arrays carry a distinct runtime tag in every slot
+    emitter.instruction("mov x12, #7");                                         // their destination hash must allow heterogeneous entry tags
+    emitter.instruction("csel x1, x12, x1, eq");                                // use Mixed metadata only for the inline tagged-scalar representation
     emitter.instruction("cmp x9, #8");                                          // is the length below the minimum hash capacity?
     emitter.instruction("b.ge __rt_array_to_hash_cap_ok");                      // use the length as the capacity hint
     emitter.instruction("mov x9, #8");                                          // clamp the capacity hint to a small minimum
@@ -66,10 +70,13 @@ pub fn emit_array_to_hash(emitter: &mut Emitter) {
     emitter.instruction("mov x9, #0");                                          // non-string elements have no high word
     emitter.instruction("str x9, [sp, #56]");                                   // save a zero high word
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the value_type
+    emitter.instruction("cmp x9, #10");                                         // callable descriptors own captured values independently of the source array
+    emitter.instruction("b.eq __rt_array_to_hash_retain");                      // retain heap descriptors while the ordinary incref skips static descriptors
     emitter.instruction("cmp x9, #4");                                          // is the element below the heap-backed tag range?
     emitter.instruction("b.lt __rt_array_to_hash_set");                         // scalar elements need no retain
     emitter.instruction("cmp x9, #7");                                          // is the element above the heap-backed tag range?
     emitter.instruction("b.gt __rt_array_to_hash_set");                         // non-heap tags need no retain
+    emitter.label("__rt_array_to_hash_retain");
     emitter.instruction("ldr x0, [sp, #48]");                                   // load the heap-backed element pointer
     emitter.instruction("bl __rt_incref");                                      // retain the heap-backed element for the result hash
     emitter.instruction("b __rt_array_to_hash_set");                            // continue to insertion
@@ -86,6 +93,13 @@ pub fn emit_array_to_hash(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #48]");                                   // value low word
     emitter.instruction("ldr x4, [sp, #56]");                                   // value high word
     emitter.instruction("ldr x5, [sp, #32]");                                   // value runtime tag (= value_type)
+    emitter.instruction("cmp x5, #11");                                         // inline tagged-scalar storage is not itself a PHP value tag
+    emitter.instruction("b.ne __rt_array_to_hash_tag_ready");                   // ordinary element tags are already valid for hash insertion
+    emitter.instruction("ldr x9, [sp]");                                        // recover the original array after staging the hash arguments
+    emitter.instruction("add x9, x9, #24");                                     // skip the indexed-array header
+    emitter.instruction("add x9, x9, x1, lsl #4");                              // locate the selected sixteen-byte scalar slot
+    emitter.instruction("ldr x5, [x9, #8]");                                    // use the slot's concrete scalar or null tag
+    emitter.label("__rt_array_to_hash_tag_ready");
     emitter.instruction("bl __rt_hash_set");                                    // insert element[i] at integer key i
     emitter.instruction("str x0, [sp, #8]");                                    // update the result pointer after possible reallocation
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the index
@@ -119,6 +133,9 @@ fn emit_array_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rdi + 16]");                       // load the element size (stride) from the header
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the element stride
     emitter.instruction("mov rsi, r10");                                        // value_type for the new hash header
+    emitter.instruction("cmp r10, 11");                                         // inline nullable scalar slots may carry different PHP tags
+    emitter.instruction("mov r11d, 7");                                         // prepare heterogeneous destination metadata
+    emitter.instruction("cmove rsi, r11");                                      // preserve ordinary tags while normalizing tagged-scalar metadata
     emitter.instruction("mov rdi, rax");                                        // capacity hint = length
     emitter.instruction("cmp rdi, 8");                                          // is the length below the minimum hash capacity?
     emitter.instruction("jge __rt_array_to_hash_cap_ok");                       // use the length as the capacity hint
@@ -142,11 +159,14 @@ fn emit_array_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, 1");                                           // is the element a string?
     emitter.instruction("je __rt_array_to_hash_string");                        // strings need persistence
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // non-string elements have no high word
+    emitter.instruction("cmp r9, 10");                                          // callable descriptors own their captured values independently of the source
+    emitter.instruction("je __rt_array_to_hash_retain");                        // retain heap descriptors before the original indexed array can be released
     emitter.instruction("cmp r9, 4");                                           // is the element below the heap-backed tag range?
     emitter.instruction("jl __rt_array_to_hash_set");                           // scalar elements need no retain
     emitter.instruction("cmp r9, 7");                                           // is the element above the heap-backed tag range?
     emitter.instruction("jg __rt_array_to_hash_set");                           // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // load the heap-backed element pointer
+    emitter.label("__rt_array_to_hash_retain");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // pass the child through the native incref result-register convention
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed element for the result hash
     emitter.instruction("jmp __rt_array_to_hash_set");                          // continue to insertion
     emitter.label("__rt_array_to_hash_string");
@@ -162,6 +182,13 @@ fn emit_array_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // value low word
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // value high word
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // value runtime tag (= value_type)
+    emitter.instruction("cmp r9, 11");                                          // the inline storage marker must not escape into a PHP hash entry
+    emitter.instruction("jne __rt_array_to_hash_tag_ready");                    // ordinary tags already describe the copied low/high payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover the indexed source without disturbing staged C arguments
+    emitter.instruction("mov r11, rsi");                                        // preserve the integer key while computing its source address
+    emitter.instruction("shl r11, 4");                                          // scale by the tagged-scalar sixteen-byte stride
+    emitter.instruction("mov r9, QWORD PTR [r10 + r11 + 32]");                  // read the concrete scalar or null tag after the array header and low word
+    emitter.label("__rt_array_to_hash_tag_ready");
     emitter.instruction("call __rt_hash_set");                                  // insert element[i] at integer key i
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // update the result pointer after possible reallocation
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the index
@@ -174,4 +201,3 @@ fn emit_array_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the result hash in rax
 }
-

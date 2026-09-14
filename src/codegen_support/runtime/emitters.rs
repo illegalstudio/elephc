@@ -50,11 +50,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
-    strings::emit_str_persist(emitter);
+    strings::emit_str_persist(emitter, features.mbstring || features.eval_bridge);
     strings::emit_str_inc_dec(emitter);
     strings::emit_mixed_inc_dec(emitter);
-    strings::emit_strtolower(emitter);
-    strings::emit_strtoupper(emitter);
+    strings::emit_strtolower(emitter, features.mbstring || features.eval_bridge);
+    strings::emit_strtoupper(emitter, features.mbstring || features.eval_bridge);
     strings::emit_trim(emitter);
     strings::emit_ltrim(emitter);
     strings::emit_rtrim(emitter);
@@ -111,8 +111,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_md5(emitter);
     strings::emit_sha1(emitter);
     strings::emit_crc32(emitter);
-    if features.mb_strlen {
-        strings::emit_mb_strlen(emitter);
+    if features.mbstring || features.eval_bridge {
+        strings::emit_mbstring(emitter, features.eval_bridge, features.mbregex);
     }
     strings::emit_iconv(emitter);
     strings::emit_hash(emitter);
@@ -193,7 +193,6 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     if features.regex {
         system::emit_preg_strip(emitter);
         system::emit_pcre_to_posix(emitter);
-        system::emit_mb_ereg_match(emitter);
         system::emit_preg_match(emitter);
         system::emit_preg_match_all(emitter);
         system::emit_preg_replace(emitter);
@@ -212,6 +211,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
+    exceptions::emit_throwable_boxed_owners(emitter);
 
     // Generator runtime helpers for Iterator methods, send/throw, and return-value retrieval.
     generators::emit_generator_runtime(emitter);

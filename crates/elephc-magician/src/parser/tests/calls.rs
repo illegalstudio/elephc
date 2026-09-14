@@ -9,6 +9,17 @@
 
 use super::support::*;
 
+/// Represents non-UTF-8 literals explicitly while keeping real Unicode and synthesized names ordinary strings.
+#[test]
+fn string_literal_bytes_parse_without_utf8_reencoding() {
+    for (source, expected) in [(r#"return "\xFF\377";"#.to_owned(), EvalConst::Bytes(vec![0xff, 0xff])),
+        (r#"return "\xC3\xA9";"#.to_owned(), EvalConst::String("é".to_owned())),
+        ("return '\u{e000}';".to_owned(), EvalConst::String("\u{e000}".to_owned()))] {
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        assert_eq!(program.statements(), &[EvalStmt::Return(Some(EvalExpr::Const(expected)))]);
+    }
+}
+
 /// Verifies print fragments lower to expression-form print with the printed value.
 #[test]
 fn parse_fragment_accepts_print_source() {

@@ -1,11 +1,11 @@
 ---
-title: "imageresolution() — internals"
+title: "imageresolution() - internals"
 description: "Compiler internals for imageresolution(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 523
 ---
 
-## `imageresolution()` — internals
+## `imageresolution()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,7 @@ function imageresolution(mixed $image, ?int $resolution_x = null, ?int $resoluti
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

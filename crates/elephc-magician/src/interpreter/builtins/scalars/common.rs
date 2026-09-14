@@ -116,7 +116,9 @@ pub(in crate::interpreter) fn eval_int_value(
         }
     }
     let value = values.cast_int(value)?;
-    let bytes = values.string_bytes(value)?;
+    let bytes = values.string_bytes(value);
+    values.release(value)?;
+    let bytes = bytes?;
     std::str::from_utf8(&bytes)
         .map_err(|_| EvalStatus::RuntimeFatal)?
         .parse::<i64>()

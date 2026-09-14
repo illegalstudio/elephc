@@ -26,9 +26,12 @@ impl Parser {
                 Ok(EvalExpr::Const(EvalConst::Float(value)))
             }
             TokenKind::String(value) => {
-                let value = value.clone();
+                let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
                 self.advance();
-                Ok(EvalExpr::Const(EvalConst::String(value)))
+                Ok(EvalExpr::Const(match String::from_utf8(bytes) {
+                    Ok(value) => EvalConst::String(value),
+                    Err(error) => EvalConst::Bytes(error.into_bytes()),
+                }))
             }
             TokenKind::DollarIdent(name) => {
                 let name = name.clone();

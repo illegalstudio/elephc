@@ -1,16 +1,16 @@
 ---
-title: "strncmp() — internals"
+title: "strncmp() - internals"
 description: "Compiler internals for strncmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 832
+  order: 893
 ---
 
-## `strncmp()` — internals
+## `strncmp()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strncmp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strncmp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:643](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L643) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,7 +48,7 @@ function strncmp(string $string1, string $string2, int $length): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
