@@ -113,3 +113,39 @@ echo $e->negative(), "\n";
          array_fill(): Argument #2 ($count) must be greater than or equal to 0\n"
     );
 }
+
+/// Raised in review: an integer read out of an array carries the TAGGED-NULL representation
+/// under the default sentinel scheme, so `array_fill()` sees `TaggedScalar`, not `Int`.
+///
+/// It needs no staging, and this pins why: a tagged scalar keeps its integer payload in the
+/// value's own slot and the null tag in the adjacent one, so loading the slot into an ABI
+/// register already yields the integer. Only `Mixed`/`Union` has to be unboxed.
+///
+/// Both argument positions and every value-type path are covered, because each reaches a
+/// different fill helper. Measured against the host PHP 8.5.10.
+#[test]
+fn test_array_fill_accepts_tagged_scalar_start_and_count() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe(bool $b): ?int { return $b ? 4 : null; }
+
+$counts = [3, 5, 7];
+$starts = [0, 2, 4];
+var_dump(count(array_fill(0, $counts[0], 9)));
+var_dump(count(array_fill(0, $counts[1], "s")));
+var_dump(implode(",", array_keys(array_fill($starts[1], $counts[0], 1))));
+var_dump(count(array_fill($starts[0], $counts[2], 1.5)));
+
+$a = maybe(true);
+var_dump(count(array_fill(0, $a ?? 1, 1)));
+$b = maybe(true);
+if ($b !== null) {
+    var_dump(count(array_fill(0, $b, 1)));
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(3)\nint(5)\nstring(5) \"2,3,4\"\nint(7)\nint(4)\nint(4)\n"
+    );
+}
