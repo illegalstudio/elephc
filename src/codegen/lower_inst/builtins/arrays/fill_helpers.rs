@@ -13,8 +13,10 @@ use super::*;
 ///
 /// String fills use the `(count, ptr, len)` ABI of `__rt_array_fill_str` (the helper is always
 /// 0-indexed, so `start` is unused); every other value type uses the shared `(start, count, value)`
-/// scalar/refcounted ABI. The register loads are independent stack reads, so loading `count` before
-/// the string pointer/length cannot clobber it.
+/// scalar/refcounted ABI.
+///
+/// Both integer arguments go through the staging pair below, which is what makes a BOXED one
+/// work at all.
 pub(super) fn lower_array_fill_call(
     ctx: &mut FunctionContext<'_>,
     start: ValueId,
@@ -23,34 +25,86 @@ pub(super) fn lower_array_fill_call(
     value_ty: &PhpType,
 ) -> Result<()> {
     if matches!(value_ty.codegen_repr(), PhpType::Str) {
+        let staged_count = stage_boxed_fill_integer(ctx, count)?;
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.load_value_to_reg(count, "x0")?;
                 ctx.load_string_value_to_regs(value, "x1", "x2")?;
+                settle_fill_integer(ctx, count, staged_count, "x0")?;
             }
             Arch::X86_64 => {
-                ctx.load_value_to_reg(count, "rdi")?;
                 ctx.load_string_value_to_regs(value, "rsi", "rdx")?;
+                settle_fill_integer(ctx, count, staged_count, "rdi")?;
             }
         }
         emit_array_fill_count_guard(ctx, false);
         abi::emit_call_label(ctx.emitter, array_fill_runtime_helper(value_ty));
         return Ok(());
     }
+    let staged_start = stage_boxed_fill_integer(ctx, start)?;
+    let staged_count = stage_boxed_fill_integer(ctx, count)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.load_value_to_reg(start, "x0")?;
-            ctx.load_value_to_reg(count, "x1")?;
             ctx.load_value_to_reg(value, "x2")?;
+            settle_fill_integer(ctx, count, staged_count, "x1")?;
+            settle_fill_integer(ctx, start, staged_start, "x0")?;
         }
         Arch::X86_64 => {
-            ctx.load_value_to_reg(start, "rdi")?;
-            ctx.load_value_to_reg(count, "rsi")?;
             ctx.load_value_to_reg(value, "rdx")?;
+            settle_fill_integer(ctx, count, staged_count, "rsi")?;
+            settle_fill_integer(ctx, start, staged_start, "rdi")?;
         }
     }
     emit_array_fill_count_guard(ctx, true);
     abi::emit_call_label(ctx.emitter, array_fill_runtime_helper(value_ty));
+    Ok(())
+}
+
+/// Resolves a BOXED `array_fill()` integer argument to a plain `int` and parks it on the stack.
+///
+/// Returns whether anything was parked; an unboxed argument is left for `settle_fill_integer`
+/// to load in place, which keeps that path byte-identical to what it was.
+///
+/// `$n = $this->w * $this->h` is the shape issue #502 reported: `ichecked_mul` returns `Mixed`
+/// because the product may overflow to float, so the local holds a BOX. The fill arguments were
+/// loaded straight into their ABI registers, which put the box's POINTER in the count register —
+/// a number far past `INT_MAX`, reported as `array_fill(): Argument #2 ($count) is too large`
+/// (and, before that guard existed, an exhausted heap). `$start` has the same shape and the same
+/// defect: it produced an array keyed from the pointer value.
+///
+/// A literal count, a count passed as a parameter, and the same code in a free function all stay
+/// `Int`, which is what made this look like a method-only defect.
+///
+/// Parking is not an optimization: unboxing calls `__rt_mixed_cast_int`, which clobbers every
+/// caller-saved argument register, so a boxed argument resolved in ABI order would destroy the
+/// arguments loaded before it.
+fn stage_boxed_fill_integer(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    if !matches!(
+        ctx.value_php_type(value)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return Ok(false);
+    }
+    resolve_int_operand_to_result(ctx, value, "array_fill integer argument")?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    Ok(true)
+}
+
+/// Puts one `array_fill()` integer argument into its ABI register, after every other argument.
+///
+/// Staged arguments are popped in REVERSE staging order, so callers must settle `count` before
+/// `start` — the order the two `stage_boxed_fill_integer` calls above push them in.
+fn settle_fill_integer(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    staged: bool,
+    reg: &str,
+) -> Result<()> {
+    if staged {
+        abi::emit_pop_reg(ctx.emitter, reg);
+        return Ok(());
+    }
+    ctx.load_value_to_reg(value, reg)?;
     Ok(())
 }
 
@@ -109,18 +163,20 @@ pub(super) fn lower_array_fill_assoc_call(
     value_ty: &PhpType,
 ) -> Result<()> {
     let value_tag = runtime_value_tag("array_fill", value_ty)? as i64;
+    let staged_start = stage_boxed_fill_integer(ctx, start)?;
+    let staged_count = stage_boxed_fill_integer(ctx, count)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.load_value_to_reg(start, "x0")?;
-            ctx.load_value_to_reg(count, "x1")?;
             materialize_array_fill_assoc_value_words(ctx, value, value_ty, "x2", "x3")?;
             abi::emit_load_int_immediate(ctx.emitter, "x4", value_tag);
+            settle_fill_integer(ctx, count, staged_count, "x1")?;
+            settle_fill_integer(ctx, start, staged_start, "x0")?;
         }
         Arch::X86_64 => {
-            ctx.load_value_to_reg(start, "rdi")?;
-            ctx.load_value_to_reg(count, "rsi")?;
             materialize_array_fill_assoc_value_words(ctx, value, value_ty, "rdx", "rcx")?;
             abi::emit_load_int_immediate(ctx.emitter, "r8", value_tag);
+            settle_fill_integer(ctx, count, staged_count, "rsi")?;
+            settle_fill_integer(ctx, start, staged_start, "rdi")?;
         }
     }
     emit_array_fill_count_guard(ctx, true);
