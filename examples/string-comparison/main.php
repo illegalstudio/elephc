@@ -43,3 +43,20 @@ foreach ($words as $word) {
     }
 }
 echo "smallest: ", $smallest, "\n";
+
+// Two INTEGER strings compare exactly, as int — they are not rounded through a float first.
+// These two differ only past 2^53, which is precisely where a float can no longer tell them
+// apart, so comparing them as floats would call them equal.
+$hi = "9007199254740993";
+$lo = "9007199254740992";
+var_dump($hi > $lo);
+var_dump($hi == $lo);
+
+// Integer text too large for int follows PHP's own fallback rather than the float value:
+// two sides that overflowed the same way compare by BYTES. That is why this is true even
+// though it is numerically false — "9..." sorts after "1...".
+var_dump("99999999999999999999" > "100000000000000000000");
+
+// <=> is the same ordering, reported as -1, 0 or 1.
+var_dump($hi <=> $lo);
+echo "a" <=> "b", "\n";
