@@ -1,12 +1,21 @@
 //! Purpose:
 //! Regression tests for issue #479: storing a SUBCLASS over a local whose slot type is a
-//! supertype must not widen the slot to boxed `Mixed`, or the release emitted before the
-//! store reads a raw object pointer as a box and frees nothing.
+//! supertype widens the slot to boxed `Mixed`, and the release emitted before an EARLIER
+//! store was typed against the concrete slot it saw at the time.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
+//! - The widening is deliberate and stays. What was wrong is the release that runs before
+//!   the first store: the backend uses the FINAL boxed storage for the whole frame, so an
+//!   `Object`-typed load against it is an unbox WITH RETAIN — it hands back the inner
+//!   pointer holding a fresh reference, the release cancels exactly that reference, and the
+//!   box is never freed. Two blocks per iteration, the box and the object it pinned.
+//! - The fix defers that release to `release_local_slot`, which the backend types at the
+//!   slot's final storage. Fixing it by suppressing the widening instead is what the first
+//!   attempt did, and it breaks twelve `DatePeriod` tests, whose synthetic bodies assign a
+//!   `DateTime` in one branch and a `DateTimeImmutable` in the other and rely on the box.
 //! - Every fixture loops, because the leak is one object pair per REBIND: a single
 //!   reassignment is reclaimed by frame cleanup and hides the bug entirely.
 //! - The issue reported this as catch-specific ("the previous-value release falls back to
@@ -30,11 +39,12 @@ fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
 
 /// Issue #479 repro: the caught exception variable reassigned to a new object.
 ///
-/// `catch (\Throwable $e)` types the slot `Object("Throwable")`; `new TypeError` stores
-/// `Object("TypeError")` over it. The two are one identical frame representation — a
-/// refcounted pointer — but the slot used to widen to `Mixed` anyway, so the release before
-/// the store loaded a Mixed box out of a slot holding a raw object pointer and freed
-/// nothing. Roughly three blocks leaked per iteration.
+/// `catch (\Throwable $e)` types the slot `Object("Throwable")`; storing `Object("TypeError")`
+/// over it widens the slot to boxed `Mixed`, because `widened_local_storage_type` has no arm
+/// for a pair of object types. The backend then uses that boxed storage for the whole frame —
+/// but the release emitted before the CATCH BIND was lowered while the slot still looked
+/// concrete, so it unboxes with a retain and cancels only its own reference. Roughly three
+/// blocks leaked per iteration.
 #[test]
 fn test_issue_479_catch_variable_reassigned_to_object_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -52,7 +62,8 @@ echo "done\n";
 
 /// Issue #479 is NOT catch-specific: an ordinary local holding an interface-typed value and
 /// then reassigned to a concrete implementation leaks the same way, and by the same
-/// mechanism — `Object("Shape")` widened by `Object("Sq")` to `Mixed`.
+/// mechanism — `Object("Shape")` widened by `Object("Sq")` to `Mixed`, with the release
+/// before the FIRST store left typed against the concrete slot.
 ///
 /// Worth a test of its own: fixing only the catch-bound path would leave this one leaking.
 #[test]
