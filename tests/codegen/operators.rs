@@ -1599,3 +1599,73 @@ fn test_runtime_non_numeric_string_coerces_to_zero() {
     let out = compile_and_run(r#"<?php $x = $argc > 99 ? "1" : "hi"; var_dump($x + 1);"#);
     assert_eq!(out, "int(1)\n");
 }
+
+/// Issue #507: `<`, `<=`, `>`, `>=` between two strings compile and follow PHP's ordering.
+///
+/// These were rejected outright with "Comparison operators require numeric operands", so the
+/// ordinary character-range idiom was a compile error and callers fell back to `ord()`.
+///
+/// The interesting half is that PHP does NOT order two strings by bytes: when BOTH are
+/// numeric strings it compares them numerically, which is why `"10" > "9"` is true while
+/// byte order says the opposite. Lowering therefore routes this through the runtime ordering
+/// helper (`__rt_php_compare`) rather than `StrCmp`'s lexicographic `__rt_strcmp` — the
+/// latter is right for `strcmp()` and wrong here.
+///
+/// Every expectation measured against the host PHP 8.5.10.
+#[test]
+fn test_string_relational_comparison_follows_php_ordering() {
+    let out = compile_and_run(
+        r#"<?php
+$c = "5";
+echo ($c >= '0' && $c <= '9') ? "digit" : "no", "\n";
+var_dump("a" < "b");
+var_dump("abc" < "abd");
+var_dump("abc" > "ab");
+var_dump("" < "a");
+"#,
+    );
+    assert_eq!(
+        out,
+        "digit\nbool(true)\nbool(true)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// Issue #507, the rule that byte comparison gets wrong: two NUMERIC strings order
+/// numerically, and a numeric/non-numeric pair falls back to bytes.
+///
+/// `"10" > "9"` is the case a lexicographic `strcmp` answers backwards, and `"1e2"` vs
+/// `"100"` pins that exponent notation counts as numeric rather than comparing as text.
+#[test]
+fn test_numeric_strings_order_numerically_not_bytewise() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump("10" > "9");
+var_dump("10" < "9a");
+var_dump("1e2" == "100");
+var_dump("1e2" >= "100");
+var_dump("1.5" <= "1.50");
+var_dump("0x1A" < "26");
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// Issue #507: the comparison works on RUNTIME strings, not just literals the optimizer
+/// could fold. `$argc` keeps both operands opaque to constant folding.
+#[test]
+fn test_runtime_string_relational_comparison() {
+    let out = compile_and_run(
+        r#"<?php
+$a = $argc > 99 ? "zz" : "10";
+$b = $argc > 99 ? "aa" : "9";
+var_dump($a > $b);
+$c = $argc > 99 ? "zz" : "apple";
+$d = $argc > 99 ? "aa" : "banana";
+var_dump($c < $d);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\n");
+}
