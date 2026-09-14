@@ -22,6 +22,33 @@ pub(crate) struct ReturnInfo {
     pub has_value: bool,
 }
 
+/// Adds one scalar member to an inferred return type, the way [`nullable_return_type`] adds
+/// `Void` — the shared shape behind `string|false` and `?string`.
+///
+/// `Checker::resolve_type_expr` expands a declared `string|false` to `Union([Str, False])`,
+/// so building the same shape here keeps a hint-less union return byte-identical to the
+/// declared spelling, which already lowered correctly. `codegen_repr()` maps such a union to
+/// a boxed representation, which is what carries `false` distinctly from `""` instead of
+/// coercing it into the other arm's zero value.
+///
+/// `Mixed` already admits every value and is left alone; an existing union gains the member
+/// rather than nesting, so folding three or more returns pairwise stays flat.
+fn union_return_type(other: &PhpType, member: PhpType) -> PhpType {
+    match other {
+        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Union(members) => {
+            if members.iter().any(|existing| *existing == member) {
+                PhpType::Union(members.clone())
+            } else {
+                let mut members = members.clone();
+                members.push(member);
+                PhpType::Union(members)
+            }
+        }
+        other => PhpType::Union(vec![other.clone(), member]),
+    }
+}
+
 /// Makes an inferred return type nullable, the way a declared `?T` hint resolves.
 ///
 /// `Checker::resolve_type_expr` expands `?T` to `Union([T, Void])`, and
@@ -471,11 +498,51 @@ impl Checker {
     /// saw `""` instead of `NULL`. Writing `: ?string` was already correct, and the ternary
     /// spelling of the same function already inferred `string|null` through
     /// `nullable_match_arm_type` — this makes the multi-`return` fold agree with both.
+    /// `False` and `Bool` are subject to the SAME rule as `Void`, for the same reason, and
+    /// their arms must likewise precede `Str`/`Float` (issue #398).
+    ///
+    /// `false` is a VALUE, not a width. A function that returns `false` on failure and a
+    /// string otherwise returns `string|false`, and every PHP caller tests that with
+    /// `=== false`. Letting `Str` absorb it below inferred plain `Str`, so the failure arm
+    /// was lowered as a string and the caller saw `""` — `image_type_to_extension()` on an
+    /// unknown type returned `""` instead of `false`, and so did any hint-less user function
+    /// of that shape. `Float` did the same with `0.0`, and `Bool` was absorbed into `"1"`.
+    ///
+    /// `int|false` never had the bug only because it fell through to `Mixed`, which carries
+    /// the value distinctly — the accident that made the defect look image-specific.
+    ///
+    /// Writing `: string|false` was already correct; this makes the hint-less fold agree
+    /// with the declared spelling, exactly as the `Void` arm above does for `?string`.
     pub(crate) fn wider_type(a: &PhpType, b: &PhpType) -> PhpType {
         match (a, b) {
             _ if a == b => a.clone(),
             (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
             (PhpType::Void, other) | (other, PhpType::Void) => nullable_return_type(other),
+            // `false` is the literal subtype of `bool`, so together they are just `bool`.
+            (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool) => PhpType::Bool,
+            (PhpType::False, other @ (PhpType::Str | PhpType::Float))
+            | (other @ (PhpType::Str | PhpType::Float), PhpType::False) => {
+                union_return_type(other, PhpType::False)
+            }
+            (PhpType::Bool, other @ (PhpType::Str | PhpType::Float))
+            | (other @ (PhpType::Str | PhpType::Float), PhpType::Bool) => {
+                union_return_type(other, PhpType::Bool)
+            }
+            // A union already carries its members distinctly, so `Str`/`Float` below must
+            // not absorb one back into a single scalar. Without this the fold only survived
+            // TWO returns: a third collapsed the union the first two had correctly built.
+            // That applied to the `Void` arm above as well — `null`, `"one"`, `"two"`
+            // inferred plain `Str`, and the null arm came back as `""`.
+            (PhpType::Mixed, _) | (_, PhpType::Mixed) => PhpType::Mixed,
+            (PhpType::Union(_), PhpType::Union(members)) => {
+                let mut widened = a.clone();
+                for member in members {
+                    widened = union_return_type(&widened, member.clone());
+                }
+                widened
+            }
+            (PhpType::Union(_), other) => union_return_type(a, other.clone()),
+            (other, PhpType::Union(_)) => union_return_type(b, other.clone()),
             (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
             (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,
             _ => PhpType::Mixed,

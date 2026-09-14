@@ -13,8 +13,9 @@
 //!   byte writers shared by the EXIF builders.
 //! - EXIF field values come back as strings (ASCII text, SHORT as a decimal,
 //!   RATIONAL as `num/den`) — elephc's documented simplification of PHP's typed
-//!   EXIF values. `exif_tagname`/`exif_thumbnail` yield `""` (not `false`) on the
-//!   not-found path because elephc collapses a `string|false` return to string.
+//!   EXIF values. `exif_tagname`/`exif_thumbnail` return `false` on the not-found
+//!   path, as PHP does; they yielded `""` until the hint-less `string|false` return
+//!   inference was fixed (issue #398).
 
 use crate::support::*;
 
@@ -37,16 +38,20 @@ echo exif_tagname(0x010F), "|", exif_tagname(0x0112), "|", exif_tagname(0x8825),
     assert_eq!(out, "Make|Orientation|GPS_IFD_Pointer|ExposureTime");
 }
 
-/// An unknown tag yields "" (the documented `string|false` collapse), not false.
+/// An unknown tag yields `false`, as PHP does (issue #398).
+///
+/// Asserted with `=== false` rather than `=== ""`: `false` stringifies to the empty
+/// string, so an `echo`-shaped assertion cannot tell the two apart — which is how
+/// the collapse this used to document stayed invisible in these fixtures.
 #[test]
-fn test_exif_tagname_unknown_is_empty() {
+fn test_exif_tagname_unknown_is_false() {
     let out = compile_and_run(
         r#"<?php
 $n = exif_tagname(0x9999);
-echo ($n === "" ? "EMPTY" : "VALUE:" . $n);
+echo ($n === false ? "FALSE" : "VALUE:" . $n);
 "#,
     );
-    assert_eq!(out, "EMPTY");
+    assert_eq!(out, "FALSE");
 }
 
 /// `exif_imagetype` returns the IMAGETYPE_* code for a real image and false for a
@@ -186,11 +191,11 @@ $p = (string) tempnam(sys_get_temp_dir(), "elephc_img_p6nt_");
 file_put_contents($p, $jpeg);
 $w = -1;
 $out = exif_thumbnail($p, $w);
-echo ($out === "" ? "EMPTY" : "STR:" . strlen($out)), "|", $w;
+echo ($out === false ? "FALSE" : "STR:" . strlen($out)), "|", $w;
 "#
     );
     let out = compile_and_run(&src);
-    assert_eq!(out, "EMPTY|-1");
+    assert_eq!(out, "FALSE|-1");
 }
 
 /// `iptcparse` decodes an IIM block into `record#dataset` keys, grouping repeated
@@ -234,7 +239,10 @@ $im = imagecreatetruecolor(5, 7);
 $p = (string) tempnam(sys_get_temp_dir(), "elephc_img_p6em_");
 imagejpeg($im, $p);
 $iptc = chr(0x1C).chr(2).chr(5).be16(9)."headline!";
-$embedded = iptcembed($iptc, $p);
+// `iptcembed()` returns `string|false`; the cast is what hands a plain string to
+// `imagecreatefromstring()`, whose declared parameter does not accept the union.
+// Same reason as the `(string) tempnam(...)` above.
+$embedded = (string) iptcembed($iptc, $p);
 $hasPs = strpos($embedded, "Photoshop 3.0") !== false ? "Y" : "N";
 $hasData = strpos($embedded, "headline!") !== false ? "Y" : "N";
 $re = imagecreatefromstring($embedded);

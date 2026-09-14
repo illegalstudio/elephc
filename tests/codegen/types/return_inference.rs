@@ -295,3 +295,85 @@ echo $r, "|", gettype($r);
     );
     assert_eq!(out, "9.2233720368548E+18|double");
 }
+
+/// Issue #398: a hint-less function that returns `false` on one path and a string on another
+/// infers `string|false`, so the caller's `=== false` is right.
+///
+/// `Checker::wider_type` let `Str` absorb `False`, inferring plain `Str`, so the failure arm
+/// was lowered as a string and came back as `""`. `int|false` never had the bug only because
+/// it fell through to `Mixed`, which carries the value distinctly — the accident that made
+/// the defect look specific to the image builtins that first surfaced it.
+///
+/// Measured against PHP 8.5.10.
+#[test]
+fn test_inferred_false_union_return_survives_the_other_arm() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) {
+    if ($n === 0) { return false; }
+    return "ok";
+}
+$r = pick(0);
+var_dump($r === false);
+var_dump($r);
+var_dump(pick(1));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nstring(2) \"ok\"\n");
+}
+
+/// Issue #398, the other absorbing widths: `float|false` collapsed to `0.0` and a `bool` arm
+/// was stringified to `"1"`. Both are the same `Str`/`Float` absorb, and both are wrong for
+/// the same reason — `false` and `true` are VALUES, not widths.
+#[test]
+fn test_inferred_float_and_bool_union_returns_keep_their_arms() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $n) {
+    if ($n === 0) { return false; }
+    return 1.5;
+}
+function b(int $n) {
+    if ($n === 0) { return true; }
+    return "ok";
+}
+var_dump(f(0) === false);
+var_dump(b(0) === true);
+var_dump(f(1));
+var_dump(b(1));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nfloat(1.5)\nstring(2) \"ok\"\n");
+}
+
+/// Issue #398: the fold has to survive a THIRD return.
+///
+/// `wider_type` folds the returns pairwise, and `Str`/`Float` absorbed a union the earlier
+/// pairs had correctly built — so the union only held for exactly two returns. The image
+/// builtin that reported this has three (`false`, `"." . $ext`, `$ext`), which is why the
+/// first two arms being right was not enough.
+///
+/// The `null` case is the same defect on the pre-existing `Void` arm, and was silently
+/// broken the same way: `null`, `"one"`, `"two"` inferred plain `Str`.
+#[test]
+fn test_inferred_union_return_survives_a_third_return() {
+    let out = compile_and_run(
+        r#"<?php
+function three_false(int $t) {
+    if ($t === 0) { return false; }
+    if ($t === 1) { return "one"; }
+    return "two";
+}
+function three_null(int $t) {
+    if ($t === 0) { return null; }
+    if ($t === 1) { return "one"; }
+    return "two";
+}
+var_dump(three_false(0) === false);
+var_dump(three_null(0) === null);
+var_dump(three_false(2));
+var_dump(three_null(2));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nstring(3) \"two\"\nstring(3) \"two\"\n");
+}
