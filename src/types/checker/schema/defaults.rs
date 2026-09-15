@@ -193,7 +193,7 @@ fn validate_class_defaults(checker: &mut Checker, class_name: &str, errors: &mut
 
 /// Revalidates local declared instance and static property defaults for one class.
 fn validate_class_property_defaults(
-    checker: &Checker,
+    checker: &mut Checker,
     class_name: &str,
     class_info: &crate::types::ClassInfo,
     errors: &mut Vec<CompileError>,
@@ -210,7 +210,7 @@ fn validate_class_property_defaults(
         let Some(default) = class_info.defaults.get(index).and_then(Option::as_ref) else {
             continue;
         };
-        validate_object_default(
+        validate_deferred_default(
             checker,
             expected_ty,
             default,
@@ -237,7 +237,7 @@ fn validate_class_property_defaults(
         else {
             continue;
         };
-        validate_object_default(
+        validate_deferred_default(
             checker,
             expected_ty,
             default,
@@ -274,7 +274,7 @@ fn validate_signature_deferred_defaults(
         let Some(default) = default.as_ref() else {
             continue;
         };
-        validate_deferred_parameter_default(
+        validate_deferred_default(
             checker,
             expected_ty,
             default,
@@ -286,7 +286,11 @@ fn validate_signature_deferred_defaults(
 }
 
 /// Resolves a direct scoped-constant default semantically, or rechecks a deferred object pair.
-fn validate_deferred_parameter_default(
+///
+/// Shared by parameters and by directly declared properties: both defer a scoped constant at
+/// schema time, for the same reason — enum cases and class constants do not exist yet — so both
+/// have to be resolved here, where they do (issue #566).
+fn validate_deferred_default(
     checker: &mut Checker,
     expected_ty: &PhpType,
     default: &Expr,

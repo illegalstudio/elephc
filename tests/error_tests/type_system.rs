@@ -670,16 +670,63 @@ function unused_class_constant_default(Foo $value = Foo::BAR): void {}
     );
 }
 
-/// Verifies plain property enum case defaults remain outside the supported EIR surface.
+/// Issue #566: a directly declared property may take an enum case default, as PHP allows.
+///
+/// This replaces `test_error_plain_property_enum_case_default_remains_unsupported`, which
+/// pinned the rejection PR #565 left in place. The rejection was a SCHEMA-TIME artifact rather
+/// than a rule: enum cases do not exist while class schemas are being built, so
+/// `infer_expr_type_syntactic` answered `Str` for `Level::Low` and the declared `Object("Level")`
+/// slot refused it. Constructor promotion was already accepted only because its default is a
+/// parameter default, and parameters already deferred scoped constants to a pass that could
+/// resolve them.
+///
+/// The runtime half is in `codegen::enum_case_property_defaults`; this asserts the checker no
+/// longer rejects the form.
 #[test]
-fn test_error_plain_property_enum_case_default_remains_unsupported() {
-    expect_error(
+fn test_plain_property_enum_case_default_is_accepted() {
+    expect_no_error(
         r#"<?php
 enum Level {
     case Low;
 }
 class Config {
     public Level $level = Level::Low;
+}
+"#,
+    );
+}
+
+/// The deferral must not become an acceptance: an enum case that does not exist is still a
+/// hard error, now reported by the pass that can actually tell.
+#[test]
+fn test_error_property_default_names_a_missing_enum_case() {
+    expect_error(
+        r#"<?php
+enum Level {
+    case Low;
+}
+class Config {
+    public Level $level = Level::Missing;
+}
+"#,
+        "Undefined enum case: Level::Missing",
+    );
+}
+
+/// And a scoped constant that resolves to a SCALAR is still refused for an object slot — the
+/// deferral changes when the default is judged, not what counts as compatible.
+#[test]
+fn test_error_property_default_scalar_class_constant_in_object_slot() {
+    expect_error(
+        r#"<?php
+enum Level {
+    case Low;
+}
+class Holder {
+    const NAME = 'plain';
+}
+class Config {
+    public Level $level = Holder::NAME;
 }
 "#,
         "Property Config::$level default expects Object(\"Level\"), got Str",

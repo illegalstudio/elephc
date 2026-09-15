@@ -1106,6 +1106,31 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::Str(value) => {
             emit_string_literal_default_to_result(ctx, value);
         }
+        // `public static Level $l = Level::Low;` — the same singleton the instance-property
+        // path loads, into the result register this function's caller then stores. See
+        // `LiteralDefaultValue::EnumCase` for why the receiver is only settled here.
+        LiteralDefaultValue::EnumCase {
+            enum_name,
+            case_name,
+        } => {
+            let is_case = ctx
+                .module
+                .enum_infos
+                .get(enum_name.as_str())
+                .is_some_and(|info| info.cases.iter().any(|case| &case.name == case_name));
+            if !is_case {
+                return Err(CodegenIrError::unsupported(format!(
+                    "enum case default {}::{} for static property {}::${}",
+                    enum_name, case_name, class_name, property
+                )));
+            }
+            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+                ctx.emitter,
+                ctx.module,
+                enum_name,
+                case_name,
+            );
+        }
         LiteralDefaultValue::Null => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }

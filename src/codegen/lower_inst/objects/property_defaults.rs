@@ -113,6 +113,40 @@ pub(super) fn emit_property_default(
             abi::emit_store_to_address(ctx.emitter, ptr_reg, object_reg, default.offset);
             abi::emit_store_to_address(ctx.emitter, len_reg, object_reg, default.offset + 8);
         }
+        LiteralDefaultValue::EnumCase {
+            enum_name,
+            case_name,
+        } => {
+            // The receiver was taken on shape alone by `literal_default_value`, which has no
+            // module. This is where that is settled: a scoped constant in an object slot whose
+            // receiver is not an enum, or whose name is not one of its cases, has no singleton
+            // to load and is reported unsupported rather than turned into a symbol reference
+            // the assembler would then fail on.
+            let is_case = ctx
+                .module
+                .enum_infos
+                .get(enum_name.as_str())
+                .is_some_and(|info| info.cases.iter().any(|case| &case.name == case_name));
+            if !is_case {
+                return Err(CodegenIrError::unsupported(format!(
+                    "enum case default {}::{} for property slot at offset {}",
+                    enum_name, case_name, default.offset
+                )));
+            }
+            // The singleton is materialized lazily, so the store has to go through the
+            // materializer rather than read the slot: a default written before the case's
+            // first use would otherwise store the still-null slot and every
+            // `$obj->prop === Enum::Case` after it would be false.
+            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+                ctx.emitter,
+                ctx.module,
+                enum_name,
+                case_name,
+            );
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
+            abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
+        }
         LiteralDefaultValue::Null => {
             abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset);
             abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);

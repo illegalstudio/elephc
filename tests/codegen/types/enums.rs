@@ -1037,3 +1037,75 @@ fn test_backed_int_enum_tryfrom_mixed() {
     );
     assert_eq!(out, "HighnullLow");
 }
+
+/// Issue #566: a DIRECTLY declared typed property may default to an enum case, and gets the
+/// canonical singleton — not a fresh object, and not null.
+///
+/// Constructor promotion already worked, because its default is evaluated as a parameter
+/// default before the assignment; a plain `public Level $level = Level::Low;` had no path at
+/// all. The checker rejected it at schema time (enum cases do not exist yet there, so
+/// `Level::Low` typed as `Str`), and behind that the EIR property-initialization path had no
+/// form for it either — `object_new for default value of property $level`.
+///
+/// `===` is the assertion that matters: a default that allocated a new object, or that stored
+/// the still-null lazy slot, would print the right `->name` and still be a different value
+/// from `Level::Low` everywhere else in the program. The singleton is materialized lazily, so
+/// the fourth row — a default written before the case's first use anywhere — is the one that
+/// catches storing the unmaterialized slot.
+///
+/// All three declaration forms are here together, and asserted to agree with each other:
+/// static, instance, and promoted. Every expectation is the host PHP 8.5.10 output.
+#[test]
+fn test_enum_case_default_on_every_property_form_is_the_singleton() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level
+{
+    case Low;
+    case High;
+}
+
+enum Backed: string
+{
+    case Alpha = 'a';
+}
+
+class Config
+{
+    public static Level $shared = Level::High;
+    public Level $level = Level::Low;
+    public Backed $backed = Backed::Alpha;
+
+    public function __construct(public Level $promoted = Level::High) {}
+}
+
+$c = new Config();
+var_dump(Config::$shared === Level::High);
+var_dump($c->level === Level::Low);
+var_dump($c->level === Level::High);
+var_dump($c->promoted === Level::High);
+var_dump($c->level === $c->promoted);
+var_dump($c->level->name);
+var_dump($c->backed->value);
+
+$c->level = Level::High;
+var_dump($c->level === Level::High);
+Config::$shared = Level::Low;
+var_dump(Config::$shared === Level::Low);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "string(3) \"Low\"\n",
+            "string(1) \"a\"\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        )
+    );
+}
