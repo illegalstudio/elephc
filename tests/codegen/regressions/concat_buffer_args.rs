@@ -239,32 +239,54 @@ echo strlen($out), ":", $out === $want ? "ok" : "CORRUPT";
 /// so the destination has to have headroom reserved before the cast rather than after it —
 /// and once the join has grown out of the scratch, the cast gets the whole buffer back.
 ///
+/// The three sizes execute the three states the cast can be in, rather than asserting the
+/// grown one only through the emitted assembly:
+///
+/// - **11726 → 65524 bytes**: every cast happens with the destination still in the scratch,
+///   twelve bytes short of the end. The cast headroom itself is what keeps this one from
+///   running over.
+/// - **11727 → 65540 bytes**: four bytes past. The element that crosses is `11726 % 5 == 1`,
+///   a FLOAT, so the crossing goes through `__rt_ftoa`'s 47-byte format — the exact case
+///   where reserving after the cast instead of before it writes outside the buffer.
+/// - **20000 → 115054 bytes**: the destination has grown (more than once, against a doubling
+///   growth) and thousands of casts run afterwards, with the entry offset restored each time.
+///
 /// Every expectation is the host PHP 8.5.10 output for the same fixture.
 #[test]
 fn test_regression_515_implode_mixed_elements_past_the_scratch() {
     let out = compile_and_run(
         r#"<?php
-$parts = [];
-for ($i = 0; $i < 6000; $i++) {
-    $m = $i % 5;
-    if ($m === 0) {
-        $parts[] = $i;
-    } elseif ($m === 1) {
-        $parts[] = $i / 7;
-    } elseif ($m === 2) {
-        $parts[] = $i % 2 === 0;
-    } elseif ($m === 3) {
-        $parts[] = null;
-    } else {
-        $parts[] = "s" . $i;
+function join_mixed(int $n): string {
+    $parts = [];
+    for ($i = 0; $i < $n; $i++) {
+        $m = $i % 5;
+        if ($m === 0) {
+            $parts[] = $i;
+        } elseif ($m === 1) {
+            $parts[] = $i / 7;
+        } elseif ($m === 2) {
+            $parts[] = $i % 2 === 0;
+        } elseif ($m === 3) {
+            $parts[] = null;
+        } else {
+            $parts[] = "s" . $i;
+        }
     }
+    return implode("|", $parts);
 }
-$out = implode("|", $parts);
-echo strlen($out), "|", md5($out), "|", substr($out, 0, 24), "|", substr($out, -16);
+
+foreach ([11726, 11727, 20000] as $n) {
+    $out = join_mixed($n);
+    echo $n, ":", strlen($out), ":", md5($out), ":", substr($out, -12), "\n";
+}
 "#,
     );
     assert_eq!(
         out,
-        "32883|9d3b4508b8ca428e2f57263ca05b17e0|0|0.14285714285714|1||s4|42857143|||s5999"
+        concat!(
+            "11726:65524:3beb1107424c1aa7629cab80c3f988fe:s11724|11725\n",
+            "11727:65540:a4455986403d5911b6c8abd6bcb8d952:5.1428571429\n",
+            "20000:115054:b41ba00211d8f2f17ea523053efbf0c2:714|||s19999\n",
+        )
     );
 }
