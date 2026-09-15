@@ -379,6 +379,34 @@ The same accumulation applies to instance-method and static-method parameters. C
 
 This information is then used when checking calls to that function.
 
+#### When no direct call site exists
+
+The `Int` fallback is only sound because a direct call site replaces it. A function reached
+**only** through a dynamic callable — a runtime string name passed to `call_user_func`,
+`array_map`, an `ob_start` handler — has no such site, so every untyped parameter keeps the
+fallback, and a return inferred from one records `Int` for a value that is really whatever the
+caller passed.
+
+So an un-hinted body that hands one of its untyped by-value parameters straight back records
+`mixed` instead (`src/types/dynamic_params.rs`):
+
+```php
+function h($b, $p) { return $b; }
+$fn = 'h';
+var_dump(call_user_func($fn, "probe", 9));   // string(5) "probe"; was int(0)
+```
+
+It is recorded in the **checker**, not during lowering, because the declaration and its call
+sites have to reach the same answer: EIR already boxes such a parameter, and widening only the
+callee left the caller reading the boxed cell back as a raw integer. `ir_lower` applies the same
+predicate to methods when it normalizes their ABIs, through the same module, so the two cannot
+drift apart.
+
+The rule is narrow on purpose. Only a `return` that yields the parameter itself counts —
+through the pass-through shapes (`?:`, `??`, `match`, `@`, assignment) — so a body that computes
+its own result keeps the type it inferred (`function add($a, $b) { return $a + $b; }` still
+returns `int`), and a declared return type is authoritative and never overridden (issue #576).
+
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 
 **File:** `src/types/checker/stmt_check/narrowing.rs`

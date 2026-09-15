@@ -321,6 +321,22 @@ Captured first-class callable targets (`static::method(...)` and `$obj->method(.
 
 `call_user_func()` and `call_user_func_array()` also accept PHP callable arrays (`[$object, "method"]`, `[ClassName::class, "method"]`) and invokable objects. Dynamic string callback dispatch resolves user functions, declared extern functions, supported builtin wrappers such as `STRLEN`, and public static method strings such as `"Formatter::wrap"`; the matched descriptor's generated invoker receives a boxed argument container, branches on whether it holds an indexed array or associative hash, applies the resolved descriptor signature, and returns a boxed `mixed`. String variables can also be invoked directly as PHP variable functions, for example `$callback = "STRLEN"; echo $callback("hello");`, and they use the same descriptor invoker path for names, defaults, variadics, and by-reference parameter metadata. Callable-array variables and literals can also be invoked directly, for example `$callback = [$object, "wrap"]; echo $callback(value: "ok");` or `([$object, "wrap"])(value: "ok")`, and direct instance-method callable arrays read the receiver stored in the callable array before invoking the descriptor. Objects with public `__invoke()` can also be called directly through descriptor metadata, so `$runner(suffix: "?")` and `(new Runner())(suffix: "?")` apply defaults, named arguments, variadics, and by-reference flags through the same invoker path. Direct callable-array variables and literals may resolve the method or static receiver from runtime strings, so `$method = "wrap"; $callback = [$object, $method]; $callback(...)`, `([$object, $method])(...)`, `$callback = [$class, $method]; ($callback)(...)`, and `([$class, $method])(...)` select the matching public method descriptor at the call site. Public static-method callable arrays use the same descriptor invoker path for direct variable and literal calls, `call_user_func()`, and `call_user_func_array()`, including associative argument containers and positional prefixes before indexed spreads. Public instance-method callable arrays and invokable objects use descriptor invokers for direct `call_user_func()` calls, including single-spread forwarding such as `call_user_func([$object, "method"], ...$args)` and positional prefixes followed by indexed spreads such as `call_user_func([$object, "method"], "head", ...$args)`. They use the same descriptor path for `call_user_func_array()` calls with literal indexed, literal associative, dynamic indexed, dynamic associative, or runtime-opaque `mixed`/union argument containers. Receiver-bound runtime-opaque containers are unboxed at runtime, dispatch by indexed-array versus associative-hash tag, and prepend the receiver as descriptor slot zero before invoking the descriptor adapter. For `call_user_func_array()`, descriptor invokers operate on a cloned Mixed argument container so the caller's `$args` array keeps its original layout after invocation.
 
+A function reached **only** through a dynamic callable returns what it was given. Untyped
+parameters are normally narrowed by the direct call sites the compiler can see; with none, an
+un-hinted body that hands one of them straight back is typed `mixed` rather than guessed at, so
+the value survives the round trip:
+
+```php
+<?php
+function passthrough($value, $unused) { return $value; }
+
+$callback = 'passthrough';
+var_dump(call_user_func($callback, "probe", 9));   // string(5) "probe"
+```
+
+A body that computes its own result keeps its inferred type (`function add($a, $b) { return $a
++ $b; }` still returns `int`), and a declared return type always wins.
+
 ## Global variables
 
 ```php

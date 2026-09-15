@@ -14,6 +14,9 @@ pub mod checker;
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
+/// Whether an un-hinted declaration returns one of its untyped parameters; shared so the
+/// checker and EIR lowering cannot disagree about the recorded return type (issue #576).
+pub mod dynamic_params;
 /// Array storage-representation conversions shared by checking and lowering.
 mod array_storage;
 /// Call argument planning: named, positional, and spread semantics.
