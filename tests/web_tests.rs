@@ -1031,6 +1031,38 @@ fn web_post_superglobal_parsed() {
     assert!(resp.ends_with("alice:s@fe"), "body: {:?}", resp);
 }
 
+/// Issue #513: a urlencoded POST body far past the old ~73 KB ceiling reaches the handler.
+///
+/// The worker used to die with `heap memory exhausted` and an empty response (curl exit 52)
+/// somewhere past 73 KB, *before* the handler ran — so an application-level size check never
+/// got the chance to reject the request itself. The threshold was fixed: identical at an 8 MB
+/// and a 64 MB heap, which is what made it a parser limit rather than a heap one.
+///
+/// 300 KB here is four times the old ceiling and still the default 8 MB heap, and the handler
+/// is what answers. Measured while revalidating: 74 KB, 100 KB, 200 KB and 300 KB all round-trip
+/// at 8 MB, and a 4 MB body round-trips at 64 MB — so what is left scales with the heap the way
+/// the issue asked for.
+#[test]
+fn web_post_body_past_the_old_parser_ceiling_reaches_the_handler() {
+    let dir = make_test_dir("web_post_large");
+    let src = "<?php echo 'len=' . strlen((string) ($_POST['body'] ?? ''));";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let body = format!("body={}", "a".repeat(300_000));
+    let resp = http_request(
+        &addr,
+        "POST",
+        "/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        &body,
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("len=300000"), "body: {:?}", resp);
+}
+
 /// Verifies echoing a superglobal value directly (a boxed Mixed string) reaches
 /// the HTTP response body, not the worker's stdout. This is the output-capture
 /// completeness fix: `__rt_mixed_write_stdout` routes through `__rt_stdout_write`.
