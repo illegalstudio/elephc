@@ -266,6 +266,26 @@ bridge archives next to the elephc binary (or in a sibling lib/).
 `elephc --print-capabilities` lists every archive this binary can need.
 ```
 
+`ELEPHC_<NAME>_LIB_DIR` **replaces** the search rather than joining it: when it
+is set and non-empty, resolution stops there and steps 2–5 are never consulted.
+So an override pointing somewhere without the archive fails even when a perfectly
+good copy sits beside the binary, and the message says so rather than listing
+directories it did not read:
+
+```
+Linker error: required Elephc bridge `elephc_web` could not be found
+  needs: libelephc_web.a
+  looked in:
+    /opt/stage/lib
+
+ELEPHC_WEB_LIB_DIR is set to /opt/stage/lib, which takes priority over every
+other location — the elephc binary's own directory, a sibling lib/ and the build
+tree were NOT consulted. Put libelephc_web.a in /opt/stage/lib, point
+ELEPHC_WEB_LIB_DIR somewhere that has it, or unset ELEPHC_WEB_LIB_DIR to search
+those locations again. `elephc --print-capabilities` lists every archive this
+binary can need.
+```
+
 [`--print-capabilities`](cli-reference.md) is the
 authoritative list for the binary you are holding — one line per capability with
 the archives it needs — so a packaging script can check a tarball carries

@@ -42,6 +42,13 @@ pub enum LinkError {
         env_var: Option<String>,
         /// Directories that were consulted, in the order they were tried.
         searched: Vec<String>,
+        /// The `env_var` directory, when it is what short-circuited discovery.
+        ///
+        /// An override does not join the search — it REPLACES it, returning before any
+        /// fallback is consulted. So its presence changes what the message may claim: the
+        /// fallbacks were not tried, and the fix is to correct or unset the variable rather
+        /// than to place an archive next to the binary, which the override would ignore.
+        override_dir: Option<String>,
     },
 }
 
@@ -60,6 +67,7 @@ impl std::fmt::Display for LinkError {
                 archive,
                 env_var,
                 searched,
+                override_dir,
             } => {
                 write!(formatter, "required Elephc bridge `{name}` could not be found")?;
                 let Some(archive) = archive else {
@@ -72,15 +80,29 @@ impl std::fmt::Display for LinkError {
                         write!(formatter, "\n    {directory}")?;
                     }
                 }
-                if let Some(env_var) = env_var {
-                    write!(
+                let Some(env_var) = env_var else {
+                    return Ok(());
+                };
+                // An override that short-circuited discovery gets the opposite advice: the
+                // fallbacks were never consulted, so telling the user to put the archive next
+                // to the binary would send them somewhere this run will not look.
+                match override_dir {
+                    Some(override_dir) => write!(
+                        formatter,
+                        "\n\n{env_var} is set to {override_dir}, which takes priority over every \
+                         other location — the elephc binary's own directory, a sibling lib/ and \
+                         the build tree were NOT consulted. Put {archive} in {override_dir}, \
+                         point {env_var} somewhere that has it, or unset {env_var} to search \
+                         those locations again. `elephc --print-capabilities` lists every \
+                         archive this binary can need."
+                    ),
+                    None => write!(
                         formatter,
                         "\n\nSet {env_var} to a directory containing {archive}, or keep the \
                          bridge archives next to the elephc binary (or in a sibling lib/). \
                          `elephc --print-capabilities` lists every archive this binary can need."
-                    )?;
+                    ),
                 }
-                Ok(())
             }
         }
     }

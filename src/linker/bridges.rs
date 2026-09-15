@@ -526,6 +526,7 @@ fn validate_archive_path(name: &str, archive: PathBuf) -> Result<PathBuf, LinkEr
                 archive: None,
                 env_var: None,
                 searched: Vec::new(),
+                override_dir: None,
             },
             BridgeStaticlib::missing_error,
         ))
@@ -584,7 +585,8 @@ impl BridgeStaticlib {
     fn archive_path(&self) -> Result<PathBuf, LinkError> {
         if let Ok(env_dir) = std::env::var(self.env_var) {
             if !env_dir.is_empty() {
-                return self.validate_archive(PathBuf::from(env_dir).join(self.archive_filename()));
+                return self
+                    .validate_override_archive(&self.archive_filename(), Path::new(&env_dir));
             }
         }
         if let Some(archive) = self.find_archive() {
@@ -648,7 +650,7 @@ impl BridgeStaticlib {
 
         if let Ok(env_dir) = std::env::var(self.env_var) {
             if !env_dir.is_empty() {
-                return self.validate_archive(PathBuf::from(env_dir).join(&filename));
+                return self.validate_override_archive(&filename, Path::new(&env_dir));
             }
         }
 
@@ -695,6 +697,7 @@ impl BridgeStaticlib {
             archive,
             env_var,
             searched,
+            override_dir,
             ..
         } = self.missing_archive_error(&self.magician_curl_archive_filename());
         LinkError::MissingBridge {
@@ -706,6 +709,7 @@ impl BridgeStaticlib {
             archive,
             env_var,
             searched,
+            override_dir,
         }
     }
 
@@ -852,7 +856,41 @@ impl BridgeStaticlib {
                 .iter()
                 .map(|directory| directory.display().to_string())
                 .collect(),
+            override_dir: None,
         }
+    }
+
+    /// The error for an override directory that does not hold `filename`.
+    ///
+    /// An override does not join the search, it REPLACES it: `archive_path` returns on the
+    /// override before a single fallback is consulted. Reporting the fallbacks here would
+    /// claim a search that never ran, and — worse — the generic advice ("keep the archives
+    /// next to the elephc binary") names a location this run will not look at while the
+    /// variable stays set. So the message lists the one directory that was actually read and
+    /// says the override is what stopped the rest.
+    fn missing_override_error(&self, filename: &str, directory: &Path) -> LinkError {
+        LinkError::MissingBridge {
+            name: self.lib_name.to_string(),
+            archive: Some(filename.to_string()),
+            env_var: Some(self.env_var.to_string()),
+            searched: vec![directory.display().to_string()],
+            override_dir: Some(directory.display().to_string()),
+        }
+    }
+
+    /// Validates an archive named by the environment override, reporting the override.
+    ///
+    /// `filename` is passed rather than assumed: the curl-aware magician resolves a DIFFERENT
+    /// archive through the same variable, and reporting the plain `libelephc_magician.a` for
+    /// it would send someone looking for a file that is present and fine.
+    fn validate_override_archive(
+        &self,
+        filename: &str,
+        directory: &Path,
+    ) -> Result<PathBuf, LinkError> {
+        let archive = directory.join(filename);
+        validate_archive_path(self.lib_name, archive)
+            .map_err(|_| self.missing_override_error(filename, directory))
     }
 
     /// The directories an archive is looked for in, in the order they are tried.
@@ -1717,6 +1755,70 @@ mod tests {
         }
     }
 
+    /// An override that short-circuited discovery must not be reported as a search that ran.
+    ///
+    /// `archive_path` returns on a non-empty `ELEPHC_<NAME>_LIB_DIR` BEFORE any fallback is
+    /// consulted. Listing the fallbacks under "looked in" would claim a search that never
+    /// happened, and the generic advice ("keep the archives next to the elephc binary") names
+    /// a location this run will not read while the variable stays set — so someone with a
+    /// perfectly good archive beside the binary follows the message and stays broken.
+    #[test]
+    fn invalid_override_message_names_the_override_and_not_the_untried_fallbacks() {
+        let bridge = bridge_for_library("elephc_web").expect("web bridge");
+        let directory = std::env::temp_dir().join(format!(
+            "elephc-override-miss-{}",
+            std::process::id()
+        ));
+        let error = bridge
+            .validate_override_archive("libelephc_web.a", &directory)
+            .expect_err("an override directory without the archive must fail");
+        let rendered = error.to_string();
+
+        assert!(rendered.contains("needs: libelephc_web.a"));
+        assert!(rendered.contains(&directory.display().to_string()));
+        assert!(
+            rendered.contains("takes priority over every other location"),
+            "the message must say the override is what stopped the search:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("unset ELEPHC_WEB_LIB_DIR"),
+            "the message must offer unsetting the override as a way out:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("keep the bridge archives next to the elephc binary"),
+            "advice that the override would ignore must not be offered:\n{rendered}"
+        );
+        for fallback in bridge.archive_search_dirs() {
+            assert!(
+                !rendered.contains(&fallback.display().to_string()),
+                "an untried fallback must not be reported as searched, found {}:\n{}",
+                fallback.display(),
+                rendered
+            );
+        }
+    }
+
+    /// The override error names the archive that was actually wanted.
+    ///
+    /// `ELEPHC_MAGICIAN_LIB_DIR` resolves TWO archives — the plain `libelephc_magician.a` and
+    /// the curl-aware `libelephc_magician_curl.a`. Reporting the plain one for a missing
+    /// curl-aware build sends someone looking for a file that is present and fine.
+    #[test]
+    fn invalid_override_message_names_the_curl_aware_archive_when_that_is_the_one_missing() {
+        let bridge = bridge_for_library("elephc_magician").expect("magician bridge");
+        let directory = std::env::temp_dir().join(format!(
+            "elephc-override-curl-miss-{}",
+            std::process::id()
+        ));
+        let rendered = bridge
+            .validate_override_archive(&bridge.magician_curl_archive_filename(), &directory)
+            .expect_err("an override directory without the archive must fail")
+            .to_string();
+
+        assert!(rendered.contains("needs: libelephc_magician_curl.a"));
+        assert!(!rendered.contains("needs: libelephc_magician.a"));
+    }
+
     /// A `LinkOrigin::Bridge` item the table does not describe has no archive, override or
     /// candidate list, so the diagnostic stays the bare first line rather than inventing any
     /// of the three.
@@ -1727,6 +1829,7 @@ mod tests {
             archive: None,
             env_var: None,
             searched: Vec::new(),
+            override_dir: None,
         };
         assert_eq!(
             error.to_string(),
