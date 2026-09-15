@@ -1031,6 +1031,53 @@ fn web_post_superglobal_parsed() {
     assert!(resp.ends_with("alice:s@fe"), "body: {:?}", resp);
 }
 
+/// Issue #510, raised in review on the CLI regression: the reported corruption was seen across
+/// repeated `--web` requests, so the `--web` lifecycle needs its own coverage.
+///
+/// `$x = substr($x, …)` on a non-literal buffer returned eight bytes of allocator metadata in
+/// front of otherwise correct text, and they changed on every request — which is what pointed
+/// at the worker's reused heap rather than at the expression. A one-shot native program
+/// repeats the operation but never repeats request setup, teardown, or worker reuse.
+///
+/// One worker, so every request lands on the same process and the same heap, and the response
+/// is compared byte for byte each time: the failure was never in the length.
+#[test]
+fn web_substr_self_reassignment_is_stable_across_requests() {
+    let dir = make_test_dir("web_substr_alias");
+    let src = r#"<?php
+function body(): string { return "private function foo() {}\n"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+$code = body();
+$code = substr($code, 0, -1);
+
+$p = new Paste("second body here\n");
+$t = $p->body;
+$t = substr($t, 0, -1);
+
+echo $code, "|", $t, "|", strlen($code);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        seen.push(http_request(&addr, "GET", "/", &[], ""));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    for (i, resp) in seen.iter().enumerate() {
+        assert!(
+            resp.ends_with("private function foo() {}|second body here|25"),
+            "request {i} came back corrupted: {resp:?}"
+        );
+    }
+}
+
 /// Verifies echoing a superglobal value directly (a boxed Mixed string) reaches
 /// the HTTP response body, not the worker's stdout. This is the output-capture
 /// completeness fix: `__rt_mixed_write_stdout` routes through `__rt_stdout_write`.
