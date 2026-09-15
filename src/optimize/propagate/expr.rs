@@ -233,7 +233,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 variadic_type,
                 return_type,
                 body: super::stmt::with_function_scope_mode(by_ref_return, || {
-                    propagate_block(body, captured_constant_env(&captures, &capture_refs, env)).0
+                    crate::optimize::generator_bodies::rewrite_preserving_yield(body, |body| {
+                        propagate_block(body, captured_constant_env(&captures, &capture_refs, env))
+                            .0
+                    })
                 }),
                 is_arrow,
                 is_static,

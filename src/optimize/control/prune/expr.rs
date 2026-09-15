@@ -144,7 +144,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             variadic_by_ref,
             variadic_type,
             return_type,
-            body: prune_block(body),
+            body: crate::optimize::generator_bodies::rewrite_preserving_yield(
+                body,
+                prune_block,
+            ),
             is_arrow,
             is_static,
             captures,

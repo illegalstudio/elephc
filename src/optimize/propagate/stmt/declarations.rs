@@ -66,7 +66,9 @@ pub(super) fn propagate_method(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         params: propagate_params(method.params),
         body: with_function_scope_mode(method.by_ref_return, || {
-            propagate_block(method.body, HashMap::new()).0
+            crate::optimize::generator_bodies::rewrite_preserving_yield(method.body, |body| {
+                propagate_block(body, HashMap::new()).0
+            })
         }),
         ..method
     }

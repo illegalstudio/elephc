@@ -205,7 +205,12 @@ pub(crate) fn lower_user_function(
         .get(name)
         .cloned()
         .unwrap_or_else(|| collect_attribute_args(attributes));
-    attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
+    attach_generator_source_if_needed(
+        &mut function,
+        body,
+        eir_signature.params.len(),
+        &eir_signature.return_type,
+    );
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -322,7 +327,12 @@ pub(crate) fn lower_class_method(
         body_params.insert(0, ("this".to_string(), this_type));
     }
     function.params.extend(function_params(&signature));
-    attach_generator_source_if_needed(&mut function, body, body_params.len());
+    attach_generator_source_if_needed(
+        &mut function,
+        body,
+        body_params.len(),
+        &signature.return_type,
+    );
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -1509,7 +1519,12 @@ fn lower_closure_function_with_signature(
     function.params.extend(closure_capture_params(captures));
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
-    attach_generator_source_if_needed(&mut function, body, signature.params.len());
+    attach_generator_source_if_needed(
+        &mut function,
+        body,
+        signature.params.len(),
+        &signature.return_type,
+    );
     let env = env_with_closure_captures(&signature, captures, parent.web);
     let lowered_params = params_with_closure_captures(&signature, captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
@@ -1786,9 +1801,16 @@ fn attach_generator_source_if_needed(
     function: &mut Function,
     body: &[Stmt],
     visible_param_count: usize,
+    signature_return: &PhpType,
 ) {
+    // `signature_return` is the CHECKER's return type, not `function.return_php_type`. Those two
+    // differ precisely for a generator: `generator_body_return_type` has already rewritten the
+    // body's type to `Mixed`, because a generator's compiled body is a coroutine whose `return`
+    // feeds `Generator::getReturn()`. Testing the rewritten type therefore threw away the very
+    // evidence this decision needs, leaving only the `yield` scan — which answers `false` for a
+    // body whose `yield` was unreachable (issue #673).
     if !crate::types::checker::yield_validation::body_contains_yield(body)
-        && !is_generator_return_type(&function.return_php_type)
+        && !is_generator_return_type(signature_return)
     {
         return;
     }
