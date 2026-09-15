@@ -692,6 +692,15 @@ echo classify(2), "\n";
 /// in the same fixture: truncating THAT answers `1.5 > 1` correctly by accident but
 /// `1.5 <=> PHP_INT_MAX` wrongly, so the spaceship rows carry it.
 ///
+/// Each of the four relational operators is asserted on its own, because each maps to its own
+/// `CmpPredicate` (`Sgt`/`Sge`/`Slt`/`Sle`) after the shared Mixed dispatch — a regression
+/// isolated to one predicate would slip past a fixture that only exercises its sibling. The
+/// rows are chosen so every operator has at least one discriminating case: `<= PHP_INT_MAX` is
+/// the one ARM64's saturating `fcvtzs` gets wrong on the positive overflow (`INT64_MAX <=
+/// INT64_MAX` is true where `1.84e19 <= INT64_MAX` is false), `< PHP_INT_MAX` is the one
+/// x86_64's `INT64_MIN` indefinite gets wrong on the same value, and `<= 1` separates float
+/// from truncated-int for the in-range `1.5` (`1.5 <= 1` is false; `1 <= 1` is not).
+///
 /// Every expectation is the host PHP 8.5.10 output for the same fixture.
 #[test]
 fn test_relational_mixed_float_compares_numerically_across_the_int64_boundary() {
@@ -702,6 +711,9 @@ function probe($m) {
     var_dump($m > PHP_INT_MAX);
     var_dump($m >= PHP_INT_MAX);
     var_dump($m < 0);
+    var_dump($m < PHP_INT_MAX);
+    var_dump($m <= PHP_INT_MAX);
+    var_dump($m <= 1);
     var_dump($m <=> 0);
     var_dump($m <=> PHP_INT_MAX);
 }
@@ -715,11 +727,15 @@ probe(1.5);
         out,
         concat!(
             // 1.8446744073709552E+19: above everything, and above INT64_MAX in particular.
-            "bool(true)\nbool(true)\nbool(true)\nbool(false)\nint(1)\nint(1)\n",
+            "bool(true)\nbool(true)\nbool(true)\nbool(false)\n",
+            "bool(false)\nbool(false)\nbool(false)\nint(1)\nint(1)\n",
             // -1.8446744073709552E+19: below everything, the saturation case in reverse.
-            "bool(false)\nbool(false)\nbool(false)\nbool(true)\nint(-1)\nint(-1)\n",
-            // 1.5: in range, so only the PHP_INT_MAX rows separate float from truncated-int.
-            "bool(true)\nbool(false)\nbool(false)\nbool(false)\nint(1)\nint(-1)\n",
+            "bool(false)\nbool(false)\nbool(false)\nbool(true)\n",
+            "bool(true)\nbool(true)\nbool(true)\nint(-1)\nint(-1)\n",
+            // 1.5: in range, so the PHP_INT_MAX rows and `<= 1` separate float from
+            // truncated-int.
+            "bool(true)\nbool(false)\nbool(false)\nbool(false)\n",
+            "bool(true)\nbool(true)\nbool(false)\nint(1)\nint(-1)\n",
         )
     );
 }
