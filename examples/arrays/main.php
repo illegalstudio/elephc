@@ -67,6 +67,13 @@ foreach ($slice as $value) {
 }
 echo "\n";
 
+// The same slice works on a string array, whose elements are wider than a scalar slot. The
+// result owns its own copy of every string, so writing into it leaves the source alone.
+$names = ["Ada", "Grace", "Linus", "Barbara"];
+$middle = array_slice($names, 1, 2);
+$middle[0] = "GRACE";
+echo "Sliced names: " . implode(", ", $middle) . " (source still " . implode(", ", $names) . ")\n";
+
 // array_splice() removes a window IN PLACE and returns what it removed; the optional
 // fourth argument is spliced in where the removed window was, so the array can grow.
 $queue = [10, 20, 30, 40, 50];
