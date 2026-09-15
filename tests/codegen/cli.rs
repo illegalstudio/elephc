@@ -2049,3 +2049,84 @@ fn test_cli_probe_embeds_in_process_sampler() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+
+/// Verifies a bridge-archive override that points somewhere without the archive is reported as
+/// an override, through the real `archive_path` routing rather than the validator alone.
+///
+/// `ELEPHC_<NAME>_LIB_DIR` REPLACES the search instead of joining it: resolution returns on a
+/// non-empty override before a single fallback is read. The failure used to render the generic
+/// message anyway, which listed four directories it had not consulted and then recommended
+/// keeping the archives next to the elephc binary — a location this run will not look at while
+/// the variable stays set, so someone who has already done that follows the advice and stays
+/// broken (issue #517).
+///
+/// This goes through the CLI on purpose. A unit test that calls the validator directly would
+/// still pass if `archive_path` went back to the generic error, because the routing is the part
+/// that decides which message a user sees. The override reaches the compiler as a CHILD process
+/// environment variable, so it cannot race other tests in the same process.
+#[test]
+fn test_cli_bridge_override_miss_reports_the_override_not_the_fallbacks() {
+    let dir = make_cli_test_dir("elephc_cli_bridge_override");
+    let empty = dir.join("no-archives-here");
+    fs::create_dir_all(&empty).expect("create the empty override directory");
+    fs::write(dir.join("main.php"), "<?php\necho \"hi\\n\";\n")
+        .expect("write the web fixture");
+
+    let output = elephc_cli_command(&dir)
+        .env("ELEPHC_WEB_LIB_DIR", &empty)
+        .args(["-q", "--web", "main.php"])
+        .output()
+        .expect("failed to run elephc --web");
+
+    assert!(
+        !output.status.success(),
+        "an override without the archive must fail the link"
+    );
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let override_dir = empty.display().to_string();
+
+    assert!(
+        report.contains("needs: libelephc_web.a"),
+        "the message must name the archive:\n{report}"
+    );
+    assert!(
+        report.contains(&override_dir),
+        "the message must name the directory it actually read:\n{report}"
+    );
+    assert!(
+        report.contains("takes priority over every other location"),
+        "the message must say the override is what stopped the search:\n{report}"
+    );
+    assert!(
+        report.contains("unset ELEPHC_WEB_LIB_DIR"),
+        "the message must offer unsetting the override as a way out:\n{report}"
+    );
+    assert!(
+        !report.contains("keep the bridge archives next to the elephc binary"),
+        "advice the override would ignore must not be offered:\n{report}"
+    );
+    assert!(
+        !report.contains("target/debug"),
+        "a fallback that was never consulted must not be reported as searched:\n{report}"
+    );
+
+    // The same build links once the override is gone, which is what makes that last sentence
+    // actionable rather than decorative.
+    let recovered = elephc_cli_command(&dir)
+        .args(["-q", "--web", "main.php"])
+        .output()
+        .expect("failed to re-run elephc --web");
+    assert!(
+        recovered.status.success(),
+        "the same build must succeed without the override:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&recovered.stdout),
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
