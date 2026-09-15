@@ -94,6 +94,21 @@ pub fn stmt_returns_dynamic_param(stmt: &Stmt, dynamic_params: &HashSet<String>)
                     .as_ref()
                     .is_some_and(|body| body_returns_dynamic_param(body, dynamic_params))
         }
+        // `ifdef` is resolved before type checking — `check_stmt` rejects a surviving one with
+        // "Unresolved ifdef statement" — so neither caller can reach this arm today. It recurses
+        // anyway, because the sibling body walkers (`mixed_storage_scan`,
+        // `binding_decision_ambiguity`) do, and a walker that silently answers "no returns here"
+        // for a construct it does not know is the wrong default for this question.
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            body_returns_dynamic_param(then_body, dynamic_params)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body_returns_dynamic_param(body, dynamic_params))
+        }
         StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
         | StmtKind::Foreach { body, .. }

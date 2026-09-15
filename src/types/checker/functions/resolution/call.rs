@@ -108,6 +108,11 @@ impl Checker {
             .canonical_function_name_folded(name)
             .unwrap_or_else(|| name.to_string());
         let name = canonical_name.as_str();
+        // A real call site with an argument list is what replaces an untyped parameter's `Int`
+        // placeholder, so it is also what makes the pass-through return widening unnecessary.
+        // Recorded here rather than inferred from `functions` membership: a first-class callable
+        // reference (`h(...)`) resolves the signature without passing anything (issue #576).
+        self.functions_called_directly.insert(canonical_name.clone());
 
         if let Some(mut sig) = self.functions.get(name).cloned() {
             if let Some(reason) = sig.deprecation.as_deref() {

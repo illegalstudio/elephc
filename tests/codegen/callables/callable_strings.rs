@@ -173,6 +173,12 @@ var_dump(call_user_func($fadd, 2, 3));
 
 var_dump(array_map('m', ["a", "b"]));
 var_dump(call_user_func_array('h', ["arr", 7]));
+
+function fcc($b) { return $b; }
+var_dump(array_map(fcc(...), ["probe"]));
+$bound = fcc(...);
+var_dump($bound("bound"));
+var_dump(call_user_func(fcc(...), "cuf"));
 "#,
     );
     assert_eq!(
@@ -190,6 +196,9 @@ var_dump(call_user_func_array('h', ["arr", 7]));
             "int(5)\n",
             "array(2) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(1) \"b\"\n}\n",
             "string(3) \"arr\"\n",
+            "array(1) {\n  [0]=>\n  string(5) \"probe\"\n}\n",
+            "string(5) \"bound\"\n",
+            "string(3) \"cuf\"\n",
         )
     );
 }

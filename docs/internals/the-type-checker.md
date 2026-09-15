@@ -387,9 +387,10 @@ The `Int` fallback is only sound because a direct call site replaces it. A funct
 fallback, and a return inferred from one records `Int` for a value that is really whatever the
 caller passed.
 
-So a function with NO direct call site whose un-hinted body hands one of its untyped by-value
-parameters straight back records `mixed` instead (`src/types/dynamic_params.rs`, applied from
-`resolve_unchecked_functions` — the pass that resolves exactly the functions no call site did):
+So a function **no call site ever passed arguments to**, whose un-hinted body hands one of its
+untyped by-value parameters straight back, records `mixed` instead
+(`src/types/dynamic_params.rs`, applied by `widen_dynamic_only_passthrough_returns` once every
+signature exists and every direct call has been seen):
 
 ```php
 function h($b, $p) { return $b; }
@@ -410,8 +411,13 @@ Only a `return` that yields the parameter itself counts — through the pass-thr
 it inferred (`function add($a, $b) { return $a + $b; }` still returns `int`), and a declared
 return type is authoritative and never overridden.
 
-And it applies only where no direct call site exists. Applying it to every pass-through body
-feeds back on itself:
+And it applies only where no call site ever passed arguments. That is tracked explicitly in
+`functions_called_directly` rather than inferred from whether a signature exists, because the
+two differ for the shape that matters: `array_map(h(...), […])` *resolves* `h` while checking
+the callable expression — inserting a placeholder-based signature — without ever calling it, so
+`h`'s parameters still hold the placeholder and its return still needs widening.
+
+Applying the widening to every pass-through body instead feeds back on itself:
 
 ```php
 function grow($arr) { … ; return $arr; }
