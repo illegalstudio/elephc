@@ -625,6 +625,15 @@ while (true) {
 }
 ```
 
+`$still_running` has to be **seeded with an int**, as it is above. php.net's
+examples often write `$running = null`, which php-src accepts because
+`curl_multi_exec()` is an internal function; here it is a `curl_multi_exec(…, int
+&$still_running)` written in elephc-PHP, and a by-reference parameter writes back
+through the caller's variable rather than coercing it on the way in. A `null`
+seed is rejected at compile time, with the fix in the message — the same rule
+php-src applies to a *userland* `int &$x`, which throws
+`TypeError: …must be of type int, null given`.
+
 `curl_multi_get_handles()` (PHP 8.5) returns the attached handles in attachment
 order.
 

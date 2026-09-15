@@ -201,6 +201,59 @@ fn curl_share_errno_rejects_wrong_arity() {
     );
 }
 
+/// Issue #892: `curl_multi_exec()`'s by-reference `$still_running` seeded with `null`
+/// reached the EIR backend as `unsupported EIR backend feature: icmp for PHP type Void`,
+/// positionless, on the FIRST use of the variable after the call.
+///
+/// The cause is not curl-specific and neither is the fix: `types_compatible` accepts
+/// `null` for `int` — correct for a by-VALUE parameter, which PHP coerces — and that
+/// acceptance short-circuited every later by-reference check, so the argument was admitted
+/// with the caller's local still typed `Void` while the callee wrote an int through the
+/// reference. `$running > 0` then lowered an integer compare on a null.
+///
+/// The recovery half of the message is asserted too, because "expects Int, got Void" alone
+/// would leave a user staring at a line php-src runs without complaint.
+#[test]
+fn curl_multi_exec_rejects_a_null_seeded_still_running() {
+    expect_curl_error(
+        "<?php
+         $mh = curl_multi_init();
+         $running = null;
+         do {
+             $status = curl_multi_exec($mh, $running);
+         } while ($running > 0 && $status == CURLM_OK);
+         echo $running;",
+        "parameter $still_running expects Int, got Void",
+    );
+    expect_curl_error(
+        "<?php
+         $mh = curl_multi_init();
+         $running = null;
+         curl_multi_exec($mh, $running);",
+        "initialize it (for example `= 0`), or declare BOTH the parameter and the variable nullable",
+    );
+}
+
+/// The shape the diagnostic points at compiles, so the recovery it prints is real.
+///
+/// Seeding with `0` is what every `curl_multi_exec()` example in `docs/php/curl.md` does.
+/// `null` is php-src's INTERNAL-function laxity, which a prelude written in elephc-PHP does
+/// not inherit: measured on 8.5.10, the same `null` handed to a USERLAND `int &$x` is a
+/// `TypeError`.
+#[test]
+fn curl_multi_exec_accepts_an_int_seeded_still_running() {
+    check_source(
+        "<?php
+         $mh = curl_multi_init();
+         $running = 0;
+         do {
+             $status = curl_multi_exec($mh, $running);
+         } while ($running > 0 && $status == CURLM_OK);
+         echo $running;",
+    )
+    .expect("an int-seeded $still_running must compile");
+}
+
 /// `curl_share_init_persistent()` / `CurlSharePersistentHandle` are PHP 8.5 SURFACE ONLY,
 /// the same gate `curl_multi_get_handles()` has: compiled for 8.4
 /// the prelude must not declare either, so each reference is an ordinary "undefined

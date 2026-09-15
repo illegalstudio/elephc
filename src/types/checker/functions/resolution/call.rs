@@ -357,7 +357,7 @@ impl Checker {
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
                     if decl.ref_params.get(arg_idx).copied().unwrap_or(false) {
-                        self.require_boxed_by_ref_storage(
+                        self.require_by_ref_argument_storage(
                             &declared_ty,
                             &ty,
                             arg.span,

@@ -555,7 +555,7 @@ impl Checker {
                     if sig.declared_params.get(param_idx).copied().unwrap_or(false)
                         && sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     {
-                        self.require_boxed_by_ref_storage(
+                        self.require_by_ref_argument_storage(
                             expected_ty,
                             &actual_ty,
                             arg.span,

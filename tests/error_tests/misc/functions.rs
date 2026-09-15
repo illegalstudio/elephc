@@ -542,6 +542,62 @@ fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
     );
 }
 
+/// Issue #892: the MIRROR of the test above — a NON-nullable by-reference parameter handed
+/// a variable that holds `null`.
+///
+/// This one had no diagnostic at all. `types_compatible` accepts `Void` for `Int`, `Float`
+/// and `Bool`, which is right for a by-VALUE parameter (PHP coerces null to `0`/`0.0`/
+/// `false` there) and wrong for a by-reference one: nothing coerces the caller's slot, so
+/// the call was admitted with the local still typed `Void`, the callee wrote an int through
+/// the reference, and the first thing the caller did with the local reached EIR lowering as
+/// an operation on a null. The reported shape produced a positionless
+/// `unsupported EIR backend feature: icmp for PHP type Void`.
+///
+/// php-src agrees with the rejection: measured on 8.5.10,
+/// `function out(int &$s) {} $x = null; out($x);` throws
+/// `TypeError: out(): Argument #1 ($s) must be of type int, null given`.
+#[test]
+fn test_error_non_nullable_by_ref_parameter_rejects_a_null_variable() {
+    // `string` is in the list even though `types_compatible` never accepted `Void` for it:
+    // it used to reach the generic "expects Str, got Void" mismatch further down, and this
+    // pins that the by-reference position now answers with the recovery instead.
+    for declared in ["int", "float", "bool", "string"] {
+        expect_error(
+            &format!(
+                "<?php function out({declared} &$slot) {{ }} $value = null; out($value); \
+                 echo $value;"
+            ),
+            "a by-reference parameter writes back through the caller's variable",
+        );
+    }
+}
+
+/// The recovery the diagnostic above prints has to work, on both of its branches: seeding
+/// the variable with a value of the declared type, or declaring the parameter nullable and
+/// giving the variable boxed storage.
+#[test]
+fn test_by_ref_null_recovery_compiles() {
+    // Recovery 1: initialize the variable with a value of the declared type.
+    assert!(check_source(
+        "<?php function out(int &$slot) { $slot = 7; } $value = 0; out($value); echo $value;"
+    )
+    .is_ok());
+
+    // Recovery 2: make BOTH the parameter and the variable nullable. The parameter alone is
+    // not enough -- `?int &$slot` needs boxed storage on the caller's side, so a bare
+    // `$value = null` still fails the mixed/union/nullable-storage rule. That is why the
+    // diagnostic names the variable in this branch too; the first version of the message
+    // said "declare the parameter nullable" and that advice did not compile.
+    assert!(check_source(
+        "<?php function out(?int &$slot) { $slot = 7; } ?int $value = null; out($value); echo $value;"
+    )
+    .is_ok());
+    assert!(check_source(
+        "<?php function out(?int &$slot) { $slot = 7; } $value = null; out($value);"
+    )
+    .is_err());
+}
+
 // -- Include/require path expression errors --
 
 /// Verifies that a static closure cannot capture `$this` from the enclosing scope.

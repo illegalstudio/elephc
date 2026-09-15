@@ -339,7 +339,7 @@ impl Checker {
     /// Checks that an actual return type is compatible with the declared return type.
     /// Handles three cases: void-returning functions (no value allowed), value-returning
     /// functions (value required and must be assignable to `expected`), and nullability
-    /// via `return_type_accepts_null`. Delegates to `require_compatible_arg_type` for
+    /// via `declared_type_accepts_null`. Delegates to `require_compatible_arg_type` for
     /// the final assignability check.
     pub(crate) fn require_compatible_return_type(
         &self,
@@ -366,7 +366,7 @@ impl Checker {
             ));
         }
 
-        if matches!(actual, PhpType::Void) && !Self::return_type_accepts_null(expected) {
+        if matches!(actual, PhpType::Void) && !Self::declared_type_accepts_null(expected) {
             return Err(CompileError::new(
                 span,
                 &format!("{} expects {:?}, got Void", context, expected),
@@ -378,10 +378,16 @@ impl Checker {
 
     /// Returns true if `ty` can accept a null/void value — covers PhpType::Mixed,
     /// PhpType::Void, and PhpType::Union types where any member accepts null.
-    fn return_type_accepts_null(ty: &PhpType) -> bool {
+    ///
+    /// Shared with the by-reference PARAMETER position
+    /// (`Checker::require_by_ref_argument_storage`), which asks the identical question of a
+    /// declared type: PHP's `?int`/`mixed` accept null in both positions and a bare `int`
+    /// accepts it in neither. Kept as one predicate rather than two so the two sites cannot
+    /// drift on a type either of them later learns about.
+    pub(crate) fn declared_type_accepts_null(ty: &PhpType) -> bool {
         match ty {
             PhpType::Mixed => true,
-            PhpType::Union(members) => members.iter().any(Self::return_type_accepts_null),
+            PhpType::Union(members) => members.iter().any(Self::declared_type_accepts_null),
             PhpType::Void => true,
             _ => false,
         }

@@ -366,6 +366,22 @@ pub struct FunctionSig {
 - `param_attributes` carries PHP 8 attribute groups attached to each parameter, for Reflection metadata.
 - `by_ref_return` records `function &f()` / `fn &()` declarations — the function returns a reference (alias) to the returned lvalue rather than a copy.
 - `ref_params` tracks which parameters use `&` (pass by reference). The codegen passes the stack address of the argument instead of its value.
+
+#### Storage rules for a declared by-reference argument
+
+Because codegen passes the stack address, a declared by-reference parameter is checked against the caller's **storage**, not just against the incoming value. `Checker::require_by_ref_argument_storage` (`src/types/checker/type_compat/declarations.rs`) is the one place that decides it, and it is the reason a by-reference position is stricter than the by-value position next to it:
+
+| declared parameter | caller's variable | verdict |
+|---|---|---|
+| needs boxed storage (`mixed`, `?int`, a union) | a concrete non-boxed slot | rejected — the callee can write values the slot cannot represent |
+| does not accept null (`int`, `float`, `bool`, `string`) | holds `null` (`PhpType::Void`) | rejected — nothing coerces the slot on the way in |
+| anything else | matching representation | accepted |
+
+The second row is the one that is easy to get backwards, and it was: `types_compatible` deliberately accepts `Void` for `Int`, `Float` and `Bool`, which is **correct by value** (PHP coerces `null` to `0`/`0.0`/`false` for an internal function's by-value parameter) and wrong by reference. That acceptance short-circuited every later by-reference check, so the argument was admitted with the caller's local still typed `Void` while the callee wrote an int through the reference; the first thing the caller then did with the local reached EIR lowering as an operation on a null and produced a positionless `unsupported EIR backend feature: icmp for PHP type Void` (issue #892, reported through `curl_multi_exec()`'s `$still_running`).
+
+php-src draws the same line for a **userland** function — `function out(int &$s) {} $x = null; out($x);` is a `TypeError` there too. It is laxer only for its own **internal** functions, which is why a `curl_*` wrapper written in elephc-PHP rejects a `null` seed that php.net's examples use; `docs/php/curl.md` says so where the multi loop is documented.
+
+`Checker::declared_type_accepts_null` answers "does this declared type admit `null`" for both this rule and the return position, as one predicate, so the two cannot drift.
 - `declared_params` lets later phases distinguish explicit PHP type hints from inferred/defaulted parameter types.
 - `declared_return` lets later phases distinguish explicit PHP return hints from inferred return types.
 - `variadic` holds the name of the variadic parameter (e.g., `$args` in `function foo(...$args)`). Extra arguments beyond the regular parameters are collected into an array.

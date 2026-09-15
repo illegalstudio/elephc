@@ -153,7 +153,7 @@ impl Checker {
                             .copied()
                             .unwrap_or(false)
                     {
-                        self.require_boxed_by_ref_storage(
+                        self.require_by_ref_argument_storage(
                             expected_ty,
                             &actual_ty,
                             arg.span,

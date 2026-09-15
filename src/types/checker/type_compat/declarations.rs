@@ -193,11 +193,28 @@ impl Checker {
         }
     }
 
-    /// Validates that `actual_ty` is suitable storage for a by-reference parameter whose
-    /// declared type needs boxed or nullable storage.
-    /// Returns an error if `actual_ty` is a concrete non-boxed type that cannot represent
-    /// writes of every value accepted by the by-reference parameter.
-    pub(crate) fn require_boxed_by_ref_storage(
+    /// Validates that the caller's variable is suitable storage for a declared
+    /// by-reference parameter, which writes its result back through that variable.
+    ///
+    /// Two rules, both about the WRITE-BACK rather than the incoming value:
+    ///
+    /// 1. A parameter whose declared type needs boxed or nullable storage cannot write
+    ///    every value it accepts into a concrete non-boxed slot.
+    /// 2. A parameter whose declared type does NOT accept null cannot be handed a variable
+    ///    that holds null, because the slot's representation is the declared scalar's and
+    ///    nothing coerces it on the way in. php-src agrees and throws
+    ///    `TypeError: f(): Argument #N ($x) must be of type int, null given` for exactly
+    ///    this shape (measured on 8.5.10).
+    ///
+    /// Rule 2 exists because `types_compatible` deliberately accepts `null` for `int`,
+    /// `float` and `bool` — correct for a BY-VALUE parameter, which PHP coerces — and that
+    /// acceptance was short-circuiting every later by-reference check. The argument was then
+    /// admitted with the caller's local still typed `Void`, the callee wrote an int through
+    /// the reference, and the first thing the caller did with the local reached EIR lowering
+    /// as an operation on a null-typed value: issue #892 reported
+    /// `unsupported EIR backend feature: icmp for PHP type Void`, positionless, from
+    /// `$running = null; do { … } while ($running > 0);` around `curl_multi_exec()`.
+    pub(crate) fn require_by_ref_argument_storage(
         &self,
         expected_ty: &PhpType,
         actual_ty: &PhpType,
@@ -212,6 +229,23 @@ impl Checker {
                 &format!(
                     "{} requires a variable with mixed/union/nullable storage when passed by reference",
                     context
+                ),
+            ));
+        }
+        if *actual_ty == PhpType::Void && !Self::declared_type_accepts_null(expected_ty) {
+            return Err(CompileError::new(
+                span,
+                // The recovery names the VARIABLE in both branches, deliberately. Saying
+                // "declare the parameter nullable" alone is advice that does not work:
+                // `?int &$slot` needs the caller's variable to have nullable storage too, so
+                // a bare `$v = null` still fails the boxed-storage rule above. `?int $v =
+                // null` is the spelling that compiles.
+                &format!(
+                    "{} expects {:?}, got Void — a by-reference parameter writes back \
+                     through the caller's variable, so that variable must already hold the \
+                     declared type; initialize it (for example `= 0`), or declare BOTH the \
+                     parameter and the variable nullable (`?int &$p` with `?int $v = null`)",
+                    context, expected_ty
                 ),
             ));
         }
