@@ -279,6 +279,27 @@ pub(crate) struct Checker {
     /// A binding created inside a branch may be uninitialized at a later depth-0 point, so
     /// releasing or abandoning its slot there is not safe.
     pub local_binding_depth: HashMap<String, u32>,
+    /// For each local currently VIEWED through a flow guard's narrowing, the type its binding
+    /// held before the guard narrowed it, paired with the view the guard published.
+    ///
+    /// A guard narrows by overwriting the environment entry (`control_flow` inserts
+    /// `guard.then_ty` / `guard.else_ty`), which is right for reads but leaves an assignment
+    /// inside the guarded region measuring itself against a FLOW FACT about the value instead
+    /// of against the binding that has to hold the new one. That is how the commonest PHP
+    /// fallback idiom there is became a compile error (issue #509):
+    ///
+    /// ```php
+    /// $g = glob($dir . '/*.meta');      // array<string>|false
+    /// if ($g === false) { $g = []; }    // "cannot reassign $g from false to array<never>"
+    /// ```
+    ///
+    /// The store is fine — the binding is `array<string>|false` and an empty array is one of
+    /// the things it holds — so `merge_local_assignment_type` retries a failed merge against
+    /// the recorded origin before reporting.
+    ///
+    /// Empty outside a guarded region, and reset per body — a name narrowed in the caller says
+    /// nothing about a same-named local in a closure checked inside the branch.
+    pub narrowed_local_origins: HashMap<String, NarrowedLocalOrigin>,
     /// Locals of the current body that a reference can reach: `=&` target or source,
     /// by-reference closure captures (`use (&$x)`), any plain variable passed to a
     /// by-reference parameter, and BOTH names a `foreach ($arr as &$v)` touches — the iterable
@@ -408,11 +429,51 @@ pub(crate) struct Checker {
 pub(crate) struct SavedLocalBindingScope {
     conditional_depth: u32,
     binding_depth: HashMap<String, u32>,
+    narrowed_origins: HashMap<String, NarrowedLocalOrigin>,
     ref_aliased: HashSet<String>,
     statics: HashSet<String>,
     typed: HashSet<String>,
     mixed_storage: HashSet<String>,
     contains_eval: bool,
+}
+
+/// What a flow guard did to one local: the type the binding held before it, and the view it
+/// published to the environment in place of it.
+#[derive(Clone)]
+pub struct NarrowedLocalOrigin {
+    /// Type the binding held before any guard on this name narrowed it.
+    pub origin: PhpType,
+    /// The guard's own view, or `None` once the region has stored something of its own.
+    ///
+    /// A failed assignment merge is re-measured against `origin` only while the environment
+    /// still holds a guard view. After a store the entry is a fact the REGION established, the
+    /// ordinary merge governs, and the shapes the branch-divergent `Mixed`-storage marking
+    /// exists for keep reaching it: `$a = 1; if (is_string($a)) { $a = "x"; $a = 2; }` is one
+    /// of those, decided by `mixed_storage_scan` and by `--strict-locals`, not here. Comparing
+    /// the view to the environment is not enough to tell the two apart — the store in that
+    /// example leaves `string` behind, which is also what the guard published.
+    ///
+    /// Restored by a COMPLEMENT: `restore_narrowed_var` puts the pre-`if` type back before the
+    /// `elseif`/`else` clauses are checked, so what they see is a fresh guard fact whatever the
+    /// then-branch stored — the `else` is a path the then-branch's store says nothing about.
+    pub view: Option<PhpType>,
+    /// Whether ANYTHING inside this entry's region has bound the name, on any path.
+    ///
+    /// Distinct from `view.is_none()` because a complement re-opens a view and this has to
+    /// survive it. It travels OUTWARD at [`Checker::exit_flow_narrowing`]: the enclosing region
+    /// CONTAINS the closing one, so a store the inner one made is a store the enclosing one
+    /// made. Without that, nesting was a way around the rule —
+    /// `$a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; }` compiled while
+    /// the same two stores written flat did not (raised in review on #509).
+    pub stored_in_region: bool,
+}
+
+/// One entry of [`Checker::narrowed_local_origins`] as it stood before a guard region opened it.
+/// Produced by [`Checker::enter_flow_narrowing`] and consumed by
+/// [`Checker::exit_flow_narrowing`].
+pub(crate) struct SavedNarrowingOrigin {
+    name: String,
+    previous: Option<NarrowedLocalOrigin>,
 }
 
 impl Checker {
@@ -541,6 +602,10 @@ impl Checker {
         let saved = SavedLocalBindingScope {
             conditional_depth: self.local_conditional_depth,
             binding_depth: std::mem::take(&mut self.local_binding_depth),
+            // A guard in the ENCLOSING body narrows the enclosing frame's local. A closure
+            // checked inside that branch binds its own name in its own frame, so inheriting the
+            // origin would measure the closure's store against a binding it does not own.
+            narrowed_origins: std::mem::take(&mut self.narrowed_local_origins),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
             statics: std::mem::take(&mut self.static_local_names),
             typed: std::mem::take(&mut self.typed_local_names),
@@ -566,11 +631,115 @@ impl Checker {
     pub(crate) fn exit_local_binding_scope(&mut self, saved: SavedLocalBindingScope) {
         self.local_conditional_depth = saved.conditional_depth;
         self.local_binding_depth = saved.binding_depth;
+        self.narrowed_local_origins = saved.narrowed_origins;
         self.ref_aliased_locals = saved.ref_aliased;
         self.static_local_names = saved.statics;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
         self.body_contains_eval = saved.contains_eval;
+    }
+
+    /// Opens a region in which `name` is viewed as `view` through a flow guard's narrowing,
+    /// recording the type its binding held just before (`pre_guard`, the environment entry the
+    /// guard is about to overwrite). The returned value must be handed back to
+    /// [`Checker::exit_flow_narrowing`] when the region ends.
+    ///
+    /// NESTED guards keep the OUTERMOST origin, which is the binding's own type: in
+    /// `if (is_scalar($x)) { if (is_float($x)) { $x = "s"; } }` the inner guard's `pre_guard` is
+    /// already the outer guard's target, and a store inside it has to be measured against the
+    /// binding rather than against another guard's view of the value. The VIEW is the innermost
+    /// guard's, because that is what the environment holds.
+    pub(crate) fn enter_flow_narrowing(
+        &mut self,
+        name: &str,
+        pre_guard: Option<&PhpType>,
+        view: &PhpType,
+    ) -> SavedNarrowingOrigin {
+        let previous = self.narrowed_local_origins.get(name).cloned();
+        match previous
+            .as_ref()
+            .map(|entry| entry.origin.clone())
+            .or_else(|| pre_guard.cloned())
+        {
+            Some(origin) => {
+                self.narrowed_local_origins.insert(
+                    name.to_string(),
+                    NarrowedLocalOrigin {
+                        origin,
+                        view: Some(view.clone()),
+                        // The REGION is new even when the entry inherits an outer origin, so a
+                        // store the enclosing region already made does not follow it inward. It
+                        // is still recorded on the enclosing entry, which comes back at
+                        // `exit_flow_narrowing`.
+                        stored_in_region: false,
+                    },
+                );
+            }
+            // `guard_narrowing` bails on an unbound plain variable, so this is the property and
+            // synthetic-key shapes: nothing to measure a later store against, and recording an
+            // absent origin would only make `merge_local_assignment_type` look one up in vain.
+            None => {
+                self.narrowed_local_origins.remove(name);
+            }
+        }
+        SavedNarrowingOrigin { name: name.to_string(), previous }
+    }
+
+    /// Replaces the published view of an OPEN narrowing region, keeping its origin.
+    ///
+    /// An `if`/`elseif` chain narrows twice per guarded clause: to the guard's target for its own
+    /// body, then to the COMPLEMENT for every clause after it and the final `else`. Both are the
+    /// guard's view of the value rather than anything the region stored, so
+    /// `if ($h !== false) { … } else { $h = []; }` — the same issue-#509 idiom written the other
+    /// way round — has to be recognised on the complement side too.
+    ///
+    /// `stored_in_region` deliberately SURVIVES this. The complement is a fresh fact about the
+    /// `else` path, but a store the then-branch made is still a store the construct made, and
+    /// that is what the enclosing region has to hear about. It also fires for a single-clause
+    /// `if` with nothing after it, where the "rest of the chain" is empty — which is how
+    /// clearing only `view` let a nested store's effect evaporate before `exit_flow_narrowing`
+    /// could see it.
+    pub(crate) fn republish_flow_narrowing(&mut self, name: &str, view: &PhpType) {
+        if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
+            entry.view = Some(view.clone());
+        }
+    }
+
+    /// Records that a guarded region has bound `name` itself, which ends the guard view: from
+    /// here on the environment entry is the region's own fact and an assignment measures itself
+    /// against it in the ordinary way.
+    ///
+    /// A no-op for a name no guard has narrowed, which is every name most of the time.
+    pub(crate) fn record_store_over_flow_narrowing(&mut self, name: &str) {
+        if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
+            entry.view = None;
+            entry.stored_in_region = true;
+        }
+    }
+
+    /// Closes a region opened by [`Checker::enter_flow_narrowing`]. Regions opened in order must
+    /// be closed in REVERSE order, the way the environment's own narrowings are restored.
+    ///
+    /// A store inside the closing region travels OUTWARD: the enclosing entry comes back with
+    /// its view cleared. See [`NarrowedLocalOrigin::stored_in_region`] for why nesting would
+    /// otherwise be a way around the rule.
+    pub(crate) fn exit_flow_narrowing(&mut self, saved: SavedNarrowingOrigin) {
+        let region_stored = self
+            .narrowed_local_origins
+            .get(&saved.name)
+            .is_some_and(|entry| entry.stored_in_region);
+        match saved.previous {
+            Some(mut entry) => {
+                if region_stored {
+                    entry.view = None;
+                    entry.stored_in_region = true;
+                }
+                self.narrowed_local_origins.insert(saved.name, entry);
+            }
+            None => {
+                self.narrowed_local_origins.remove(&saved.name);
+            }
+        }
     }
 
     /// Drops every per-name fact the checker carries for a local whose binding just ended.

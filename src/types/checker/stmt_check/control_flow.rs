@@ -19,7 +19,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
-use super::super::Checker;
+use super::super::{Checker, SavedNarrowingOrigin};
 
 const FS_CURRENT_AS_SELF: i64 = 16;
 const FS_CURRENT_AS_PATHNAME: i64 = 32;
@@ -339,6 +339,13 @@ impl Checker {
                 // Pre-`if` type of every variable we narrow, captured the first time we touch it,
                 // so each one can be restored after the construct.
                 let mut saved_vars: Vec<(String, Option<PhpType>)> = Vec::new();
+                // The same pre-`if` types, held for `merge_local_assignment_type` so a store
+                // inside a guarded region is measured against the BINDING rather than against
+                // the guard's view of the value (issue #509). Opened where `saved_vars` records
+                // a variable and closed once for the whole construct: the complement a guarded
+                // clause publishes narrows the later clauses and the `else` body too, so the
+                // origin has to outlive the then-branch it was opened for.
+                let mut saved_origins: Vec<SavedNarrowingOrigin> = Vec::new();
                 let mut applied_any_guard = false;
                 // Single-clause join state: the guarded key and the type it has where the
                 // then-branch falls out of the construct. `None` means "no usable fact" (the
@@ -356,6 +363,11 @@ impl Checker {
                         if !saved_vars.iter().any(|(v, _)| v == &guard.var) {
                             saved_vars.push((guard.var.clone(), env.get(&guard.var).cloned()));
                         }
+                        saved_origins.push(self.enter_flow_narrowing(
+                            &guard.var,
+                            env.get(&guard.var),
+                            &guard.then_ty,
+                        ));
 
                         // Check the guarded body with the "then" type.
                         let saved = env.get(&guard.var).cloned();
@@ -384,6 +396,7 @@ impl Checker {
                         // The fallthrough env for the rest of the chain (next elseif or else)
                         // sees the complement.
                         env.insert(guard.var.clone(), guard.else_ty.clone());
+                        self.republish_flow_narrowing(&guard.var, &guard.else_ty);
                     } else {
                         // No narrowing for this clause — check the body with the current env.
                         for s in *body {
@@ -446,6 +459,14 @@ impl Checker {
                         env.insert(key, joined);
                     }
                 }
+                // Closed for the construct even when the complement is KEPT for the code after
+                // it. A kept complement is a sound fact about every path that gets there, so the
+                // statements after the `if` are ordinary straight-line code: a store that does
+                // not fit takes the depth-0 re-bind path, which abandons the slot properly,
+                // rather than being waved through against a binding the `if` may have replaced.
+                for saved_origin in saved_origins.into_iter().rev() {
+                    self.exit_flow_narrowing(saved_origin);
+                }
 
                 if errors.is_empty() {
                     Ok(())
@@ -474,10 +495,16 @@ impl Checker {
                 let saved = guard
                     .as_ref()
                     .map(|g| (g.var.clone(), env.get(&g.var).cloned()));
+                let saved_origin = guard
+                    .as_ref()
+                    .map(|g| self.enter_flow_narrowing(&g.var, env.get(&g.var), &g.then_ty));
                 if let Some(g) = &guard {
                     env.insert(g.var.clone(), g.then_ty.clone());
                 }
                 let errors = self.check_break_continue_target_body(body, env);
+                if let Some(saved_origin) = saved_origin {
+                    self.exit_flow_narrowing(saved_origin);
+                }
                 if let Some((var, previous)) = saved {
                     match previous {
                         Some(ty) => {

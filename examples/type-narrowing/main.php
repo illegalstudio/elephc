@@ -53,7 +53,33 @@ class Cart
     }
 }
 
+// A guard narrows what the branch READS. An assignment inside it is still measured
+// against the variable's own type, so the standard fallback idiom compiles: `$found`
+// reads as `false` in the branch, yet `string[]|false` holds an empty array perfectly
+// well.
+function metaFiles(string $dir): array
+{
+    $found = glob($dir . "/*.meta");
+    if ($found === false) {
+        $found = [];
+    }
+    sort($found);
+    return $found;
+}
+
+$dir = sys_get_temp_dir() . "/elephc-narrowing-example";
+if (!is_dir($dir)) {
+    mkdir($dir);
+}
+file_put_contents($dir . "/beta.meta", "b");
+file_put_contents($dir . "/alpha.meta", "a");
+
 echo render(7), "\n";
 echo render(new Money(1299)), "\n";
 echo "quantity ", requireQuantity(3), "\n";
 echo "discount ", (new Cart(new Money(250)))->requireDiscount()->format(), "\n";
+
+foreach (metaFiles($dir) as $path) {
+    echo "meta ", basename($path), "\n";
+}
+echo "missing ", count(metaFiles($dir . "/nope")), "\n";

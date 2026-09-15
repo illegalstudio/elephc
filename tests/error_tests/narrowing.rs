@@ -174,3 +174,104 @@ class S {
         "return type expects Object(\"S\")",
     );
 }
+
+/// Issue #509: a store inside a guarded region is measured against the BINDING, not against the
+/// guard's view of the value, so the universal PHP fallback idiom type-checks.
+///
+/// `glob()` returns `array<string>|false`; the guard narrows `$g` to `false` for its branch, and
+/// merging an empty array with `false` is what produced
+/// `cannot reassign $g from false to array<never>`. The binding holds an empty array perfectly
+/// well and no slot is abandoned, so the rule holds under `--strict-locals` too.
+#[test]
+fn test_false_fallback_store_inside_the_guard_is_accepted() {
+    let source = r#"<?php
+$g = glob("*.meta");
+if ($g === false) { $g = []; }
+echo count($g);
+"#;
+    expect_no_error(source);
+    expect_no_error_strict(source);
+}
+
+/// The complement an `if`/`else` chain publishes is a guard fact in its own right, so the same
+/// idiom with the fallback in the `else` is accepted the same way.
+#[test]
+fn test_false_fallback_store_on_the_complement_side_is_accepted() {
+    let source = r#"<?php
+$g = glob("*.meta");
+if ($g !== false) { echo count($g); } else { $g = []; }
+echo count($g);
+"#;
+    expect_no_error(source);
+    expect_no_error_strict(source);
+}
+
+/// The origin is the BINDING's type, not the enclosing guard's view: an inner guard narrows
+/// further, and a store inside it is still judged against `int|string`.
+#[test]
+fn test_nested_guard_store_is_judged_against_the_binding() {
+    let source = r#"<?php
+function p(int $n): int|string { return $n === 0 ? 1 : "s"; }
+$v = p($argc);
+if (is_scalar($v)) { if (is_int($v)) { $v = "s"; } }
+echo $v;
+"#;
+    expect_no_error(source);
+    expect_no_error_strict(source);
+}
+
+/// The limit of the rule: a value the BINDING cannot hold either is not the narrowing's doing,
+/// and re-binding the name inside a branch is not safe — `Checker::local_binding_is_killable`
+/// needs conditional depth 0 — so it stays the error it was.
+#[test]
+fn test_a_store_the_binding_cannot_hold_is_still_rejected() {
+    expect_error(
+        r#"<?php
+function p(int $n): int|string { return $n === 0 ? 1 : "s"; }
+$v = p($argc);
+if (is_int($v)) { $v = new stdClass(); }
+echo 1;
+"#,
+        "cannot reassign $v",
+    );
+}
+
+/// The guard stops governing a name once the region has bound it: the SECOND store measures
+/// itself against what the first one left behind. That is what keeps
+/// `$a = 1; if (is_string($a)) { $a = "x"; $a = 2; }` on the branch-divergent `Mixed`-storage
+/// path (`type_system::test_guarded_region_shapes_still_error_under_strict`) instead of being
+/// waved through on the strength of `$a`'s original `int`.
+#[test]
+fn test_the_guard_stops_governing_after_the_region_stores() {
+    expect_warning(
+        "<?php $a = 1; if (is_string($a)) { $a = \"x\"; $a = 2; } echo $a;",
+        "boxed mixed storage",
+    );
+    expect_error_strict(
+        "<?php $a = 1; if (is_string($a)) { $a = \"x\"; $a = 2; } echo $a;",
+        "cannot reassign $a",
+    );
+}
+
+/// Raised in review on #509: a store in a NESTED guard must end the enclosing guard's authority
+/// too, or nesting becomes a way around the rule above.
+///
+/// The inner region's entry is the one `record_store_over_flow_narrowing` clears, and the outer
+/// entry is restored when that region closes — so the outer view came back intact and the later
+/// `$a = 2` was accepted against `$a`'s original `int`. The enclosing region CONTAINS the inner
+/// one, so a store the inner one made is a store the enclosing one made:
+/// `NarrowedLocalOrigin::stored_in_region` travels outward at `exit_flow_narrowing` and the two
+/// spellings agree again.
+///
+/// Written with `$a = 1.5` rather than `$a = "x"` on purpose: `"x"` does not fit the `int`
+/// binding either, so it is rejected at the inner store and never reaches the shape under test.
+#[test]
+fn a_store_in_a_nested_guard_ends_the_enclosing_guards_authority() {
+    let source =
+        "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; } echo $a;";
+    // The same answer in both modes, and the same one HEAD gave before this feature: the outer
+    // region is not transparent, but its replay from `$a`'s own `int` sees no conflict either,
+    // so `mixed_storage_scan` does not mark the name and the checker reports.
+    expect_error(source, "cannot reassign $a from string to int");
+    expect_error_strict(source, "cannot reassign $a from string to int");
+}

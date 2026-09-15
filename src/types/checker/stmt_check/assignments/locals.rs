@@ -215,7 +215,14 @@ pub(super) fn check_assign(
         return Err(error);
     }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
-    merge_local_assignment_type(checker, name, &ty, span, env, stmt_form)
+    let merged = merge_local_assignment_type(checker, name, &ty, span, env, stmt_form);
+    if merged.is_ok() {
+        // Whatever the environment holds for `name` from here on was put there by this store,
+        // so a guard that narrowed the name no longer speaks for it. `merge_local_assignment_type`
+        // has already consulted the guard view, which is why this runs after it and not before.
+        checker.record_store_over_flow_narrowing(name);
+    }
+    merged
 }
 
 /// Type-checks a reference alias assignment (`$target =& <source>`).
@@ -836,6 +843,40 @@ fn merge_local_assignment_type(
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty);
         if merged_ty.is_none() {
+            // `existing` may be a FLOW FACT rather than the binding: inside a guarded region the
+            // environment holds the guard's view, and `$g = glob(…); if ($g === false) { $g =
+            // []; }` reached here with `false` on the left and `array<never>` on the right. That
+            // store is not a retype at all — the binding is `array<string>|false` and an empty
+            // array is one of the things it holds — so the failed merge is re-measured against
+            // the type the binding had before the guard narrowed it (issue #509).
+            //
+            // Only while the environment still holds the GUARD'S OWN view, which is what makes
+            // this a fact about the narrowing rather than about the binding. A region that has
+            // already stored something of its own put that entry there itself, and the shapes the
+            // branch-divergent `Mixed`-storage marking exists for are exactly those —
+            // `$a = 1; if (is_string($a)) { $a = "x"; $a = 2; }` must keep reaching
+            // `mixed_storage_scan` and its `--strict-locals` error, not be waved through here on
+            // the strength of `$a`'s original `int`.
+            //
+            // The ENVIRONMENT takes the assigned type, not the origin: the store is the newest
+            // fact about the value and the rest of the guarded region should read it as such
+            // (`if (is_int($x)) { $x = "s"; strlen($x); }`). The enclosing construct restores the
+            // pre-guard view when the region ends, as it always did.
+            //
+            // Nothing is recorded in `local_retype_sites`: no slot is abandoned, because the one
+            // the binding already owns is wide enough. That is also why this arm does not need
+            // `local_binding_is_killable` — the depth-0 requirement exists to make abandoning a
+            // slot safe, and there is no abandonment here.
+            if let Some(narrowing) = checker.narrowed_local_origins.get(name) {
+                if narrowing.view.as_ref() == Some(existing)
+                    && checker
+                        .merged_assignment_type(&narrowing.origin, ty)
+                        .is_some()
+                {
+                    env.insert(name.to_string(), ty.clone());
+                    return Ok(());
+                }
+            }
             if !checker.strict_locals && stmt_form && checker.local_binding_is_killable(name) {
                 let message = format!(
                     "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
