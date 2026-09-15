@@ -394,6 +394,10 @@ pub(super) fn check_types_impl(
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
+    // After every function has a signature and every direct call has been seen, so the pass can
+    // tell a function the program only ever reaches dynamically from one a call site taught real
+    // parameter types to (issue #576).
+    checker.widen_dynamic_only_passthrough_returns();
     // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
     // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
     // into method-checkable units here — their signatures already live in `checker.classes`.

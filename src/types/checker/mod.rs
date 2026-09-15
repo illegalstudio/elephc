@@ -78,6 +78,14 @@ pub(crate) struct Checker {
     /// Recursive calls may use their provisional signature, but must not re-specialize the same
     /// declaration while it is in flight.
     pub resolving_functions: HashSet<String>,
+    /// Functions a real call site invoked with an argument list.
+    ///
+    /// Membership in `functions` cannot answer this: a first-class callable reference (`h(...)`)
+    /// resolves a function's signature without passing it anything, so it inserts an entry while
+    /// leaving every untyped parameter on the `Int` placeholder. That is the same situation as a
+    /// function no call site touched at all, and both need the pass-through return widening
+    /// (issue #576).
+    pub functions_called_directly: HashSet<String>,
     /// Top-level constant types indexed by canonical name.
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables, keyed by variable name.

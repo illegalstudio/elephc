@@ -379,6 +379,56 @@ The same accumulation applies to instance-method and static-method parameters. C
 
 This information is then used when checking calls to that function.
 
+#### When no direct call site exists
+
+The `Int` fallback is only sound because a direct call site replaces it. A function reached
+**only** through a dynamic callable — a runtime string name passed to `call_user_func`,
+`array_map`, an `ob_start` handler — has no such site, so every untyped parameter keeps the
+fallback, and a return inferred from one records `Int` for a value that is really whatever the
+caller passed.
+
+So a function **no call site ever passed arguments to**, whose un-hinted body hands one of its
+untyped by-value parameters straight back, records `mixed` instead
+(`src/types/dynamic_params.rs`, applied by `widen_dynamic_only_passthrough_returns` once every
+signature exists and every direct call has been seen):
+
+```php
+function h($b, $p) { return $b; }
+$fn = 'h';
+var_dump(call_user_func($fn, "probe", 9));   // string(5) "probe"; was int(0)
+```
+
+It is recorded in the **checker**, not during lowering, because the declaration and its call
+sites have to reach the same answer: EIR already boxes such a parameter, and widening only the
+callee left the caller reading the boxed cell back as a raw integer. `ir_lower` applies the same
+predicate to methods when it normalizes their ABIs, through the same module, so the two cannot
+drift apart.
+
+The rule is narrow on purpose, in two ways.
+
+Only a `return` that yields the parameter itself counts — through the pass-through shapes
+(`?:`, `??`, `match`, `@`, assignment) — so a body that computes its own result keeps the type
+it inferred (`function add($a, $b) { return $a + $b; }` still returns `int`), and a declared
+return type is authoritative and never overridden.
+
+And it applies only where no call site ever passed arguments. That is tracked explicitly in
+`functions_called_directly` rather than inferred from whether a signature exists, because the
+two differ for the shape that matters: `array_map(h(...), […])` *resolves* `h` while checking
+the callable expression — inserting a placeholder-based signature — without ever calling it, so
+`h`'s parameters still hold the placeholder and its return still needs widening.
+
+Applying the widening to every pass-through body instead feeds back on itself:
+
+```php
+function grow($arr) { … ; return $arr; }
+$arr = grow($arr);        // recording mixed makes the LOCAL mixed…
+                          // …which re-specializes the parameter to mixed…
+                          // …and array_push($arr, …) inside the body stops checking
+```
+
+A function with a direct call site already learns its real parameter types from it and needs
+nothing here (issue #576).
+
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 
 **File:** `src/types/checker/stmt_check/narrowing.rs`

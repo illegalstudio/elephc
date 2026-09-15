@@ -51,6 +51,7 @@ impl Checker {
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
             resolving_functions: HashSet::new(),
+            functions_called_directly: HashSet::new(),
             constants,
             closure_return_types: HashMap::new(),
             callable_sigs: HashMap::new(),

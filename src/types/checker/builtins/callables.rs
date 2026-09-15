@@ -1396,7 +1396,18 @@ pub(crate) fn check_function_exists(
                     .iter()
                     .map(|_| Expr::new(ExprKind::IntLiteral(0), span))
                     .collect();
+                // This is a SIGNATURE PROBE, not a call site: the arguments are fabricated
+                // zeros whose only job is to force resolution. Letting it count as a direct
+                // call would tell `widen_dynamic_only_passthrough_returns` that a real caller
+                // had taught this function its parameter types, and a function whose only
+                // genuine callers are dynamic would keep the `Int` placeholder (issue #576).
+                // The previous membership is restored rather than cleared, so a probe that
+                // follows a genuine call cannot erase that call's mark.
+                let was_called_directly = checker.functions_called_directly.contains(&cb_name);
                 let _ = checker.check_function_call(&cb_name, &dummy_args, span, env);
+                if !was_called_directly {
+                    checker.functions_called_directly.remove(&cb_name);
+                }
             }
         } else if checker.function_variant_groups.contains_key(cb_name.as_str())
             && !checker.functions.contains_key(cb_name.as_str())
