@@ -437,9 +437,9 @@ PHP-compatibility notes (documented simplifications):
   into `exif_read_data` are not produced; use `getimagesize()` / `exif_imagetype()`
   for file-level data. The `$sections`, `$as_arrays`, and `$thumbnail` arguments
   are accepted for signature compatibility and do not change the returned tags.
-- `exif_tagname` (unknown tag) and `exif_thumbnail` (no thumbnail) return `""`
-  rather than `false`, because elephc collapses a `string|false` return to string.
-  Test those with `=== ""` instead of `=== false`.
+- `exif_tagname` (unknown tag) and `exif_thumbnail` (no thumbnail) return `false`,
+  as PHP does, and are tested with `=== false`. They returned `""` before the
+  hint-less `string|false` return inference was fixed (issue #398).
 - Only JPEG-compressed EXIF thumbnails are extracted; the rare uncompressed-TIFF
   thumbnail form is not.
 

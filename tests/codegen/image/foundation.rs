@@ -92,22 +92,26 @@ echo image_type_to_mime_type(IMAGETYPE_WEBP) . "\n";
 }
 
 /// `image_type_to_extension` returns the extension with the leading dot by
-/// default and without it when `$include_dot` is false.
+/// default, without it when `$include_dot` is false, and `false` for an unknown
+/// type (issue #398).
 ///
-/// Known limitation: PHP returns `false` for an unknown type, but elephc
-/// currently collapses a `string|false` function return to `string`, so an
-/// unknown type yields "" here (asserted as the empty third line). This is
-/// tracked with the scalar-union value-runtime work; revisit when fixed.
+/// The unknown case is asserted with `=== false` rather than by echoing: `false`
+/// stringifies to `""`, so the echo form this test used to take passed
+/// identically whether the function returned `false` or the empty string — which
+/// is exactly how the collapse it once documented as a known limitation stayed
+/// invisible here. The prelude declares no return type, so its `string|false` is
+/// INFERRED, and `Checker::wider_type` let `Str` absorb the `False` arm.
 #[test]
 fn test_image_type_to_extension() {
     let out = compile_and_run(
         r#"<?php
 echo image_type_to_extension(IMAGETYPE_PNG) . "\n";
 echo image_type_to_extension(IMAGETYPE_JPEG, false) . "\n";
-echo image_type_to_extension(IMAGETYPE_UNKNOWN) . "\n";
+var_dump(image_type_to_extension(IMAGETYPE_UNKNOWN) === false);
+var_dump(image_type_to_extension(IMAGETYPE_UNKNOWN));
 "#,
     );
-    assert_eq!(out, ".png\njpeg\n\n");
+    assert_eq!(out, ".png\njpeg\nbool(true)\nbool(false)\n");
 }
 
 /// `imagesx`/`imagesy` report the dimensions of a freshly created image without
