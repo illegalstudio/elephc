@@ -108,11 +108,20 @@ impl Checker {
             .canonical_function_name_folded(name)
             .unwrap_or_else(|| name.to_string());
         let name = canonical_name.as_str();
-        // A real call site with an argument list is what replaces an untyped parameter's `Int`
-        // placeholder, so it is also what makes the pass-through return widening unnecessary.
-        // Recorded here rather than inferred from `functions` membership: a first-class callable
-        // reference (`h(...)`) resolves the signature without passing anything (issue #576).
-        self.functions_called_directly.insert(canonical_name.clone());
+        // A call site that actually PASSES something is what replaces an untyped parameter's
+        // `Int` placeholder, so it is also what makes the pass-through return widening
+        // unnecessary. Recorded here rather than inferred from `functions` membership: a
+        // first-class callable reference (`h(...)`) resolves the signature without passing
+        // anything (issue #576).
+        //
+        // An empty argument list is excluded for the same reason. `opt()` on
+        // `function opt($b = null) { return $b; }` is a real call that teaches `$b` nothing, so
+        // the parameter keeps the type its default implies and the return still needs widening
+        // for the dynamic callers. This stays coarse for a call that fills SOME untyped
+        // parameters and not others — it marks on any argument rather than per parameter.
+        if !args.is_empty() {
+            self.functions_called_directly.insert(canonical_name.clone());
+        }
 
         if let Some(mut sig) = self.functions.get(name).cloned() {
             if let Some(reason) = sig.deprecation.as_deref() {

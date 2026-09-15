@@ -202,3 +202,49 @@ var_dump(call_user_func(fcc(...), "cuf"));
         )
     );
 }
+
+
+/// A signature PROBE and an argument-less call are not call sites, so neither suppresses the
+/// pass-through return widening.
+///
+/// `widen_dynamic_only_passthrough_returns` skips a function a real caller taught its parameter
+/// types to. Two things reach the same checker entry point without teaching it anything:
+///
+/// - `function_exists('fe')` resolves `fe`'s signature by calling it with FABRICATED zeros
+///   (`check_function_exists` builds one `IntLiteral(0)` per parameter). Counting that as a
+///   caller left `fe`'s untyped parameter on the `Int` placeholder, and the dynamic call
+///   returned `int(0)` instead of the string.
+/// - `opt()` on `function opt($b = null) { return $b; }` is a genuine call that passes nothing,
+///   so `$b` keeps the type its default implies and the dynamic call returned `NULL`.
+///
+/// Both are driven through a callable VARIABLE on purpose. A literal callable string is
+/// validated against the signature during the top-level walk, which runs before the widening
+/// pass, so it reports a compile error instead — a separate, pre-existing ordering problem that
+/// this fixture deliberately does not depend on.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_signature_probes_do_not_suppress_dynamic_return_widening() {
+    let out = compile_and_run(
+        r#"<?php
+function fe($b) { return $b; }
+var_dump(function_exists('fe'));
+$fn = 'fe';
+var_dump(call_user_func($fn, "probe"));
+
+function opt($b = null) { return $b; }
+var_dump(opt());
+$fo = 'opt';
+var_dump(call_user_func($fo, "probe"));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "string(5) \"probe\"\n",
+            "NULL\n",
+            "string(5) \"probe\"\n",
+        )
+    );
+}
