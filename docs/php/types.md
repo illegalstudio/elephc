@@ -257,6 +257,14 @@ Narrowing is not tracked across a reassignment of the variable inside the branch
 
 Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
 
+A `null` argument is the exception, and never fixes a closure parameter's type. It carries no storage the parameter could adopt — a parameter closed to `null` alone could satisfy no other call — so `$f(null)` leaves the parameter open exactly as omitting the argument does, and both spellings of the call accept anything afterwards:
+
+```php
+$f = function ($v = null) { var_dump($v); };
+$f(null);      // NULL
+$f(5);         // int(5)
+```
+
 ### Local retyping
 
 A local is monomorphic by default, but three shapes let it change type anyway. `unset($a)` ends the binding, and the next assignment re-binds `$a` at any type with no diagnostic. A plain straight-line reassignment (`$a = 0; $a = "ciao";`) re-binds `$a` to a fresh slot of the new type and warns. A branch-divergent assignment (`if (…) { $a = 0; } else { $a = "ciao"; }`) compiles the local as boxed `mixed` storage for the whole body and warns — a performance signal as much as a correctness one, since every read of it then goes through the box.
