@@ -54,9 +54,18 @@ const BURN_ROUNDS: u64 = 30_000_000;
 
 /// The slack allowed between the two runs' reported network wait. Both are sub-millisecond
 /// loopback transfers whose jitter is not proportional to anything, so the bound is a flat
-/// few milliseconds rather than a ratio — and it still sits ~40x below the 133.9 ms the
+/// few milliseconds rather than a ratio — and it still sits well below the 133.9 ms the
 /// pre-fix bridge reported.
-const WAIT_SLACK_NS: u64 = 5_000_000;
+///
+/// 5 ms held on a quiet laptop and did not survive a shared CI runner. Measured there across
+/// four unrelated pull requests in one afternoon, the control stayed at ~0.42 ms every time
+/// while the instrumented run came back at 5.56 ms, 7.80 ms and 9.11 ms — loopback scheduling
+/// jitter, not billed callback CPU, since the burn is ~130 ms and would show as that.
+///
+/// 20 ms covers those with better than 2x to spare and still leaves ~6.6x below the 132.7 ms
+/// gap the defect produced, so the test keeps failing outright on the regression it guards
+/// while no longer failing on the machine it runs on.
+const WAIT_SLACK_NS: u64 = 20_000_000;
 
 /// A `CURLOPT_WRITEFUNCTION` that burns CPU must not have that CPU counted as network wait.
 ///
