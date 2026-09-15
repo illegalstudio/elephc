@@ -18,8 +18,9 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 ///
 /// Two entry points share one body. `__rt_file_put_contents` keeps the original
 /// two-argument ABI and writes with no PHP flags; `__rt_file_put_contents_flagged` takes
-/// PHP's `$flags` word in an extra register. Splitting them this way leaves the six internal
-/// callers of the original label — phar writes, `copy()` — untouched (issue #506).
+/// PHP's `$flags` word in an extra register. Splitting them this way leaves the internal
+/// callers of the original label — the phar archive writer and `copy()`, four across the two
+/// targets — untouched (issue #506).
 ///
 /// `FILE_APPEND` (8) selects `O_APPEND` over `O_TRUNC`; `LOCK_EX` (2) takes an exclusive
 /// `flock` on the open descriptor, which `close()` then releases.
@@ -142,6 +143,13 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
 /// Uses the System V AMD64 ABI: rdi/rsi/rdx for the first three integer arguments.
 /// Calls `__rt_cstr` to convert the filename, then libc `open`, `write`, and `close`.
 ///
+/// The two runtime helpers it calls do NOT follow that ABI, and their ARM64 siblings do take
+/// x0/x1, so the mismatch is invisible on the arch this is usually developed on:
+/// `__rt_flock` reads its fd from `rax` and its lock op from `rdx`, and `__rt_ftruncate` reads
+/// its fd from `rax` with the size already in `rsi`. Passing `rdi`/`rsi` to `__rt_flock` here
+/// made every `LOCK_EX` write return `-1` on linux-x86_64 while linux-aarch64 and
+/// macos-aarch64 passed.
+///
 /// # Input (System V AMD64 ABI)
 /// - rdi/rsi: data string (pointer/length)
 /// - rdx/rcx: filename string (pointer/length)
@@ -190,8 +198,8 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the PHP flags
     emitter.instruction("test rax, 2");                                         // LOCK_EX is PHP constant 2
     emitter.instruction("je __rt_fpc_write_linux_x86_64");                      // no lock requested: write straight away
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the open fd to the lock helper
-    emitter.instruction("mov rsi, 2");                                          // LOCK_EX, in the PHP numbering __rt_flock expects
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // __rt_flock takes its fd in rax, NOT in the SysV first argument register
+    emitter.instruction("mov rdx, 2");                                          // LOCK_EX in the PHP numbering, in the register __rt_flock reads the op from
     emitter.instruction("call __rt_flock");                                     // block until the exclusive lock is held
     emitter.instruction("test rax, rax");                                       // did the lock succeed?
     emitter.instruction("jz __rt_fpc_lock_failed_linux_x86_64");                // PHP reports a failed lock as a failed write
@@ -227,4 +235,101 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the aligned stack locals used by file_put_contents
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller with the write byte count in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    /// `__rt_flock` and `__rt_ftruncate` do NOT take the platform's first argument registers on
+    /// x86_64: both read their fd from `rax`, `__rt_flock` reads its lock op from `rdx`, and
+    /// `__rt_ftruncate` expects the size already in `rsi`. Their ARM64 siblings DO take x0/x1,
+    /// so a caller written on ARM64 and mirrored register-for-register into the x86_64 emitter
+    /// assembles, links, and locks whatever happened to be in `rax`.
+    ///
+    /// That is what happened: `file_put_contents($f, …, LOCK_EX)` returned `-1` and wrote
+    /// nothing on linux-x86_64 while both aarch64 targets passed. Asserting the call sites here
+    /// catches it without an x86_64 host.
+    #[test]
+    fn test_x86_64_lock_path_uses_the_registers_its_helpers_read() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_file_put_contents(&mut emitter);
+        let asm = emitter.output();
+
+        let before_flock = asm
+            .split("call __rt_flock")
+            .next()
+            .expect("the x86_64 emitter must call __rt_flock");
+        assert!(
+            before_flock.ends_with("mov rax, QWORD PTR [rbp - 32]\n    mov rdx, 2\n    "),
+            "the fd must reach __rt_flock in rax and the op in rdx, not in rdi/rsi"
+        );
+
+        let before_ftruncate = asm
+            .split("call __rt_ftruncate")
+            .next()
+            .expect("the x86_64 emitter must call __rt_ftruncate");
+        assert!(
+            before_ftruncate.ends_with("mov rax, QWORD PTR [rbp - 32]\n    xor esi, esi\n    "),
+            "the fd must reach __rt_ftruncate in rax with the size in rsi"
+        );
+    }
+
+    /// The ARM64 siblings take x0/x1, and the lock op is PHP's `LOCK_EX` (2) rather than the
+    /// POSIX value — `__rt_flock` does that translation itself, and only for `LOCK_UN`.
+    #[test]
+    fn test_arm64_lock_path_uses_the_registers_its_helpers_read() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_file_put_contents(&mut emitter);
+        let asm = emitter.output();
+
+        let before_flock = asm
+            .split("bl __rt_flock")
+            .next()
+            .expect("the ARM64 emitter must call __rt_flock");
+        assert!(
+            before_flock.ends_with("ldr x0, [sp, #8]\n    mov x1, #2\n    "),
+            "the fd must reach __rt_flock in x0 and the op in x1"
+        );
+
+        let before_ftruncate = asm
+            .split("bl __rt_ftruncate")
+            .next()
+            .expect("the ARM64 emitter must call __rt_ftruncate");
+        assert!(
+            before_ftruncate.ends_with("ldr x0, [sp, #8]\n    mov x1, #0\n    "),
+            "the fd must reach __rt_ftruncate in x0 with the size in x1"
+        );
+    }
+
+    /// A refused lock and a refused truncation take the SAME exit on both targets: close the
+    /// descriptor and return `-1`. An unlocked write, or a write over a file that could not be
+    /// emptied, would report a byte count while leaving a stale tail behind it.
+    #[test]
+    fn test_both_targets_fail_the_write_when_the_lock_or_the_truncation_is_refused() {
+        for (target, label) in [
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "__rt_fpc_lock_failed_linux_x86_64",
+            ),
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "__rt_fpc_lock_failed",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_file_put_contents(&mut emitter);
+            let asm = emitter.output();
+            // Once as the label, twice as a branch target: the refused lock and the refused
+            // truncation.
+            assert_eq!(
+                asm.matches(label).count(),
+                3,
+                "both refusals must reach {} on {:?}",
+                label,
+                target.arch
+            );
+        }
+    }
 }
