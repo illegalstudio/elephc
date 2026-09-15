@@ -253,7 +253,17 @@ function describe($x): string {        // $x may be int or a Point across call s
 }
 ```
 
-Narrowing is not tracked across a reassignment of the variable inside the branch.
+Narrowing is not tracked across a reassignment of the variable inside the branch. The assignment itself is checked against the variable's own type — the one it had before the guard, not the narrowed one — so the standard fallback idiom compiles even though the narrowed view and the assigned value have nothing in common:
+
+```php
+$files = glob($dir . "/*.meta");   // string[]|false
+if ($files === false) {            // $files reads as false inside the branch
+    $files = [];                   // still fine: string[]|false holds an empty array
+}
+echo count($files);
+```
+
+The same applies on the `else` side (`if ($files !== false) { … } else { $files = []; }`) and inside a `while` whose condition narrows. A value the variable's own type cannot hold either — `$files = new stdClass()` above — is still rejected, because re-binding a local to an unrelated type is only allowed in straight-line code; see [Local retyping](#local-retyping). Once the branch has assigned the variable once, later assignments in the same branch are checked against what that first one stored.
 
 Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
 

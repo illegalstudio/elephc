@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Submodules group focused fixtures for branches and loops, alternative (`:` … `endif;`)
-//!   syntax, functions, booleans, assignments, nulls, and related suites.
+//!   syntax, functions, booleans, assignments, nulls, guarded reassignment, and related suites.
 
 use crate::support::*;
 
@@ -28,3 +28,5 @@ mod ternary;
 mod match_expressions;
 #[path = "control_flow/closures.rs"]
 mod closures;
+#[path = "control_flow/guarded_reassignment.rs"]
+mod guarded_reassignment;
