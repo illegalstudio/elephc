@@ -1702,3 +1702,50 @@ plain(17);
         )
     );
 }
+
+
+/// A `: void` function's result is a `null` argument like any other, and must not fix an
+/// untyped closure parameter either.
+///
+/// PHP has no separate "void value": calling a `void` function yields `null`, and passing it
+/// on is ordinary code that runs. It is included here because the `Void` exclusion above is
+/// written on the TYPE, not on the syntax — `$f(nothing())` and `$f(null)` reach it the same
+/// way, and they must behave the same way, which is what these rows assert rather than assume.
+///
+/// The fourth pair is a `void` call into a parameter that also has a `= null` default: the two
+/// nulls come from different places and still leave the parameter open.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_void_call_argument_leaves_an_untyped_closure_parameter_open() {
+    let out = compile_and_run(
+        r#"<?php
+function nothing(): void {}
+
+$f = function ($x) { var_dump($x); };
+$f(nothing());
+$f(1);
+
+$g = function ($x) { var_dump($x); };
+$g(nothing());
+$g("s");
+
+$h = function ($x) { var_dump($x); };
+$h(nothing());
+$h(nothing());
+
+$k = function ($x = null) { var_dump($x); };
+$k(nothing());
+$k(2.5);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "NULL\nint(1)\n",
+            "NULL\nstring(1) \"s\"\n",
+            "NULL\nNULL\n",
+            "NULL\nfloat(2.5)\n",
+        )
+    );
+}
