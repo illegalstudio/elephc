@@ -54,9 +54,25 @@ const BURN_ROUNDS: u64 = 30_000_000;
 
 /// The slack allowed between the two runs' reported network wait. Both are sub-millisecond
 /// loopback transfers whose jitter is not proportional to anything, so the bound is a flat
-/// few milliseconds rather than a ratio — and it still sits ~40x below the 133.9 ms the
+/// few milliseconds rather than a ratio — and it still sits well below the 133.9 ms the
 /// pre-fix bridge reported.
-const WAIT_SLACK_NS: u64 = 5_000_000;
+///
+/// 5 ms held on a quiet laptop and did not survive a shared CI runner. Measured there across
+/// four unrelated pull requests in one afternoon, the control stayed at ~0.42 ms every time
+/// while the instrumented run came back at 5.56 ms, 7.80 ms and 9.11 ms — loopback scheduling
+/// jitter, not billed callback CPU, since the burn is ~130 ms and would show as that.
+///
+/// 20 ms covers those with better than 2x to spare and still leaves ~6.6x below the 132.7 ms
+/// gap the defect produced, so the test keeps failing outright on the regression it guards
+/// while no longer failing on the machine it runs on.
+///
+/// Widening a tolerance can only ever move a test toward vacuous, so the test now asserts
+/// what keeps this one meaningful instead of leaving it to this comment: the burn nested
+/// inside `curl_exec()` is measured from the capture and required to exceed this slack by
+/// 2x. A fully misbilled callback therefore cannot move reported wait by less than the
+/// tolerance, whatever a later edit does to `BURN_ROUNDS` or a faster target does to the
+/// burn. Measured at 123 ms in-callback locally — about 6x this slack.
+const WAIT_SLACK_NS: u64 = 20_000_000;
 
 /// A `CURLOPT_WRITEFUNCTION` that burns CPU must not have that CPU counted as network wait.
 ///
@@ -302,6 +318,37 @@ echo ">>";
              anything; raise BURN_ROUNDS:\n{capture}"
         );
     }
+
+    // ...and specifically, the burn that is nested INSIDE the transfer is much larger than
+    // the slack. The whole-run floor above cannot say that: it measures the process, so a
+    // fixture whose burn shrank below `WAIT_SLACK_NS` — on a faster target, or after an
+    // edit to `BURN_ROUNDS` — would still clear it while a COMPLETELY misclassified callback
+    // moved reported wait by less than the tolerance. The regression assertion would then
+    // hold for a build that bills every nanosecond of callback CPU as network wait.
+    //
+    // `curl_exec`'s inclusive minus exclusive time IS the nested callback: on this fixture's
+    // in-callback shape the write callback is the only frame called from the transfer. That
+    // is read off the capture rather than found by symbol name, so a change to closure
+    // mangling cannot silently turn this into a vacuous check.
+    let nested_callback_cpu = |capture: &serde_json::Value, shape: &str| -> u64 {
+        let node = capture["nodes"]
+            .as_array()
+            .expect("capture nodes")
+            .iter()
+            .find(|node| node["name"] == "curl_exec")
+            .unwrap_or_else(|| panic!("the `{shape}` capture has no `curl_exec` frame:\n{capture}"));
+        let inclusive = node["inclusive"].as_u64().expect("curl_exec inclusive");
+        let exclusive = node["exclusive"].as_u64().expect("curl_exec exclusive");
+        inclusive.saturating_sub(exclusive)
+    };
+    let inside_callback_cpu = nested_callback_cpu(&inside, "inside");
+    assert!(
+        inside_callback_cpu > WAIT_SLACK_NS * 2,
+        "the burn nested inside `curl_exec()` measured {inside_callback_cpu} ns, which is not \
+         far enough above the {WAIT_SLACK_NS} ns slack for the comparison below to mean \
+         anything — a fully misbilled callback would move reported wait by less than the \
+         tolerance and pass. Raise BURN_ROUNDS.\n{inside:?}"
+    );
 
     // The control must record SOME wait: a build that stopped recording network wait
     // altogether would otherwise satisfy the comparison below trivially.
