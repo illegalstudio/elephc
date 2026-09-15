@@ -189,6 +189,17 @@ and Linux x86_64. By-reference/lvalue, callable, reflection, resource,
 eval-declaration, and partial-signature behavior remains on an explicit Magician
 adapter with a catalog-audited reason.
 
+Reflected AOT member names cross the same boundary as generated data tables, and
+those tables store the **declared** spelling, not the case-insensitive lookup
+key. `_eval_reflection_methods` is emitted from each class-like's `method_decls`
+(`src/codegen_support/runtime/data/user.rs`), so `__elephc_eval_reflection_method_names`
+hands the interpreter `Match` for a method written `Match`. Every reader of the
+table compares with `__rt_strcasecmp`, which is what makes that safe: the stored
+spelling decides only what is *reported*, never which row a lookup finds. The
+interpreter must therefore not re-normalize a name it took from the table — doing
+so is how `ReflectionMethod::getName()` inside `eval()` came to answer `match`
+while the same program's compiled reflection answered `Match` (issue #571).
+
 Eval array reads use a dedicated owned shared-cell mode. Unlike an ordinary
 PHP array read, which detaches a boxed zval to preserve value semantics, the
 bridge must retain the exact stored cell because that handle can be the

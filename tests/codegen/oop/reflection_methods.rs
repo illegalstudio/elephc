@@ -299,3 +299,117 @@ echo (new ReflectionMethod(ReflectInvokeInferredTarget::class, "join"))->invoke(
     );
     assert_eq!(out, "AB");
 }
+
+
+/// Regression for #571: reflected method names are the DECLARED spelling, not the lookup text.
+///
+/// Method lookup is case-insensitive, so every reflection entry point finds a method declared
+/// `Match` from `"mAtCh"`. What it then reports was wrong in two different ways, which is why
+/// the issue shows two lines of output for one method:
+///
+/// | | before | PHP |
+/// |---|---|---|
+/// | `new ReflectionMethod(Box::class, "mAtCh")` | `mAtCh` — the caller's own lookup text | `Match` |
+/// | `(new ReflectionClass(Box::class))->getMethod("MATCH")` | `match` — the lowercase key | `Match` |
+///
+/// The declaration is the only answer that is a property of the program rather than of how it
+/// was queried, and `method_decls` retains it, so every path now reads it back from there.
+///
+/// Each row is a different retention path, not a repetition: a directly declared method, a
+/// static one, an inherited one, one flattened in from a trait, one declared on an interface,
+/// and the trait itself reflected directly (which reads `TraitMethodInfo::declared_name`,
+/// because a trait's own declarations are not reachable from a using class). The listing and
+/// the prototype/declaring-function rows are included because they take separate code paths
+/// from the constructor.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_reflected_method_names_report_the_declared_spelling() {
+    let out = compile_and_run(
+        r#"<?php
+interface ReflectCasingContract {
+    public function RunIt(int $Times): void;
+}
+
+trait ReflectCasingHelper {
+    public function HelpMe(): void {}
+}
+
+class ReflectCasingBase {
+    public function BaseThing(): void {}
+}
+
+class ReflectCasingBox extends ReflectCasingBase implements ReflectCasingContract {
+    use ReflectCasingHelper;
+
+    public function Match(): void {}
+    public static function StaticOne(): void {}
+    public function RunIt(int $Times): void {}
+}
+
+echo (new ReflectionMethod(ReflectCasingBox::class, "mAtCh"))->getName(), "|";
+echo (new ReflectionClass(ReflectCasingBox::class))->getMethod("MATCH")->getName(), "|";
+echo (new ReflectionMethod(ReflectCasingBox::class, "STATICONE"))->getName(), "|";
+echo (new ReflectionMethod(ReflectCasingBox::class, "basething"))->getName(), "|";
+echo (new ReflectionMethod(ReflectCasingBox::class, "helpme"))->getName(), "|";
+echo (new ReflectionMethod(ReflectCasingContract::class, "runit"))->getName(), "|";
+echo (new ReflectionMethod(ReflectCasingHelper::class, "HELPME"))->getName(), "|";
+echo (new ReflectionMethod("ReflectCasingBox::mAtCh"))->getName(), "|";
+
+$names = [];
+foreach ((new ReflectionClass(ReflectCasingBox::class))->getMethods() as $method) {
+    $names[] = $method->getName();
+}
+sort($names);
+echo implode(",", $names), "|";
+
+$run = new ReflectionMethod(ReflectCasingBox::class, "runit");
+echo $run->getPrototype()->getName(), "|";
+echo $run->getParameters()[0]->getDeclaringFunction()->getName();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Match|Match|StaticOne|BaseThing|HelpMe|RunIt|HelpMe|Match|\
+         BaseThing,HelpMe,Match,RunIt,StaticOne|RunIt|RunIt"
+    );
+}
+
+/// Regression for #571's AOT/eval consistency requirement: reflecting an AOT class from inside
+/// `eval()` reports the same declared spelling the AOT path reports.
+///
+/// The eval bridge reads its AOT metadata from a generated table that stored the lowercase
+/// lookup key, and the interpreter then lowercased the caller's text on top of that — so the
+/// same program answered `Match` in compiled code and `match` one line later inside `eval()`.
+/// Every reader of that table compares with `__rt_strcasecmp`, so recording the declaration
+/// instead of the key changes only what is reported, never which row is found.
+///
+/// The class declared INSIDE `eval()` is the control: eval's own metadata always kept its
+/// spelling, so it is what the AOT rows now have to match rather than a second thing to fix.
+///
+/// The fixture deliberately does NOT list the AOT class's methods from compiled code first —
+/// that combination hangs, for a reason unrelated to naming (#1031).
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_eval_reflected_method_names_report_the_declared_spelling() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectCasingEvalBox {
+    public function Match(): void {}
+    public static function StaticOne(): void {}
+}
+
+eval('echo (new ReflectionMethod("ReflectCasingEvalBox", "mAtCh"))->getName(), "|";
+$c = new ReflectionClass("ReflectCasingEvalBox");
+echo $c->getMethod("match")->getName(), "|";
+$n = []; foreach ($c->getMethods() as $m) { $n[] = $m->getName(); } sort($n);
+echo implode(",", $n), "|";
+$g = get_class_methods("ReflectCasingEvalBox"); sort($g);
+echo implode(",", $g), "|";');
+eval('class ReflectCasingEvalDeclared { public function EvalMatch(): void {} }
+echo (new ReflectionMethod("ReflectCasingEvalDeclared", "evalmatch"))->getName();');
+"#,
+    );
+    assert_eq!(out, "Match|Match|Match,StaticOne|Match,StaticOne|EvalMatch");
+}

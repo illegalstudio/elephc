@@ -69,6 +69,26 @@ pub(super) fn eval_reflection_aot_member_names(
     Ok(names)
 }
 
+/// Returns one AOT method's DECLARED spelling, as the generated name table records it.
+///
+/// `ReflectionMethod` resolves case-insensitively, but PHP reports the declaration rather than
+/// the caller's lookup text, and the AOT branch used to answer with the lookup text lowercased
+/// — `match` for a method written `Match` (issue #571). The generated table carries the
+/// declaration, so the match is found there and the requested name is only a fallback, for a
+/// class-like the table does not describe.
+pub(super) fn eval_reflection_aot_declared_method_name(
+    class_name: &str,
+    requested_method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let names =
+        eval_reflection_aot_member_names(EVAL_REFLECTION_OWNER_METHOD, class_name, values)?;
+    Ok(names
+        .into_iter()
+        .find(|name| name.eq_ignore_ascii_case(requested_method_name))
+        .unwrap_or_else(|| requested_method_name.to_ascii_lowercase()))
+}
+
 /// Returns generated AOT interface names for one reflected class-like symbol.
 pub(super) fn eval_reflection_aot_class_interface_names(
     class_name: &str,

@@ -89,7 +89,11 @@ pub(super) fn eval_reflection_method_object_result_if_exists(
             context,
             values,
         )? {
-            let method_name = requested_method_name.to_ascii_lowercase();
+            let method_name = eval_reflection_aot_declared_method_name(
+                &reflected_name,
+                requested_method_name,
+                values,
+            )?;
             return eval_reflection_member_object_result(
                 EVAL_REFLECTION_OWNER_METHOD,
                 &method_name,

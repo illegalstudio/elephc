@@ -1370,6 +1370,10 @@ fn emit_eval_reflection_method_lookup_data(
         .iter()
         .map(|(name, info)| (name.as_str(), *info))
         .collect::<HashMap<_, _>>();
+    let interface_infos = sorted_interfaces
+        .iter()
+        .map(|(name, info)| (name.as_str(), *info))
+        .collect::<HashMap<_, _>>();
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
         let mut methods = class_info.methods.keys().collect::<Vec<_>>();
@@ -1387,12 +1391,18 @@ fn emit_eval_reflection_method_lookup_data(
                 method_name,
                 false,
             );
+            let declared_name = eval_reflection_declared_method_name(
+                &class_infos,
+                &interface_infos,
+                &[declaring_class, class_name],
+                method_name,
+            );
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 class_name,
-                method_name,
+                &declared_name,
                 flags,
                 declaring_class,
             );
@@ -1410,12 +1420,18 @@ fn emit_eval_reflection_method_lookup_data(
                 method_name,
                 true,
             );
+            let declared_name = eval_reflection_declared_method_name(
+                &class_infos,
+                &interface_infos,
+                &[declaring_class, class_name],
+                method_name,
+            );
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 class_name,
-                method_name,
+                &declared_name,
                 flags,
                 declaring_class,
             );
@@ -1431,12 +1447,18 @@ fn emit_eval_reflection_method_lookup_data(
                 interface_info,
                 method_name,
             );
+            let declared_name = eval_reflection_declared_method_name(
+                &class_infos,
+                &interface_infos,
+                &[declaring_interface, interface_name],
+                method_name,
+            );
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 interface_name,
-                method_name,
+                &declared_name,
                 eval_reflection_interface_method_flags(false),
                 declaring_interface,
             );
@@ -1450,12 +1472,18 @@ fn emit_eval_reflection_method_lookup_data(
                 interface_info,
                 method_name,
             );
+            let declared_name = eval_reflection_declared_method_name(
+                &class_infos,
+                &interface_infos,
+                &[declaring_interface, interface_name],
+                method_name,
+            );
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 interface_name,
-                method_name,
+                &declared_name,
                 eval_reflection_interface_method_flags(true),
                 declaring_interface,
             );
@@ -1477,6 +1505,44 @@ fn emit_eval_reflection_method_lookup_data(
         out.push_str(&format!("    .quad {}\n", declaring_label));
         out.push_str(&format!("    .quad {}\n", declaring_len));
     }
+}
+
+/// The method's DECLARED spelling for one eval-visible AOT row, or the key when none is known.
+///
+/// Every reader of this table compares with `__rt_strcasecmp`, so storing the declaration
+/// rather than the lowercase key changes nothing about which row a lookup finds — it only
+/// changes what eval REPORTS. Without it, `get_class_methods()` and `ReflectionMethod::
+/// getName()` inside `eval()` answered `match` for a method declared `Match`, disagreeing with
+/// the same program's AOT reflection as well as with PHP (issue #571).
+///
+/// `method_decls` already holds the source declarations, flattened trait methods included, so
+/// the declaring class-like is consulted first and the reflected one second: an inherited
+/// method takes its spelling from where it was written. A compiler-injected class-like has no
+/// user source, and keeps the key.
+fn eval_reflection_declared_method_name(
+    class_infos: &HashMap<&str, &ClassInfo>,
+    interface_infos: &HashMap<&str, &InterfaceInfo>,
+    owners: &[&str],
+    method_key: &str,
+) -> String {
+    owners
+        .iter()
+        .find_map(|owner| {
+            let owner = owner.trim_start_matches('\\');
+            let declarations = class_infos
+                .get(owner)
+                .map(|info| info.method_decls.as_slice())
+                .or_else(|| {
+                    interface_infos
+                        .get(owner)
+                        .map(|info| info.method_decls.as_slice())
+                })?;
+            declarations
+                .iter()
+                .find(|method| php_symbol_key(&method.name) == method_key)
+                .map(|method| method.name.clone())
+        })
+        .unwrap_or_else(|| method_key.to_string())
 }
 
 /// Adds one eval ReflectionMethod lookup row and its backing string labels.

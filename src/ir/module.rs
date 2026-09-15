@@ -39,6 +39,12 @@ impl DataId {
 /// Method metadata retained for standalone trait reflection.
 #[derive(Debug, Clone)]
 pub struct TraitMethodInfo {
+    /// The method's spelling as declared in the trait, for reflected metadata.
+    ///
+    /// Lookup is keyed case-insensitively, but `ReflectionMethod::getName()` must report the
+    /// declaration rather than the lookup key (issue #571), and a trait's declarations are not
+    /// reachable from the using class's `method_decls`.
+    pub declared_name: String,
     pub signature: FunctionSig,
     pub visibility: Visibility,
     pub is_static: bool,

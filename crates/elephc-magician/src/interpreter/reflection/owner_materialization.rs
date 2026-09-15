@@ -1134,18 +1134,13 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
         if !eval_reflection_member_matches_filter(&member, filter) {
             continue;
         }
-        let reflected_name = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-            name.to_ascii_lowercase()
-        } else {
-            name.clone()
-        };
-        let member_object = eval_reflection_member_object_result(
-            owner_kind,
-            &reflected_name,
-            &member,
-            context,
-            values,
-        )?;
+        // `names` comes from the generated AOT table, which records each method's DECLARED
+        // spelling. Lowercasing it here made `ReflectionMethod::getName()` inside `eval()`
+        // answer `match` for a method written `Match`, disagreeing with the same program's AOT
+        // reflection and with PHP (issue #571). Property names were never keyed
+        // case-insensitively, so they were already passed through.
+        let member_object =
+            eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
         result = values.array_set(result, key, member_object)?;
         index += 1;

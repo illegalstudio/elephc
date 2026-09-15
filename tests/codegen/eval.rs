@@ -23871,7 +23871,7 @@ echo $aotOwn->getDeclaringClass()->getName();');
     );
     assert_eq!(
         out.stdout,
-        "MiXeDCase:EvalReflectMethodObjectBase:base:childCase:EvalReflectMethodObjectChild:child|aotbase:EvalAotReflectMethodObjectBase:aotchild:EvalAotReflectMethodObjectChild"
+        "MiXeDCase:EvalReflectMethodObjectBase:base:childCase:EvalReflectMethodObjectChild:child|aotBase:EvalAotReflectMethodObjectBase:aotChild:EvalAotReflectMethodObjectChild"
     );
 }
 
@@ -23903,7 +23903,7 @@ echo $aot->invoke(new EvalAotReflectCreateMethodTarget());');
     );
     assert_eq!(
         out.stdout,
-        "EvalReflectCreateMethodTarget:MiXeDCase:ok|EvalAotReflectCreateMethodTarget:aotrun:aot"
+        "EvalReflectCreateMethodTarget:MiXeDCase:ok|EvalAotReflectCreateMethodTarget:aotRun:aot"
     );
 }
 
@@ -23935,7 +23935,7 @@ echo $ref->invoke(new EvalReflectCtorMethodTarget());');
     );
     assert_eq!(
         out.stdout,
-        "EvalAotReflectCtorMethodTarget:aotrun:aot|EvalReflectCtorMethodTarget:MiXeDCase:ok"
+        "EvalAotReflectCtorMethodTarget:aotRun:aot|EvalReflectCtorMethodTarget:MiXeDCase:ok"
     );
 }
 
