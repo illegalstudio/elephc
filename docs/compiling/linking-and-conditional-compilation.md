@@ -222,6 +222,75 @@ may require a separately declared managed package — `--with-regex` requires
 it. Composer dependencies are
 PHP source handled by the compile-time autoload pipeline and remain separate.
 
+### Where bridge archives are found
+
+**The archives have to travel with the compiler.** Copying just the `elephc`
+binary out of its build tree — into a project's `tools/bin`, say — makes every
+build that needs a bridge fail at link time, because the archives are separate
+files and not embedded in the binary. Either of the two supported layouts works:
+
+```
+tools/bin/elephc            # archives beside the binary
+tools/bin/libelephc_web.a
+
+tools/bin/elephc            # or in a sibling lib/, the usual install layout
+tools/lib/libelephc_web.a
+```
+
+`elephc` resolves each archive in this order, taking the first that exists:
+
+1. `ELEPHC_<NAME>_LIB_DIR`, if set and non-empty — `ELEPHC_WEB_LIB_DIR`,
+   `ELEPHC_PDO_LIB_DIR`, and so on, one per bridge. This wins over everything
+   below, and names a **directory**, not the archive itself.
+2. The directory the running `elephc` binary is in.
+3. Its sibling `lib/` (`<bin>/../lib`).
+4. `$CARGO_TARGET_DIR/debug` and `$CARGO_TARGET_DIR/release`, when that variable
+   is set.
+5. `target/debug` and `target/release`, relative to the **current directory**.
+
+Run from an elephc source checkout, a missing archive is built on demand, which
+is why this never comes up during development. A relocated binary has no
+checkout to build from, so it reports what it wanted and where it looked:
+
+```
+Linker error: required Elephc bridge `elephc_web` could not be found
+  needs: libelephc_web.a
+  looked in:
+    /opt/tools/bin
+    /opt/tools/lib
+    target/debug
+    target/release
+
+Set ELEPHC_WEB_LIB_DIR to a directory containing libelephc_web.a, or keep the
+bridge archives next to the elephc binary (or in a sibling lib/).
+`elephc --print-capabilities` lists every archive this binary can need.
+```
+
+`ELEPHC_<NAME>_LIB_DIR` **replaces** the search rather than joining it: when it
+is set and non-empty, resolution stops there and steps 2–5 are never consulted.
+So an override pointing somewhere without the archive fails even when a perfectly
+good copy sits beside the binary, and the message says so rather than listing
+directories it did not read:
+
+```
+Linker error: required Elephc bridge `elephc_web` could not be found
+  needs: libelephc_web.a
+  looked in:
+    /opt/stage/lib
+
+ELEPHC_WEB_LIB_DIR is set to /opt/stage/lib, which takes priority over every
+other location — the elephc binary's own directory, a sibling lib/ and the build
+tree were NOT consulted. Put libelephc_web.a in /opt/stage/lib, point
+ELEPHC_WEB_LIB_DIR somewhere that has it, or unset ELEPHC_WEB_LIB_DIR to search
+those locations again. `elephc --print-capabilities` lists every archive this
+binary can need.
+```
+
+[`--print-capabilities`](cli-reference.md) is the
+authoritative list for the binary you are holding — one line per capability with
+the archives it needs — so a packaging script can check a tarball carries
+everything the compiler inside it advertises rather than guessing from this page.
+
 ## Heap size
 
 The compiled program uses a fixed-size runtime heap, **8 MB** by default. Programs

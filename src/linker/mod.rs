@@ -32,15 +32,77 @@ pub enum LinkError {
     MissingBridge {
         /// Authoritative bridge linker name that could not be materialized.
         name: String,
+        /// Archive this bridge resolves to (`libelephc_web.a`), when known.
+        ///
+        /// A bridge the table does not describe — a `LinkOrigin::Bridge` item whose name is
+        /// not in `BRIDGES` — has no archive filename, environment override, or candidate
+        /// list to report, so it renders the bare first line and nothing else.
+        archive: Option<String>,
+        /// Per-bridge directory override that takes priority over every search location.
+        env_var: Option<String>,
+        /// Directories that were consulted, in the order they were tried.
+        searched: Vec<String>,
+        /// The `env_var` directory, when it is what short-circuited discovery.
+        ///
+        /// An override does not join the search — it REPLACES it, returning before any
+        /// fallback is consulted. So its presence changes what the message may claim: the
+        /// fallbacks were not tried, and the fix is to correct or unset the variable rather
+        /// than to place an archive next to the binary, which the override would ignore.
+        override_dir: Option<String>,
     },
 }
 
 impl std::fmt::Display for LinkError {
     /// Formats an actionable linker-preparation diagnostic.
+    ///
+    /// "Actionable" means naming the way out, which the bare first line never did: a binary
+    /// copied out of its build tree fails here with nothing to go on, and the archives simply
+    /// have to travel with it (issue #517). So the message reports the archive it wanted, the
+    /// directories it actually looked in, and the environment override — a resolution order
+    /// that is otherwise only discoverable by reading `linker::bridges`.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingBridge { name } => {
-                write!(formatter, "required Elephc bridge `{name}` could not be found")
+            Self::MissingBridge {
+                name,
+                archive,
+                env_var,
+                searched,
+                override_dir,
+            } => {
+                write!(formatter, "required Elephc bridge `{name}` could not be found")?;
+                let Some(archive) = archive else {
+                    return Ok(());
+                };
+                write!(formatter, "\n  needs: {archive}")?;
+                if !searched.is_empty() {
+                    write!(formatter, "\n  looked in:")?;
+                    for directory in searched {
+                        write!(formatter, "\n    {directory}")?;
+                    }
+                }
+                let Some(env_var) = env_var else {
+                    return Ok(());
+                };
+                // An override that short-circuited discovery gets the opposite advice: the
+                // fallbacks were never consulted, so telling the user to put the archive next
+                // to the binary would send them somewhere this run will not look.
+                match override_dir {
+                    Some(override_dir) => write!(
+                        formatter,
+                        "\n\n{env_var} is set to {override_dir}, which takes priority over every \
+                         other location — the elephc binary's own directory, a sibling lib/ and \
+                         the build tree were NOT consulted. Put {archive} in {override_dir}, \
+                         point {env_var} somewhere that has it, or unset {env_var} to search \
+                         those locations again. `elephc --print-capabilities` lists every \
+                         archive this binary can need."
+                    ),
+                    None => write!(
+                        formatter,
+                        "\n\nSet {env_var} to a directory containing {archive}, or keep the \
+                         bridge archives next to the elephc binary (or in a sibling lib/). \
+                         `elephc --print-capabilities` lists every archive this binary can need."
+                    ),
+                }
             }
         }
     }
