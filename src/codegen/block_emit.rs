@@ -1130,6 +1130,15 @@ fn emit_static_property_default_value(
                 enum_name,
                 case_name,
             );
+            // The static slot becomes a new OWNER, so it retains, exactly as the instance
+            // path and an ordinary `Enum::Case` read do (issue #349). Without it,
+            // `Config::$shared = Level::High;` releases the global's only reference. There is
+            // no object register to preserve here — the caller stores straight from the
+            // result register.
+            abi::emit_incref_if_refcounted(
+                ctx.emitter,
+                &crate::types::PhpType::Object(enum_name.clone()),
+            );
         }
         LiteralDefaultValue::Null => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);

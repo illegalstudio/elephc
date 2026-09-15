@@ -8,7 +8,11 @@
 //! Key details:
 //! - The initial schema pass cannot reliably resolve inheritance or interface relationships.
 //! - Direct scoped-constant method defaults and Object-to-Object pairs are revisited.
-//! - Plain property scoped-constant defaults stay outside this pass until EIR lowering supports them.
+//! - Directly declared instance and static property defaults are revisited here too, on the same
+//!   rule: enum cases do not exist while class schemas are built, so `public Level $l =
+//!   Level::Low;` is judged once they do (issue #566). It changes WHEN a default is checked,
+//!   never what counts as compatible — a missing case and an incompatible scalar constant are
+//!   both still rejected, from the pass that can tell them apart.
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};

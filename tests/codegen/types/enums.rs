@@ -1115,3 +1115,75 @@ var_dump(Config::$shared === Level::Low);
         )
     );
 }
+
+
+/// An enum-case default makes its slot a new OWNER of the singleton, so it must retain it.
+///
+/// Storing the borrowed global without an incref is not a leak but its opposite: the first
+/// thing that releases the slot — a property reassignment, an object's cleanup, a web worker's
+/// static teardown — consumes the global's only reference and frees a case that is still
+/// reachable by name. Lazy materialization then hands the freed block to the NEXT case, so two
+/// cases end up sharing one object; this is the same under-retention that #349 fixed for an
+/// ordinary `Enum::Case` read, reached through the default paths instead.
+///
+/// The loop is what makes it observable. Pre-fix, 500 iterations of
+/// `$c = new Config(); $c->level = Level::High;` left `Level::Low->name` reading back `""`
+/// from the reused block, while `Level::Low === Level::Low` still answered `true` — identity
+/// survives a dangling pointer, so `->name` is the assertion that catches it.
+///
+/// All three default forms churn here, because each has its own store site: the instance path
+/// and the promoted one go through `emit_property_default`, the static one through
+/// `emit_static_property_default_value`.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_enum_case_defaults_retain_the_singleton_across_reassignment() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level
+{
+    case Low;
+    case High;
+}
+
+class Config
+{
+    public static Level $shared = Level::Low;
+    public Level $level = Level::Low;
+
+    public function __construct(public Level $promoted = Level::Low) {}
+}
+
+function churn(int $n): void
+{
+    for ($i = 0; $i < $n; $i++) {
+        $config = new Config();
+        $config->level = Level::High;
+        $config->promoted = Level::High;
+        Config::$shared = Level::High;
+        Config::$shared = Level::Low;
+    }
+}
+
+churn(500);
+var_dump(Level::Low->name);
+var_dump(Level::High->name);
+$fresh = new Config();
+var_dump($fresh->level === Level::Low);
+var_dump($fresh->promoted === Level::Low);
+var_dump(Config::$shared === Level::Low);
+var_dump($fresh->level->name);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(3) \"Low\"\n",
+            "string(4) \"High\"\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "string(3) \"Low\"\n",
+        )
+    );
+}

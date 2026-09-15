@@ -143,6 +143,22 @@ pub(super) fn emit_property_default(
                 enum_name,
                 case_name,
             );
+            // The slot becomes a new OWNER of the singleton, so it has to retain it —
+            // exactly as an ordinary `Enum::Case` read does (`lower_inst::scoped_constants`,
+            // issue #349). Without this, the first thing that releases the slot consumes the
+            // global's only reference: `$c = new Config(); $c->level = Level::High;` in a loop
+            // freed `Level::Low`, and after 500 iterations `Level::Low->name` read back as
+            // `""` from the reused block.
+            //
+            // `__rt_incref` is an ordinary helper, so `object_reg` is preserved across it the
+            // way the boxed-literal arms below preserve it. The materializer above makes no
+            // such demand: it promises to preserve every caller-saved integer register.
+            abi::emit_push_reg(ctx.emitter, object_reg);
+            abi::emit_incref_if_refcounted(
+                ctx.emitter,
+                &crate::types::PhpType::Object(enum_name.clone()),
+            );
+            abi::emit_pop_reg(ctx.emitter, object_reg);
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
             abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
